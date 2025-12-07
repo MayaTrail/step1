@@ -10,7 +10,7 @@ Task definition
 import boto3
 from logger import get_logger
 
-logger = get_logger("enumerations_n_s3_access")
+logger = get_logger("enumeration")
 
 def enumerate_services(action_confirmation_only:bool=False, actions_list:dict=None) -> boto3.client | bool:
     """
