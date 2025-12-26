@@ -30,7 +30,7 @@ def get_role_creds(role_arn: str):
     except Exception as err:
         raise Exception(err.__str__())
 
-def attach_policy(role_name: str):
+def attach_administrator_policy(role_name: str):
     """attach AdministratorAccess to a role"""
 
     iam_client = boto3.client("iam") # this is a global servie, no region is required
