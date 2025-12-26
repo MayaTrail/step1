@@ -12,7 +12,12 @@ from logger import get_logger
 
 logger = get_logger("enumeration")
 
-def enumerate_services(action_confirmation_only:bool=False, actions_list:dict=None) -> boto3.client | bool:
+def enumerate_services(
+        action_confirmation_only:bool=False, 
+        actions_list:dict=None,
+        user_arn:str=None,
+        resource_arn:str=None
+    ) -> boto3.client | bool:
     """
     enumerate few services to check if they are available
     Return: None; it only checks if specific service call is
@@ -64,15 +69,16 @@ def enumerate_services(action_confirmation_only:bool=False, actions_list:dict=No
         iam_client = boto3.client("iam")
         sts = boto3.client("sts")
 
-        user_data = sts.get_caller_identity()
-        user_arn = user_data.get("Arn")
+        if not user_arn:
+            user_data = sts.get_caller_identity()
+            user_arn = user_data.get("Arn")
 
         given_actions = actions_list if actions_list else given_actions
         for _, actions in given_actions.items():
             actions_decisions = iam_client.simulate_principal_policy(
                 PolicySourceArn=user_arn,
                 ActionNames=actions,
-                ResourceArns=["*"]
+                ResourceArns=[resource_arn or "*"]
             )
 
             for each_action in actions_decisions.get("EvaluationResults", ()):
@@ -89,7 +95,6 @@ def enumerate_services(action_confirmation_only:bool=False, actions_list:dict=No
         # check if any of the above enumeration worked or not, if yes return True or False
         if active_clients:
             logger.info(f"active clients: {active_clients.keys()}")
-            return active_clients
-        return False
+        return active_clients
     except Exception as err:
         logger.error(err.__str__())

