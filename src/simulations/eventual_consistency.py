@@ -11,9 +11,9 @@ import time
 from botocore.exceptions import ClientError
 from logger import get_logger
 
-logger = get_logger("eventual_consistency")
+logger = get_logger("eventual_consistency_attack")
 
-def persistence_via_eventual_consistency() -> None:
+def eventual_consistency_attack() -> None:
 
     # hardcoding user information, soon to be replaced by pulumi stack output
     user_creds={
@@ -154,3 +154,5 @@ def persistence_via_eventual_consistency() -> None:
         logger.info("Eventual consistency window closed - attack failed")
     else:
         logger.info("Policy deleted within eventual consistency window attack passed")
+
+eventual_consistency_attack()
