@@ -24,9 +24,11 @@ pulumi up
 src/
 ├── __main__.py          # Core infrastructure (IAM, S3)
 ├── simulations/
-│   ├── attach_role_policy.py  # Privilege escalation simulation
-│   ├── enumeration.py         # AWS service enumeration
-│   └── s3_initial_access.py   # S3 access simulation
+│   ├── attach_role_policy.py     # Privilege escalation simulation
+│   ├── enumeration.py            # AWS service enumeration
+│   ├── s3_initial_access.py      # S3 access simulation
+│   ├── s3_kms_encryption.py      # S3 KMS encryption simulation
+|   └── eventual_consistency.py   # Eventual Consistency attack simulation 
 └── Pulumi.yaml
 ```
 
@@ -36,6 +38,8 @@ src/
 | simulations/attach_role_policy | Attach AdministratorAccess to role |
 | simulations/enumeration  | IAM policy simulator for permission discovery |
 | simulations/s3_initial_access | perform a very basic N common attack on found s3 bucket | 
+| simulations/s3_kms_encryption | perform KMS Ransomware attack scenario on s3 bucket |
+| simulations/eventual_consistency.py | perform eventual consistency attack using compromised user creds |
 
 ---
 

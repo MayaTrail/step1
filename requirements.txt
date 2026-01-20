@@ -2,6 +2,7 @@ Arpeggio==2.0.3
 attrs==25.4.0
 boto3==1.41.2
 botocore==1.41.2
+cryptography>=42.0.0
 debugpy==1.8.17
 dill==0.4.0
 grpcio==1.76.0
