@@ -19,7 +19,7 @@ function CTASection() {
         ),
         React.createElement('div', { className: 'cta-actions' },
           React.createElement('a', {
-            href: 'mailto:hello@mayatrail.io',
+            href: 'mailto:admin@mayatrail.tech',
             className: 'btn-primary-main'
           }, 'Request a Demo'),
           React.createElement('a', {
