@@ -1,0 +1,10 @@
+# .dockerignore - exclude unnecessary files from Docker build context
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+README.md
+cleanup.py
+runner.py

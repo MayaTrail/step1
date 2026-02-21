@@ -30,10 +30,11 @@ class LoginProfileCleanup(dynamic.Resource):
 class MayaTrailInfra:
 
     def __init__(self):
-        self.username = "mayatrail-user"
-        self.rolename = "mayatrail-role"
+        stack_name = pulumi.get_stack()
+        self.username = f"mayatrail-user-{stack_name}"
+        self.rolename = f"mayatrail-role-{stack_name}"
         self.account_id = "104266513052"
-        self.bucket_name = "mayatrail-step1-bucket"
+        self.bucket_name = f"mayatrail-step1-bucket-{stack_name}"
         self.region = "ap-south-1"
         self.user = None
         self.role = None
@@ -167,26 +168,26 @@ def setup():
     # role - AttachRolePolicy
 
     # keys naming convention here shouldn't be strict and can be used in lowercase.
-    #mayatrail.attach_policies(type="user", policy_statements=[
-    #    {
-    #        "effect": "Allow",
-    #        "actions": ["iam:*"],
-    #        "resources": ["*"]
-    #    },
-    #    {
-    #        "effect": "Allow",
-    #        "actions": ["sts:AssumeRole"],
-    #        "resources": mayatrail.role.arn
-    #    }
-    #])
+    mayatrail.attach_policies(type="user", policy_statements=[
+        {
+            "effect": "Allow",
+            "actions": ["iam:*"],
+            "resources": ["*"]
+        },
+        {
+            "effect": "Allow",
+            "actions": ["sts:AssumeRole"],
+            "resources": mayatrail.role.arn
+        }
+    ])
 
-    #mayatrail.attach_policies(type="role", policy_statements=[
-    #    {
-    #        "effect": "Allow",
-    #        "actions": ["iam:AttachRolePolicy"],
-    #        "resources": ["*"]
-    #    }
-    #])
+    mayatrail.attach_policies(type="role", policy_statements=[
+        {
+            "effect": "Allow",
+            "actions": ["iam:AttachRolePolicy"],
+            "resources": ["*"]
+        }
+    ])
 
     mayatrail.create_s3_bucket()
 
