@@ -38,7 +38,7 @@ def modify_s3_buckets(
     # task1: list atleast 1 bucket
     try:
         bucket_list = s3_client.list_buckets(MaxBuckets=1)
-        if bucket_list.get("Buckets", []).__len__() < 0:
+        if bucket_list.get("Buckets", []).__len__() == 0:
             logger.info("No buckets present")
             return False
 
