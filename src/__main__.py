@@ -2,16 +2,39 @@
 import os
 import json
 import pulumi
+import pulumi.dynamic as dynamic
 import pulumi_aws as aws
+import boto3
+from botocore.exceptions import ClientError
 from simulations import attach_role_policy
+
+
+class LoginProfileProvider(dynamic.ResourceProvider):
+    def create(self, props):
+        return dynamic.CreateResult(id_=props["username"], outs=props)
+
+    def delete(self, id, props):
+        try:
+            username = props.get("username") or id
+            boto3.client("iam").delete_login_profile(UserName=username)
+        except ClientError as e:
+            if e.response["Error"]["Code"] not in ("NoSuchEntity", "NoSuchEntityException"):
+                raise
+
+
+class LoginProfileCleanup(dynamic.Resource):
+    def __init__(self, name, username: pulumi.Input[str], opts=None):
+        super().__init__(LoginProfileProvider(), name, {"username": username}, opts)
+
 
 class MayaTrailInfra:
 
     def __init__(self):
-        self.username = "mayatrail-user"
-        self.rolename = "mayatrail-role"
+        stack_name = pulumi.get_stack()
+        self.username = f"mayatrail-user-{stack_name}"
+        self.rolename = f"mayatrail-role-{stack_name}"
         self.account_id = "104266513052"
-        self.bucket_name = "mayatrail-step1-bucket"
+        self.bucket_name = f"mayatrail-step1-bucket-{stack_name}"
         self.region = "ap-south-1"
         self.user = None
         self.role = None
@@ -26,12 +49,18 @@ class MayaTrailInfra:
             user_object = aws.iam.User(self.username,
                 name=self.username,
                 path="/",
+                force_destroy=True,
                 tags={
                     "test-key": "test-value",
                 }
             )
             # create dummy access key
             self._create_user_access_key(user_object)
+            # ensure login profile is deleted before user on pulumi destroy
+            LoginProfileCleanup("mayatrail-login-profile-cleanup",
+                username=self.username,
+                opts=pulumi.ResourceOptions(depends_on=[user_object])
+            )
             self.user = user_object
         elif type.lower() == "role":
             # assume role policy document assings to the trust relationship of a role
@@ -79,7 +108,8 @@ class MayaTrailInfra:
             # attach policy to user
             aws.iam.UserPolicyAttachment("mayatrail-test-user-policy-attachment",
                 policy_arn=policy_object.arn,
-                user=self.user.name
+                user=self.user.name,
+                opts=pulumi.ResourceOptions(depends_on=[self.user])
             )
         elif type.lower() == "role":
             # attach policy to role
@@ -97,7 +127,8 @@ class MayaTrailInfra:
 	
         access_key_obj = aws.iam.AccessKey("mayatrail-dummy-access-key",
             user=user_obj,
-            status='Active'
+            status='Active',
+            opts=pulumi.ResourceOptions(depends_on=[user_obj])
         )
 
         self._access_key_id = access_key_obj.id

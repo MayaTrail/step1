@@ -78,7 +78,7 @@ def enumerate_services(
             actions_decisions = iam_client.simulate_principal_policy(
                 PolicySourceArn=user_arn,
                 ActionNames=actions,
-                ResourceArns=[resource_arn or "*"]
+                ResourceArns=[resource_arn] if resource_arn else ["*"]
             )
 
             for each_action in actions_decisions.get("EvaluationResults", ()):
