@@ -1,0 +1,2227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MayaTrail — APT Emulation Platform</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-deep: #06080f;
+    --bg-base: #0a0e1a;
+    --bg-surface: #0d1525;
+    --bg-elevated: #111827;
+    --bg-card: #0a1628;
+    --border: #1a2a45;
+    --border-active: #1e3a5f;
+    --cyan: #00d4ff;
+    --cyan-dim: #006680;
+    --orange: #ff6b35;
+    --orange-dim: #7a2f12;
+    --purple: #a78bfa;
+    --purple-dim: #2d1a6e;
+    --green: #10b981;
+    --green-dim: #052e1c;
+    --red: #f87171;
+    --text-primary: #e2e8f0;
+    --text-secondary: #94a3b8;
+    --text-muted: #475569;
+    --text-dim: #334155;
+    --sidebar-w: 240px;
+    --topnav-h: 58px;
+    --font-display: 'Syne', sans-serif;
+    --font-mono: 'Space Mono', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    font-family: var(--font-display);
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── TOP NAV ── */
+  .topnav {
+    height: var(--topnav-h);
+    background: var(--bg-base);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    gap: 12px;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 100;
+  }
+
+  .topnav::before {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, var(--cyan) 0%, transparent 60%);
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-display);
+    font-size: 18px;
+    font-weight: 800;
+    color: var(--cyan);
+    letter-spacing: -0.5px;
+    cursor: pointer;
+    text-decoration: none;
+  }
+
+  .logo-hex {
+    width: 32px;
+    height: 32px;
+    background: linear-gradient(135deg, var(--cyan) 0%, #0088bb 100%);
+    clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    color: var(--bg-deep);
+    font-weight: 800;
+  }
+
+  .topnav-search {
+    flex: 1;
+    max-width: 400px;
+    margin: 0 auto;
+    position: relative;
+  }
+
+  .topnav-search input {
+    width: 100%;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 16px 8px 38px;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .topnav-search input:focus { border-color: var(--cyan-dim); }
+  .topnav-search input::placeholder { color: var(--text-muted); }
+
+  .search-icon {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+
+  .topnav-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-left: auto;
+  }
+
+  .theme-toggle {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 6px 14px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s;
+  }
+
+  .theme-toggle:hover { border-color: var(--border-active); }
+
+  .account-btn {
+    background: var(--bg-card);
+    border: 1px solid var(--cyan-dim);
+    border-radius: 8px;
+    padding: 7px 14px;
+    color: var(--cyan);
+    cursor: pointer;
+    font-family: var(--font-display);
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.2s;
+    position: relative;
+  }
+
+  .account-btn:hover { background: #0c1f38; }
+
+  .account-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--cyan) 0%, var(--purple) 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 800;
+    color: white;
+  }
+
+  /* ── LAYOUT ── */
+  .app-body {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── SIDEBAR ── */
+  .sidebar {
+    width: var(--sidebar-w);
+    background: var(--bg-base);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    flex-shrink: 0;
+    padding: 16px 0;
+  }
+
+  .sidebar::-webkit-scrollbar { width: 4px; }
+  .sidebar::-webkit-scrollbar-track { background: transparent; }
+  .sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .sidebar-section-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: var(--text-muted);
+    padding: 0 20px 8px;
+    text-transform: uppercase;
+  }
+
+  .platform-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    cursor: pointer;
+    transition: all 0.15s;
+    border-left: 2px solid transparent;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    position: relative;
+  }
+
+  .platform-item:hover { background: var(--bg-surface); color: var(--text-primary); }
+
+  .platform-item.active {
+    color: var(--orange);
+    border-left-color: var(--orange);
+    background: rgba(255,107,53,0.06);
+  }
+
+  .platform-chevron {
+    margin-left: auto;
+    font-size: 10px;
+    transition: transform 0.2s;
+  }
+
+  .platform-item.active .platform-chevron { transform: rotate(90deg); }
+
+  .platform-badge {
+    background: var(--bg-elevated);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-muted);
+    margin-left: auto;
+  }
+
+  .sub-items {
+    display: none;
+    background: rgba(0,0,0,0.2);
+    border-left: 1px solid var(--border);
+    margin-left: 24px;
+  }
+
+  .sub-items.open { display: block; }
+
+  .sub-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-muted);
+    transition: all 0.15s;
+    font-weight: 500;
+  }
+
+  .sub-item:hover { color: var(--text-secondary); background: rgba(255,255,255,0.02); }
+
+  .sub-item.active {
+    color: var(--purple);
+    background: rgba(167,139,250,0.06);
+  }
+
+  /* ── MAIN CONTENT ── */
+  .main {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .screen {
+    display: none;
+    height: 100%;
+    overflow-y: auto;
+    padding: 28px 32px;
+    animation: fadeIn 0.2s ease;
+  }
+
+  .screen.active { display: block; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .screen::-webkit-scrollbar { width: 5px; }
+  .screen::-webkit-scrollbar-track { background: transparent; }
+  .screen::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* ── BREADCRUMB ── */
+  .breadcrumb {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .breadcrumb span { color: var(--text-dim); }
+  .breadcrumb a { color: var(--text-muted); cursor: pointer; }
+  .breadcrumb a:hover { color: var(--text-secondary); }
+
+  /* ── PAGE HEADER ── */
+  .page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 24px;
+    gap: 16px;
+  }
+
+  .page-title {
+    font-size: 22px;
+    font-weight: 800;
+    color: var(--text-primary);
+    line-height: 1.2;
+  }
+
+  .page-subtitle {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    font-family: var(--font-mono);
+  }
+
+  .page-actions {
+    display: flex;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+
+  /* ── BUTTONS ── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 16px;
+    border-radius: 7px;
+    font-family: var(--font-display);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+
+  .btn-run {
+    background: var(--green-dim);
+    border-color: var(--green);
+    color: var(--green);
+  }
+
+  .btn-run:hover { background: #073d26; }
+
+  .btn-playbook {
+    background: var(--purple-dim);
+    border-color: var(--purple);
+    color: var(--purple);
+  }
+
+  .btn-playbook:hover { background: #3d2090; }
+
+  .btn-secondary {
+    background: var(--bg-elevated);
+    border-color: var(--border);
+    color: var(--text-secondary);
+  }
+
+  .btn-secondary:hover { border-color: var(--border-active); color: var(--text-primary); }
+
+  /* ── DASHBOARD SCREEN ── */
+  .dashboard-hero {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-surface) 100%);
+    padding: 32px;
+    margin-bottom: 28px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .dashboard-hero::before {
+    content: '';
+    position: absolute;
+    top: -40px; right: -40px;
+    width: 200px; height: 200px;
+    background: radial-gradient(circle, rgba(0,212,255,0.08) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .dashboard-hero h1 {
+    font-size: 30px;
+    font-weight: 800;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+  }
+
+  .dashboard-hero p {
+    color: var(--text-secondary);
+    font-size: 14px;
+    max-width: 540px;
+    line-height: 1.6;
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+
+  .hero-tag {
+    display: inline-block;
+    background: rgba(0,212,255,0.08);
+    border: 1px solid rgba(0,212,255,0.2);
+    border-radius: 4px;
+    padding: 3px 10px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--cyan);
+    margin-bottom: 14px;
+    letter-spacing: 1px;
+  }
+
+  .def-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+
+  .def-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    transition: border-color 0.2s, transform 0.2s;
+    cursor: default;
+  }
+
+  .def-card:hover {
+    border-color: var(--border-active);
+    transform: translateY(-1px);
+  }
+
+  .def-card-icon {
+    font-size: 22px;
+    margin-bottom: 10px;
+  }
+
+  .def-card-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+  }
+
+  .def-card-body {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+
+  .def-card.cyan { border-top: 2px solid var(--cyan); }
+  .def-card.purple { border-top: 2px solid var(--purple); }
+  .def-card.green { border-top: 2px solid var(--green); }
+  .def-card.orange { border-top: 2px solid var(--orange); }
+  .def-card.red { border-top: 2px solid var(--red); }
+
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-bottom: 28px;
+  }
+
+  .stat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    text-align: center;
+  }
+
+  .stat-value {
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--cyan);
+    font-family: var(--font-mono);
+  }
+
+  .stat-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    font-family: var(--font-mono);
+    letter-spacing: 0.5px;
+  }
+
+  /* ── EMULATION LIST ── */
+  .filter-bar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .filter-chip {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 5px 12px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: var(--font-mono);
+  }
+
+  .filter-chip:hover { border-color: var(--border-active); }
+  .filter-chip.active { background: var(--bg-card); border-color: var(--orange); color: var(--orange); }
+
+  .emulation-list { display: flex; flex-direction: column; gap: 10px; }
+
+  .emulation-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .emulation-card::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--border);
+    transition: background 0.15s;
+  }
+
+  .emulation-card:hover {
+    border-color: var(--border-active);
+    background: #0c1830;
+    transform: translateX(2px);
+  }
+
+  .emulation-card:hover::before { background: var(--orange); }
+
+  .emulation-meta {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .emulation-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 5px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .threat-origin {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-weight: 400;
+    letter-spacing: 0.5px;
+  }
+
+  .threat-russia { background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); color: #f87171; }
+  .threat-china { background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); color: #fbbf24; }
+  .threat-nk { background: rgba(167,139,250,0.1); border: 1px solid rgba(167,139,250,0.3); color: var(--purple); }
+  .threat-iran { background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3); color: var(--green); }
+
+  .emulation-tags {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .tag {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 2px 7px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-muted);
+    letter-spacing: 0.3px;
+  }
+
+  .emulation-stats {
+    display: flex;
+    gap: 20px;
+    flex-shrink: 0;
+    text-align: center;
+  }
+
+  .emulation-stat-item {
+    font-family: var(--font-mono);
+  }
+
+  .emulation-stat-value {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-secondary);
+  }
+
+  .emulation-stat-label {
+    font-size: 9px;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+    margin-top: 2px;
+  }
+
+  .emulation-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  /* ── EMULATION DETAIL ── */
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .detail-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 20px;
+  }
+
+  .detail-tab {
+    padding: 10px 18px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: all 0.15s;
+    font-family: var(--font-mono);
+    letter-spacing: 0.3px;
+  }
+
+  .detail-tab:hover { color: var(--text-secondary); }
+  .detail-tab.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  .section-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 14px;
+  }
+
+  .section-card-title {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .section-card-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* ── ATTACK PATH VISUAL ── */
+  .attack-path {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .attack-phase {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+
+  .phase-line {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .phase-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--orange);
+    flex-shrink: 0;
+    margin-top: 3px;
+  }
+
+  .phase-connector {
+    width: 1px;
+    flex: 1;
+    min-height: 20px;
+    background: var(--border);
+    margin-top: 4px;
+  }
+
+  .phase-content { flex: 1; }
+
+  .phase-name {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .technique-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .technique-chip {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 4px 10px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .technique-chip:hover {
+    border-color: var(--cyan-dim);
+    color: var(--cyan);
+    background: rgba(0,212,255,0.04);
+  }
+
+  .technique-chip .tid {
+    color: var(--text-muted);
+    margin-right: 5px;
+  }
+
+  /* ── MITRE TABLE ── */
+  .mitre-table { width: 100%; border-collapse: collapse; }
+
+  .mitre-table th {
+    text-align: left;
+    padding: 8px 12px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .mitre-table td {
+    padding: 10px 12px;
+    font-size: 12px;
+    border-bottom: 1px solid rgba(30,58,95,0.4);
+  }
+
+  .mitre-table tr:last-child td { border-bottom: none; }
+  .mitre-table tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .tid-badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--cyan);
+    background: rgba(0,212,255,0.06);
+    border: 1px solid rgba(0,212,255,0.15);
+    border-radius: 3px;
+    padding: 2px 7px;
+  }
+
+  .tactic-badge {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    padding: 2px 7px;
+    border-radius: 3px;
+  }
+
+  .tactic-initial { background: rgba(248,113,113,0.1); color: #f87171; }
+  .tactic-execution { background: rgba(251,191,36,0.1); color: #fbbf24; }
+  .tactic-persistence { background: rgba(167,139,250,0.1); color: var(--purple); }
+  .tactic-privesc { background: rgba(16,185,129,0.1); color: var(--green); }
+  .tactic-defense { background: rgba(0,212,255,0.1); color: var(--cyan); }
+  .tactic-lateral { background: rgba(255,107,53,0.1); color: var(--orange); }
+  .tactic-exfil { background: rgba(248,113,113,0.1); color: #f87171; }
+
+  /* ── REFS ── */
+  .ref-list { display: flex; flex-direction: column; gap: 8px; }
+
+  .ref-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 12px 16px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .ref-item:hover { border-color: var(--border-active); }
+
+  .ref-icon { font-size: 16px; flex-shrink: 0; }
+
+  .ref-meta { flex: 1; }
+  .ref-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 3px; }
+  .ref-source { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); }
+
+  .ref-type {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    padding: 2px 7px;
+    border-radius: 3px;
+    border: 1px solid;
+  }
+
+  /* ── PLAYBOOK SCREEN ── */
+  .playbook-steps { display: flex; flex-direction: column; gap: 12px; }
+
+  .playbook-step {
+    display: flex;
+    gap: 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+
+  .step-number {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: var(--purple-dim);
+    border: 1px solid var(--purple);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--purple);
+    flex-shrink: 0;
+  }
+
+  .step-content { flex: 1; }
+  .step-title { font-size: 14px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px; }
+  .step-body { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); line-height: 1.6; }
+
+  .code-block {
+    background: var(--bg-deep);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: #7dd3fc;
+    margin-top: 10px;
+    overflow-x: auto;
+    line-height: 1.5;
+  }
+
+  /* ── RUN MODAL ── */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(4px);
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .modal-overlay.open { display: flex; }
+
+  .modal {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    width: 540px;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: 0 25px 50px rgba(0,0,0,0.5);
+    animation: modalIn 0.2s ease;
+  }
+
+  @keyframes modalIn {
+    from { opacity: 0; transform: scale(0.95) translateY(10px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+  }
+
+  .modal-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .modal-title { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+  .modal-close { cursor: pointer; color: var(--text-muted); font-size: 18px; padding: 4px; }
+  .modal-close:hover { color: var(--text-primary); }
+
+  .modal-body { padding: 24px; }
+
+  .modal-field { margin-bottom: 18px; }
+  .modal-label { font-family: var(--font-mono); font-size: 10px; letter-spacing: 1px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px; display: block; }
+
+  .modal-select, .modal-input {
+    width: 100%;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 10px 14px;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.2s;
+    appearance: none;
+  }
+
+  .modal-select:focus, .modal-input:focus { border-color: var(--cyan-dim); }
+
+  .modal-warning {
+    background: rgba(255,107,53,0.06);
+    border: 1px solid rgba(255,107,53,0.2);
+    border-radius: 7px;
+    padding: 12px 14px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--orange);
+    margin-bottom: 18px;
+    display: flex;
+    gap: 8px;
+  }
+
+  .modal-footer {
+    padding: 16px 24px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+  }
+
+  /* ── STATUS SCREEN ── */
+  .status-banner {
+    background: rgba(16,185,129,0.06);
+    border: 1px solid rgba(16,185,129,0.2);
+    border-radius: 10px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--green);
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    animation: pulse 1.5s infinite;
+    flex-shrink: 0;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .progress-steps { display: flex; flex-direction: column; gap: 8px; }
+
+  .progress-step {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 12px;
+  }
+
+  .progress-step-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+
+  .step-done { background: rgba(16,185,129,0.15); color: var(--green); }
+  .step-running { background: rgba(0,212,255,0.1); color: var(--cyan); animation: pulse 1s infinite; }
+  .step-pending { background: var(--bg-elevated); color: var(--text-muted); }
+  .step-finding { background: rgba(248,113,113,0.1); color: var(--red); }
+
+  .step-name { flex: 1; font-family: var(--font-mono); }
+  .step-time { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); }
+  .step-status { font-family: var(--font-mono); font-size: 10px; }
+
+  /* ── ACCOUNT DROPDOWN ── */
+  .dropdown-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    width: 200px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+    z-index: 300;
+    overflow: hidden;
+  }
+
+  .dropdown-menu.open { display: block; }
+
+  .dropdown-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dropdown-name { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+  .dropdown-email { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+
+  .dropdown-item {
+    padding: 10px 16px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: background 0.1s;
+  }
+
+  .dropdown-item:hover { background: var(--bg-elevated); color: var(--text-primary); }
+
+  .divider { height: 1px; background: var(--border); }
+
+  /* ── SEARCH OVERLAY ── */
+  .search-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(4px);
+    z-index: 200;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 80px;
+  }
+
+  .search-overlay.open { display: flex; }
+
+  .search-modal {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    width: 600px;
+    overflow: hidden;
+    animation: modalIn 0.15s ease;
+  }
+
+  .search-input-wrap {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .search-input-wrap input {
+    flex: 1;
+    background: none;
+    border: none;
+    outline: none;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--text-primary);
+  }
+
+  .search-input-wrap input::placeholder { color: var(--text-muted); }
+
+  .search-results { padding: 8px; }
+
+  .search-result-item {
+    padding: 10px 12px;
+    border-radius: 7px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    transition: background 0.1s;
+  }
+
+  .search-result-item:hover { background: var(--bg-elevated); }
+
+  .search-result-icon { font-size: 16px; flex-shrink: 0; }
+  .search-result-text { flex: 1; }
+  .search-result-title { font-size: 13px; color: var(--text-primary); font-weight: 600; }
+  .search-result-sub { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+  .search-result-category { font-family: var(--font-mono); font-size: 9px; color: var(--text-muted); padding: 2px 7px; background: var(--bg-elevated); border-radius: 3px; }
+
+  /* ── EMPTY STATE ── */
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-muted);
+  }
+
+  .empty-state-icon { font-size: 40px; margin-bottom: 12px; }
+  .empty-state-title { font-size: 16px; font-weight: 700; color: var(--text-secondary); margin-bottom: 8px; }
+  .empty-state-body { font-family: var(--font-mono); font-size: 12px; line-height: 1.6; }
+
+  /* ── NOTIFICATION TOAST ── */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--bg-surface);
+    border: 1px solid var(--green);
+    border-radius: 10px;
+    padding: 14px 18px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--green);
+    display: none;
+    align-items: center;
+    gap: 10px;
+    z-index: 400;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    animation: slideUp 0.2s ease;
+  }
+
+  .toast.show { display: flex; }
+
+  @keyframes slideUp {
+    from { transform: translateY(10px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+</style>
+</head>
+<body>
+
+<!-- TOP NAV -->
+<nav class="topnav">
+  <a class="logo" onclick="showScreen('dashboard')">
+    <div class="logo-hex">M</div>
+    MayaTrail
+  </a>
+
+  <div class="topnav-search">
+    <span class="search-icon">🔍</span>
+    <input type="text" placeholder="Search emulations, techniques, threat actors..." onclick="openSearch()" readonly>
+  </div>
+
+  <div class="topnav-right">
+    <button class="theme-toggle" onclick="toggleTheme()">🌙 Dark</button>
+    <div style="position:relative">
+      <button class="account-btn" onclick="toggleDropdown()">
+        <div class="account-avatar">AK</div>
+        Ayush K.
+        <span style="font-size:10px; color:var(--text-muted)">▾</span>
+      </button>
+      <div class="dropdown-menu" id="accountDropdown">
+        <div class="dropdown-header">
+          <div class="dropdown-name">Ayush Kumar</div>
+          <div class="dropdown-email">ayush@mayatrail.io</div>
+        </div>
+        <div class="dropdown-item" onclick="closeDropdown()">👤 Profile</div>
+        <div class="dropdown-item" onclick="closeDropdown()">⚙️ Settings</div>
+        <div class="dropdown-item" onclick="closeDropdown()">🔑 API Keys</div>
+        <div class="dropdown-item" onclick="closeDropdown()">📊 Usage</div>
+        <div class="divider"></div>
+        <div class="dropdown-item" style="color:var(--red)" onclick="closeDropdown()">↪ Logout</div>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<!-- APP BODY -->
+<div class="app-body">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="sidebar-section-label">Cloud Platforms</div>
+
+    <!-- AWS -->
+    <div class="platform-item active" id="aws-toggle" onclick="togglePlatform('aws')">
+      <span>☁️</span> AWS
+      <span class="platform-badge">12</span>
+      <span class="platform-chevron" id="aws-chevron">▶</span>
+    </div>
+    <div class="sub-items open" id="aws-sub">
+      <div class="sub-item active" onclick="showScreen('emulations')">🎯 APT Emulations</div>
+      <div class="sub-item" onclick="showScreen('playbook')">📋 Playbooks</div>
+      <div class="sub-item" onclick="showScreen('detections')">🔍 Detections</div>
+      <div class="sub-item" onclick="showScreen('guardrails')">🛡️ Guardrails</div>
+    </div>
+
+    <!-- AI -->
+    <div class="platform-item" id="ai-toggle" onclick="togglePlatform('ai')">
+      <span>🤖</span> AI
+      <span class="platform-badge">4</span>
+      <span class="platform-chevron" id="ai-chevron">▶</span>
+    </div>
+    <div class="sub-items" id="ai-sub">
+      <div class="sub-item">🎯 APT Emulations</div>
+      <div class="sub-item">📋 Playbooks</div>
+      <div class="sub-item">🔍 Detections</div>
+      <div class="sub-item">🛡️ Guardrails</div>
+    </div>
+
+    <!-- GCP -->
+    <div class="platform-item" id="gcp-toggle" onclick="togglePlatform('gcp')">
+      <span>🔵</span> GCP
+      <span class="platform-badge">8</span>
+      <span class="platform-chevron" id="gcp-chevron">▶</span>
+    </div>
+    <div class="sub-items" id="gcp-sub">
+      <div class="sub-item">🎯 APT Emulations</div>
+      <div class="sub-item">📋 Playbooks</div>
+      <div class="sub-item">🔍 Detections</div>
+      <div class="sub-item">🛡️ Guardrails</div>
+    </div>
+
+    <!-- Azure -->
+    <div class="platform-item" id="azure-toggle" onclick="togglePlatform('azure')">
+      <span>🔷</span> Azure
+      <span class="platform-badge">9</span>
+      <span class="platform-chevron" id="azure-chevron">▶</span>
+    </div>
+    <div class="sub-items" id="azure-sub">
+      <div class="sub-item">🎯 APT Emulations</div>
+      <div class="sub-item">📋 Playbooks</div>
+      <div class="sub-item">🔍 Detections</div>
+      <div class="sub-item">🛡️ Guardrails</div>
+    </div>
+
+    <!-- Kubernetes -->
+    <div class="platform-item" id="k8s-toggle" onclick="togglePlatform('k8s')">
+      <span>⚙️</span> Kubernetes
+      <span class="platform-badge">6</span>
+      <span class="platform-chevron" id="k8s-chevron">▶</span>
+    </div>
+    <div class="sub-items" id="k8s-sub">
+      <div class="sub-item">🎯 APT Emulations</div>
+      <div class="sub-item">📋 Playbooks</div>
+      <div class="sub-item">🔍 Detections</div>
+      <div class="sub-item">🛡️ Guardrails</div>
+    </div>
+
+  </aside>
+
+  <!-- MAIN CONTENT -->
+  <main class="main">
+
+    <!-- ── SCREEN: DASHBOARD ── -->
+    <div class="screen active" id="screen-dashboard">
+      <div class="dashboard-hero">
+        <div class="hero-tag">APT EMULATION PLATFORM v2.1</div>
+        <h1>Welcome to MayaTrail</h1>
+        <p>Proactively defend your cloud infrastructure by emulating real-world APT techniques. Test your detections, validate your playbooks, and strengthen your security posture before adversaries do.</p>
+      </div>
+
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-value" style="color:var(--orange)">39</div>
+          <div class="stat-label">APT Emulations</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" style="color:var(--purple)">156</div>
+          <div class="stat-label">MITRE Techniques</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" style="color:var(--green)">212</div>
+          <div class="stat-label">Detection Rules</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" style="color:var(--cyan)">5</div>
+          <div class="stat-label">Cloud Platforms</div>
+        </div>
+      </div>
+
+      <div class="def-grid">
+        <div class="def-card cyan">
+          <div class="def-card-icon">🎯</div>
+          <div class="def-card-title">Adversary Emulation</div>
+          <div class="def-card-body">Realistic simulation of TTPs used by known threat actors — based on real-world intelligence, MITRE ATT&CK mappings, and live incident data. Not just scanning; full kill-chain execution in a controlled manner.</div>
+        </div>
+        <div class="def-card purple">
+          <div class="def-card-icon">📋</div>
+          <div class="def-card-title">Playbooks</div>
+          <div class="def-card-body">Step-by-step Incident Response guides co-authored with emulation results. Each playbook maps directly to a threat actor's known behavior — triage steps, detection logic, containment, and eradication included.</div>
+        </div>
+        <div class="def-card green">
+          <div class="def-card-icon">📖</div>
+          <div class="def-card-title">Runbooks</div>
+          <div class="def-card-body">Operational automation scripts tied to each emulation scenario. Runbooks codify your IR workflows for repeatable, consistent response execution across your SOC team.</div>
+        </div>
+        <div class="def-card orange">
+          <div class="def-card-icon">🔍</div>
+          <div class="def-card-title">Detections</div>
+          <div class="def-card-body">SIGMA rules, KQL queries, and YARA signatures generated directly from emulation results. Every emulation run produces exportable detection logic for your SIEM or EDR platform.</div>
+        </div>
+        <div class="def-card red">
+          <div class="def-card-icon">🛡️</div>
+          <div class="def-card-title">Guardrails</div>
+          <div class="def-card-body">Org-level policies that define emulation scope, restrict blast radius, and prevent unintended impact. Define safe zones, excluded resources, and time windows to run emulations with confidence.</div>
+        </div>
+        <div class="def-card" style="border-top:2px solid #fbbf24">
+          <div class="def-card-icon">🗺️</div>
+          <div class="def-card-title">Why Emulation?</div>
+          <div class="def-card-body">Adversary emulation bridges the gap between threat intelligence and actual defense validation. Knowing an attack exists ≠ being protected against it. MayaTrail proves your defenses work — or shows you where they don't.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SCREEN: EMULATIONS LIST ── -->
+    <div class="screen" id="screen-emulations">
+      <div class="breadcrumb">
+        <a onclick="showScreen('dashboard')">Home</a>
+        <span>/</span> AWS <span>/</span> APT Emulations
+      </div>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">AWS · APT Emulations</div>
+          <div class="page-subtitle">39 emulations available · Sorted by threat severity</div>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-secondary">⬇ Export List</button>
+          <button class="btn btn-run" onclick="showRunModal()">▶ Run Custom</button>
+        </div>
+      </div>
+
+      <div class="filter-bar">
+        <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);letter-spacing:1px">FILTER:</span>
+        <div class="filter-chip active">All</div>
+        <div class="filter-chip">Russia-nexus</div>
+        <div class="filter-chip">China-nexus</div>
+        <div class="filter-chip">DPRK-nexus</div>
+        <div class="filter-chip">Iran-nexus</div>
+        <div class="filter-chip" style="margin-left:auto">Initial Access</div>
+        <div class="filter-chip">Persistence</div>
+        <div class="filter-chip">Exfiltration</div>
+      </div>
+
+      <div class="emulation-list">
+
+        <!-- APT29 -->
+        <div class="emulation-card" onclick="showScreen('detail')">
+          <div class="emulation-meta">
+            <div class="emulation-title">
+              APT29 — Cozy Bear / Midnight Blizzard
+              <span class="threat-origin threat-russia">RUSSIA</span>
+            </div>
+            <div class="emulation-tags">
+              <span class="tag">Initial Access</span>
+              <span class="tag">Credential Access</span>
+              <span class="tag">OAuth Abuse</span>
+              <span class="tag">S3 Exfiltration</span>
+              <span class="tag">IAM Escalation</span>
+            </div>
+          </div>
+          <div class="emulation-stats">
+            <div class="emulation-stat-item">
+              <div class="emulation-stat-value" style="color:var(--red)">14</div>
+              <div class="emulation-stat-label">TECHNIQUES</div>
+            </div>
+            <div class="emulation-stat-item">
+              <div class="emulation-stat-value" style="color:var(--orange)">HIGH</div>
+              <div class="emulation-stat-label">SEVERITY</div>
+            </div>
+          </div>
+          <div class="emulation-actions">
+            <button class="btn btn-run" onclick="event.stopPropagation(); showRunModal()">▶ Run</button>
+            <button class="btn btn-playbook" onclick="event.stopPropagation(); showScreen('playbook')">📋 Playbook</button>
+          </div>
+        </div>
+
+        <!-- APT41 -->
+        <div class="emulation-card" onclick="showScreen('detail')">
+          <div class="emulation-meta">
+            <div class="emulation-title">
+              APT41 — Winnti / Double Dragon
+              <span class="threat-origin threat-china">CHINA</span>
+            </div>
+            <div class="emulation-tags">
+              <span class="tag">Persistence</span>
+              <span class="tag">Lateral Movement</span>
+              <span class="tag">Supply Chain</span>
+              <span class="tag">EC2 Abuse</span>
+            </div>
+          </div>
+          <div class="emulation-stats">
+            <div class="emulation-stat-item">
+              <div class="emulation-stat-value" style="color:var(--red)">18</div>
+              <div class="emulation-stat-label">TECHNIQUES</div>
+            </div>
+            <div class="emulation-stat-item">
+              <div class="emulation-stat-value" style="color:var(--red)">CRITICAL</div>
+              <div class="emulation-stat-label">SEVERITY</div>
+            </div>
+          </div>
+          <div class="emulation-actions">
+            <button class="btn btn-run" onclick="event.stopPropagation(); showRunModal()">▶ Run</button>
+            <button class="btn btn-playbook" onclick="event.stopPropagation(); showScreen('playbook')">📋 Playbook</button>
+          </div>
+        </div>
+
+        <!-- Lazarus -->
+        <div class="emulation-card" onclick="showScreen('detail')">
+          <div class="emulation-meta">
+            <div class="emulation-title">
+              Lazarus Group — HIDDEN COBRA
+              <span class="threat-origin threat-nk">DPRK</span>
+            </div>
+            <div class="emulation-tags">
+              <span class="tag">Financial Crime</span>
+              <span class="tag">Ransomware</span>
+              <span class="tag">Defense Evasion</span>
+              <span class="tag">Lambda Abuse</span>
+            </div>
+          </div>
+          <div class="emulation-stats">
+            <div class="emulation-stat-item">
+              <div class="emulation-stat-value" style="color:var(--orange)">11</div>
+              <div class="emulation-stat-label">TECHNIQUES</div>
+            </div>
+            <div class="emulation-stat-item">
+              <div class="emulation-stat-value" style="color:var(--orange)">HIGH</div>
+              <div class="emulation-stat-label">SEVERITY</div>
+            </div>
+          </div>
+          <div class="emulation-actions">
+            <button class="btn btn-run" onclick="event.stopPropagation(); showRunModal()">▶ Run</button>
+            <button class="btn btn-playbook" onclick="event.stopPropagation(); showScreen('playbook')">📋 Playbook</button>
+          </div>
+        </div>
+
+        <!-- APT33 -->
+        <div class="emulation-card" onclick="showScreen('detail')">
+          <div class="emulation-meta">
+            <div class="emulation-title">
+              APT33 — Elfin / Refined Kitten
+              <span class="threat-origin threat-iran">IRAN</span>
+            </div>
+            <div class="emulation-tags">
+              <span class="tag">Spearphishing</span>
+              <span class="tag">Wiper</span>
+              <span class="tag">RDS Targeting</span>
+              <span class="tag">Cloud Recon</span>
+            </div>
+          </div>
+          <div class="emulation-stats">
+            <div class="emulation-stat-item">
+              <div class="emulation-stat-value" style="color:var(--text-secondary)">9</div>
+              <div class="emulation-stat-label">TECHNIQUES</div>
+            </div>
+            <div class="emulation-stat-item">
+              <div class="emulation-stat-value" style="color:var(--text-secondary)">MEDIUM</div>
+              <div class="emulation-stat-label">SEVERITY</div>
+            </div>
+          </div>
+          <div class="emulation-actions">
+            <button class="btn btn-run" onclick="event.stopPropagation(); showRunModal()">▶ Run</button>
+            <button class="btn btn-playbook" onclick="event.stopPropagation(); showScreen('playbook')">📋 Playbook</button>
+          </div>
+        </div>
+
+        <!-- FIN7 -->
+        <div class="emulation-card" onclick="showScreen('detail')">
+          <div class="emulation-meta">
+            <div class="emulation-title">
+              FIN7 — Carbon Spider / Sangria Tempest
+              <span class="threat-origin threat-russia">RUSSIA</span>
+            </div>
+            <div class="emulation-tags">
+              <span class="tag">Payment Card</span>
+              <span class="tag">POS Systems</span>
+              <span class="tag">Credential Dump</span>
+              <span class="tag">EKS Targeting</span>
+            </div>
+          </div>
+          <div class="emulation-stats">
+            <div class="emulation-stat-item">
+              <div class="emulation-stat-value" style="color:var(--orange)">13</div>
+              <div class="emulation-stat-label">TECHNIQUES</div>
+            </div>
+            <div class="emulation-stat-item">
+              <div class="emulation-stat-value" style="color:var(--orange)">HIGH</div>
+              <div class="emulation-stat-label">SEVERITY</div>
+            </div>
+          </div>
+          <div class="emulation-actions">
+            <button class="btn btn-run" onclick="event.stopPropagation(); showRunModal()">▶ Run</button>
+            <button class="btn btn-playbook" onclick="event.stopPropagation(); showScreen('playbook')">📋 Playbook</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── SCREEN: EMULATION DETAIL ── -->
+    <div class="screen" id="screen-detail">
+      <div class="breadcrumb">
+        <a onclick="showScreen('dashboard')">Home</a>
+        <span>/</span>
+        <a onclick="showScreen('emulations')">AWS · APT Emulations</a>
+        <span>/</span> APT29 — Cozy Bear
+      </div>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">APT29 — Cozy Bear <span class="threat-origin threat-russia" style="font-size:12px;vertical-align:middle;margin-left:8px">RUSSIA</span></div>
+          <div class="page-subtitle" style="margin-top:6px">Midnight Blizzard · Nobelium · IRON HEMLOCK · 14 MITRE Techniques · AWS Kill Chain</div>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-secondary" onclick="showScreen('emulations')">← Back</button>
+          <button class="btn btn-playbook" onclick="showScreen('playbook')">📋 View Playbook</button>
+          <button class="btn btn-run" onclick="showRunModal()">▶ Run Emulation</button>
+        </div>
+      </div>
+
+      <div class="detail-tabs">
+        <div class="detail-tab active" onclick="switchTab(this,'tab-path')">Attack Path</div>
+        <div class="detail-tab" onclick="switchTab(this,'tab-mitre')">MITRE Mapping</div>
+        <div class="detail-tab" onclick="switchTab(this,'tab-refs')">References</div>
+        <div class="detail-tab" onclick="switchTab(this,'tab-findings')">Past Findings</div>
+      </div>
+
+      <!-- TAB: ATTACK PATH -->
+      <div class="tab-content active" id="tab-path">
+        <div class="detail-grid">
+          <div>
+            <div class="section-card">
+              <div class="section-card-title">Kill Chain Visualization</div>
+              <div class="attack-path">
+                <div class="attack-phase">
+                  <div class="phase-line">
+                    <div class="phase-dot" style="background:var(--red)"></div>
+                    <div class="phase-connector"></div>
+                  </div>
+                  <div class="phase-content">
+                    <div class="phase-name" style="color:var(--red)">Phase 1 · Initial Access</div>
+                    <div class="technique-chips">
+                      <div class="technique-chip"><span class="tid">T1566.001</span> Spearphishing Link</div>
+                      <div class="technique-chip"><span class="tid">T1078.004</span> Valid Cloud Accounts</div>
+                      <div class="technique-chip"><span class="tid">T1190</span> Exploit Public-Facing App</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="attack-phase">
+                  <div class="phase-line">
+                    <div class="phase-dot" style="background:var(--orange)"></div>
+                    <div class="phase-connector"></div>
+                  </div>
+                  <div class="phase-content">
+                    <div class="phase-name" style="color:var(--orange)">Phase 2 · Credential Access</div>
+                    <div class="technique-chips">
+                      <div class="technique-chip"><span class="tid">T1528</span> Steal App Access Token</div>
+                      <div class="technique-chip"><span class="tid">T1552.005</span> Cloud Instance Metadata</div>
+                      <div class="technique-chip"><span class="tid">T1110.003</span> Password Spraying</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="attack-phase">
+                  <div class="phase-line">
+                    <div class="phase-dot" style="background:#fbbf24)"></div>
+                    <div class="phase-connector"></div>
+                  </div>
+                  <div class="phase-content">
+                    <div class="phase-name" style="color:#fbbf24">Phase 3 · Discovery & Escalation</div>
+                    <div class="technique-chips">
+                      <div class="technique-chip"><span class="tid">T1087.004</span> Cloud Account Discovery</div>
+                      <div class="technique-chip"><span class="tid">T1580</span> Cloud Infrastructure Discovery</div>
+                      <div class="technique-chip"><span class="tid">T1548.005</span> Abuse Elevation Control</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="attack-phase">
+                  <div class="phase-line">
+                    <div class="phase-dot" style="background:var(--cyan)"></div>
+                    <div class="phase-connector"></div>
+                  </div>
+                  <div class="phase-content">
+                    <div class="phase-name" style="color:var(--cyan)">Phase 4 · Defense Evasion</div>
+                    <div class="technique-chips">
+                      <div class="technique-chip"><span class="tid">T1562.008</span> Disable Cloud Logging</div>
+                      <div class="technique-chip"><span class="tid">T1078</span> Valid Accounts</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="attack-phase">
+                  <div class="phase-line">
+                    <div class="phase-dot" style="background:var(--purple)"></div>
+                  </div>
+                  <div class="phase-content">
+                    <div class="phase-name" style="color:var(--purple)">Phase 5 · Exfiltration</div>
+                    <div class="technique-chips">
+                      <div class="technique-chip"><span class="tid">T1530</span> Data from Cloud Storage</div>
+                      <div class="technique-chip"><span class="tid">T1041</span> Exfiltration Over C2</div>
+                      <div class="technique-chip"><span class="tid">T1537</span> Transfer to Cloud Account</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div class="section-card">
+              <div class="section-card-title">Emulation Summary</div>
+              <div style="display:flex;flex-direction:column;gap:12px">
+                <div>
+                  <div style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);letter-spacing:1px;margin-bottom:4px">THREAT ACTOR</div>
+                  <div style="font-size:13px;color:var(--text-primary);font-weight:600">APT29 / Cozy Bear</div>
+                </div>
+                <div>
+                  <div style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);letter-spacing:1px;margin-bottom:4px">ATTRIBUTION</div>
+                  <div style="font-size:13px;color:var(--red)">SVR — Russian Foreign Intelligence</div>
+                </div>
+                <div>
+                  <div style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);letter-spacing:1px;margin-bottom:4px">ACTIVE SINCE</div>
+                  <div style="font-size:13px;color:var(--text-secondary)">2008 — Present</div>
+                </div>
+                <div>
+                  <div style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);letter-spacing:1px;margin-bottom:4px">TARGETS</div>
+                  <div style="font-size:12px;color:var(--text-secondary)">Government, Defense, Healthcare, Tech</div>
+                </div>
+                <div>
+                  <div style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);letter-spacing:1px;margin-bottom:4px">NOTABLE INCIDENTS</div>
+                  <div style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);line-height:1.5">SolarWinds (2020)<br>DNC Breach (2016)<br>USAID Campaign (2021)</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB: MITRE -->
+      <div class="tab-content" id="tab-mitre">
+        <div class="section-card">
+          <div class="section-card-title">MITRE ATT&CK Mapping — AWS</div>
+          <table class="mitre-table">
+            <thead>
+              <tr>
+                <th>Technique ID</th>
+                <th>Technique Name</th>
+                <th>Tactic</th>
+                <th>Platform</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td><span class="tid-badge">T1566.001</span></td><td>Spearphishing Link</td><td><span class="tactic-badge tactic-initial">Initial Access</span></td><td>Any</td><td style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted)">OAuth phishing to harvest tokens</td></tr>
+              <tr><td><span class="tid-badge">T1078.004</span></td><td>Valid Cloud Accounts</td><td><span class="tactic-badge tactic-initial">Initial Access</span></td><td>AWS IAM</td><td style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted)">Stolen/purchased cloud credentials</td></tr>
+              <tr><td><span class="tid-badge">T1528</span></td><td>Steal App Access Token</td><td><span class="tactic-badge tactic-initial">Credential Access</span></td><td>AWS SSO</td><td style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted)">OAuth 2.0 Device Authorization flow abuse</td></tr>
+              <tr><td><span class="tid-badge">T1552.005</span></td><td>Cloud Instance Metadata</td><td><span class="tactic-badge tactic-initial">Credential Access</span></td><td>EC2 IMDS</td><td style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted)">SSRF to IMDSv1 endpoint</td></tr>
+              <tr><td><span class="tid-badge">T1087.004</span></td><td>Cloud Account Discovery</td><td><span class="tactic-badge tactic-defense">Discovery</span></td><td>AWS IAM</td><td style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted)">Enumerate users, roles, and policies</td></tr>
+              <tr><td><span class="tid-badge">T1580</span></td><td>Cloud Infrastructure Discovery</td><td><span class="tactic-badge tactic-defense">Discovery</span></td><td>Multi</td><td style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted)">DescribeInstances, ListBuckets, etc.</td></tr>
+              <tr><td><span class="tid-badge">T1548.005</span></td><td>Abuse Elevation Control</td><td><span class="tactic-badge tactic-privesc">Priv Esc</span></td><td>AWS IAM</td><td style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted)">iam:PassRole + iam:AttachRolePolicy</td></tr>
+              <tr><td><span class="tid-badge">T1562.008</span></td><td>Disable Cloud Logging</td><td><span class="tactic-badge tactic-defense">Defense Evasion</span></td><td>CloudTrail</td><td style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted)">StopLogging on CloudTrail trails</td></tr>
+              <tr><td><span class="tid-badge">T1530</span></td><td>Data from Cloud Storage</td><td><span class="tactic-badge tactic-exfil">Collection</span></td><td>S3</td><td style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted)">Bulk S3 GetObject across buckets</td></tr>
+              <tr><td><span class="tid-badge">T1537</span></td><td>Transfer to Cloud Account</td><td><span class="tactic-badge tactic-exfil">Exfiltration</span></td><td>S3</td><td style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted)">Cross-account S3 replication to attacker</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- TAB: REFERENCES -->
+      <div class="tab-content" id="tab-refs">
+        <div class="section-card">
+          <div class="section-card-title">APT Advisories & Intelligence Reports</div>
+          <div class="ref-list">
+            <div class="ref-item">
+              <div class="ref-icon">🏛️</div>
+              <div class="ref-meta">
+                <div class="ref-title">CISA Alert AA21-148A — Sophisticated Spearphishing Campaign</div>
+                <div class="ref-source">CISA · US Cybersecurity & Infrastructure Security Agency · 2021</div>
+              </div>
+              <span class="ref-type" style="border-color:var(--red);color:var(--red)">ADVISORY</span>
+            </div>
+            <div class="ref-item">
+              <div class="ref-icon">🔬</div>
+              <div class="ref-meta">
+                <div class="ref-title">Midnight Blizzard: Guidance for responders on nation-state attack</div>
+                <div class="ref-source">Microsoft MSTIC · 2024</div>
+              </div>
+              <span class="ref-type" style="border-color:var(--cyan);color:var(--cyan)">REPORT</span>
+            </div>
+            <div class="ref-item">
+              <div class="ref-icon">🗂️</div>
+              <div class="ref-meta">
+                <div class="ref-title">MITRE ATT&CK — APT29 Group Profile (G0016)</div>
+                <div class="ref-source">MITRE ATT&CK · mitre.org</div>
+              </div>
+              <span class="ref-type" style="border-color:var(--purple);color:var(--purple)">MITRE</span>
+            </div>
+            <div class="ref-item">
+              <div class="ref-icon">📊</div>
+              <div class="ref-meta">
+                <div class="ref-title">APT29 Cloud Targeting: SolarWinds Supply Chain Attack Analysis</div>
+                <div class="ref-source">Mandiant / Google Cloud Intelligence · 2021</div>
+              </div>
+              <span class="ref-type" style="border-color:var(--orange);color:var(--orange)">CASE STUDY</span>
+            </div>
+            <div class="ref-item">
+              <div class="ref-icon">📝</div>
+              <div class="ref-meta">
+                <div class="ref-title">OAuth 2.0 Device Authorization Grant Attack Scenarios in AWS</div>
+                <div class="ref-source">Volexity Research · 2023</div>
+              </div>
+              <span class="ref-type" style="border-color:var(--green);color:var(--green)">RESEARCH</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB: FINDINGS -->
+      <div class="tab-content" id="tab-findings">
+        <div class="empty-state">
+          <div class="empty-state-icon">📊</div>
+          <div class="empty-state-title">No previous runs found</div>
+          <div class="empty-state-body">Run this emulation to generate findings and track your security posture over time.<br>Findings will appear here after each execution.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SCREEN: PLAYBOOK ── -->
+    <div class="screen" id="screen-playbook">
+      <div class="breadcrumb">
+        <a onclick="showScreen('dashboard')">Home</a> <span>/</span>
+        <a onclick="showScreen('emulations')">AWS · APT Emulations</a> <span>/</span>
+        <a onclick="showScreen('detail')">APT29 — Cozy Bear</a> <span>/</span> Playbook
+      </div>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">📋 Incident Response Playbook</div>
+          <div class="page-subtitle">APT29 · AWS Cloud Environment · Last updated Feb 2024</div>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-secondary" onclick="showScreen('detail')">← Back</button>
+          <button class="btn btn-secondary">⬇ Export PDF</button>
+          <button class="btn btn-run" onclick="showRunModal()">▶ Run Emulation</button>
+        </div>
+      </div>
+
+      <div class="playbook-steps">
+        <div class="playbook-step">
+          <div class="step-number">01</div>
+          <div class="step-content">
+            <div class="step-title">Triage & Initial Detection</div>
+            <div class="step-body">Verify alert fidelity. Check CloudTrail for anomalous API calls originating from unusual IP addresses or user agents. Look for GetObject calls at unusual volume or from unexpected principals. Confirm whether the activity is from a known service account or a potentially compromised identity.</div>
+            <div class="code-block">aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=GetObject \
+  --start-time 2024-01-01T00:00:00Z \
+  --max-results 50</div>
+          </div>
+        </div>
+
+        <div class="playbook-step">
+          <div class="step-number">02</div>
+          <div class="step-content">
+            <div class="step-title">Identity Containment</div>
+            <div class="step-body">If compromise is confirmed, immediately disable the affected IAM user or role. Revoke all active sessions. Rotate access keys. Review and document all permissions associated with the affected identity before removal to understand potential blast radius.</div>
+            <div class="code-block">aws iam update-access-key \
+  --access-key-id AKIAIOSFODNN7EXAMPLE \
+  --status Inactive
+aws iam delete-login-profile --user-name compromised-user</div>
+          </div>
+        </div>
+
+        <div class="playbook-step">
+          <div class="step-number">03</div>
+          <div class="step-content">
+            <div class="step-title">Scope Assessment — What Was Accessed?</div>
+            <div class="step-body">Enumerate all resources accessed by the compromised identity in the window of compromise. Query S3 access logs, CloudWatch, and GuardDuty findings. Identify if any data exfiltration occurred via cross-account replication, presigned URLs, or direct transfer.</div>
+          </div>
+        </div>
+
+        <div class="playbook-step">
+          <div class="step-number">04</div>
+          <div class="step-content">
+            <div class="step-title">Re-enable & Validate Logging</div>
+            <div class="step-body">APT29 is known to disable CloudTrail logging as part of defense evasion. Verify all CloudTrail trails are active and logging to a tamper-proof S3 bucket with Object Lock enabled. Ensure GuardDuty and Security Hub are active in all regions.</div>
+          </div>
+        </div>
+
+        <div class="playbook-step">
+          <div class="step-number">05</div>
+          <div class="step-content">
+            <div class="step-title">Deploy Detection Rules</div>
+            <div class="step-body">Apply the SIGMA and KQL detection rules generated from this emulation run. Import into your SIEM. Enable the associated GuardDuty threat intelligence feeds. Create CloudWatch alarms for the specific CloudTrail event patterns observed.</div>
+          </div>
+        </div>
+
+        <div class="playbook-step">
+          <div class="step-number">06</div>
+          <div class="step-content">
+            <div class="step-title">Post-Incident Review & Hardening</div>
+            <div class="step-body">Document findings in your security ticket system. Apply IAM guardrails to prevent re-occurrence: enforce MFA, enforce IMDSv2, restrict PassRole permissions. Schedule a re-run of this emulation after remediation to validate controls are effective.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SCREEN: DETECTIONS ── -->
+    <div class="screen" id="screen-detections">
+      <div class="breadcrumb">
+        <a onclick="showScreen('dashboard')">Home</a> <span>/</span> AWS <span>/</span> Detections
+      </div>
+      <div class="page-header">
+        <div>
+          <div class="page-title">AWS · Detection Library</div>
+          <div class="page-subtitle">212 rules · SIGMA · KQL · YARA</div>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-secondary">⬇ Export All Rules</button>
+        </div>
+      </div>
+      <div class="section-card">
+        <div class="section-card-title">SIGMA Rules — APT29</div>
+        <div class="code-block">title: APT29 CloudTrail Logging Disabled
+status: experimental
+description: Detects disabling of CloudTrail logging, a known APT29 defense evasion technique
+references:
+  - https://attack.mitre.org/techniques/T1562/008/
+tags:
+  - attack.defense_evasion
+  - attack.t1562.008
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventName: StopLogging
+    eventSource: cloudtrail.amazonaws.com
+  condition: selection
+falsepositives:
+  - Legitimate maintenance operations
+level: high</div>
+      </div>
+      <div class="section-card">
+        <div class="section-card-title">KQL Query — Microsoft Sentinel</div>
+        <div class="code-block">AWSCloudTrail
+| where EventName == "StopLogging"
+| where EventSource == "cloudtrail.amazonaws.com"
+| project TimeGenerated, UserIdentityArn, SourceIpAddress, UserAgent, RequestParameters
+| where TimeGenerated > ago(24h)
+| extend ThreatActor = "APT29", Technique = "T1562.008"</div>
+      </div>
+    </div>
+
+    <!-- ── SCREEN: GUARDRAILS ── -->
+    <div class="screen" id="screen-guardrails">
+      <div class="breadcrumb">
+        <a onclick="showScreen('dashboard')">Home</a> <span>/</span> AWS <span>/</span> Guardrails
+      </div>
+      <div class="page-header">
+        <div>
+          <div class="page-title">AWS · Guardrails Configuration</div>
+          <div class="page-subtitle">Define emulation scope, boundaries, and auto-block policies</div>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-run">💾 Save Config</button>
+        </div>
+      </div>
+      <div class="section-card">
+        <div class="section-card-title">Excluded Resources</div>
+        <div style="font-family:var(--font-mono);font-size:12px;color:var(--text-muted);line-height:2">
+          <div>🚫 prod-* (all production buckets)</div>
+          <div>🚫 arn:aws:iam::*:role/ProductionRole</div>
+          <div>🚫 RDS instances tagged Environment=Production</div>
+        </div>
+      </div>
+      <div class="section-card">
+        <div class="section-card-title">Allowed Emulation Window</div>
+        <div style="font-family:var(--font-mono);font-size:12px;color:var(--text-muted)">
+          Monday – Friday &nbsp;|&nbsp; 02:00 – 06:00 UTC &nbsp;|&nbsp; Auto-pause on incidents
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SCREEN: RUN STATUS ── -->
+    <div class="screen" id="screen-status">
+      <div class="breadcrumb">
+        <a onclick="showScreen('dashboard')">Home</a> <span>/</span>
+        <a onclick="showScreen('emulations')">AWS · APT Emulations</a> <span>/</span>
+        <a onclick="showScreen('detail')">APT29</a> <span>/</span> Emulation Run
+      </div>
+
+      <div class="page-header">
+        <div>
+          <div class="page-title">▶ Emulation Running — APT29</div>
+          <div class="page-subtitle">Started Feb 24 2026 · 11:42 UTC · Environment: aws-sandbox-eu-west-1</div>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-secondary" style="border-color:var(--red);color:var(--red)">⏹ Stop</button>
+        </div>
+      </div>
+
+      <div class="status-banner">
+        <div class="status-dot"></div>
+        Emulation in progress — Phase 2 of 5 · Credential Access · 3 techniques executed
+      </div>
+
+      <div class="progress-steps">
+        <div class="progress-step">
+          <div class="progress-step-icon step-done">✓</div>
+          <div class="step-name">Phase 1 · Initial Access — Spearphishing simulation</div>
+          <div class="step-time">00:42</div>
+          <div class="step-status" style="color:var(--green)">COMPLETE</div>
+        </div>
+        <div class="progress-step">
+          <div class="progress-step-icon step-done">✓</div>
+          <div class="step-name">Phase 1 · Valid Cloud Accounts — IAM key check</div>
+          <div class="step-time">01:12</div>
+          <div class="step-status" style="color:var(--green)">COMPLETE</div>
+        </div>
+        <div class="progress-step">
+          <div class="progress-step-icon step-running">◉</div>
+          <div class="step-name">Phase 2 · Steal App Access Token — OAuth Device Flow</div>
+          <div class="step-time">02:05 …</div>
+          <div class="step-status" style="color:var(--cyan)">RUNNING</div>
+        </div>
+        <div class="progress-step">
+          <div class="progress-step-icon step-finding">!</div>
+          <div class="step-name">Phase 2 · Cloud Instance Metadata — SSRF to IMDSv1</div>
+          <div class="step-time">—</div>
+          <div class="step-status" style="color:var(--red)">FINDING</div>
+        </div>
+        <div class="progress-step">
+          <div class="progress-step-icon step-pending">○</div>
+          <div class="step-name">Phase 3 · Cloud Account Discovery</div>
+          <div class="step-time">—</div>
+          <div class="step-status" style="color:var(--text-muted)">PENDING</div>
+        </div>
+        <div class="progress-step">
+          <div class="progress-step-icon step-pending">○</div>
+          <div class="step-name">Phase 3 · Privilege Escalation via PassRole</div>
+          <div class="step-time">—</div>
+          <div class="step-status" style="color:var(--text-muted)">PENDING</div>
+        </div>
+        <div class="progress-step">
+          <div class="progress-step-icon step-pending">○</div>
+          <div class="step-name">Phase 4 · Disable CloudTrail Logging</div>
+          <div class="step-time">—</div>
+          <div class="step-status" style="color:var(--text-muted)">PENDING</div>
+        </div>
+        <div class="progress-step">
+          <div class="progress-step-icon step-pending">○</div>
+          <div class="step-name">Phase 5 · S3 Data Exfiltration</div>
+          <div class="step-time">—</div>
+          <div class="step-status" style="color:var(--text-muted)">PENDING</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- RUN MODAL -->
+<div class="modal-overlay" id="runModal" onclick="if(event.target===this) closeRunModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">▶ Configure & Run Emulation</div>
+      <span class="modal-close" onclick="closeRunModal()">✕</span>
+    </div>
+    <div class="modal-body">
+      <div class="modal-warning">
+        ⚠️ Ensure guardrails are configured before running. This emulation will execute real AWS API calls in your environment.
+      </div>
+      <div class="modal-field">
+        <label class="modal-label">Target Environment</label>
+        <select class="modal-select">
+          <option>aws-sandbox-eu-west-1 (recommended)</option>
+          <option>aws-dev-us-east-1</option>
+          <option>aws-staging-ap-southeast-1</option>
+        </select>
+      </div>
+      <div class="modal-field">
+        <label class="modal-label">Emulation Scope</label>
+        <select class="modal-select">
+          <option>Full Kill Chain (all 5 phases)</option>
+          <option>Phase 1–2 only (Initial Access + Credentials)</option>
+          <option>Phase 3–5 only (Discovery + Exfiltration)</option>
+          <option>Single Technique</option>
+        </select>
+      </div>
+      <div class="modal-field">
+        <label class="modal-label">Apply Guardrail Profile</label>
+        <select class="modal-select">
+          <option>Default Sandbox Profile</option>
+          <option>Strict (exclude all data buckets)</option>
+          <option>Custom...</option>
+        </select>
+      </div>
+      <div class="modal-field">
+        <label class="modal-label">Notification (on completion)</label>
+        <input class="modal-input" type="text" placeholder="ayush@mayatrail.io" value="ayush@mayatrail.io">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeRunModal()">Cancel</button>
+      <button class="btn btn-run" onclick="launchEmulation()">▶ Launch Emulation</button>
+    </div>
+  </div>
+</div>
+
+<!-- SEARCH OVERLAY -->
+<div class="search-overlay" id="searchOverlay" onclick="if(event.target===this) closeSearch()">
+  <div class="search-modal">
+    <div class="search-input-wrap">
+      <span style="font-size:16px">🔍</span>
+      <input type="text" id="searchInput" placeholder="Search emulations, techniques, threat actors..." oninput="filterSearch(this.value)">
+      <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);cursor:pointer" onclick="closeSearch()">ESC</span>
+    </div>
+    <div class="search-results" id="searchResults">
+      <div class="search-result-item" onclick="showScreen('detail'); closeSearch()">
+        <div class="search-result-icon">🎯</div>
+        <div class="search-result-text">
+          <div class="search-result-title">APT29 — Cozy Bear</div>
+          <div class="search-result-sub">AWS · 14 techniques · Russia-nexus</div>
+        </div>
+        <span class="search-result-category">Emulation</span>
+      </div>
+      <div class="search-result-item" onclick="showScreen('detail'); closeSearch()">
+        <div class="search-result-icon">🎯</div>
+        <div class="search-result-text">
+          <div class="search-result-title">APT41 — Winnti</div>
+          <div class="search-result-sub">AWS · 18 techniques · China-nexus</div>
+        </div>
+        <span class="search-result-category">Emulation</span>
+      </div>
+      <div class="search-result-item" onclick="showScreen('emulations'); closeSearch()">
+        <div class="search-result-icon">📋</div>
+        <div class="search-result-text">
+          <div class="search-result-title">AWS APT Emulations</div>
+          <div class="search-result-sub">39 emulations available</div>
+        </div>
+        <span class="search-result-category">Section</span>
+      </div>
+      <div class="search-result-item" onclick="closeSearch()">
+        <div class="search-result-icon">🔍</div>
+        <div class="search-result-text">
+          <div class="search-result-title">T1562.008 — Disable Cloud Logging</div>
+          <div class="search-result-sub">MITRE ATT&CK · Defense Evasion</div>
+        </div>
+        <span class="search-result-category">Technique</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast">✓ <span id="toastMsg">Emulation launched successfully</span></div>
+
+<script>
+  function showScreen(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById('screen-' + id).classList.add('active');
+
+    // Update sub-item active state
+    document.querySelectorAll('.sub-item').forEach(i => i.classList.remove('active'));
+    if (id === 'emulations') document.querySelectorAll('.sub-item')[0].classList.add('active');
+    else if (id === 'playbook') document.querySelectorAll('.sub-item')[1].classList.add('active');
+    else if (id === 'detections') document.querySelectorAll('.sub-item')[2].classList.add('active');
+    else if (id === 'guardrails') document.querySelectorAll('.sub-item')[3].classList.add('active');
+  }
+
+  function togglePlatform(name) {
+    const sub = document.getElementById(name + '-sub');
+    const toggle = document.getElementById(name + '-toggle');
+    const chevron = document.getElementById(name + '-chevron');
+    const isOpen = sub.classList.contains('open');
+
+    // Close all
+    document.querySelectorAll('.sub-items').forEach(s => s.classList.remove('open'));
+    document.querySelectorAll('.platform-item').forEach(i => i.classList.remove('active'));
+    document.querySelectorAll('.platform-chevron').forEach(c => c.style.transform = '');
+
+    if (!isOpen) {
+      sub.classList.add('open');
+      toggle.classList.add('active');
+      chevron.style.transform = 'rotate(90deg)';
+    }
+  }
+
+  function switchTab(el, tabId) {
+    el.closest('.screen').querySelectorAll('.detail-tab').forEach(t => t.classList.remove('active'));
+    el.closest('.screen').querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    el.classList.add('active');
+    document.getElementById(tabId).classList.add('active');
+  }
+
+  function toggleDropdown() {
+    document.getElementById('accountDropdown').classList.toggle('open');
+  }
+
+  function closeDropdown() {
+    document.getElementById('accountDropdown').classList.remove('open');
+  }
+
+  function openSearch() {
+    document.getElementById('searchOverlay').classList.add('open');
+    setTimeout(() => document.getElementById('searchInput').focus(), 100);
+  }
+
+  function closeSearch() {
+    document.getElementById('searchOverlay').classList.remove('open');
+  }
+
+  function filterSearch(val) {
+    // simple visual feedback - in production would filter real data
+  }
+
+  function showRunModal() {
+    document.getElementById('runModal').classList.add('open');
+  }
+
+  function closeRunModal() {
+    document.getElementById('runModal').classList.remove('open');
+  }
+
+  function launchEmulation() {
+    closeRunModal();
+    showScreen('status');
+    showToast('Emulation launched — APT29 · aws-sandbox-eu-west-1');
+  }
+
+  function showToast(msg) {
+    const toast = document.getElementById('toast');
+    document.getElementById('toastMsg').textContent = msg;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 3500);
+  }
+
+  function toggleTheme() {
+    // placeholder for theme toggle
+    showToast('Theme toggle coming soon!');
+  }
+
+  // Keyboard shortcut: / to open search
+  document.addEventListener('keydown', e => {
+    if (e.key === '/' && !e.target.matches('input, select')) {
+      e.preventDefault();
+      openSearch();
+    }
+    if (e.key === 'Escape') {
+      closeSearch();
+      closeDropdown();
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.account-btn') && !e.target.closest('.dropdown-menu')) {
+      closeDropdown();
+    }
+  });
+</script>
+</body>
+</html>
