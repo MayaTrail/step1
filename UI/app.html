@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MayaTrail — APT Emulation Platform</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+<script>
+  // Apply saved theme before paint to prevent flash
+  (function() {
+    var t = localStorage.getItem('mayatrail_theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+</head>
+<body>
+
+<!-- ── TOP NAV ── -->
+<div class="topnav">
+  <a class="logo" onclick="showScreen('dashboard')">
+    <div class="logo-hex">M</div>
+    MayaTrail
+  </a>
+
+  <div class="topnav-search" onclick="openSearch()">
+    <span class="search-icon">&#128269;</span>
+    <input type="text" placeholder="Search emulations, techniques, actors…  ( / )" readonly>
+  </div>
+
+  <div class="topnav-right">
+    <button class="theme-toggle" onclick="toggleTheme()">&#9789; Theme</button>
+    <button class="account-btn" onclick="toggleDropdown()">
+      <div class="account-avatar" id="userAvatar">AP</div>
+      <span id="userName">Ayush P.</span> &#9662;
+      <div class="dropdown-menu" id="accountDropdown">
+        <div class="dropdown-header">
+          <div class="dropdown-name" id="ddName">Ayush Pathak</div>
+          <div class="dropdown-email" id="ddEmail">admin@mayatrail.tech</div>
+        </div>
+        <div class="dropdown-item">&#9881;&#65039; Settings</div>
+        <div class="dropdown-item">&#128203; API Keys</div>
+        <div class="dropdown-item">&#128101; Team</div>
+        <div class="divider"></div>
+        <div class="dropdown-item" onclick="handleLogout()" style="color:var(--red)">&#128682; Sign Out</div>
+      </div>
+    </button>
+  </div>
+</div>
+
+<!-- ── APP BODY ── -->
+<div class="app-body">
+
+  <!-- ── SIDEBAR ── -->
+  <aside class="sidebar">
+    <div class="sidebar-section-label">Dashboard</div>
+    <div class="platform-item" onclick="showScreen('dashboard')" style="color:var(--cyan);border-left-color:var(--cyan)">
+      &#127968; Home
+    </div>
+    <div style="height:12px"></div>
+
+    <div class="sidebar-section-label">Platforms</div>
+
+    <!-- AWS -->
+    <div class="platform-item" id="aws-toggle" onclick="togglePlatform('aws')">
+      &#9729;&#65039; AWS
+      <span class="platform-badge" id="badge-aws">5</span>
+      <span class="platform-chevron" id="aws-chevron">&#9654;</span>
+    </div>
+    <div class="sub-items" id="aws-sub">
+      <div class="sub-item" onclick="sidebarNavigate('aws','emulations')">&#127919; APT Emulations</div>
+      <div class="sub-item" onclick="sidebarNavigate('aws','playbook')">&#128203; Playbooks</div>
+      <div class="sub-item" onclick="sidebarNavigate('aws','detections')">&#128269; Detections</div>
+      <div class="sub-item" onclick="sidebarNavigate('aws','guardrails')">&#128737; Guardrails</div>
+    </div>
+
+    <!-- AI -->
+    <div class="platform-item" id="ai-toggle" onclick="togglePlatform('ai')">
+      &#129302; AI
+      <span class="platform-badge" id="badge-ai">4</span>
+      <span class="platform-chevron" id="ai-chevron">&#9654;</span>
+    </div>
+    <div class="sub-items" id="ai-sub">
+      <div class="sub-item" onclick="sidebarNavigate('ai','emulations')">&#127919; APT Emulations</div>
+      <div class="sub-item" onclick="sidebarNavigate('ai','playbook')">&#128203; Playbooks</div>
+      <div class="sub-item" onclick="sidebarNavigate('ai','detections')">&#128269; Detections</div>
+      <div class="sub-item" onclick="sidebarNavigate('ai','guardrails')">&#128737; Guardrails</div>
+    </div>
+
+    <!-- GCP -->
+    <div class="platform-item" id="gcp-toggle" onclick="togglePlatform('gcp')">
+      &#128309; GCP
+      <span class="platform-badge" id="badge-gcp">5</span>
+      <span class="platform-chevron" id="gcp-chevron">&#9654;</span>
+    </div>
+    <div class="sub-items" id="gcp-sub">
+      <div class="sub-item" onclick="sidebarNavigate('gcp','emulations')">&#127919; APT Emulations</div>
+      <div class="sub-item" onclick="sidebarNavigate('gcp','playbook')">&#128203; Playbooks</div>
+      <div class="sub-item" onclick="sidebarNavigate('gcp','detections')">&#128269; Detections</div>
+      <div class="sub-item" onclick="sidebarNavigate('gcp','guardrails')">&#128737; Guardrails</div>
+    </div>
+
+    <!-- Azure -->
+    <div class="platform-item" id="azure-toggle" onclick="togglePlatform('azure')">
+      &#128311; Azure
+      <span class="platform-badge" id="badge-azure">5</span>
+      <span class="platform-chevron" id="azure-chevron">&#9654;</span>
+    </div>
+    <div class="sub-items" id="azure-sub">
+      <div class="sub-item" onclick="sidebarNavigate('azure','emulations')">&#127919; APT Emulations</div>
+      <div class="sub-item" onclick="sidebarNavigate('azure','playbook')">&#128203; Playbooks</div>
+      <div class="sub-item" onclick="sidebarNavigate('azure','detections')">&#128269; Detections</div>
+      <div class="sub-item" onclick="sidebarNavigate('azure','guardrails')">&#128737; Guardrails</div>
+    </div>
+
+    <!-- Kubernetes -->
+    <div class="platform-item" id="k8s-toggle" onclick="togglePlatform('k8s')">
+      &#9881;&#65039; Kubernetes
+      <span class="platform-badge" id="badge-k8s">5</span>
+      <span class="platform-chevron" id="k8s-chevron">&#9654;</span>
+    </div>
+    <div class="sub-items" id="k8s-sub">
+      <div class="sub-item" onclick="sidebarNavigate('k8s','emulations')">&#127919; APT Emulations</div>
+      <div class="sub-item" onclick="sidebarNavigate('k8s','playbook')">&#128203; Playbooks</div>
+      <div class="sub-item" onclick="sidebarNavigate('k8s','detections')">&#128269; Detections</div>
+      <div class="sub-item" onclick="sidebarNavigate('k8s','guardrails')">&#128737; Guardrails</div>
+    </div>
+
+    <div style="height:16px"></div>
+    <div class="sidebar-section-label">System</div>
+    <div class="platform-item" style="color:var(--text-muted);font-size:12px">&#128202; Reports</div>
+    <div class="platform-item" style="color:var(--text-muted);font-size:12px">&#9881;&#65039; Settings</div>
+    <div class="platform-item" style="color:var(--text-muted);font-size:12px">&#128214; Documentation</div>
+  </aside>
+
+  <!-- ── MAIN CONTENT ── -->
+  <main class="main">
+    <div class="screen active" id="mainContent">
+      <!-- Dynamic content rendered by renderer.js -->
+    </div>
+  </main>
+</div>
+
+<!-- ── RUN MODAL ── -->
+<div class="modal-overlay" id="runModal" onclick="if(event.target===this) closeRunModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">&#9654; Configure & Run Emulation</div>
+      <span class="modal-close" onclick="closeRunModal()">&#10005;</span>
+    </div>
+    <div class="modal-body">
+      <div class="modal-warning">
+        &#9888;&#65039; Ensure guardrails are configured before running. This emulation will execute real API calls in your environment.
+      </div>
+      <div class="modal-field">
+        <label class="modal-label">Target Environment</label>
+        <select class="modal-select">
+          <option>aws-sandbox-eu-west-1 (recommended)</option>
+          <option>gcp-sandbox-us-central1</option>
+          <option>azure-sandbox-westeurope</option>
+          <option>k8s-sandbox-cluster-01</option>
+          <option>ai-sandbox-ml-cluster</option>
+        </select>
+      </div>
+      <div class="modal-field">
+        <label class="modal-label">Emulation Scope</label>
+        <select class="modal-select">
+          <option>Full Kill Chain (all phases)</option>
+          <option>Phase 1-2 only (Initial Access + Credentials)</option>
+          <option>Phase 3-5 only (Discovery + Exfiltration)</option>
+          <option>Single Technique</option>
+        </select>
+      </div>
+      <div class="modal-field">
+        <label class="modal-label">Apply Guardrail Profile</label>
+        <select class="modal-select">
+          <option>Default Sandbox Profile</option>
+          <option>Strict (exclude all data stores)</option>
+          <option>Custom...</option>
+        </select>
+      </div>
+      <div class="modal-field">
+        <label class="modal-label">Notification (on completion)</label>
+        <input class="modal-input" type="text" placeholder="admin@mayatrail.tech" value="admin@mayatrail.tech">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeRunModal()">Cancel</button>
+      <button class="btn btn-run" onclick="launchEmulation()">&#9654; Launch Emulation</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── SEARCH OVERLAY ── -->
+<div class="search-overlay" id="searchOverlay" onclick="if(event.target===this) closeSearch()">
+  <div class="search-modal">
+    <div class="search-input-wrap">
+      <span style="font-size:16px">&#128269;</span>
+      <input type="text" id="searchInput" placeholder="Search emulations, techniques, threat actors..." oninput="filterSearch(this.value)">
+      <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);cursor:pointer" onclick="closeSearch()">ESC</span>
+    </div>
+    <div class="search-results" id="searchResults"></div>
+  </div>
+</div>
+
+<!-- ── TOAST ── -->
+<div class="toast" id="toast">&#10003; <span id="toastMsg">Action completed successfully</span></div>
+
+<!-- ══════════════════════════════════════════
+     SCRIPT LOADING ORDER
+     1. Auth module (session check)
+     2. Platform data files (data layer)
+     3. Renderer (UI generation)
+     4. App core (navigation, events)
+     ══════════════════════════════════════════ -->
+
+<!-- Auth -->
+<script src="js/auth.js"></script>
+
+<!-- Platform Data: AWS -->
+<script src="platforms/aws/emulations.js"></script>
+<script src="platforms/aws/playbooks.js"></script>
+<script src="platforms/aws/detections.js"></script>
+
+<!-- Platform Data: GCP -->
+<script src="platforms/gcp/emulations.js"></script>
+<script src="platforms/gcp/playbooks.js"></script>
+<script src="platforms/gcp/detections.js"></script>
+
+<!-- Platform Data: Azure -->
+<script src="platforms/azure/emulations.js"></script>
+<script src="platforms/azure/playbooks.js"></script>
+<script src="platforms/azure/detections.js"></script>
+
+<!-- Platform Data: AI -->
+<script src="platforms/ai/emulations.js"></script>
+<script src="platforms/ai/playbooks.js"></script>
+<script src="platforms/ai/detections.js"></script>
+
+<!-- Platform Data: Kubernetes -->
+<script src="platforms/kubernetes/emulations.js"></script>
+<script src="platforms/kubernetes/playbooks.js"></script>
+<script src="platforms/kubernetes/detections.js"></script>
+
+<!-- Core Modules -->
+<script src="js/renderer.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>

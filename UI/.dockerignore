@@ -1,0 +1,23 @@
+# Build artifacts & version control
+.git/
+.gitignore
+
+# Docker files (don't copy into image)
+Dockerfile
+.dockerignore
+
+# Documentation
+README.md
+*.md
+
+# Monolithic reference file (not needed in production)
+mayatrail_ui.html
+
+# Editor & OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
