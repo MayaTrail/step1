@@ -1,0 +1,95 @@
+"""
+Views for the simulations app.
+
+SimulationRunViewSet provides:
+    GET  /api/simulations/       — list all runs for the authenticated user
+    GET  /api/simulations/{id}/  — retrieve a single run (for status polling)
+    POST /api/simulations/run/   — trigger a new simulation run
+"""
+
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.request import Request
+from rest_framework.response import Response
+
+from apps.infrastructure.models import Stack
+
+from .models import SimulationRun
+from .serializers import SimulationRunSerializer, TriggerSimulationSerializer
+from .tasks import run_simulation
+
+
+class SimulationRunViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet for SimulationRun resources.
+
+    Read-only by default (list + retrieve).  The only write operation is
+    the /run/ custom action, which enqueues a Celery task.
+    """
+
+    serializer_class = SimulationRunSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """
+        Return simulation runs triggered by the authenticated user.
+
+        Returns:
+            QuerySet of SimulationRun objects belonging to request.user.
+        """
+        return SimulationRun.objects.filter(triggered_by=self.request.user).select_related(
+            "stack", "triggered_by"
+        )
+
+    @action(detail=False, methods=["post"], url_path="run")
+    def run(self, request: Request) -> Response:
+        """
+        Trigger a new simulation run.
+
+        POST /api/simulations/run/
+        Body: { "stack_id": "<uuid>", "module": "<module_name>" }
+
+        Validates that the referenced Stack belongs to the authenticated user
+        and is in READY status before enqueuing the task.
+
+        Args:
+            request: DRF request with stack_id and module in the body.
+
+        Returns:
+            201 Created with the SimulationRun record and Celery task_id,
+            or 400/403/409 on validation failure.
+        """
+        input_serializer = TriggerSimulationSerializer(data=request.data)
+        if not input_serializer.is_valid():
+            return Response(input_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        stack_id = input_serializer.validated_data["stack_id"]
+        module = input_serializer.validated_data["module"]
+
+        try:
+            stack = Stack.objects.get(id=stack_id, owner=request.user)
+        except Stack.DoesNotExist:
+            return Response(
+                {"detail": "Stack not found or does not belong to you."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if stack.status != Stack.Status.READY:
+            return Response(
+                {"detail": f"Stack must be in READY state to run simulations (current: {stack.status})."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        run = SimulationRun.objects.create(
+            stack=stack,
+            module=module,
+            triggered_by=request.user,
+        )
+
+        task = run_simulation.delay(str(run.id))
+
+        return Response(
+            {"run": SimulationRunSerializer(run).data, "task_id": task.id},
+            status=status.HTTP_201_CREATED,
+        )
