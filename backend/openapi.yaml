@@ -1,0 +1,702 @@
+openapi: 3.0.3
+
+info:
+  title: MayaTrail API
+  version: 1.0.0
+  description: |
+    Backend API for the MayaTrail cloud-security simulation platform.
+
+    **Authentication**: All endpoints (except `/api/auth/register` and `/api/auth/login`)
+    require a JWT Bearer token obtained via the login endpoint.
+  contact:
+    name: MayaTrail Team
+
+servers:
+  - url: http://localhost:8000
+    description: Local development (Docker Compose)
+
+# ---------------------------------------------------------------------------
+# Security
+# ---------------------------------------------------------------------------
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Pass the access token returned by POST /api/auth/login
+        in the `Authorization: Bearer <token>` header.
+
+  # -----------------------------------------------------------------------
+  # Reusable schemas
+  # -----------------------------------------------------------------------
+  schemas:
+
+    # ---- Auth / Users ---------------------------------------------------
+    RegisterRequest:
+      type: object
+      required: [username, email, password]
+      properties:
+        username:
+          type: string
+          example: himan10
+        email:
+          type: string
+          format: email
+          example: himan10@example.com
+        password:
+          type: string
+          format: password
+          minLength: 8
+          example: superSecret123
+
+    RegisterResponse:
+      type: object
+      properties:
+        username:
+          type: string
+          example: himan10
+        email:
+          type: string
+          example: himan10@example.com
+
+    TokenRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          example: himan10
+        password:
+          type: string
+          format: password
+          example: superSecret123
+
+    TokenResponse:
+      type: object
+      properties:
+        access:
+          type: string
+          description: Short-lived JWT access token (1 hour).
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        refresh:
+          type: string
+          description: Long-lived refresh token (7 days).
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+    TokenRefreshRequest:
+      type: object
+      required: [refresh]
+      properties:
+        refresh:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+    TokenRefreshResponse:
+      type: object
+      properties:
+        access:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        username:
+          type: string
+          example: himan10
+        email:
+          type: string
+          example: himan10@example.com
+        first_name:
+          type: string
+          example: Himanshu
+        last_name:
+          type: string
+          example: ""
+        date_joined:
+          type: string
+          format: date-time
+          example: "2026-02-27T16:30:00Z"
+
+    # ---- Infrastructure (Stacks) ----------------------------------------
+    Stack:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+        name:
+          type: string
+          example: dev-himan10
+        region:
+          type: string
+          example: us-east-1
+        status:
+          type: string
+          enum: [pending, deploying, ready, destroying, failed]
+          example: pending
+        outputs:
+          type: object
+          additionalProperties: true
+          example: {}
+        owner:
+          type: string
+          description: Username of the owner (read-only, via StringRelatedField).
+          example: himan10
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    StackCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          example: dev-himan10
+        region:
+          type: string
+          default: us-east-1
+          example: us-west-2
+
+    StackActionResponse:
+      type: object
+      properties:
+        stack:
+          $ref: "#/components/schemas/Stack"
+        task_id:
+          type: string
+          description: Celery task ID for tracking the async operation.
+          example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+
+    # ---- Simulations ----------------------------------------------------
+    SimulationRun:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        stack:
+          type: string
+          format: uuid
+          description: UUID of the Stack used for this run.
+        module:
+          type: string
+          enum:
+            - attach_role_policy
+            - enumeration
+            - eventual_consistency
+            - s3_initial_access
+            - s3_kms_encryption
+          example: enumeration
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+          example: pending
+        stdout:
+          type: string
+          example: ""
+        stderr:
+          type: string
+          example: ""
+        triggered_by:
+          type: string
+          description: Username of the user who triggered the run.
+          example: himan10
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    TriggerSimulationRequest:
+      type: object
+      required: [stack_id, module]
+      properties:
+        stack_id:
+          type: string
+          format: uuid
+          description: UUID of the target Stack (must be READY).
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+        module:
+          type: string
+          enum:
+            - attach_role_policy
+            - enumeration
+            - eventual_consistency
+            - s3_initial_access
+            - s3_kms_encryption
+          example: enumeration
+
+    TriggerSimulationResponse:
+      type: object
+      properties:
+        run:
+          $ref: "#/components/schemas/SimulationRun"
+        task_id:
+          type: string
+          example: d4e5f6a7-b8c9-0123-4567-890abcdef123
+
+    # ---- Logs -----------------------------------------------------------
+    LogEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        level:
+          type: string
+          enum: [info, warning, error]
+          example: info
+        event:
+          type: string
+          enum:
+            - stack.deployed
+            - stack.destroyed
+            - simulation.started
+            - simulation.completed
+            - simulation.failed
+          example: stack.deployed
+        message:
+          type: string
+          example: "Stack dev-himan10 deployed successfully."
+        actor:
+          type: string
+          nullable: true
+          description: Username of the user who caused this event.
+          example: himan10
+        stack:
+          type: string
+          format: uuid
+          nullable: true
+        run:
+          type: string
+          format: uuid
+          nullable: true
+        timestamp:
+          type: string
+          format: date-time
+
+    # ---- Common ---------------------------------------------------------
+    ValidationError:
+      type: object
+      additionalProperties:
+        type: array
+        items:
+          type: string
+      example:
+        username: ["This field is required."]
+
+    DetailError:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: "Authentication credentials were not provided."
+
+  # -----------------------------------------------------------------------
+  # Reusable responses
+  # -----------------------------------------------------------------------
+  responses:
+    Unauthorized:
+      description: Authentication credentials were not provided or are invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/DetailError"
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  # ======================= Auth ==========================================
+
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user
+      operationId: authRegister
+      security: []   # public
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: User created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterResponse"
+        "400":
+          description: Validation errors (duplicate username, weak password, etc.).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Obtain JWT token pair
+      operationId: authLogin
+      security: []   # public
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenRequest"
+      responses:
+        "200":
+          description: Token pair returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "401":
+          description: Invalid credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailError"
+
+  /api/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh an access token
+      operationId: authRefresh
+      security: []   # only the refresh token is needed in the body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenRefreshRequest"
+      responses:
+        "200":
+          description: New access token returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenRefreshResponse"
+        "401":
+          description: Refresh token is invalid or expired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailError"
+
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Get current user profile
+      operationId: authMe
+      responses:
+        "200":
+          description: Authenticated user's profile.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "401":
+          description: Missing or invalid JWT.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailError"
+
+  # ======================= Stacks ========================================
+
+  /api/stacks/:
+    get:
+      tags: [Stacks]
+      summary: List all stacks owned by the current user
+      operationId: stacksList
+      responses:
+        "200":
+          description: Array of stacks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Stack"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Stacks]
+      summary: Create a new stack
+      operationId: stacksCreate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StackCreateRequest"
+      responses:
+        "201":
+          description: Stack created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stack"
+        "400":
+          description: Validation error (e.g. duplicate name).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/stacks/{id}/:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Stacks]
+      summary: Retrieve a stack
+      operationId: stacksRetrieve
+      responses:
+        "200":
+          description: Stack details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stack"
+        "404":
+          description: Stack not found.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [Stacks]
+      summary: Delete a stack record
+      operationId: stacksDelete
+      responses:
+        "204":
+          description: Stack deleted.
+        "404":
+          description: Stack not found.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/stacks/{id}/deploy/:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Stacks]
+      summary: Deploy a stack (async Pulumi up)
+      operationId: stacksDeploy
+      description: >
+        Enqueues a Celery task that runs `pulumi up` for the given stack.
+        Returns immediately with 202 and includes the Celery task_id for polling.
+        Returns 409 if the stack is already deploying or destroying.
+      responses:
+        "202":
+          description: Deploy task enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StackActionResponse"
+        "409":
+          description: Stack is in a non-terminal state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/stacks/{id}/destroy/:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Stacks]
+      summary: Destroy a stack (async Pulumi destroy)
+      operationId: stacksDestroy
+      description: >
+        Enqueues a Celery task that runs `pulumi destroy` for the given stack.
+        Returns immediately with 202 and includes the Celery task_id.
+        Returns 409 if the stack is already deploying or destroying.
+      responses:
+        "202":
+          description: Destroy task enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StackActionResponse"
+        "409":
+          description: Stack is in a non-terminal state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ======================= Simulations ===================================
+
+  /api/simulations/:
+    get:
+      tags: [Simulations]
+      summary: List all simulation runs for the current user
+      operationId: simulationsList
+      responses:
+        "200":
+          description: Array of simulation runs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SimulationRun"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/simulations/{id}/:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Simulations]
+      summary: Retrieve a simulation run (poll for status)
+      operationId: simulationsRetrieve
+      responses:
+        "200":
+          description: Simulation run details including stdout/stderr.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimulationRun"
+        "404":
+          description: Run not found.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/simulations/run/:
+    post:
+      tags: [Simulations]
+      summary: Trigger a new simulation run
+      operationId: simulationsRun
+      description: >
+        Creates a SimulationRun record and enqueues a Celery task.
+        The referenced stack must belong to the user and be in READY status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TriggerSimulationRequest"
+      responses:
+        "201":
+          description: Run created and task enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TriggerSimulationResponse"
+        "400":
+          description: Validation error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+        "404":
+          description: Stack not found or doesn't belong to user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailError"
+        "409":
+          description: Stack is not in READY state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ======================= Logs ==========================================
+
+  /api/logs/:
+    get:
+      tags: [Logs]
+      summary: List audit log entries for the current user
+      operationId: logsList
+      description: >
+        Returns log entries where the user is the actor, or the entry
+        references a stack/run owned by the user.
+      responses:
+        "200":
+          description: Array of log entries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LogEntry"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/logs/{id}/:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Logs]
+      summary: Retrieve a single log entry
+      operationId: logsRetrieve
+      responses:
+        "200":
+          description: Log entry details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogEntry"
+        "404":
+          description: Log entry not found.
+        "401":
+          $ref: "#/components/responses/Unauthorized"

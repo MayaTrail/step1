@@ -1,0 +1,95 @@
+version: "3.9"
+
+# MayaTrail step1 — local development stack
+# Services: PostgreSQL, Redis, Django backend, Celery worker.
+#
+# Usage:
+#   cp backend/.env.example backend/.env   # fill in SECRET_KEY
+#   docker-compose up --build
+
+services:
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mayatrail
+      POSTGRES_USER: mayatrail
+      POSTGRES_PASSWORD: mayatrail
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mayatrail"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: mayatrail
+      POSTGRES_USER: mayatrail
+      POSTGRES_PASSWORD: mayatrail
+      REDIS_URL: redis://redis:6379/0
+      SRC_DIR: /src
+    volumes:
+      - ./src:/src:ro
+    ports:
+      - "8000:8000"
+    depends_on: # waits for db and redis to be healthy before starting backend. 
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "python manage.py makemigrations users infrastructure simulations logs && python manage.py migrate --noinput &&
+             gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120"
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: mayatrail
+      POSTGRES_USER: mayatrail
+      POSTGRES_PASSWORD: mayatrail
+      REDIS_URL: redis://redis:6379/0
+      SRC_DIR: /src
+    volumes:
+      - ./src:/src:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A config worker --loglevel=info --concurrency=2
+
+volumes:
+  postgres_data:
