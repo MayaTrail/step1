@@ -30,17 +30,43 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     Accepts username, email, and password.  Password is write-only
     and is hashed before storage via create().
+    Email is normalised to lowercase and checked for uniqueness.
     """
 
     password = serializers.CharField(write_only=True, min_length=8)
+    email = serializers.EmailField(required=True)
 
     class Meta:
         model = User
         fields = ["username", "email", "password"]
 
+    def validate_email(self, value: str) -> str:
+        """
+        Normalise the email to lowercase and reject duplicates.
+
+        This gives a clean validation error instead of a raw DB
+        IntegrityError if uniqueness is violated.
+
+        Args:
+            value: The raw email string from the request body.
+
+        Returns:
+            The lowercased email if it is unique.
+
+        Raises:
+            serializers.ValidationError: If the email is already taken.
+        """
+        normalised = value.lower().strip()
+        if User.objects.filter(email=normalised).exists():
+            raise serializers.ValidationError(
+                "A user with this email already exists."
+            )
+        return normalised
+
     def create(self, validated_data: dict) -> User:
         """
         Create and return a new user with a hashed password.
+        Algorithm in which the password is stored is "PBKDF2"
 
         Args:
             validated_data: Validated field values from the request body.
@@ -50,6 +76,6 @@ class RegisterSerializer(serializers.ModelSerializer):
         """
         return User.objects.create_user(
             username=validated_data["username"],
-            email=validated_data.get("email", ""),
+            email=validated_data["email"],
             password=validated_data["password"],
         )

@@ -142,7 +142,7 @@ components:
           example: us-east-1
         status:
           type: string
-          enum: [pending, deploying, ready, destroying, failed]
+          enum: [pending, deploying, ready, destroying, refreshing, failed]
           example: pending
         outputs:
           type: object
@@ -519,9 +519,9 @@ paths:
       summary: Deploy a stack (async Pulumi up)
       operationId: stacksDeploy
       description: >
-        Enqueues a Celery task that runs `pulumi up` for the given stack.
+        Enqueues a Celery task that spawns a Pulumi container to run `pulumi up`.
         Returns immediately with 202 and includes the Celery task_id for polling.
-        Returns 409 if the stack is already deploying or destroying.
+        Returns 409 if the stack is already deploying, destroying, or refreshing.
       responses:
         "202":
           description: Deploy task enqueued.
@@ -530,7 +530,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/StackActionResponse"
         "409":
-          description: Stack is in a non-terminal state.
+          description: Stack is busy (deploying, destroying, or refreshing).
           content:
             application/json:
               schema:
@@ -551,9 +551,9 @@ paths:
       summary: Destroy a stack (async Pulumi destroy)
       operationId: stacksDestroy
       description: >
-        Enqueues a Celery task that runs `pulumi destroy` for the given stack.
+        Enqueues a Celery task that spawns a Pulumi container to run `pulumi destroy`.
         Returns immediately with 202 and includes the Celery task_id.
-        Returns 409 if the stack is already deploying or destroying.
+        Returns 409 if the stack is already deploying, destroying, or refreshing.
       responses:
         "202":
           description: Destroy task enqueued.
@@ -562,7 +562,73 @@ paths:
               schema:
                 $ref: "#/components/schemas/StackActionResponse"
         "409":
-          description: Stack is in a non-terminal state.
+          description: Stack is busy (deploying, destroying, or refreshing).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/stacks/{id}/refresh/:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Stacks]
+      summary: Refresh a stack (async Pulumi refresh)
+      operationId: stacksRefresh
+      description: >
+        Enqueues a Celery task that spawns a Pulumi container to run `pulumi refresh`.
+        Syncs the Pulumi state with the actual cloud resources without making any
+        infrastructure changes. Useful after manual changes in the AWS console.
+        Returns 409 if the stack is already deploying, destroying, or refreshing.
+      responses:
+        "202":
+          description: Refresh task enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StackActionResponse"
+        "409":
+          description: Stack is busy (deploying, destroying, or refreshing).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/stacks/{id}/preview/:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Stacks]
+      summary: Preview stack changes (async Pulumi preview)
+      operationId: stacksPreview
+      description: >
+        Enqueues a Celery task that spawns a Pulumi container to run `pulumi preview`.
+        This is a read-only operation that shows what changes would be made without
+        actually deploying. The stack status is not modified.
+        Returns 409 if the stack is already deploying, destroying, or refreshing.
+      responses:
+        "202":
+          description: Preview task enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StackActionResponse"
+        "409":
+          description: Stack is busy (deploying, destroying, or refreshing).
           content:
             application/json:
               schema:
