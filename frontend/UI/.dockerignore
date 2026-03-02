@@ -1,0 +1,30 @@
+# Dependencies (rebuilt in Docker)
+node_modules/
+
+# Build output (rebuilt in Docker)
+dist/
+
+# Build artifacts & version control
+.git/
+.gitignore
+
+# Docker files (don't copy into image)
+Dockerfile
+.dockerignore
+
+# Documentation
+README.md
+*.md
+
+# Legacy vanilla JS files (not used in React build)
+mayatrail_ui.html
+
+# Editor & OS files
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
