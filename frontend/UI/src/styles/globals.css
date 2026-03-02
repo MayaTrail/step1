@@ -1,0 +1,140 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base Styles ── */
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* Dark theme (default) — Matched to frontend/css/custom.css design system */
+  :root {
+    --surface-deep: #07080c;
+    --surface-base: #0d0f16;
+    --surface-card: #111420;
+    --surface-elevated: #1a1d2a;
+    --content-primary: #e8eaf0;
+    --content-secondary: #8a90a4;
+    --content-dim: #4a5068;
+    --border-subtle: rgba(255, 255, 255, 0.06);
+    --border-default: rgba(255, 255, 255, 0.06);
+    --border-active: rgba(255, 255, 255, 0.15);
+    --cyan: #00d4ff;
+    --orange: #ff6b35;
+    --purple: #a78bfa;
+    --green: #10b981;
+    --danger: #ff2244;
+    --safe: #00e676;
+    --accent-blue: #00b4d8;
+    --accent-cyan: #48e8c8;
+  }
+
+  /* Light theme overrides */
+  [data-theme='light'] {
+    --surface-deep: #f5f7fa;
+    --surface-base: #ffffff;
+    --surface-card: #ffffff;
+    --surface-elevated: #e8ecf1;
+    --content-primary: #1a2332;
+    --content-secondary: #4a5568;
+    --content-dim: #718096;
+    --border-subtle: rgba(0, 0, 0, 0.08);
+    --border-default: rgba(0, 0, 0, 0.08);
+    --border-active: rgba(0, 0, 0, 0.18);
+    --cyan: #0088bb;
+    --orange: #d45a20;
+    --purple: #7c5cbf;
+    --green: #0d8a63;
+    --danger: #cc1a36;
+    --safe: #0d8a63;
+    --accent-blue: #007a96;
+    --accent-cyan: #2db89e;
+  }
+
+  body {
+    @apply bg-surface-deep text-content-primary font-body antialiased;
+    min-height: 100vh;
+  }
+}
+
+/* ── Gradient Text Utilities ── */
+@layer utilities {
+  .text-gradient-danger {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, #ff2244, #ff6644);
+  }
+
+  .text-gradient-safe {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, #00e676, #48e8c8);
+  }
+
+  .text-gradient-cyan {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, #00b4d8, #48e8c8);
+  }
+}
+
+/* ── Feature Card Accent Lines ── */
+@layer components {
+  .card-hover-accent::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--danger), transparent);
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .card-hover-accent:hover::before {
+    opacity: 1;
+  }
+
+  .card-hover-accent-cyan::before {
+    background: linear-gradient(90deg, transparent, var(--accent-cyan), transparent);
+  }
+}
+
+/* ── Scrollbar (matched to frontend) ── */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--surface-deep);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+[data-theme='light'] ::-webkit-scrollbar-track {
+  background: #f5f7fa;
+}
+
+[data-theme='light'] ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+[data-theme='light'] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+/* ── Light theme specific overrides ── */
+[data-theme='light'] .bg-surface-deep {
+  background-color: var(--surface-deep);
+}
+
+/* ── Code Block Styling ── */
+pre code {
+  @apply font-mono text-xs leading-relaxed;
+}
