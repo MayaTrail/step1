@@ -11,17 +11,16 @@ COPY Pulumi.yaml .
 
 # Copy application source
 COPY __main__.py .
+COPY runner.py .
 COPY simulations/ ./simulations/
 
-# Copy and set entrypoint
-COPY entrypoint.sh .
-RUN chmod +x entrypoint.sh
-
 # Default environment variables (can be overridden at runtime)
-# especially this state bucket name (should be separate for each user)
+# The runner reads these as fallbacks when CLI flags are not provided.
+# PULUMI_CONFIG_PASSPHRASE - add your pulumi passphrase
 ENV ACTION=preview
 ENV STACK=dev-default
-ENV STATE_BUCKET=mayatrail-pulumi-state 
+ENV STATE_BUCKET=mayatrail-pulumi-state
 ENV AWS_REGION=ap-south-1
+ENV PULUMI_CONFIG_PASSPHRASE=enter-your-passphrase-here
 
-ENTRYPOINT ["./entrypoint.sh"]
+ENTRYPOINT ["python", "runner.py"]

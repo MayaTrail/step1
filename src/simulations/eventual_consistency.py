@@ -209,4 +209,7 @@ def eventual_consistency_attack() -> None:
     else:
         logger.info("Policy deleted within eventual consistency window attack passed")
 
-eventual_consistency_attack()
+def run():
+    """Entry point for the Celery task runner."""
+    print("=== Eventual Consistency Attack ===")
+    eventual_consistency_attack()

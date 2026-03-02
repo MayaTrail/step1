@@ -142,7 +142,7 @@ components:
           example: us-east-1
         status:
           type: string
-          enum: [pending, deploying, ready, destroying, failed]
+          enum: [pending, deploying, ready, destroying, refreshing, failed]
           example: pending
         outputs:
           type: object
@@ -227,24 +227,36 @@ components:
           type: string
           format: date-time
 
+    SimulationModule:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Numeric ID used to trigger this simulation.
+          example: 2
+        name:
+          type: string
+          description: Internal module name.
+          example: enumeration
+        description:
+          type: string
+          description: Human-readable description of the simulation.
+          example: IAM policy simulator / service enumeration
+
     TriggerSimulationRequest:
       type: object
-      required: [stack_id, module]
+      required: [stack_id, module_id]
       properties:
         stack_id:
           type: string
           format: uuid
           description: UUID of the target Stack (must be READY).
           example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
-        module:
-          type: string
-          enum:
-            - attach_role_policy
-            - enumeration
-            - eventual_consistency
-            - s3_initial_access
-            - s3_kms_encryption
-          example: enumeration
+        module_id:
+          type: integer
+          enum: [1, 2, 3, 4, 5]
+          description: Numeric ID of the simulation module (see GET /api/simulations/modules/).
+          example: 2
 
     TriggerSimulationResponse:
       type: object
@@ -519,9 +531,9 @@ paths:
       summary: Deploy a stack (async Pulumi up)
       operationId: stacksDeploy
       description: >
-        Enqueues a Celery task that runs `pulumi up` for the given stack.
+        Enqueues a Celery task that spawns a Pulumi container to run `pulumi up`.
         Returns immediately with 202 and includes the Celery task_id for polling.
-        Returns 409 if the stack is already deploying or destroying.
+        Returns 409 if the stack is already deploying, destroying, or refreshing.
       responses:
         "202":
           description: Deploy task enqueued.
@@ -530,7 +542,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/StackActionResponse"
         "409":
-          description: Stack is in a non-terminal state.
+          description: Stack is busy (deploying, destroying, or refreshing).
           content:
             application/json:
               schema:
@@ -551,9 +563,9 @@ paths:
       summary: Destroy a stack (async Pulumi destroy)
       operationId: stacksDestroy
       description: >
-        Enqueues a Celery task that runs `pulumi destroy` for the given stack.
+        Enqueues a Celery task that spawns a Pulumi container to run `pulumi destroy`.
         Returns immediately with 202 and includes the Celery task_id.
-        Returns 409 if the stack is already deploying or destroying.
+        Returns 409 if the stack is already deploying, destroying, or refreshing.
       responses:
         "202":
           description: Destroy task enqueued.
@@ -562,7 +574,73 @@ paths:
               schema:
                 $ref: "#/components/schemas/StackActionResponse"
         "409":
-          description: Stack is in a non-terminal state.
+          description: Stack is busy (deploying, destroying, or refreshing).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/stacks/{id}/refresh/:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Stacks]
+      summary: Refresh a stack (async Pulumi refresh)
+      operationId: stacksRefresh
+      description: >
+        Enqueues a Celery task that spawns a Pulumi container to run `pulumi refresh`.
+        Syncs the Pulumi state with the actual cloud resources without making any
+        infrastructure changes. Useful after manual changes in the AWS console.
+        Returns 409 if the stack is already deploying, destroying, or refreshing.
+      responses:
+        "202":
+          description: Refresh task enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StackActionResponse"
+        "409":
+          description: Stack is busy (deploying, destroying, or refreshing).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/stacks/{id}/preview/:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Stacks]
+      summary: Preview stack changes (async Pulumi preview)
+      operationId: stacksPreview
+      description: >
+        Enqueues a Celery task that spawns a Pulumi container to run `pulumi preview`.
+        This is a read-only operation that shows what changes would be made without
+        actually deploying. The stack status is not modified.
+        Returns 409 if the stack is already deploying, destroying, or refreshing.
+      responses:
+        "202":
+          description: Preview task enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StackActionResponse"
+        "409":
+          description: Stack is busy (deploying, destroying, or refreshing).
           content:
             application/json:
               schema:
@@ -586,6 +664,43 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/SimulationRun"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/simulations/modules/:
+    get:
+      tags: [Simulations]
+      summary: List all available simulation modules
+      operationId: simulationsModules
+      description: >
+        Returns the catalogue of simulation modules with their numeric IDs,
+        internal names, and human-readable descriptions. Use the `id` from
+        this response as the `module_id` when triggering a simulation run.
+      responses:
+        "200":
+          description: Array of available simulation modules.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SimulationModule"
+              example:
+                - id: 1
+                  name: attach_role_policy
+                  description: Privilege escalation via AttachRolePolicy
+                - id: 2
+                  name: enumeration
+                  description: IAM policy simulator / service enumeration
+                - id: 3
+                  name: eventual_consistency
+                  description: Eventual consistency attack
+                - id: 4
+                  name: s3_initial_access
+                  description: S3 basic access & data exfiltration
+                - id: 5
+                  name: s3_kms_encryption
+                  description: S3 KMS ransomware simulation
         "401":
           $ref: "#/components/responses/Unauthorized"
 

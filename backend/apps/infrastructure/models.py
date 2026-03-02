@@ -28,6 +28,7 @@ class Stack(models.Model):
         DEPLOYING = "deploying", "Deploying"
         READY = "ready", "Ready"
         DESTROYING = "destroying", "Destroying"
+        REFRESHING = "refreshing", "Refreshing"
         FAILED = "failed", "Failed"
 
     id = models.UUIDField(

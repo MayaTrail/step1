@@ -40,14 +40,14 @@ class TriggerSimulationSerializer(serializers.Serializer):
     """
     Input serializer for triggering a new simulation run.
 
-    Validates that both stack_id and module are provided, and that
-    the module name is one of the known simulation modules.
+    Validates that both stack_id and module_id are provided, and that
+    the module_id corresponds to a known simulation module.
     """
 
     stack_id = serializers.UUIDField(
         help_text="UUID of the Stack to run the simulation against.",
     )
-    module = serializers.ChoiceField(
-        choices=SimulationRun.KNOWN_MODULES,
-        help_text="Simulation module name (matches a file in src/simulations/).",
+    module_id = serializers.ChoiceField(
+        choices=SimulationRun.MODULE_IDS,
+        help_text="Numeric ID of the simulation module (see GET /api/simulations/modules/).",
     )

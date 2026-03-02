@@ -42,30 +42,46 @@ class SimulationRunViewSet(viewsets.ReadOnlyModelViewSet):
             "stack", "triggered_by"
         )
 
+    @action(detail=False, methods=["get"], url_path="modules")
+    def modules(self, request: Request) -> Response:
+        """
+        List all available simulation modules.
+
+        GET /api/simulations/modules/
+
+        Returns:
+            200 with a list of module names and descriptions.
+        """
+        return Response(SimulationRun.KNOWN_MODULES, status=status.HTTP_200_OK)
+
     @action(detail=False, methods=["post"], url_path="run")
     def run(self, request: Request) -> Response:
         """
         Trigger a new simulation run.
 
         POST /api/simulations/run/
-        Body: { "stack_id": "<uuid>", "module": "<module_name>" }
+        Body: { "stack_id": "<uuid>", "module_id": <int> }
 
         Validates that the referenced Stack belongs to the authenticated user
         and is in READY status before enqueuing the task.
 
         Args:
-            request: DRF request with stack_id and module in the body.
+            request: DRF request with stack_id and module_id in the body.
 
         Returns:
             201 Created with the SimulationRun record and Celery task_id,
-            or 400/403/409 on validation failure.
+            or 400/404/409 on validation failure.
         """
         input_serializer = TriggerSimulationSerializer(data=request.data)
         if not input_serializer.is_valid():
             return Response(input_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         stack_id = input_serializer.validated_data["stack_id"]
-        module = input_serializer.validated_data["module"]
+        module_id = input_serializer.validated_data["module_id"]
+
+        # Resolve numeric ID to module name.
+        module_info = SimulationRun.MODULE_BY_ID[module_id]
+        module_name = module_info["name"]
 
         try:
             stack = Stack.objects.get(id=stack_id, owner=request.user)
@@ -83,7 +99,7 @@ class SimulationRunViewSet(viewsets.ReadOnlyModelViewSet):
 
         run = SimulationRun.objects.create(
             stack=stack,
-            module=module,
+            module=module_name,
             triggered_by=request.user,
         )
 
@@ -93,3 +109,4 @@ class SimulationRunViewSet(viewsets.ReadOnlyModelViewSet):
             {"run": SimulationRunSerializer(run).data, "task_id": task.id},
             status=status.HTTP_201_CREATED,
         )
+

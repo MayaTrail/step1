@@ -5,6 +5,8 @@ RDS
 EBS
 """
 
+from __future__ import annotations
+
 import os
 import boto3
 from cryptography.hazmat.primitives import serialization, hashes
@@ -220,3 +222,13 @@ def simulate_kms_ransomware() -> None | bool:
         "encrypted_objects": encrypted_objects,
         "message": "ransomware simulation complete. Key material deleted and made the data unrecoverable."
     }
+
+
+def run():
+    """Entry point for the Celery task runner."""
+    print("=== S3 KMS Ransomware Simulation ===")
+    result = simulate_kms_ransomware()
+    if result and isinstance(result, dict):
+        print(f"\nResult: {result.get('message', 'completed')}")
+    elif result is False:
+        print("\nSimulation failed — check logs for details.")
