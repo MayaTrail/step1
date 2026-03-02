@@ -7,6 +7,8 @@ Task definition
     d. lambda list-functions
 """
 
+from __future__ import annotations
+
 import boto3
 from logger import get_logger
 
@@ -98,3 +100,14 @@ def enumerate_services(
         return active_clients
     except Exception as err:
         logger.error(err.__str__())
+
+
+def run():
+    """Entry point for the Celery task runner."""
+    print("=== IAM Policy Simulator / Service Enumeration ===")
+    result = enumerate_services()
+    if result:
+        print(f"\nActive clients: {list(result.keys())}")
+    else:
+        print("\nNo active clients found.")
+

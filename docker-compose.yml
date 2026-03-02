@@ -1,7 +1,8 @@
 version: "3.9"
 
 # MayaTrail step1 — local development stack
-# Services: PostgreSQL, Redis, Django backend, Celery worker, Pulumi runner (build-only).
+# Services: PostgreSQL, Redis, Django backend, Celery worker,
+#           Pulumi runner (build-only), React UI, Edge nginx proxy.
 #
 # Usage:
 #   cp backend/.env.example backend/.env   # fill in SECRET_KEY & AWS creds
@@ -60,6 +61,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import socket; s=socket.create_connection((\"localhost\",8000),2); s.close()'"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
     command: >
       sh -c "python manage.py makemigrations users infrastructure simulations logs && python manage.py migrate --noinput &&
              gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120"
@@ -106,6 +113,33 @@ services:
         condition: service_healthy
     command: celery -A config worker --loglevel=info --concurrency=2
 
+  # ── UI (React SPA on nginx) ──────────────────────────────────────
+  ui:
+    build:
+      context: ./frontend/UI
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 $(cat /tmp/nginx.pid 2>/dev/null) 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # ── Edge Reverse Proxy ───────────────────────────────────────────
+  #  Routes / → ui:8080, /api/ + /admin/ → backend:8000
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      ui:
+        condition: service_started
+      backend:
+        condition: service_healthy
+
 volumes:
   postgres_data:
-

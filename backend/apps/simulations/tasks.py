@@ -63,9 +63,14 @@ def run_simulation(self, run_id: str) -> dict:
         run.started_at = dj_timezone.now()
         run.save(update_fields=["status", "started_at"])
 
-        # Insert src/ at the front of sys.path so simulation imports resolve.
-        if SRC_DIR not in sys.path:
-            sys.path.insert(0, SRC_DIR)
+        # Insert src/ and src/simulations/ at the front of sys.path so
+        # simulation imports resolve.  The simulation modules use bare
+        # imports like `from logger import get_logger` (sibling files),
+        # so both directories must be on the path.
+        sims_dir = os.path.join(SRC_DIR, "simulations")
+        for p in (SRC_DIR, sims_dir):
+            if p not in sys.path:
+                sys.path.insert(0, p)
 
         stdout_buf = io.StringIO()
         stderr_buf = io.StringIO()

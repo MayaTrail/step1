@@ -30,14 +30,18 @@ class SimulationRun(models.Model):
         COMPLETED = "completed", "Completed"
         FAILED = "failed", "Failed"
 
-    # Known simulation module names — validated in the serializer.
+    # Known simulation modules — serves as the catalogue and validation source.
     KNOWN_MODULES = [
-        "attach_role_policy",
-        "enumeration",
-        "eventual_consistency",
-        "s3_initial_access",
-        "s3_kms_encryption",
+        {"id": 1, "name": "attach_role_policy",   "description": "Privilege escalation via AttachRolePolicy"},
+        {"id": 2, "name": "enumeration",           "description": "IAM policy simulator / service enumeration"},
+        {"id": 3, "name": "eventual_consistency",  "description": "Eventual consistency attack"},
+        {"id": 4, "name": "s3_initial_access",     "description": "S3 basic access & data exfiltration"},
+        {"id": 5, "name": "s3_kms_encryption",     "description": "S3 KMS ransomware simulation"},
     ]
+
+    # Lookup helpers.
+    MODULE_BY_ID = {m["id"]: m for m in KNOWN_MODULES}
+    MODULE_IDS = [m["id"] for m in KNOWN_MODULES]
 
     id = models.UUIDField(
         primary_key=True,

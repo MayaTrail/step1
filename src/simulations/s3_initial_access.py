@@ -137,3 +137,10 @@ def attack_s3():
         modify_s3_buckets(
             s3client, bucket_name_to_upload="open-bucket-me", modify_all=True, del_objects_only=True
         )
+
+
+def run():
+    """Entry point for the Celery task runner."""
+    print("=== S3 Basic Access & Data Exfiltration ===")
+    attack_s3()
+

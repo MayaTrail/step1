@@ -227,24 +227,36 @@ components:
           type: string
           format: date-time
 
+    SimulationModule:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Numeric ID used to trigger this simulation.
+          example: 2
+        name:
+          type: string
+          description: Internal module name.
+          example: enumeration
+        description:
+          type: string
+          description: Human-readable description of the simulation.
+          example: IAM policy simulator / service enumeration
+
     TriggerSimulationRequest:
       type: object
-      required: [stack_id, module]
+      required: [stack_id, module_id]
       properties:
         stack_id:
           type: string
           format: uuid
           description: UUID of the target Stack (must be READY).
           example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
-        module:
-          type: string
-          enum:
-            - attach_role_policy
-            - enumeration
-            - eventual_consistency
-            - s3_initial_access
-            - s3_kms_encryption
-          example: enumeration
+        module_id:
+          type: integer
+          enum: [1, 2, 3, 4, 5]
+          description: Numeric ID of the simulation module (see GET /api/simulations/modules/).
+          example: 2
 
     TriggerSimulationResponse:
       type: object
@@ -652,6 +664,43 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/SimulationRun"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/simulations/modules/:
+    get:
+      tags: [Simulations]
+      summary: List all available simulation modules
+      operationId: simulationsModules
+      description: >
+        Returns the catalogue of simulation modules with their numeric IDs,
+        internal names, and human-readable descriptions. Use the `id` from
+        this response as the `module_id` when triggering a simulation run.
+      responses:
+        "200":
+          description: Array of available simulation modules.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SimulationModule"
+              example:
+                - id: 1
+                  name: attach_role_policy
+                  description: Privilege escalation via AttachRolePolicy
+                - id: 2
+                  name: enumeration
+                  description: IAM policy simulator / service enumeration
+                - id: 3
+                  name: eventual_consistency
+                  description: Eventual consistency attack
+                - id: 4
+                  name: s3_initial_access
+                  description: S3 basic access & data exfiltration
+                - id: 5
+                  name: s3_kms_encryption
+                  description: S3 KMS ransomware simulation
         "401":
           $ref: "#/components/responses/Unauthorized"
 
