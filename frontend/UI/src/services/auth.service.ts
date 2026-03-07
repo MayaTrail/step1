@@ -105,6 +105,7 @@ async function backendSignup(req: SignupRequest): Promise<AuthResponse> {
     password: req.password,
     first_name: firstName,
     last_name: lastName,
+    invite_code: req.inviteCode,
   })
   // Auto-login after registration
   return backendLogin({ username: req.email, password: req.password })
@@ -164,24 +165,62 @@ function mockSignup(req: SignupRequest): AuthResponse {
 // ─── Public API ─────────────────────────────────────────────────
 
 /**
- * Login — tries real backend first, falls back to mock.
+ * Extract a human-readable error message from an Axios error response.
+ * Handles DRF's various error response shapes (object of field arrays,
+ * flat detail string, non_field_errors array).
+ */
+function extractApiError(err: any): string {
+  const data = err.response?.data
+  if (!data) return err.message ?? 'Request failed'
+
+  // DRF "detail" string, e.g. { detail: "Not found." }
+  if (typeof data.detail === 'string') return data.detail
+
+  // DRF field-level errors, e.g. { invite_code: ["Invalid invite code."] }
+  if (typeof data === 'object') {
+    const messages: string[] = []
+    for (const value of Object.values(data)) {
+      if (Array.isArray(value)) {
+        messages.push(...value.map(String))
+      } else if (typeof value === 'string') {
+        messages.push(value)
+      }
+    }
+    if (messages.length) return messages.join(' ')
+  }
+
+  return 'Request failed'
+}
+
+/**
+ * Login — tries real backend first, falls back to mock only when
+ * the backend is unreachable (no HTTP response at all).
  */
 export async function login(req: LoginRequest): Promise<AuthResponse> {
   try {
     return await backendLogin(req)
-  } catch {
+  } catch (err: any) {
+    // Backend responded with an error (4xx/5xx) — propagate it
+    if (err.response) {
+      throw new Error(extractApiError(err))
+    }
     // Backend unreachable — fall back to mock for dev convenience
     return mockLogin(req)
   }
 }
 
 /**
- * Signup — tries real backend first, falls back to mock.
+ * Signup — tries real backend first, falls back to mock only when
+ * the backend is unreachable (no HTTP response at all).
  */
 export async function signup(req: SignupRequest): Promise<AuthResponse> {
   try {
     return await backendSignup(req)
-  } catch {
+  } catch (err: any) {
+    // Backend responded with an error (4xx/5xx) — propagate it
+    if (err.response) {
+      throw new Error(extractApiError(err))
+    }
     return mockSignup(req)
   }
 }

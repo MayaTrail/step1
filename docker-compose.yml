@@ -120,7 +120,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "kill -0 $(cat /tmp/nginx.pid 2>/dev/null) 2>/dev/null || exit 1"]
+      test: ["CMD-SHELL", "kill -0 $$(cat /tmp/nginx.pid 2>/dev/null) 2>/dev/null || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 5

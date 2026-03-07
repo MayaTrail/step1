@@ -186,6 +186,7 @@ function SignInForm() {
 function SignUpForm() {
   const navigate = useNavigate()
   const { signup, loading, error, clearError } = useAuth()
+  const [inviteCode, setInviteCode] = useState('')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -203,7 +204,7 @@ function SignUpForm() {
     }
 
     try {
-      await signup({ name, email, password })
+      await signup({ name, email, password, inviteCode })
       navigate('/', { replace: true })
     } catch {
       // error is set in AuthContext
@@ -214,6 +215,21 @@ function SignUpForm() {
 
   return (
     <form className="flex flex-col gap-5" onSubmit={handleSubmit}>
+      <FormField label="Invite Code" icon="&#128273;">
+        <input
+          type="text"
+          value={inviteCode}
+          onChange={(e) => setInviteCode(e.target.value)}
+          placeholder="Enter your invite code"
+          required
+          autoComplete="off"
+          className="w-full bg-surface-elevated border border-border rounded-lg py-3 pl-[42px] pr-3.5
+            text-content-primary font-mono text-[13px] outline-none
+            transition-all focus:border-danger/40 focus:shadow-[0_0_0_3px_rgba(255,34,68,0.08)]
+            placeholder:text-content-dim"
+        />
+      </FormField>
+
       <FormField label="Full Name" icon="&#128100;">
         <input
           type="text"
