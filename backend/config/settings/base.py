@@ -163,3 +163,11 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "UTC"
+
+# ---------------------------------------------------------------------------
+# Registration gate
+# ---------------------------------------------------------------------------
+# When set to a non-empty string, every registration request must include
+# this exact invite code.  Set to "" (empty) to allow open registration.
+
+REGISTRATION_INVITE_CODE = config("REGISTRATION_INVITE_CODE", default="")
