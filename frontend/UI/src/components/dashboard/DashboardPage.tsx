@@ -25,16 +25,38 @@ export function DashboardPage() {
           style={{
             background: 'radial-gradient(circle at 30% 50%, rgba(255,34,68,0.06), transparent 60%), radial-gradient(circle at 70% 50%, rgba(0,180,216,0.06), transparent 60%)',
           }} />
+        {/* Decorative dots — right side */}
+        <div className="absolute right-8 top-1/2 -translate-y-1/2 pointer-events-none select-none">
+          <span className="absolute w-2 h-2 rounded-full bg-danger opacity-60" style={{ top: -30, right: 0 }} />
+          <span className="absolute w-1.5 h-1.5 rounded-full bg-safe opacity-50" style={{ top: -18, right: 28 }} />
+          <span className="absolute w-2.5 h-2.5 rounded-full bg-danger opacity-40" style={{ top: 2, right: 12 }} />
+          <span className="absolute w-1.5 h-1.5 rounded-full bg-safe opacity-60" style={{ top: -6, right: 52 }} />
+          <span className="absolute w-2 h-2 rounded-full bg-safe opacity-35" style={{ top: 18, right: 38 }} />
+          <span className="absolute w-1 h-1 rounded-full bg-danger opacity-50" style={{ top: 10, right: 68 }} />
+          <span className="absolute w-2 h-2 rounded-full bg-danger opacity-30" style={{ top: -36, right: 40 }} />
+          <span className="absolute w-1.5 h-1.5 rounded-full bg-safe opacity-45" style={{ top: 26, right: 8 }} />
+          <span className="absolute w-1 h-1 rounded-full bg-danger opacity-55" style={{ top: -44, right: 20 }} />
+          <span className="absolute w-2 h-2 rounded-full bg-safe opacity-30" style={{ top: -40, right: 65 }} />
+          <span className="absolute w-1.5 h-1.5 rounded-full bg-danger opacity-45" style={{ top: 30, right: 60 }} />
+          <span className="absolute w-1 h-1 rounded-full bg-safe opacity-55" style={{ top: 36, right: 24 }} />
+          <span className="absolute w-2 h-2 rounded-full bg-danger opacity-35" style={{ top: -12, right: 82 }} />
+          <span className="absolute w-1.5 h-1.5 rounded-full bg-safe opacity-40" style={{ top: 14, right: 95 }} />
+          <span className="absolute w-2.5 h-2.5 rounded-full bg-danger opacity-25" style={{ top: -50, right: 50 }} />
+          <span className="absolute w-1 h-1 rounded-full bg-safe opacity-50" style={{ top: 40, right: 48 }} />
+          <span className="absolute w-1.5 h-1.5 rounded-full bg-danger opacity-40" style={{ top: 22, right: 80 }} />
+          <span className="absolute w-2 h-2 rounded-full bg-safe opacity-30" style={{ top: -24, right: 100 }} />
+        </div>
         <div className="relative z-[1]">
           <div className="inline-flex items-center gap-2 bg-danger/[0.15] border border-danger/30 rounded-full px-4 py-1 font-mono text-[0.75rem] text-danger mb-4 tracking-[0.5px] font-medium">
             <span className="w-2 h-2 rounded-full bg-danger animate-pulse" />
-            APT EMULATION PLATFORM v2.1
+            APT EMULATION PLATFORM
           </div>
           <h1 className="font-display text-[2.2rem] font-[900] text-content-primary mb-3 tracking-[-1px] leading-[1.1]">
             Welcome to <span className="text-gradient-danger">MayaTrail</span>
           </h1>
-          <p className="text-content-secondary max-w-[540px] leading-[1.7] text-[0.95rem]">
-            Proactively defend your cloud infrastructure by emulating real-world APT techniques. Test your detections, validate your playbooks, and strengthen your security posture.
+          <p className="text-content-secondary max-w-[720px] leading-[1.7] text-[0.95rem]">
+            Proactively defend your cloud infrastructure by emulating real-world APT techniques.<br />
+            Test your detections, validate your playbooks, and strengthen your security posture.
           </p>
         </div>
       </div>

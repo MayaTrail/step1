@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
+import mayatrailLogo from '@/assets/mayatrail-logo.png'
 
 type AuthTab = 'signin' | 'signup'
 
@@ -44,9 +45,11 @@ export function LoginPage() {
           {/* Header */}
           <div className="text-center mb-8">
             <div className="flex items-center justify-center gap-2.5 mb-2">
-              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-danger to-[#ff6644] flex items-center justify-center text-sm font-extrabold text-white">
-                M
-              </div>
+              <img
+                src={mayatrailLogo}
+                alt="MayaTrail"
+                className="w-9 h-9 rounded-lg object-cover"
+              />
               <span className="font-display text-2xl font-extrabold text-content-primary tracking-[-0.5px]">MayaTrail</span>
             </div>
             <p className="font-mono text-[11px] text-content-dim tracking-[1.5px] uppercase">

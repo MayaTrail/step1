@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import { useTheme } from '@/context/ThemeContext'
+import mayatrailLogo from '@/assets/mayatrail-logo.png'
 
 interface TopNavProps {
   onOpenSearch: () => void
@@ -32,10 +33,11 @@ export function TopNav({ onOpenSearch }: TopNavProps) {
 
       {/* Logo — danger gradient matching frontend */}
       <Link to="/" className="flex items-center gap-2.5 no-underline group">
-        <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-danger to-[#ff6644] flex items-center justify-center text-sm font-extrabold text-white
-          transition-all group-hover:shadow-[0_0_20px_rgba(255,34,68,0.3)]">
-          M
-        </div>
+        <img
+          src={mayatrailLogo}
+          alt="MayaTrail"
+          className="w-9 h-9 rounded-lg object-cover transition-all group-hover:shadow-[0_0_20px_rgba(255,34,68,0.3)]"
+        />
         <span className="font-display text-[1.3rem] font-extrabold text-content-primary tracking-[-0.5px]">
           MayaTrail
         </span>
