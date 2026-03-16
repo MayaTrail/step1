@@ -30,18 +30,39 @@ class SimulationRun(models.Model):
         COMPLETED = "completed", "Completed"
         FAILED = "failed", "Failed"
 
-    # Known simulation modules — serves as the catalogue and validation source.
-    KNOWN_MODULES = [
-        {"id": 1, "name": "attach_role_policy",   "description": "Privilege escalation via AttachRolePolicy"},
-        {"id": 2, "name": "enumeration",           "description": "IAM policy simulator / service enumeration"},
-        {"id": 3, "name": "eventual_consistency",  "description": "Eventual consistency attack"},
-        {"id": 4, "name": "s3_initial_access",     "description": "S3 basic access & data exfiltration"},
-        {"id": 5, "name": "s3_kms_encryption",     "description": "S3 KMS ransomware simulation"},
-    ]
+    # ── Dynamic simulation catalogue ──────────────────────────────────
+    # Previously hardcoded; now auto-discovered from src/simulations/.
+    _modules_cache: list[dict] | None = None
 
-    # Lookup helpers.
-    MODULE_BY_ID = {m["id"]: m for m in KNOWN_MODULES}
-    MODULE_IDS = [m["id"] for m in KNOWN_MODULES]
+    @classmethod
+    def get_modules(cls) -> list[dict]:
+        """Return the simulation catalogue, auto-discovered and cached."""
+        if cls._modules_cache is None:
+            import os, sys
+            from pathlib import Path
+            _backend_dir = Path(__file__).resolve().parents[2]
+            sims_path = os.environ.get(
+                "SIMULATIONS_PATH", str(_backend_dir.parent)
+            )
+            if sims_path not in sys.path:
+                sys.path.insert(0, sims_path)
+
+            from simulations.registry import discover
+            cls._modules_cache = [
+                {"id": m["id"], "name": m["name"], "description": m["description"]}
+                for m in discover()
+            ]
+        return cls._modules_cache
+
+    @classmethod
+    def get_module_by_id(cls) -> dict[int, dict]:
+        """Lookup: module id → module info dict."""
+        return {m["id"]: m for m in cls.get_modules()}
+
+    @classmethod
+    def get_module_ids(cls) -> list[int]:
+        """List of valid module ids."""
+        return [m["id"] for m in cls.get_modules()]
 
     id = models.UUIDField(
         primary_key=True,

@@ -15,13 +15,15 @@ from pathlib import Path
 from celery import shared_task
 from django.apps import apps
 from django.utils import timezone as dj_timezone
-
-# Absolute path to the src/ directory so we can insert it into sys.path.
-# parents[2] == backend/ locally or /app in the container.
-# SRC_DIR can be overridden via the SRC_DIR environment variable.
-# In docker-compose the src/ directory is mounted at /src and SRC_DIR=/src is set.
+# Absolute path to the project root so the top-level `simulations` package
+# is importable.  parents[2] == backend/ locally or /app in the container.
+# SIMULATIONS_PATH can be overridden via environment variable.
+# In docker-compose, simulations/ is mounted at /opt/simulations and
+# SIMULATIONS_PATH=/opt is set.
 _BACKEND_DIR = Path(__file__).resolve().parents[2]
-SRC_DIR = str(Path(os.environ.get("SRC_DIR", str(_BACKEND_DIR.parent / "src"))))
+SIMULATIONS_PATH = str(
+    Path(os.environ.get("SIMULATIONS_PATH", str(_BACKEND_DIR.parent)))
+)
 
 
 def _get_run(run_id: str):
@@ -43,9 +45,9 @@ def run_simulation(self, run_id: str) -> dict:
     """
     Celery task: execute a simulation module against a provisioned stack.
 
-    Adds src/ to sys.path, then imports the requested module via importlib.
-    Stdout and stderr from the module are captured in-process.  The run
-    record is updated with timing, status, and output.
+    Adds the project root to sys.path, then imports the requested module
+    via importlib.  Stdout and stderr from the module are captured
+    in-process.  The run record is updated with timing, status, and output.
 
     Args:
         self: Celery task instance (provided by bind=True).
@@ -63,14 +65,10 @@ def run_simulation(self, run_id: str) -> dict:
         run.started_at = dj_timezone.now()
         run.save(update_fields=["status", "started_at"])
 
-        # Insert src/ and src/simulations/ at the front of sys.path so
-        # simulation imports resolve.  The simulation modules use bare
-        # imports like `from logger import get_logger` (sibling files),
-        # so both directories must be on the path.
-        sims_dir = os.path.join(SRC_DIR, "simulations")
-        for p in (SRC_DIR, sims_dir):
-            if p not in sys.path:
-                sys.path.insert(0, p)
+        # Insert the project root (or SIMULATIONS_PATH) into sys.path
+        # so `import simulations.<module>` resolves correctly.
+        if SIMULATIONS_PATH not in sys.path:
+            sys.path.insert(0, SIMULATIONS_PATH)
 
         stdout_buf = io.StringIO()
         stderr_buf = io.StringIO()

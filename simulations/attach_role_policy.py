@@ -1,6 +1,11 @@
 # Task: Add AdministratorAccess Policy to a role arn"
 # Let's suppose mayatrail-test is a sus user
 
+MANIFEST = {
+    "name": "attach_role_policy",
+    "description": "Privilege escalation via AttachRolePolicy",
+}
+
 import os
 import boto3
 

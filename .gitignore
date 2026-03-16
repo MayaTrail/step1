@@ -219,3 +219,4 @@ node_modules/
 .pulumi
 CLAUDE.md
 .gemini/
+step1-plans/

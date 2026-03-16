@@ -9,8 +9,13 @@ Task definition
 
 from __future__ import annotations
 
+MANIFEST = {
+    "name": "enumeration",
+    "description": "IAM policy simulator / service enumeration",
+}
+
 import boto3
-from logger import get_logger
+from simulations.logger import get_logger
 
 logger = get_logger("enumeration")
 
