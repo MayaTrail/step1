@@ -54,8 +54,12 @@ services:
       POSTGRES_USER: mayatrail
       POSTGRES_PASSWORD: mayatrail
       REDIS_URL: redis://redis:6379/0
+      SIMULATIONS_PATH: /opt
     ports:
       - "8000:8000"
+    volumes:
+      # Mount simulations package for the /api/simulations/modules/ endpoint.
+      - ./simulations:/opt/simulations:ro
     depends_on: # waits for db and redis to be healthy before starting backend.
       db:
         condition: service_healthy
@@ -100,12 +104,12 @@ services:
       REDIS_URL: redis://redis:6379/0
       PULUMI_IMAGE: step1-pulumi
       STATE_BUCKET: mayatrail-pulumi-state
-      SRC_DIR: /src
+      SIMULATIONS_PATH: /opt
     volumes:
       # Mount Docker socket so the worker can spawn Pulumi containers.
       - /var/run/docker.sock:/var/run/docker.sock
-      # Mount src/ for simulation modules (imported in-process by simulations tasks).
-      - ./src:/src:ro
+      # Mount simulations package (imported in-process by simulations tasks).
+      - ./simulations:/opt/simulations:ro
     depends_on:
       db:
         condition: service_healthy

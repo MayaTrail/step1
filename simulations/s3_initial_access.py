@@ -13,11 +13,16 @@ Task definition
 6. s3 put-object
 """
 
+MANIFEST = {
+    "name": "s3_initial_access",
+    "description": "S3 basic access & data exfiltration",
+}
+
 import base64
 import boto3
 import botocore
-from logger import get_logger
-from enumeration import enumerate_services
+from simulations.logger import get_logger
+from simulations.enumeration import enumerate_services
 
 logger = get_logger("enumerations_n_s3_access")
 

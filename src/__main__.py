@@ -6,7 +6,6 @@ import pulumi.dynamic as dynamic
 import pulumi_aws as aws
 import boto3
 from botocore.exceptions import ClientError
-from simulations import attach_role_policy
 
 
 class LoginProfileProvider(dynamic.ResourceProvider):

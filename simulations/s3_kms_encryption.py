@@ -7,14 +7,19 @@ EBS
 
 from __future__ import annotations
 
+MANIFEST = {
+    "name": "s3_kms_encryption",
+    "description": "S3 KMS ransomware simulation",
+}
+
 import os
 import boto3
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.backends import default_backend
-from enumeration import enumerate_services
-from logger import get_logger
-from attach_role_policy import get_role_creds, attach_administrator_policy
+from simulations.enumeration import enumerate_services
+from simulations.logger import get_logger
+from simulations.attach_role_policy import get_role_creds, attach_administrator_policy
 
 logger = get_logger("s3_kms_encryption")
 

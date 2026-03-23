@@ -52,7 +52,7 @@ class SimulationRunViewSet(viewsets.ReadOnlyModelViewSet):
         Returns:
             200 with a list of module names and descriptions.
         """
-        return Response(SimulationRun.KNOWN_MODULES, status=status.HTTP_200_OK)
+        return Response(SimulationRun.get_modules(), status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="run")
     def run(self, request: Request) -> Response:
@@ -80,7 +80,7 @@ class SimulationRunViewSet(viewsets.ReadOnlyModelViewSet):
         module_id = input_serializer.validated_data["module_id"]
 
         # Resolve numeric ID to module name.
-        module_info = SimulationRun.MODULE_BY_ID[module_id]
+        module_info = SimulationRun.get_module_by_id()[module_id]
         module_name = module_info["name"]
 
         try:

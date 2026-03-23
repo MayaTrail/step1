@@ -1,5 +1,7 @@
 # Django Backend Architecture
 
+> **Note:** This was the original planning/proposal document written before the Django backend was implemented. For the current, up-to-date architecture reference, see [`backend.md`](./backend.md). This file is retained for historical context.
+
 ## Overview
 
 This document describes the proposed Django REST API backend for MayaTrail. The backend

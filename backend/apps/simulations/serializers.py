@@ -47,7 +47,15 @@ class TriggerSimulationSerializer(serializers.Serializer):
     stack_id = serializers.UUIDField(
         help_text="UUID of the Stack to run the simulation against.",
     )
-    module_id = serializers.ChoiceField(
-        choices=SimulationRun.MODULE_IDS,
+    module_id = serializers.IntegerField(
         help_text="Numeric ID of the simulation module (see GET /api/simulations/modules/).",
     )
+
+    def validate_module_id(self, value: int) -> int:
+        """Ensure the module_id maps to a discovered simulation."""
+        valid_ids = SimulationRun.get_module_ids()
+        if value not in valid_ids:
+            raise serializers.ValidationError(
+                f"Invalid module_id. Valid IDs: {valid_ids}"
+            )
+        return value

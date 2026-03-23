@@ -6,10 +6,15 @@ NOTE: as per the fix implemented by AWS, it is not possible to use set of delete
 however, an attacker can list policies and remove them within the propagation window. 
 """
 
+MANIFEST = {
+    "name": "eventual_consistency",
+    "description": "Eventual consistency attack",
+}
+
 import boto3
 import time
 from botocore.exceptions import ClientError
-from logger import get_logger
+from simulations.logger import get_logger
 
 logger = get_logger("eventual_consistency_attack")
 

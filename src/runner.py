@@ -23,23 +23,18 @@ import os
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "simulations"))
+# Add the project root (step1/) to sys.path so the top-level `simulations`
+# package is importable.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from simulations.logger import get_logger
+from simulations.registry import discover
 
 logger = get_logger("runner")
 
 # Valid actions & simulation catalogue
 
 VALID_ACTIONS = ("up", "destroy", "preview", "refresh")
-
-SIMULATIONS = {
-    "1": ("attach_role_policy",    "Privilege escalation via AttachRolePolicy"),
-    "2": ("enumeration",           "IAM policy simulator / service enumeration"),
-    "3": ("s3_initial_access",     "S3 basic access & data exfiltration"),
-    "4": ("s3_kms_encryption",     "S3 KMS ransomware simulation"),
-    "5": ("eventual_consistency",  "Eventual consistency attack"),
-}
 
 # Pulumi helpers
 
@@ -199,9 +194,18 @@ def run_infra_action(
 
 def run_emulations() -> None:
     """Present simulation menu and run user-selected simulations."""
+    sims = discover()
+
+    if not sims:
+        logger.error("No simulation modules found.")
+        return
+
+    # Build a lookup: string key → sim entry
+    sim_by_key = {str(s["id"]): s for s in sims}
+
     print("\nAvailable simulations:")
-    for key, (_, desc) in SIMULATIONS.items():
-        print(f"  {key}. {desc}")
+    for key, sim in sim_by_key.items():
+        print(f"  {key}. {sim['description']}")
     print("  a. Run all")
     print("  q. Quit\n")
 
@@ -210,38 +214,19 @@ def run_emulations() -> None:
     if choice == "q":
         return
 
-    selected = list(SIMULATIONS.keys()) if choice == "a" else [c.strip() for c in choice.split(",")]
+    selected = list(sim_by_key.keys()) if choice == "a" else [c.strip() for c in choice.split(",")]
 
     for key in selected:
-        if key not in SIMULATIONS:
+        if key not in sim_by_key:
             logger.error(f"Invalid choice: {key}")
             continue
 
-        module_name, desc = SIMULATIONS[key]
-        logger.info(f"Running: {desc}")
+        sim = sim_by_key[key]
+        logger.info(f"Running: {sim['description']}")
         try:
-            if module_name == "attach_role_policy":
-                from simulations.attach_role_policy import get_role_creds, attach_administrator_policy
-                logger.info("attach_role_policy: use get_role_creds() / attach_administrator_policy() directly")
-
-            elif module_name == "enumeration":
-                from simulations.enumeration import enumerate_services
-                enumerate_services()
-
-            elif module_name == "s3_initial_access":
-                from simulations.s3_initial_access import attack_s3
-                attack_s3()
-
-            elif module_name == "s3_kms_encryption":
-                from simulations.s3_kms_encryption import simulate_kms_ransomware
-                simulate_kms_ransomware()
-
-            elif module_name == "eventual_consistency":
-                from simulations.eventual_consistency import eventual_consistency_attack
-                eventual_consistency_attack()
-
+            sim["module"].run()
         except Exception as err:
-            logger.error(f"Simulation '{desc}' failed: {err}")
+            logger.error(f"Simulation '{sim['description']}' failed: {err}")
 
 
 # CLI entry point
