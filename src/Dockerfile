@@ -12,7 +12,6 @@ COPY Pulumi.yaml .
 # Copy application source
 COPY __main__.py .
 COPY runner.py .
-COPY simulations/ ./simulations/
 
 # Default environment variables (can be overridden at runtime)
 # The runner reads these as fallbacks when CLI flags are not provided.

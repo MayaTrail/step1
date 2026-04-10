@@ -1,9 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
+import { useDemoCountdown } from '@/hooks/useDemoCountdown'
 import { fetchProfile, type UserProfile } from '@/services/auth.service'
 
 export function ProfilePage() {
     const { user, logout } = useAuth()
+    const navigate = useNavigate()
     const [profile, setProfile] = useState<UserProfile | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
@@ -125,7 +128,7 @@ export function ProfilePage() {
                                 <span className="font-mono text-xs text-content-dim">@{profile?.username ?? user?.username}</span>
                                 <span className="w-1 h-1 rounded-full bg-content-dim" />
                                 <span className="inline-flex items-center gap-1.5 bg-safe/[0.12] border border-safe/30 rounded-full px-2.5 py-0.5
-                  font-mono text-[10px] text-safe tracking-[0.5px] font-medium uppercase">
+                   font-mono text-[10px] text-safe tracking-[0.5px] font-medium uppercase">
                                     <span className="w-1.5 h-1.5 rounded-full bg-safe animate-pulse" />
                                     Active
                                 </span>
@@ -169,6 +172,13 @@ export function ProfilePage() {
                 />
             </div>
 
+            {/* Connection Mode Card */}
+            <ConnectionModeCard
+                user={user}
+                profile={profile}
+                onUpgrade={() => navigate('/connector?upgrade=1')}
+            />
+
             {/* Account ID */}
             {profile?.id && (
                 <div className="bg-surface-card border border-border rounded-card px-6 py-4 mb-6
@@ -207,6 +217,140 @@ export function ProfilePage() {
             flex items-center gap-2"
                 >
                     <span>🚪</span> Sign Out
+                </button>
+            </div>
+        </div>
+    )
+}
+
+/* ── Connection Mode Card ── */
+function ConnectionModeCard({
+    user,
+    profile,
+    onUpgrade,
+}: {
+    user: ReturnType<typeof import('@/context/AuthContext').useAuth>['user']
+    profile: UserProfile | null
+    onUpgrade: () => void
+}) {
+    if (!user) return null
+
+    const isDemo = user.isDemo
+    const isVerified = user.isVerified
+
+    if (isDemo) {
+        return <DemoModeCard user={user} onUpgrade={onUpgrade} />
+    }
+
+    if (isVerified) {
+        return (
+            <div className="bg-surface-card border border-border rounded-card relative overflow-hidden mb-6">
+                <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-accent-blue via-accent-cyan to-green" />
+                <div className="px-6 py-5">
+                    <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-lg bg-accent-blue/[0.12] border border-accent-blue/20 flex items-center justify-center text-lg">
+                                ☁️
+                            </div>
+                            <div>
+                                <div className="font-mono text-[10px] text-content-dim tracking-[1px] uppercase mb-0.5">Connection Mode</div>
+                                <div className="font-display text-sm font-bold text-content-primary">AWS Connector</div>
+                            </div>
+                        </div>
+                        <span className="inline-flex items-center gap-1.5 bg-safe/[0.12] border border-safe/30 rounded-full px-3 py-1
+              font-mono text-[10px] text-safe tracking-[0.5px] font-medium uppercase">
+                            <span className="w-1.5 h-1.5 rounded-full bg-safe" />
+                            Verified
+                        </span>
+                    </div>
+                    {profile?.aws_role_arn && (
+                        <div className="bg-surface-elevated rounded-lg px-4 py-3 border border-border">
+                            <div className="font-mono text-[10px] text-content-dim tracking-[1px] uppercase mb-1">Role ARN</div>
+                            <div className="font-mono text-xs text-accent-cyan break-all">
+                                {profile.aws_role_arn.replace(/^(arn:aws:iam::\d{4})\d+(:role\/.{4}).*$/, '$1****$2****')}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+        )
+    }
+
+    return null
+}
+
+/* ── Demo Mode Card with Countdown ── */
+function DemoModeCard({
+    user,
+    onUpgrade,
+}: {
+    user: NonNullable<ReturnType<typeof import('@/context/AuthContext').useAuth>['user']>
+    onUpgrade: () => void
+}) {
+    const { isExpired } = useDemoCountdown(user.demoExpiresAt)
+
+    return (
+        <div className={`bg-surface-card border rounded-card relative overflow-hidden mb-6 transition-all duration-300
+            ${isExpired ? 'border-[#ff8c00]/40' : 'border-border'}`}>
+            <div className={`absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r
+                ${isExpired ? 'from-[#ff8c00] via-danger to-[#ff8c00]' : 'from-[#ff8c00] via-amber-400 to-[#ff8c00]'}`} />
+            <div className="px-6 py-5">
+                <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg
+                            ${isExpired
+                                ? 'bg-danger/[0.12] border border-danger/20'
+                                : 'bg-[#ff8c00]/[0.12] border border-[#ff8c00]/20'
+                            }`}>
+                            {isExpired ? '⏱️' : '🧪'}
+                        </div>
+                        <div>
+                            <div className="font-mono text-[10px] text-content-dim tracking-[1px] uppercase mb-0.5">Connection Mode</div>
+                            <div className="font-display text-sm font-bold text-content-primary">Demo Sandbox</div>
+                        </div>
+                    </div>
+                    <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1
+              font-mono text-[10px] tracking-[0.5px] font-medium uppercase
+              ${isExpired
+                            ? 'bg-danger/[0.12] border border-danger/30 text-danger'
+                            : 'bg-[#ff8c00]/[0.12] border border-[#ff8c00]/30 text-[#ff8c00]'
+                        }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${isExpired ? 'bg-danger' : 'bg-[#ff8c00] animate-pulse'}`} />
+                        {isExpired ? 'Expired' : 'Active'}
+                    </span>
+                </div>
+
+                {/* Expired notice */}
+                {isExpired && (
+                    <div className="mb-4">
+                        <div className="bg-danger/[0.06] border border-danger/20 rounded-lg px-4 py-3">
+                            <p className="font-mono text-[11px] text-danger leading-relaxed">
+                                Your 5-minute demo session has ended. Connect your AWS account to continue using MayaTrail.
+                            </p>
+                        </div>
+                    </div>
+                )}
+
+                {/* Info notice */}
+                <div className="flex items-start gap-2 mb-4 bg-surface-elevated/50 rounded-lg px-3.5 py-2.5 border border-border">
+                    <span className="text-xs mt-0.5">ℹ️</span>
+                    <p className="font-mono text-[10px] text-content-dim leading-relaxed">
+                        Demo mode can only be activated once. Connect your AWS account for full, unlimited access to all emulations and detections.
+                    </p>
+                </div>
+
+                {/* Upgrade CTA */}
+                <button
+                    type="button"
+                    onClick={onUpgrade}
+                    className="w-full bg-accent-blue border-none rounded-btn py-3
+            text-white font-display text-sm font-bold cursor-pointer
+            transition-all hover:-translate-y-[1px] hover:shadow-[0_8px_32px_rgba(0,180,216,0.35)]
+            active:translate-y-0 flex items-center justify-center gap-2"
+                >
+                    <span>☁️</span>
+                    Connect AWS Account
+                    <span className="text-xs opacity-70">→</span>
                 </button>
             </div>
         </div>

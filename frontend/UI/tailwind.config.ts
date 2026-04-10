@@ -57,6 +57,10 @@ export default {
           from: { opacity: '0' },
           to: { opacity: '1' },
         },
+        fadeSlideIn: {
+          from: { opacity: '0', transform: 'translateY(-8px)' },
+          to: { opacity: '1', transform: 'translateY(0)' },
+        },
         modalIn: {
           from: { opacity: '0', transform: 'scale(0.95) translateY(10px)' },
           to: { opacity: '1', transform: 'scale(1) translateY(0)' },
@@ -71,6 +75,7 @@ export default {
       },
       animation: {
         fadeIn: 'fadeIn 0.3s ease-out',
+        fadeSlideIn: 'fadeSlideIn 0.3s ease-out',
         modalIn: 'modalIn 0.25s ease-out',
         slideUp: 'slideUp 0.3s ease-out',
         spin: 'spin 0.6s linear infinite',

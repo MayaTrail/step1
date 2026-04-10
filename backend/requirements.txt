@@ -11,3 +11,4 @@ gunicorn==22.0.0
 docker==7.1.0
 colorama==0.4.6
 cryptography==46.0.5
+google-auth==2.29.0

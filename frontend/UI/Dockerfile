@@ -40,6 +40,7 @@ RUN mkdir -p /var/cache/nginx /var/log/nginx /tmp/client_temp /tmp/proxy_temp \
     chown -R nginxuser:nginxgroup /var/cache/nginx /var/log/nginx /tmp/client_temp \
              /tmp/proxy_temp /tmp/fastcgi_temp /tmp/uwsgi_temp /tmp/scgi_temp && \
     chown -R nginxuser:nginxgroup /usr/share/nginx/html && \
+    chown nginxuser:nginxgroup /etc/nginx/nginx.conf && \
     touch /tmp/nginx.pid && chown nginxuser:nginxgroup /tmp/nginx.pid
 
 # ── Copy built SPA from build stage ──

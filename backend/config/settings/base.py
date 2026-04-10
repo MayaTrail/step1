@@ -41,11 +41,13 @@ DJANGO_APPS = [
 THIRD_PARTY_APPS = [
     "rest_framework",
     "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
 ]
 
 LOCAL_APPS = [
     "apps.users",
+    "apps.connectors",
     "apps.infrastructure",
     "apps.simulations",
     "apps.logs",
@@ -60,6 +62,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "apps.users.middleware.DemoExpiryMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -151,7 +154,14 @@ SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(hours=1),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "AUTH_HEADER_TYPES": ("Bearer",),
+    "TOKEN_OBTAIN_SERIALIZER": "apps.users.serializers.MayaTrailTokenObtainPairSerializer",
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
 }
+
+# Google OAuth client ID — used by GoogleOAuthView to verify id_tokens.
+# Obtain from Google Cloud Console -> APIs & Services -> Credentials.
+GOOGLE_CLIENT_ID = config("GOOGLE_CLIENT_ID", default="")
 
 # ---------------------------------------------------------------------------
 # Celery
@@ -171,3 +181,35 @@ CELERY_TIMEZONE = "UTC"
 # this exact invite code.  Set to "" (empty) to allow open registration.
 
 REGISTRATION_INVITE_CODE = config("REGISTRATION_INVITE_CODE", default="")
+
+# ---------------------------------------------------------------------------
+# Email
+# ---------------------------------------------------------------------------
+# By default, emails are printed to the console (handy for development).
+# In production, override EMAIL_BACKEND and provide SMTP credentials.
+
+EMAIL_BACKEND = config(
+    "EMAIL_BACKEND",
+    default="django.core.mail.backends.console.EmailBackend",
+)
+EMAIL_HOST = config("EMAIL_HOST", default="smtp.gmail.com")
+EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
+EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="MayaTrail <noreply@mayatrail.tech>")
+
+# ---------------------------------------------------------------------------
+# OTP settings
+# ---------------------------------------------------------------------------
+
+OTP_EXPIRY_MINUTES = config("OTP_EXPIRY_MINUTES", default=10, cast=int)
+OTP_MAX_ATTEMPTS = config("OTP_MAX_ATTEMPTS", default=5, cast=int)
+
+# ---------------------------------------------------------------------------
+# Demo mode
+# ---------------------------------------------------------------------------
+# Duration in minutes for demo sandbox sessions. After this window the
+# middleware blocks all protected API calls until the user connects AWS.
+
+DEMO_DURATION_MINUTES = config("DEMO_DURATION_MINUTES", default=5, cast=int)

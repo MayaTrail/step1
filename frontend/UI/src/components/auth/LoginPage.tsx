@@ -1,17 +1,56 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import mayatrailLogo from '@/assets/mayatrail-logo.png'
+
+// GIS is loaded via a <script> tag in index.html.
+// Declaring a minimal subset of the API keeps TypeScript happy without a
+// separate @types package.
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize: (config: {
+            client_id: string
+            callback: (response: { credential: string }) => void
+            auto_select?: boolean
+          }) => void
+          renderButton: (
+            parent: HTMLElement,
+            options: {
+              theme?: string
+              size?: string
+              width?: number
+              text?: string
+            }
+          ) => void
+        }
+      }
+    }
+  }
+}
 
 type AuthTab = 'signin' | 'signup'
 
 export function LoginPage() {
   const [activeTab, setActiveTab] = useState<AuthTab>('signin')
+  const [signupSuccess, setSignupSuccess] = useState(false)
   const { clearError } = useAuth()
 
   const switchTab = (tab: AuthTab) => {
     clearError()
+    setSignupSuccess(false)
     setActiveTab(tab)
+  }
+
+  const handleSignupComplete = () => {
+    setSignupSuccess(true)
+    // Auto-switch to sign-in tab after a short delay
+    setTimeout(() => {
+      setActiveTab('signin')
+      setSignupSuccess(false)
+    }, 4000)
   }
 
   return (
@@ -57,6 +96,20 @@ export function LoginPage() {
             </p>
           </div>
 
+          {/* Success Banner */}
+          {signupSuccess && (
+            <div className="mb-6 bg-green/[0.08] border border-green/30 rounded-lg px-4 py-3.5 flex items-start gap-3
+              animate-[fadeSlideIn_0.3s_ease-out]">
+              <svg className="w-5 h-5 mt-0.5 shrink-0 text-green" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+              <div>
+                <p className="text-sm font-bold text-green mb-0.5">Account Verified!</p>
+                <p className="text-xs text-content-secondary leading-relaxed">
+                  Your email has been verified successfully. You can now sign in with your credentials.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Auth Tabs */}
           <div className="flex mb-6 border border-border rounded-lg overflow-hidden">
             <TabButton active={activeTab === 'signin'} onClick={() => switchTab('signin')}>Sign In</TabButton>
@@ -64,17 +117,7 @@ export function LoginPage() {
           </div>
 
           {/* Forms */}
-          {activeTab === 'signin' ? <SignInForm /> : <SignUpForm />}
-
-          {/* Divider */}
-          <div className="flex items-center gap-4 my-6">
-            <div className="flex-1 h-px bg-border" />
-            <span className="font-mono text-[10px] text-content-dim tracking-[2px]">OR</span>
-            <div className="flex-1 h-px bg-border" />
-          </div>
-
-          {/* Google SSO */}
-          <GoogleSSOButton />
+          {activeTab === 'signin' ? <SignInForm /> : <SignUpForm onComplete={handleSignupComplete} />}
 
           {/* Footer */}
           <div className="text-center mt-7 pt-5 border-t border-border">
@@ -108,20 +151,38 @@ export function LoginPage() {
 /* ── Sign In Form ── */
 function SignInForm() {
   const navigate = useNavigate()
-  const { login, loading, error, clearError } = useAuth()
+  const { login, googleSSO, loading, error, clearError } = useAuth()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+
+  const redirectAfterAuth = (user: { isVerified: boolean; isDemo: boolean }) => {
+    if (!user.isVerified && !user.isDemo) {
+      navigate('/connector', { replace: true })
+    } else {
+      navigate('/', { replace: true })
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     clearError()
     try {
-      await login({ username, password })
-      navigate('/', { replace: true })
+      const loggedInUser = await login({ username, password })
+      redirectAfterAuth(loggedInUser)
     } catch {
       // error is set in AuthContext
     }
   }
+
+  const handleGoogleCredential = useCallback(async (idToken: string) => {
+    clearError()
+    try {
+      const user = await googleSSO(idToken)
+      redirectAfterAuth(user)
+    } catch {
+      // error is set in AuthContext
+    }
+  }, [googleSSO, clearError]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <form className="flex flex-col gap-5" onSubmit={handleSubmit}>
@@ -166,7 +227,9 @@ function SignInForm() {
       </div>
 
       {error && (
-        <div className="font-mono text-[11px] text-danger">{error}</div>
+        <div className="font-mono text-[11px] text-danger bg-danger/[0.06] border border-danger/20 rounded-lg px-3.5 py-2.5 animate-fadeSlideIn">
+          {error}
+        </div>
       )}
 
       <button
@@ -181,14 +244,22 @@ function SignInForm() {
         <span className={loading ? 'opacity-50' : ''}>Sign In</span>
         {loading && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
       </button>
+
+      <GoogleSignInButton onCredential={handleGoogleCredential} />
     </form>
   )
 }
 
-/* ── Sign Up Form ── */
-function SignUpForm() {
+/* ── Sign Up Form (multi-step: fields → OTP → success) ── */
+type SignUpStep = 'details' | 'otp'
+
+function SignUpForm({ onComplete }: { onComplete: () => void }) {
   const navigate = useNavigate()
-  const { signup, loading, error, clearError } = useAuth()
+  const { signup, googleSSO, verifyOTP, resendOTP, loading, error, clearError } = useAuth()
+  const [step, setStep] = useState<SignUpStep>('details')
+  const [pendingEmail, setPendingEmail] = useState('')
+
+  // Details fields
   const [inviteCode, setInviteCode] = useState('')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -196,7 +267,7 @@ function SignUpForm() {
   const [confirm, setConfirm] = useState('')
   const [localError, setLocalError] = useState('')
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleDetailsSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     clearError()
     setLocalError('')
@@ -207,17 +278,53 @@ function SignUpForm() {
     }
 
     try {
-      await signup({ name, email, password, inviteCode })
-      navigate('/', { replace: true })
+      const res = await signup({ name, email, password, inviteCode })
+      setPendingEmail(res.email)
+      setStep('otp')
     } catch {
       // error is set in AuthContext
     }
   }
 
+  const handleOTPVerified = () => {
+    onComplete()
+  }
+
+  // Google SSO on the sign-up tab creates or links the account and
+  // navigates directly — no OTP step required.
+  const handleGoogleCredential = useCallback(async (idToken: string) => {
+    clearError()
+    try {
+      const user = await googleSSO(idToken)
+      if (!user.isVerified && !user.isDemo) {
+        navigate('/connector', { replace: true })
+      } else {
+        navigate('/', { replace: true })
+      }
+    } catch {
+      // error is set in AuthContext
+    }
+  }, [googleSSO, clearError, navigate])
+
   const displayError = localError || error
 
+  if (step === 'otp') {
+    return (
+      <OTPVerificationForm
+        email={pendingEmail}
+        loading={loading}
+        error={error}
+        clearError={clearError}
+        verifyOTP={verifyOTP}
+        resendOTP={resendOTP}
+        onVerified={handleOTPVerified}
+        onBack={() => { clearError(); setStep('details') }}
+      />
+    )
+  }
+
   return (
-    <form className="flex flex-col gap-5" onSubmit={handleSubmit}>
+    <form className="flex flex-col gap-5" onSubmit={handleDetailsSubmit}>
       <FormField label="Invite Code" icon="&#128273;">
         <input
           type="text"
@@ -310,7 +417,282 @@ function SignUpForm() {
         <span className={loading ? 'opacity-50' : ''}>Create Account</span>
         {loading && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
       </button>
+
+      <GoogleSignInButton onCredential={handleGoogleCredential} />
     </form>
+  )
+}
+
+/* ── OTP Verification Form ── */
+function OTPVerificationForm({
+  email,
+  loading,
+  error,
+  clearError,
+  verifyOTP,
+  resendOTP,
+  onVerified,
+  onBack,
+}: {
+  email: string
+  loading: boolean
+  error: string | null
+  clearError: () => void
+  verifyOTP: (req: { email: string; otp: string }) => Promise<any>
+  resendOTP: (req: { email: string }) => Promise<any>
+  onVerified: () => void
+  onBack: () => void
+}) {
+  const [digits, setDigits] = useState<string[]>(['', '', '', '', '', ''])
+  const [resendCooldown, setResendCooldown] = useState(0)
+  const [resendMsg, setResendMsg] = useState('')
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([])
+
+  // Auto-focus first input on mount
+  useEffect(() => {
+    inputRefs.current[0]?.focus()
+  }, [])
+
+  // Countdown timer for resend cooldown
+  useEffect(() => {
+    if (resendCooldown <= 0) return
+    const timer = setInterval(() => {
+      setResendCooldown((c) => c - 1)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [resendCooldown])
+
+  const handleDigitChange = useCallback((index: number, value: string) => {
+    // Only allow single digit
+    const digit = value.replace(/\D/g, '').slice(-1)
+    setDigits((prev) => {
+      const next = [...prev]
+      next[index] = digit
+      return next
+    })
+    clearError()
+
+    // Auto-advance to next input
+    if (digit && index < 5) {
+      inputRefs.current[index + 1]?.focus()
+    }
+  }, [clearError])
+
+  const handleKeyDown = useCallback((index: number, e: React.KeyboardEvent) => {
+    if (e.key === 'Backspace' && !digits[index] && index > 0) {
+      inputRefs.current[index - 1]?.focus()
+    }
+  }, [digits])
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    e.preventDefault()
+    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6)
+    if (!pasted) return
+    const newDigits = [...digits]
+    for (let i = 0; i < 6; i++) {
+      newDigits[i] = pasted[i] ?? ''
+    }
+    setDigits(newDigits)
+    // Focus the last filled or the next empty input
+    const focusIdx = Math.min(pasted.length, 5)
+    inputRefs.current[focusIdx]?.focus()
+  }, [digits])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const otp = digits.join('')
+    if (otp.length !== 6) return
+
+    try {
+      await verifyOTP({ email, otp })
+      onVerified()
+    } catch {
+      // error is set in AuthContext
+    }
+  }
+
+  const handleResend = async () => {
+    if (resendCooldown > 0) return
+    clearError()
+    setResendMsg('')
+    try {
+      const res = await resendOTP({ email })
+      setResendMsg(res.message)
+      setResendCooldown(60) // 60-second cooldown
+      setDigits(['', '', '', '', '', ''])
+      inputRefs.current[0]?.focus()
+    } catch {
+      // error is set in AuthContext
+    }
+  }
+
+  const isComplete = digits.every((d) => d !== '')
+  const maskedEmail = email.replace(/(.{2})(.*)(@.*)/, '$1***$3')
+
+  return (
+    <form className="flex flex-col gap-5" onSubmit={handleSubmit}>
+      {/* Header */}
+      <div className="text-center">
+        <div className="w-14 h-14 rounded-full bg-danger/[0.12] border border-danger/20 flex items-center justify-center mx-auto mb-3">
+          <svg className="w-7 h-7 text-danger" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="4" width="20" height="16" rx="3" /><path d="M2 7l10 6 10-6" /></svg>
+        </div>
+        <p className="text-sm font-bold text-content-primary mb-1">
+          Check your email
+        </p>
+        <p className="text-xs text-content-secondary leading-relaxed">
+          We sent a 6-digit code to{' '}
+          <span className="font-mono text-content-primary">{maskedEmail}</span>
+        </p>
+      </div>
+
+      {/* OTP Inputs */}
+      <div className="flex justify-center gap-2.5" onPaste={handlePaste}>
+        {digits.map((digit, i) => (
+          <input
+            key={i}
+            ref={(el) => { inputRefs.current[i] = el }}
+            type="text"
+            inputMode="numeric"
+            maxLength={1}
+            value={digit}
+            onChange={(e) => handleDigitChange(i, e.target.value)}
+            onKeyDown={(e) => handleKeyDown(i, e)}
+            className={`w-11 h-14 text-center font-mono text-xl font-bold rounded-lg border outline-none
+              transition-all bg-surface-elevated text-content-primary
+              ${digit
+                ? 'border-danger/40 shadow-[0_0_0_2px_rgba(255,34,68,0.08)]'
+                : 'border-border'
+              }
+              focus:border-danger/60 focus:shadow-[0_0_0_3px_rgba(255,34,68,0.12)]`}
+            aria-label={`Digit ${i + 1}`}
+          />
+        ))}
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="font-mono text-[11px] text-danger bg-danger/[0.06] border border-danger/20 rounded-lg px-3.5 py-2.5 text-center">
+          {error}
+        </div>
+      )}
+
+      {/* Resend message */}
+      {resendMsg && !error && (
+        <div className="font-mono text-[11px] text-green bg-green/[0.06] border border-green/20 rounded-lg px-3.5 py-2.5 text-center">
+          {resendMsg}
+        </div>
+      )}
+
+      {/* Verify button */}
+      <button
+        type="submit"
+        disabled={loading || !isComplete}
+        className="w-full bg-danger border-none rounded-btn py-3.5
+          text-white font-display text-sm font-bold cursor-pointer
+          transition-all hover:-translate-y-[2px] hover:shadow-[0_8px_40px_rgba(255,34,68,0.4)]
+          active:translate-y-0 disabled:opacity-70 disabled:cursor-not-allowed disabled:transform-none
+          flex items-center justify-center gap-2"
+      >
+        <span className={loading ? 'opacity-50' : ''}>Verify Email</span>
+        {loading && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+      </button>
+
+      {/* Resend + Back */}
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          onClick={onBack}
+          className="font-mono text-[11px] text-content-dim no-underline hover:text-content-primary
+            transition-colors cursor-pointer bg-transparent border-none p-0"
+        >
+          ← Back
+        </button>
+
+        <button
+          type="button"
+          onClick={handleResend}
+          disabled={resendCooldown > 0 || loading}
+          className="font-mono text-[11px] text-danger no-underline hover:text-content-primary
+            transition-colors cursor-pointer bg-transparent border-none p-0
+            disabled:text-content-dim disabled:cursor-not-allowed"
+        >
+          {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend code'}
+        </button>
+      </div>
+
+      {/* Expiry note */}
+      <p className="font-mono text-[10px] text-content-dim text-center">
+        Code expires in 10 minutes · Up to 5 attempts
+      </p>
+    </form>
+  )
+}
+
+/**
+ * Renders a Google Identity Services sign-in button.
+ *
+ * GIS is initialized once per mount using the client ID from the Vite env
+ * var VITE_GOOGLE_CLIENT_ID.  On a successful Google sign-in, the provided
+ * onCredential callback receives the raw Google ID token string.
+ *
+ * Renders nothing when VITE_GOOGLE_CLIENT_ID is empty or when the GIS
+ * library has not yet loaded (defensive against slow networks).
+ */
+function GoogleSignInButton({ onCredential }: { onCredential: (idToken: string) => void }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined
+
+  useEffect(() => {
+    if (!clientId || !containerRef.current) return
+
+    // GIS may not be available yet if the <script> is still loading.
+    // Poll up to ~3 seconds before giving up.
+    let attempts = 0
+    const MAX_ATTEMPTS = 30
+
+    const tryInit = () => {
+      if (!containerRef.current) return
+
+      if (!window.google?.accounts?.id) {
+        attempts += 1
+        if (attempts < MAX_ATTEMPTS) {
+          setTimeout(tryInit, 100)
+        }
+        return
+      }
+
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: (response) => {
+          onCredential(response.credential)
+        },
+        auto_select: false,
+      })
+
+      window.google.accounts.id.renderButton(containerRef.current, {
+        theme: 'filled_black',
+        size: 'large',
+        width: 342,
+        text: 'continue_with',
+      })
+    }
+
+    tryInit()
+    // onCredential is stable (wrapped in useCallback by callers) — safe to omit.
+  }, [clientId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!clientId) return null
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-3">
+        <div className="flex-1 h-px bg-border" />
+        <span className="font-mono text-[10px] text-content-dim tracking-[1px] uppercase">or</span>
+        <div className="flex-1 h-px bg-border" />
+      </div>
+      {/* GIS injects an iframe-based button into this div */}
+      <div ref={containerRef} className="flex justify-center" />
+    </div>
   )
 }
 
@@ -343,39 +725,6 @@ function FormField({ label, icon, children }: { label: string; icon: string; chi
         {children}
       </div>
     </div>
-  )
-}
-
-function GoogleSSOButton() {
-  const navigate = useNavigate()
-  const { googleSSO, loading } = useAuth()
-
-  const handleClick = async () => {
-    try {
-      await googleSSO()
-      navigate('/', { replace: true })
-    } catch {
-      // error handled in AuthContext
-    }
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={handleClick}
-      disabled={loading}
-      className="w-full bg-transparent border border-[rgba(255,255,255,0.15)] rounded-btn py-3 text-content-primary font-body text-[13px] font-medium
-        cursor-pointer transition-all hover:bg-[rgba(255,255,255,0.05)] hover:border-border-active
-        flex items-center justify-center gap-2.5 disabled:opacity-70"
-    >
-      <svg viewBox="0 0 24 24" width="18" height="18" className="shrink-0">
-        <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4" />
-        <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
-        <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
-        <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
-      </svg>
-      Continue with Google
-    </button>
   )
 }
 

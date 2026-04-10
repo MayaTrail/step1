@@ -109,7 +109,7 @@ services:
       # Mount Docker socket so the worker can spawn Pulumi containers.
       - /var/run/docker.sock:/var/run/docker.sock
       # Mount simulations package (imported in-process by simulations tasks).
-      - ./simulations:/opt/simulations:ro
+      - ./simulations:/simulations:ro
     depends_on:
       db:
         condition: service_healthy
@@ -117,7 +117,7 @@ services:
         condition: service_healthy
     command: celery -A config worker --loglevel=info --concurrency=2
 
-  # ── UI (React SPA on nginx) ──────────────────────────────────────
+  # UI (React SPA on nginx)
   ui:
     build:
       context: ./frontend/UI
@@ -130,7 +130,7 @@ services:
       retries: 5
       start_period: 10s
 
-  # ── Edge Reverse Proxy ───────────────────────────────────────────
+  # Edge Reverse Proxy
   #  Routes / → ui:8080, /api/ + /admin/ → backend:8000
   nginx:
     image: nginx:1.27-alpine

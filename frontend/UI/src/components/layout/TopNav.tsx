@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import { useTheme } from '@/context/ThemeContext'
+import { useDemoCountdown, formatCountdown } from '@/hooks/useDemoCountdown'
 import mayatrailLogo from '@/assets/mayatrail-logo.png'
 
 interface TopNavProps {
@@ -11,6 +12,9 @@ interface TopNavProps {
 export function TopNav({ onOpenSearch }: TopNavProps) {
   const { user, logout } = useAuth()
   const { theme, toggleTheme } = useTheme()
+  const { remaining, isExpired, isActive } = useDemoCountdown(
+    user?.isDemo ? user.demoExpiresAt : null,
+  )
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
@@ -63,6 +67,27 @@ export function TopNav({ onOpenSearch }: TopNavProps) {
 
       {/* Right section */}
       <div className="flex items-center gap-2.5 ml-auto">
+
+        {/* Demo countdown — only rendered for demo users with an active timer */}
+        {isActive && (
+          <div
+            className={`flex items-center gap-2 border rounded-full px-3.5 py-1.5 font-mono text-xs transition-all ${
+              isExpired
+                ? 'bg-danger/[0.08] border-danger/30 text-danger'
+                : 'bg-[#ff8c00]/[0.08] border-[#ff8c00]/30 text-[#ff8c00]'
+            }`}
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                isExpired ? 'bg-danger' : 'bg-[#ff8c00] animate-pulse'
+              }`}
+            />
+            {isExpired
+              ? 'Demo expired'
+              : `${formatCountdown(remaining!)} left`}
+          </div>
+        )}
+
         {/* Theme toggle */}
         <button
           onClick={toggleTheme}
@@ -82,6 +107,16 @@ export function TopNav({ onOpenSearch }: TopNavProps) {
             <div className="w-[26px] h-[26px] rounded-full bg-gradient-to-br from-danger to-[#ff6644] flex items-center justify-center text-[11px] font-extrabold text-white">
               {user?.initials ?? 'U'}
             </div>
+            {user?.isDemo && (
+              <span className="font-mono text-[9px] font-bold tracking-wider bg-orange/20 text-orange border border-orange/30 rounded px-1.5 py-0.5">
+                DEMO
+              </span>
+            )}
+            {user?.isVerified && (
+              <span className="font-mono text-[9px] font-bold tracking-wider bg-green/20 text-green border border-green/30 rounded px-1.5 py-0.5">
+                IAM
+              </span>
+            )}
             <span>{user?.name?.split(' ').map((n) => n[0] + '.').join(' ') ?? 'User'}</span>
             <span className="text-[10px]">&#9662;</span>
           </button>
