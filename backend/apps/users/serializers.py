@@ -9,6 +9,8 @@ UserSerializer     — read-only representation of the authenticated user.
 RegisterSerializer — validates and creates a new (inactive) user account.
 VerifyOTPSerializer — validates the OTP and activates the user.
 ResendOTPSerializer — validates an email for OTP re-send.
+ForgotPasswordSerializer — sends a password-reset OTP to the user's email.
+ResetPasswordSerializer  — validates OTP + new password to reset credentials.
 """
 
 from django.conf import settings
@@ -324,6 +326,133 @@ class ResendOTPSerializer(serializers.Serializer):
 
         return otp
 
+
+class ForgotPasswordSerializer(serializers.Serializer):
+    """
+    Accepts an email and sends a password-reset OTP.
+
+    To prevent email enumeration the serializer always succeeds —
+    if no matching user exists or the user signed up via Google SSO
+    (unusable password), the OTP email is simply not sent.
+    """
+
+    email = serializers.EmailField()
+
+    def validate_email(self, value: str) -> str:
+        """Normalise to lowercase."""
+        return value.lower().strip()
+
+    def create(self, validated_data: dict) -> dict:
+        """
+        Generate + send reset OTP if the user is eligible.
+
+        Eligibility:
+            - Active user (is_active=True) with this email
+            - Has a usable password (not a Google SSO-only account)
+        """
+        email = validated_data["email"]
+
+        try:
+            user = User.objects.get(email=email, is_active=True)
+        except User.DoesNotExist:
+            # Silently do nothing — don't reveal whether the email exists.
+            return validated_data
+
+        if not user.has_usable_password():
+            # Google SSO-only user — cannot reset a password that doesn't exist.
+            return validated_data
+
+        otp = EmailOTP.generate_for_email(email)
+
+        name = user.first_name or user.username
+        subject = f"MayaTrail — Your password reset code is {otp.otp}"
+        message = (
+            f"Hi {name},\n\n"
+            f"Your password reset code is: {otp.otp}\n\n"
+            f"This code will expire in "
+            f"{getattr(settings, 'OTP_EXPIRY_MINUTES', 10)} minutes.\n\n"
+            f"If you did not request a password reset, ignore this email.\n\n"
+            f"— MayaTrail Team"
+        )
+        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@mayatrail.tech")
+        send_mail(subject, message, from_email, [email], fail_silently=False)
+
+        return validated_data
+
+
+class ResetPasswordSerializer(serializers.Serializer):
+    """
+    Validates an email + OTP + new password combination to reset a user's
+    password.  Follows the same OTP verification pattern as VerifyOTPSerializer.
+    """
+
+    email = serializers.EmailField()
+    otp = serializers.CharField(max_length=6, min_length=6)
+    new_password = serializers.CharField(write_only=True, min_length=8)
+
+    def validate_email(self, value: str) -> str:
+        """Normalise to lowercase."""
+        return value.lower().strip()
+
+    def validate(self, attrs: dict) -> dict:
+        """
+        Verify the OTP and ensure the user is eligible for a password reset.
+
+        Raises:
+            serializers.ValidationError: If the OTP is invalid, expired,
+            max attempts exceeded, or the user is ineligible.
+        """
+        email = attrs["email"]
+        otp_code = attrs["otp"]
+
+        # Verify OTP
+        try:
+            otp_record = EmailOTP.objects.filter(
+                email=email, is_used=False
+            ).latest("created_at")
+        except EmailOTP.DoesNotExist:
+            raise serializers.ValidationError(
+                {"otp": "No pending reset code found. Please request a new one."}
+            )
+
+        if otp_record.is_expired:
+            raise serializers.ValidationError(
+                {"otp": "This code has expired. Please request a new one."}
+            )
+
+        if not otp_record.is_valid:
+            raise serializers.ValidationError(
+                {"otp": "Too many attempts. Please request a new code."}
+            )
+
+        if not otp_record.verify(otp_code):
+            remaining = getattr(settings, "OTP_MAX_ATTEMPTS", 5) - otp_record.attempts
+            raise serializers.ValidationError(
+                {"otp": f"Invalid code. {remaining} attempt(s) remaining."}
+            )
+
+        # Resolve user
+        try:
+            user = User.objects.get(email=email, is_active=True)
+        except User.DoesNotExist:
+            raise serializers.ValidationError(
+                {"email": "No active account found for this email."}
+            )
+
+        if not user.has_usable_password():
+            raise serializers.ValidationError(
+                {"email": "This account uses Google sign-in. Password reset is not available."}
+            )
+
+        attrs["user"] = user
+        return attrs
+
+    def create(self, validated_data: dict) -> dict:
+        """Set the new password on the user."""
+        user = validated_data["user"]
+        user.set_password(validated_data["new_password"])
+        user.save(update_fields=["password"])
+        return validated_data
 
 class GoogleOAuthSerializer(serializers.Serializer):
     """

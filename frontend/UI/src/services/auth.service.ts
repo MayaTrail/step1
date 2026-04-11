@@ -21,10 +21,14 @@ import type {
   AuthResponse,
   ConnectorRequest,
   ConnectorResponse,
+  ForgotPasswordRequest,
+  ForgotPasswordResponse,
   LoginRequest,
   RegisterResponse,
   ResendOTPRequest,
   ResendOTPResponse,
+  ResetPasswordRequest,
+  ResetPasswordResponse,
   SignupRequest,
   TokenPayload,
   User,
@@ -410,4 +414,24 @@ export async function activateDemo(): Promise<{ is_demo: boolean }> {
 
 export async function refreshUser(): Promise<User> {
   return fetchMe()
+}
+
+// Password reset
+
+export async function forgotPassword(req: ForgotPasswordRequest): Promise<ForgotPasswordResponse> {
+  try {
+    const { data } = await api.post<ForgotPasswordResponse>('/auth/forgot-password/', req)
+    return data
+  } catch (err: any) {
+    throw new Error(extractApiError(err))
+  }
+}
+
+export async function resetPassword(req: ResetPasswordRequest): Promise<ResetPasswordResponse> {
+  try {
+    const { data } = await api.post<ResetPasswordResponse>('/auth/reset-password/', req)
+    return data
+  } catch (err: any) {
+    throw new Error(extractApiError(err))
+  }
 }

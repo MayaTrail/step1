@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import mayatrailLogo from '@/assets/mayatrail-logo.png'
+import { forgotPassword, resetPassword } from '@/services/auth.service'
 
 /*
  * Google Identity Services type declaration.
@@ -38,12 +39,20 @@ type AuthTab = 'signin' | 'signup'
 export function LoginPage() {
   const [activeTab, setActiveTab] = useState<AuthTab>('signin')
   const [signupSuccess, setSignupSuccess] = useState(false)
-  const { clearError } = useAuth()
+  const [formVisible, setFormVisible] = useState(true)
+  const { clearError, googleSSO } = useAuth()
+  const navigate = useNavigate()
 
   const switchTab = (tab: AuthTab) => {
-    clearError()
-    setSignupSuccess(false)
-    setActiveTab(tab)
+    if (tab === activeTab) return
+    // Fade out → swap → fade in to avoid the abrupt height jump on tab switch
+    setFormVisible(false)
+    setTimeout(() => {
+      clearError()
+      setSignupSuccess(false)
+      setActiveTab(tab)
+      setFormVisible(true)
+    }, 120)
   }
 
   const handleSignupComplete = () => {
@@ -53,6 +62,26 @@ export function LoginPage() {
       setSignupSuccess(false)
     }, 4000)
   }
+
+  /*
+   * googleSSO handler lives here (parent) so GoogleSignInButton is only ever
+   * mounted once — lifting it out of SignInForm/SignUpForm prevents GIS from
+   * tearing down and re-initialising its iframe on every tab switch, which
+   * was the source of the flicker.
+   */
+  const handleGoogleCredential = useCallback(async (idToken: string) => {
+    clearError()
+    try {
+      const user = await googleSSO(idToken)
+      if (!user.isVerified && !user.isDemo) {
+        navigate('/connector', { replace: true })
+      } else {
+        navigate('/', { replace: true })
+      }
+    } catch {
+      // error is set in AuthContext
+    }
+  }, [googleSSO, clearError, navigate])
 
   return (
     <div
@@ -152,11 +181,18 @@ export function LoginPage() {
             <TabButton active={activeTab === 'signup'} onClick={() => switchTab('signup')}>Sign Up</TabButton>
           </div>
 
-          {/* Forms */}
-          {activeTab === 'signin'
-            ? <SignInForm />
-            : <SignUpForm onComplete={handleSignupComplete} />
-          }
+          {/* Form area — fade transition on tab switch */}
+          <div style={{ opacity: formVisible ? 1 : 0, transition: 'opacity 0.12s ease' }}>
+            {activeTab === 'signin'
+              ? <SignInForm />
+              : <SignUpForm onComplete={handleSignupComplete} />
+            }
+            {/*
+              GoogleSignInButton lives here, outside both forms, so GIS is
+              initialised once and its iframe never re-mounts on tab switch.
+            */}
+            <GoogleSignInButton onCredential={handleGoogleCredential} />
+          </div>
 
           {/* Footer */}
           <div
@@ -195,41 +231,76 @@ export function LoginPage() {
 /* ── Sign In Form ── */
 function SignInForm() {
   const navigate = useNavigate()
-  const { login, googleSSO, loading, error, clearError } = useAuth()
+  const { login, loading, error, clearError } = useAuth()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
 
-  const redirectAfterAuth = (user: { isVerified: boolean; isDemo: boolean }) => {
-    if (!user.isVerified && !user.isDemo) {
-      navigate('/connector', { replace: true })
-    } else {
-      navigate('/', { replace: true })
-    }
-  }
+  // Forgot-password inline flow state
+  const [forgotStep, setForgotStep] = useState<'none' | 'email' | 'otp' | 'done'>('none')
+  const [resetEmail, setResetEmail] = useState('')
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     clearError()
     try {
-      const loggedInUser = await login({ username, password })
-      redirectAfterAuth(loggedInUser)
+      const user = await login({ username, password })
+      if (!user.isVerified && !user.isDemo) {
+        navigate('/connector', { replace: true })
+      } else {
+        navigate('/', { replace: true })
+      }
     } catch {
       // error is set in AuthContext
     }
   }
 
-  const handleGoogleCredential = useCallback(async (idToken: string) => {
-    clearError()
-    try {
-      const user = await googleSSO(idToken)
-      redirectAfterAuth(user)
-    } catch {
-      // error is set in AuthContext
-    }
-  }, [googleSSO, clearError]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Forgot password → enter email
+  if (forgotStep === 'email') {
+    return (
+      <ForgotPasswordForm
+        onCodeSent={(email) => { setResetEmail(email); setForgotStep('otp') }}
+        onBack={() => { clearError(); setForgotStep('none') }}
+      />
+    )
+  }
+
+  // Forgot password → enter OTP + new password
+  if (forgotStep === 'otp') {
+    return (
+      <ResetPasswordOTPForm
+        email={resetEmail}
+        onSuccess={() => setForgotStep('done')}
+        onBack={() => { clearError(); setForgotStep('email') }}
+      />
+    )
+  }
 
   return (
     <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+
+      {/* Password reset success banner */}
+      {forgotStep === 'done' && (
+        <div
+          className="flex items-start gap-3 animate-fadeSlideIn"
+          style={{
+            background: 'rgba(95, 201, 146, 0.08)',
+            border: '1px solid rgba(95, 201, 146, 0.2)',
+            borderRadius: '8px',
+            padding: '12px 14px',
+          }}
+        >
+          <svg className="w-4 h-4 mt-0.5 shrink-0" style={{ color: '#5fc992' }} viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+          </svg>
+          <div>
+            <p style={{ fontSize: '13px', fontWeight: 600, color: '#5fc992', marginBottom: '2px' }}>Password Reset</p>
+            <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.5 }}>
+              Your password has been changed. Sign in with your new credentials.
+            </p>
+          </div>
+        </div>
+      )}
+
       <FormField label="Username or Email">
         <input
           type="text"
@@ -263,31 +334,332 @@ function SignInForm() {
           <input type="checkbox" style={{ accentColor: '#FF6363', width: '13px', height: '13px' }} />
           <span style={{ fontSize: '12px', color: '#9c9c9d' }}>Remember me</span>
         </label>
-        <a
-          href="#"
-          style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: '#FF6363', textDecoration: 'none', letterSpacing: '0.3px' }}
+        <button
+          type="button"
+          onClick={() => { clearError(); setForgotStep('email') }}
+          style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: '#FF6363', textDecoration: 'none', letterSpacing: '0.3px', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
           onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.6')}
           onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
         >
           Forgot password?
-        </a>
+        </button>
       </div>
 
       {error && <ErrorBanner message={error} />}
 
       <PrimaryButton type="submit" loading={loading}>Sign In</PrimaryButton>
-
-      <GoogleSignInButton onCredential={handleGoogleCredential} />
     </form>
   )
 }
+
+/* ── Forgot Password — Email Form ── */
+function ForgotPasswordForm({ onCodeSent, onBack }: {
+  onCodeSent: (email: string) => void
+  onBack: () => void
+}) {
+  const [email, setEmail] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+    try {
+      await forgotPassword({ email })
+      onCodeSent(email)
+    } catch (err: any) {
+      setError(err.message ?? 'Failed to send reset code.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <form className="flex flex-col gap-5" onSubmit={handleSubmit}>
+      <div className="text-center">
+        <div
+          className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3"
+          style={{ background: 'rgba(255,99,99,0.08)', border: '1px solid rgba(255,99,99,0.15)' }}
+        >
+          <svg className="w-5 h-5" style={{ color: '#FF6363' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <rect x="3" y="11" width="18" height="11" rx="2" />
+            <path d="M7 11V7a5 5 0 0110 0v4" />
+          </svg>
+        </div>
+        <p style={{ fontSize: '14px', fontWeight: 600, color: '#f9f9f9', marginBottom: '4px' }}>Reset your password</p>
+        <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.5 }}>
+          Enter your email and we'll send you a 6-digit reset code.
+        </p>
+      </div>
+
+      <FormField label="Email Address">
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@company.com"
+          required
+          autoComplete="email"
+          style={inputStyle}
+          onFocus={(e) => applyFocusStyle(e.target)}
+          onBlur={(e) => removeFocusStyle(e.target)}
+        />
+      </FormField>
+
+      {error && <ErrorBanner message={error} />}
+
+      <PrimaryButton type="submit" loading={loading}>Send Reset Code</PrimaryButton>
+
+      <div className="text-center">
+        <button
+          type="button"
+          onClick={onBack}
+          style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: '#6a6b6c', background: 'none', border: 'none', cursor: 'pointer', padding: 0, transition: 'opacity 0.15s' }}
+          onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.6')}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+        >
+          ← Back to Sign In
+        </button>
+      </div>
+    </form>
+  )
+}
+
+/* ── Forgot Password — OTP + New Password Form ── */
+function ResetPasswordOTPForm({ email, onSuccess, onBack }: {
+  email: string
+  onSuccess: () => void
+  onBack: () => void
+}) {
+  const [digits, setDigits] = useState<string[]>(['', '', '', '', '', ''])
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [resendCooldown, setResendCooldown] = useState(0)
+  const [resendMsg, setResendMsg] = useState('')
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([])
+
+  useEffect(() => { inputRefs.current[0]?.focus() }, [])
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return
+    const timer = setInterval(() => setResendCooldown((c) => c - 1), 1000)
+    return () => clearInterval(timer)
+  }, [resendCooldown])
+
+  const handleDigitChange = useCallback((index: number, value: string) => {
+    const digit = value.replace(/\D/g, '').slice(-1)
+    setDigits((prev) => {
+      const next = [...prev]
+      next[index] = digit
+      return next
+    })
+    setError('')
+    if (digit && index < 5) inputRefs.current[index + 1]?.focus()
+  }, [])
+
+  const handleKeyDown = useCallback((index: number, e: React.KeyboardEvent) => {
+    if (e.key === 'Backspace' && !digits[index] && index > 0) {
+      inputRefs.current[index - 1]?.focus()
+    }
+  }, [digits])
+
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    e.preventDefault()
+    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6)
+    if (!pasted) return
+    const newDigits = [...digits]
+    for (let i = 0; i < 6; i++) newDigits[i] = pasted[i] ?? ''
+    setDigits(newDigits)
+    inputRefs.current[Math.min(pasted.length, 5)]?.focus()
+  }, [digits])
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+
+    const otp = digits.join('')
+    if (otp.length !== 6) return
+
+    if (newPassword.length < 8) {
+      setError('Password must be at least 8 characters.')
+      return
+    }
+    if (newPassword !== confirmPassword) {
+      setError('Passwords do not match.')
+      return
+    }
+
+    setLoading(true)
+    try {
+      await resetPassword({ email, otp, new_password: newPassword })
+      onSuccess()
+    } catch (err: any) {
+      setError(err.message ?? 'Failed to reset password.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleResend = async () => {
+    if (resendCooldown > 0) return
+    setError('')
+    setResendMsg('')
+    try {
+      await forgotPassword({ email })
+      setResendMsg('A new reset code has been sent.')
+      setResendCooldown(60)
+      setDigits(['', '', '', '', '', ''])
+      inputRefs.current[0]?.focus()
+    } catch {
+      setError('Failed to resend code.')
+    }
+  }
+
+  const isOTPComplete = digits.every((d) => d !== '')
+  const maskedEmail = email.replace(/(.{2})(.*)(@.*)/, '$1***$3')
+
+  return (
+    <form className="flex flex-col gap-5" onSubmit={handleSubmit}>
+      <div className="text-center">
+        <div
+          className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3"
+          style={{ background: 'rgba(255,99,99,0.08)', border: '1px solid rgba(255,99,99,0.15)' }}
+        >
+          <svg className="w-5 h-5" style={{ color: '#FF6363' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <rect x="2" y="4" width="20" height="16" rx="3" />
+            <path d="M2 7l10 6 10-6" />
+          </svg>
+        </div>
+        <p style={{ fontSize: '14px', fontWeight: 600, color: '#f9f9f9', marginBottom: '4px' }}>Check your email</p>
+        <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.5 }}>
+          We sent a 6-digit reset code to{' '}
+          <span style={{ fontFamily: 'Geist Mono, monospace', color: '#cecece' }}>{maskedEmail}</span>
+        </p>
+      </div>
+
+      {/* OTP digits */}
+      <div className="flex justify-center gap-2" onPaste={handlePaste}>
+        {digits.map((digit, i) => (
+          <input
+            key={i}
+            ref={(el) => { inputRefs.current[i] = el }}
+            type="text"
+            inputMode="numeric"
+            maxLength={1}
+            value={digit}
+            onChange={(e) => handleDigitChange(i, e.target.value)}
+            onKeyDown={(e) => handleKeyDown(i, e)}
+            aria-label={`Digit ${i + 1}`}
+            style={{
+              width: '42px',
+              height: '52px',
+              textAlign: 'center',
+              fontFamily: 'Geist Mono, monospace',
+              fontSize: '20px',
+              fontWeight: 600,
+              borderRadius: '8px',
+              border: digit ? '1px solid rgba(255,99,99,0.3)' : '1px solid rgba(255,255,255,0.06)',
+              background: '#07080a',
+              color: '#f9f9f9',
+              outline: 'none',
+              boxShadow: digit ? 'rgba(255,99,99,0.08) 0px 0px 0px 3px' : 'none',
+              transition: 'border-color 0.15s, box-shadow 0.15s',
+            }}
+          />
+        ))}
+      </div>
+
+      {/* New password fields */}
+      <FormField label="New Password">
+        <input
+          type="password"
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          placeholder="Min. 8 characters"
+          required
+          minLength={8}
+          autoComplete="new-password"
+          style={inputStyle}
+          onFocus={(e) => applyFocusStyle(e.target)}
+          onBlur={(e) => removeFocusStyle(e.target)}
+        />
+      </FormField>
+
+      <FormField label="Confirm New Password">
+        <input
+          type="password"
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+          placeholder="Re-enter new password"
+          required
+          autoComplete="new-password"
+          style={inputStyle}
+          onFocus={(e) => applyFocusStyle(e.target)}
+          onBlur={(e) => removeFocusStyle(e.target)}
+        />
+      </FormField>
+
+      {error && <ErrorBanner message={error} />}
+
+      {resendMsg && !error && (
+        <div
+          style={{
+            fontSize: '11px',
+            fontFamily: 'Geist Mono, monospace',
+            color: '#5fc992',
+            background: 'rgba(95,201,146,0.06)',
+            border: '1px solid rgba(95,201,146,0.2)',
+            borderRadius: '6px',
+            padding: '8px 12px',
+            textAlign: 'center',
+          }}
+        >
+          {resendMsg}
+        </div>
+      )}
+
+      <PrimaryButton type="submit" loading={loading} disabled={!isOTPComplete || newPassword.length < 8}>
+        Reset Password
+      </PrimaryButton>
+
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          onClick={onBack}
+          style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: '#6a6b6c', background: 'none', border: 'none', cursor: 'pointer', padding: 0, transition: 'opacity 0.15s' }}
+          onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.6')}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+        >
+          ← Back
+        </button>
+        <button
+          type="button"
+          onClick={handleResend}
+          disabled={resendCooldown > 0 || loading}
+          style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: resendCooldown > 0 ? '#434345' : '#FF6363', background: 'none', border: 'none', cursor: resendCooldown > 0 ? 'not-allowed' : 'pointer', padding: 0, transition: 'opacity 0.15s' }}
+          onMouseEnter={(e) => { if (resendCooldown <= 0) e.currentTarget.style.opacity = '0.6' }}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+        >
+          {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend code'}
+        </button>
+      </div>
+
+      <p style={{ fontSize: '10px', fontFamily: 'Geist Mono, monospace', color: '#434345', textAlign: 'center', letterSpacing: '0.3px' }}>
+        Expires in 10 minutes — up to 5 attempts
+      </p>
+    </form>
+  )
+}
+
 
 /* ── Sign Up Form (multi-step: details → OTP → success) ── */
 type SignUpStep = 'details' | 'otp'
 
 function SignUpForm({ onComplete }: { onComplete: () => void }) {
-  const navigate = useNavigate()
-  const { signup, googleSSO, verifyOTP, resendOTP, loading, error, clearError } = useAuth()
+  const { signup, verifyOTP, resendOTP, loading, error, clearError } = useAuth()
   const [step, setStep] = useState<SignUpStep>('details')
   const [pendingEmail, setPendingEmail] = useState('')
 
@@ -314,20 +686,6 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
       // error is set in AuthContext
     }
   }
-
-  const handleGoogleCredential = useCallback(async (idToken: string) => {
-    clearError()
-    try {
-      const user = await googleSSO(idToken)
-      if (!user.isVerified && !user.isDemo) {
-        navigate('/connector', { replace: true })
-      } else {
-        navigate('/', { replace: true })
-      }
-    } catch {
-      // error is set in AuthContext
-    }
-  }, [googleSSO, clearError, navigate])
 
   const displayError = localError || error
 
@@ -422,8 +780,6 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
       {displayError && <ErrorBanner message={displayError} />}
 
       <PrimaryButton type="submit" loading={loading}>Create Account</PrimaryButton>
-
-      <GoogleSignInButton onCredential={handleGoogleCredential} />
     </form>
   )
 }

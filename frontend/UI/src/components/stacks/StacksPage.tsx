@@ -216,7 +216,7 @@ export function StacksPage() {
             {/* Page header */}
             <div className="flex items-start justify-between mb-6 gap-4">
                 <div>
-                    <div className="font-mono text-[0.7rem] uppercase tracking-[2px] text-accent-cyan font-medium mb-2">
+                    <div className="font-mono text-[0.7rem] uppercase tracking-[2px] text-cyan font-medium mb-2">
                         Infrastructure
                     </div>
                     <div className="font-display text-[1.8rem] font-[800] text-content-primary leading-tight tracking-[-1px]">
@@ -238,7 +238,7 @@ export function StacksPage() {
                     <button
                         onClick={() => setShowCreate((v) => !v)}
                         className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn font-body text-[0.9rem] font-semibold cursor-pointer border-none
-              bg-accent-cyan text-[#07080c] transition-all hover:-translate-y-px hover:shadow-[0_8px_40px_rgba(72,232,200,0.3)]"
+              bg-cyan text-[#07080c] transition-all hover:-translate-y-px hover:shadow-[0_8px_40px_rgba(72,232,200,0.3)]"
                     >
                         + New Stack
                     </button>
@@ -255,8 +255,8 @@ export function StacksPage() {
 
             {/* Create stack form */}
             {showCreate && (
-                <div className="bg-surface-card border border-accent-cyan/20 rounded-card p-6 mb-6 animate-slideUp">
-                    <div className="font-mono text-[10px] uppercase tracking-[1.5px] text-accent-cyan font-bold mb-4">
+                <div className="bg-surface-card border border-cyan/20 rounded-card p-6 mb-6 animate-slideUp">
+                    <div className="font-mono text-[10px] uppercase tracking-[1.5px] text-cyan font-bold mb-4">
                         Create New Stack
                     </div>
                     <div className="grid grid-cols-[1fr_200px_auto] gap-3 items-end">
@@ -271,7 +271,7 @@ export function StacksPage() {
                                 placeholder="dev-yourname"
                                 disabled={creating}
                                 className="w-full font-mono text-sm text-content-primary bg-surface-base border border-border rounded-[6px] px-3 py-2.5
-                  placeholder:text-content-dim/50 focus:outline-none focus:border-accent-cyan transition-colors disabled:opacity-50"
+                  placeholder:text-content-dim/50 focus:outline-none focus:border-cyan transition-colors disabled:opacity-50"
                             />
                         </div>
                         <div>
@@ -281,7 +281,7 @@ export function StacksPage() {
                                 onChange={(e) => setNewRegion(e.target.value)}
                                 disabled={creating}
                                 className="w-full font-mono text-sm text-content-primary bg-surface-base border border-border rounded-[6px] px-3 py-2.5
-                  focus:outline-none focus:border-accent-cyan transition-colors appearance-none cursor-pointer disabled:opacity-50"
+                  focus:outline-none focus:border-cyan transition-colors appearance-none cursor-pointer disabled:opacity-50"
                             >
                                 {REGIONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
                             </select>
@@ -291,7 +291,7 @@ export function StacksPage() {
                                 onClick={handleCreate}
                                 disabled={!newName.trim() || creating}
                                 className="px-5 py-2.5 rounded-btn font-body text-[0.85rem] font-semibold cursor-pointer border-none
-                  bg-accent-cyan text-[#07080c] transition-all hover:-translate-y-px hover:shadow-[0_6px_30px_rgba(72,232,200,0.3)]
+                  bg-cyan text-[#07080c] transition-all hover:-translate-y-px hover:shadow-[0_6px_30px_rgba(72,232,200,0.3)]
                   disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0"
                             >
                                 {creating ? 'Creating...' : 'Create'}
@@ -330,12 +330,12 @@ export function StacksPage() {
                                 <div
                                     className={`bg-surface-card border rounded-card px-5 py-4 flex items-center gap-4 cursor-pointer
                     transition-all duration-[250ms] relative overflow-hidden
-                    ${isExpanded ? 'border-accent-cyan/30 bg-accent-cyan/[0.02]' : 'border-border hover:border-[rgba(72,232,200,0.2)] hover:-translate-y-px hover:shadow-[0_4px_20px_rgba(0,0,0,0.3)]'}
+                    ${isExpanded ? 'border-cyan/30 bg-cyan/[0.02]' : 'border-border hover:border-[rgba(72,232,200,0.2)] hover:-translate-y-px hover:shadow-[0_4px_20px_rgba(0,0,0,0.3)]'}
                   `}
                                     onClick={() => handleRetrieve(stack.id)}
                                 >
                                     {/* Left accent */}
-                                    <div className={`absolute left-0 top-0 bottom-0 w-[3px] transition-colors ${isExpanded ? 'bg-accent-cyan' : stack.status === 'ready' ? 'bg-safe' : stack.status === 'failed' ? 'bg-danger' : 'bg-border group-hover:bg-accent-cyan/50'
+                                    <div className={`absolute left-0 top-0 bottom-0 w-[3px] transition-colors ${isExpanded ? 'bg-cyan' : stack.status === 'ready' ? 'bg-safe' : stack.status === 'failed' ? 'bg-danger' : 'bg-border group-hover:bg-cyan/50'
                                         }`} />
 
                                     {/* Stack info */}

@@ -71,3 +71,21 @@ export interface ConnectorResponse {
   is_demo?: boolean
   message?: string
 }
+
+export interface ForgotPasswordRequest {
+  email: string
+}
+
+export interface ForgotPasswordResponse {
+  message: string
+}
+
+export interface ResetPasswordRequest {
+  email: string
+  otp: string
+  new_password: string
+}
+
+export interface ResetPasswordResponse {
+  message: string
+}

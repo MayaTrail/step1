@@ -41,6 +41,8 @@ const PUBLIC_PATHS = [
   '/auth/register/',
   '/auth/google/',
   '/auth/refresh/',
+  '/auth/forgot-password/',
+  '/auth/reset-password/',
 ]
 
 // Attach the stored JWT to every outgoing request — except public ones.

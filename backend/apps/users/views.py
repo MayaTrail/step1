@@ -1,12 +1,14 @@
 """
 Views for the users app.
 
-RegisterView    — creates a new (inactive) user and sends OTP (public).
-VerifyOTPView   — verifies OTP and activates the user (public).
-ResendOTPView   — re-sends a fresh OTP to the user's email (public).
-MeView          — returns the authenticated user's profile (JWT required).
-GoogleOAuthView — verifies a Google ID token and issues a JWT pair (public).
-LogoutView      — blacklists the refresh token to invalidate the session (JWT required).
+RegisterView        — creates a new (inactive) user and sends OTP (public).
+VerifyOTPView       — verifies OTP and activates the user (public).
+ResendOTPView       — re-sends a fresh OTP to the user's email (public).
+MeView              — returns the authenticated user's profile (JWT required).
+GoogleOAuthView     — verifies a Google ID token and issues a JWT pair (public).
+LogoutView          — blacklists the refresh token to invalidate the session (JWT required).
+ForgotPasswordView  — sends a password-reset OTP to the user's email (public).
+ResetPasswordView   — validates OTP + new password to reset credentials (public).
 """
 
 from django.contrib.auth import get_user_model
@@ -19,9 +21,11 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 
 from .serializers import (
+    ForgotPasswordSerializer,
     GoogleOAuthSerializer,
     RegisterSerializer,
     ResendOTPSerializer,
+    ResetPasswordSerializer,
     UserSerializer,
     VerifyOTPSerializer,
 )
@@ -248,3 +252,45 @@ class LogoutView(APIView):
             )
 
         return Response(status=status.HTTP_205_RESET_CONTENT)
+
+
+class ForgotPasswordView(APIView):
+    """
+    Sends a password-reset OTP to the given email address.
+
+    POST /api/auth/forgot-password/
+    Accepts: { email }
+    Returns: 200 { message } — always succeeds to prevent email enumeration.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request: Request) -> Response:
+        serializer = ForgotPasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(
+            {"message": "If an account exists, a reset code has been sent."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class ResetPasswordView(APIView):
+    """
+    Validates a reset OTP and sets a new password.
+
+    POST /api/auth/reset-password/
+    Accepts: { email, otp, new_password }
+    Returns: 200 { message } on success, 400 with errors on failure.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request: Request) -> Response:
+        serializer = ResetPasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(
+            {"message": "Password has been reset successfully."},
+            status=status.HTTP_200_OK,
+        )
