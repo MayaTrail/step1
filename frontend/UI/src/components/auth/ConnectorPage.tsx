@@ -54,25 +54,29 @@ export function ConnectorPage() {
 
   const isUpgrade = searchParams.get('upgrade') === '1'
 
-  // Wait for the AuthContext to finish hydrating user state from the
-  // server before evaluating any redirect conditions. Without this
-  // guard, stale JWT claims could cause incorrect redirects.
   if (initializing) {
     return (
-      <div className="flex h-screen w-full items-center justify-center bg-surface-deep">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-accent-blue border-t-transparent" />
+      <div
+        className="flex h-screen w-full items-center justify-center"
+        style={{ backgroundColor: '#07080a' }}
+      >
+        <div
+          className="animate-spin"
+          style={{
+            width: '28px',
+            height: '28px',
+            border: '2px solid rgba(255,255,255,0.08)',
+            borderTopColor: '#55b3ff',
+            borderRadius: '50%',
+          }}
+        />
       </div>
     )
   }
 
-  // Auth guard — unauthenticated visitors must log in first.
   if (!user) return <Navigate to="/login" replace />
-
-  // Already verified via AWS connector — nothing to do here.
   if (user.isVerified) return <Navigate to="/" replace />
 
-  // Active (non-expired) demo users should go to the dashboard (unless upgrading).
-  // Expired demo users must stay here so they can connect AWS.
   const isDemoExpired = user.isDemo && user.demoExpiresAt && new Date(user.demoExpiresAt) < new Date()
   if (user.isDemo && !isUpgrade && !isDemoExpired) return <Navigate to="/" replace />
 
@@ -87,28 +91,20 @@ export function ConnectorPage() {
     }
   }
 
-  // After successful demo activation, redirect to the dashboard.
-  // Kept separate from the catch-free try above so the Navigate
-  // renders in a clean render cycle (no side effects during render).
   if (demoSuccess) return <Navigate to="/" replace />
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     clearError()
     setLocalError('')
-
     const trimmed = roleArn.trim()
     if (!trimmed) {
       setLocalError('Please enter a Role ARN')
       return
     }
-
     setVerifying(true)
     try {
       await verifyConnector({ role_arn: trimmed })
-      // verifyConnector already calls refreshUser and updates context,
-      // so on the next render user.isVerified will be true and the
-      // guard above will redirect to /.
     } catch {
       // error is set in context
     } finally {
@@ -117,124 +113,190 @@ export function ConnectorPage() {
   }
 
   const displayError = localError || error
-
-  // Hide demo option when upgrading or when the user already used it.
   const showDemoOption = !isUpgrade && !user.demoUsed
 
   return (
-    <div className="min-h-screen flex items-center justify-center overflow-x-hidden bg-surface-deep text-content-primary font-display relative">
-      {/* Background effects */}
+    <div
+      className="min-h-screen flex items-center justify-center overflow-x-hidden relative"
+      style={{ backgroundColor: '#07080a', color: '#f9f9f9', fontFamily: 'Inter, system-ui, sans-serif' }}
+    >
+      {/* Background — grid matching LoginPage */}
       <div className="fixed inset-0 pointer-events-none z-0">
         <div
           className="absolute inset-0"
           style={{
             backgroundImage:
-              'linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px)',
+              'linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px)',
             backgroundSize: '60px 60px',
-            maskImage: 'radial-gradient(ellipse at center, black 30%, transparent 70%)',
-            WebkitMaskImage: 'radial-gradient(ellipse at center, black 30%, transparent 70%)',
+            maskImage: 'radial-gradient(ellipse at center, black 60%, transparent 90%)',
+            WebkitMaskImage: 'radial-gradient(ellipse at center, black 60%, transparent 90%)',
           }}
         />
-        <div className="absolute w-[500px] h-[500px] rounded-full blur-[120px] opacity-[0.08] bg-accent-blue -top-[150px] -right-[100px]" />
-        <div className="absolute w-[400px] h-[400px] rounded-full blur-[120px] opacity-[0.08] bg-danger -bottom-[100px] -left-[80px]" />
+        <div
+          className="absolute w-[700px] h-[700px] rounded-full -top-[200px] -right-[150px]"
+          style={{ background: 'radial-gradient(circle, rgba(85,179,255,0.05) 0%, transparent 70%)' }}
+        />
+        <div
+          className="absolute w-[600px] h-[600px] rounded-full -bottom-[150px] -left-[100px]"
+          style={{ background: 'radial-gradient(circle, rgba(255,99,99,0.04) 0%, transparent 70%)' }}
+        />
       </div>
 
-      {/* Content */}
-      <div className="relative z-[1] flex gap-8 items-start p-6 max-w-[1060px] w-full">
-
+      {/* Content — clamp-based widths matching LoginPage scaling */}
+      <div
+        className="relative z-[1] flex gap-6 items-start p-8"
+        style={{ width: 'min(1300px, 92vw)' }}
+      >
         {/* Left — Connector Card */}
-        <div className="bg-surface-card border border-border rounded-card px-9 py-10 w-[480px] shrink-0 relative overflow-hidden">
-          {/* Top accent */}
-          <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-accent-blue via-accent-cyan to-green" />
+        <div
+          className="shrink-0 relative overflow-hidden"
+          style={{
+            width: 'clamp(440px, 38vw, 560px)',
+            backgroundColor: '#101111',
+            border: '1px solid rgba(255,255,255,0.06)',
+            borderRadius: '16px',
+            boxShadow: 'rgb(27, 28, 30) 0px 0px 0px 1px, rgb(7, 8, 10) 0px 0px 0px 1px inset',
+            padding: '36px 32px 32px',
+          }}
+        >
+          {/* Top accent hairline */}
+          <div
+            className="absolute top-0 left-0 right-0"
+            style={{ height: '1px', background: 'linear-gradient(90deg, transparent, #55b3ff 40%, transparent)' }}
+          />
 
           {/* Header */}
           <div className="mb-8">
-            <div className="flex items-center gap-2.5 mb-2">
-              <img
-                src={mayatrailLogo}
-                alt="MayaTrail"
-                className="w-9 h-9 rounded-lg object-cover"
-              />
-              <span className="font-display text-2xl font-extrabold text-content-primary tracking-[-0.5px]">MayaTrail</span>
+            <div className="flex items-center gap-2.5 mb-3">
+              <img src={mayatrailLogo} alt="MayaTrail" className="w-8 h-8 rounded-lg object-cover" />
+              <span style={{ fontSize: '20px', fontWeight: 600, letterSpacing: '-0.3px', color: '#f9f9f9' }}>
+                MayaTrail
+              </span>
             </div>
-            <p className="font-mono text-[11px] text-content-dim tracking-[1.5px] uppercase">
+            <p style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: '#6a6b6c', letterSpacing: '1.5px', textTransform: 'uppercase' }}>
               {isUpgrade ? 'Upgrade Your Account' : 'Connect Your Cloud'}
             </p>
           </div>
 
-          {/* Demo Expired Banner — only when the demo has genuinely expired */}
+          {/* Demo expired banner */}
           {isUpgrade && isDemoExpired && (
-            <div className="mb-6 bg-[#ff8c00]/[0.08] border border-[#ff8c00]/30 rounded-lg px-4 py-4 flex items-start gap-3
-              animate-[fadeSlideIn_0.3s_ease-out]">
-              <div className="w-10 h-10 rounded-full bg-[#ff8c00]/[0.15] border border-[#ff8c00]/20 flex items-center justify-center text-lg shrink-0">
-                ⏱️
-              </div>
+            <div
+              className="mb-6 flex items-start gap-3 animate-fadeSlideIn"
+              style={{
+                background: 'rgba(255,188,51,0.06)',
+                border: '1px solid rgba(255,188,51,0.2)',
+                borderRadius: '8px',
+                padding: '12px 14px',
+              }}
+            >
+              <svg className="w-4 h-4 mt-0.5 shrink-0" style={{ color: '#ffbc33' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 6v6l4 2" />
+              </svg>
               <div>
-                <p className="text-sm font-bold text-[#ff8c00] mb-1">Demo Session Expired</p>
-                <p className="text-xs text-content-secondary leading-relaxed">
-                  Your 5-minute demo sandbox has ended. Connect your AWS account to continue using MayaTrail with full access.
+                <p style={{ fontSize: '13px', fontWeight: 600, color: '#ffbc33', marginBottom: '4px' }}>Demo Session Expired</p>
+                <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.5 }}>
+                  Your demo sandbox has ended. Connect your AWS account to continue with full access.
                 </p>
               </div>
             </div>
           )}
 
-          {/* Demo option — hidden in upgrade mode or if already used */}
+          {/* Demo option */}
           {showDemoOption && (
             <>
               <div className="mb-6">
-                <p className="text-sm text-content-secondary mb-3">
-                  Not ready to connect your AWS account? Try our sandbox environment first.
+                <p style={{ fontSize: '13px', color: '#9c9c9d', marginBottom: '12px', lineHeight: 1.6 }}>
+                  Not ready to connect your AWS account? Try the sandbox environment first.
                 </p>
                 <button
                   type="button"
                   onClick={handleDemo}
                   disabled={loading}
-                  className="w-full bg-transparent border border-[rgba(255,255,255,0.15)] rounded-btn py-3 text-content-primary font-body text-[13px] font-medium
-                    cursor-pointer transition-all hover:bg-[rgba(255,255,255,0.05)] hover:border-border-active
-                    flex items-center justify-center gap-2.5 disabled:opacity-70"
+                  style={{
+                    width: '100%',
+                    padding: '11px 0',
+                    background: 'transparent',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: '8px',
+                    color: '#f9f9f9',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    fontFamily: 'Inter, system-ui, sans-serif',
+                    letterSpacing: '0.2px',
+                    cursor: loading ? 'not-allowed' : 'pointer',
+                    opacity: loading ? 0.5 : 1,
+                    transition: 'opacity 0.15s, border-color 0.15s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                  }}
+                  onMouseEnter={(e) => { if (!loading) e.currentTarget.style.opacity = '0.6' }}
+                  onMouseLeave={(e) => { if (!loading) e.currentTarget.style.opacity = '1' }}
                 >
-                  <span className="text-lg">🧪</span>
+                  <svg className="w-4 h-4" style={{ color: '#55b3ff' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15M14.25 3.104c.251.023.501.05.75.082M19.8 15l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.607L5 14.5m14.8.5-1.976.994a11.54 11.54 0 01-8.048.33L5 14.5m0 0l-.149 1.494" />
+                  </svg>
                   Try Demo Mode
                 </button>
               </div>
 
-              {/* Divider */}
               <div className="flex items-center gap-4 my-6">
-                <div className="flex-1 h-px bg-border" />
-                <span className="font-mono text-[10px] text-content-dim tracking-[2px]">OR CONNECT AWS</span>
-                <div className="flex-1 h-px bg-border" />
+                <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.06)' }} />
+                <span style={{ fontSize: '10px', fontFamily: 'Geist Mono, monospace', color: '#434345', letterSpacing: '2px', textTransform: 'uppercase' }}>
+                  or connect aws
+                </span>
+                <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.06)' }} />
               </div>
             </>
           )}
 
           {/* IAM Role form */}
-          <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
-              <label className="font-mono text-[10px] tracking-[1px] text-content-dim uppercase">
+              <label style={{ fontSize: '11px', fontWeight: 500, color: '#9c9c9d', letterSpacing: '0.3px' }}>
                 IAM Role ARN
               </label>
-              <div className="relative">
-                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-content-dim pointer-events-none">
-                  🔑
-                </span>
-                <input
-                  type="text"
-                  value={roleArn}
-                  onChange={(e) => setRoleArn(e.target.value)}
-                  placeholder="arn:aws:iam::123456789012:role/MayaTrailRole"
-                  className="w-full bg-surface-elevated border border-border rounded-lg py-3 pl-[42px] pr-3.5
-                    text-content-primary font-mono text-[13px] outline-none
-                    transition-all focus:border-accent-blue/40 focus:shadow-[0_0_0_3px_rgba(0,180,216,0.08)]
-                    placeholder:text-content-dim"
-                />
-              </div>
+              <input
+                type="text"
+                value={roleArn}
+                onChange={(e) => setRoleArn(e.target.value)}
+                placeholder="arn:aws:iam::123456789012:role/MayaTrailRole"
+                style={{
+                  width: '100%',
+                  background: '#07080a',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: '8px',
+                  padding: '10px 14px',
+                  color: '#f9f9f9',
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  fontFamily: 'Geist Mono, monospace',
+                  letterSpacing: '0.2px',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                  transition: 'border-color 0.15s, box-shadow 0.15s',
+                }}
+                onFocus={(e) => {
+                  e.target.style.borderColor = 'rgba(85,179,255,0.4)'
+                  e.target.style.boxShadow = 'hsla(202, 100%, 67%, 0.12) 0px 0px 0px 3px'
+                }}
+                onBlur={(e) => {
+                  e.target.style.borderColor = 'rgba(255,255,255,0.08)'
+                  e.target.style.boxShadow = 'none'
+                }}
+              />
             </div>
 
-            {/* Processing indicator */}
+            {/* Verifying indicator */}
             {verifying && (
-              <div className="flex items-center gap-3 py-2">
-                <div className="w-4 h-4 border-2 border-accent-blue/30 border-t-accent-blue rounded-full animate-spin" />
-                <span className="font-mono text-[11px] text-accent-blue">
+              <div className="flex items-center gap-2.5">
+                <div
+                  className="animate-spin"
+                  style={{ width: '14px', height: '14px', border: '2px solid rgba(85,179,255,0.2)', borderTopColor: '#55b3ff', borderRadius: '50%', flexShrink: 0 }}
+                />
+                <span style={{ fontSize: '12px', fontFamily: 'Geist Mono, monospace', color: '#55b3ff', letterSpacing: '0.2px' }}>
                   Verifying IAM role via STS AssumeRole...
                 </span>
               </div>
@@ -242,150 +304,182 @@ export function ConnectorPage() {
 
             {/* Error */}
             {displayError && !verifying && (
-              <div className="font-mono text-[11px] text-danger bg-danger/[0.08] border border-danger/20 rounded-lg px-3.5 py-2.5">
+              <div
+                style={{
+                  fontSize: '12px',
+                  fontFamily: 'Geist Mono, monospace',
+                  color: '#FF6363',
+                  background: 'rgba(255,99,99,0.06)',
+                  border: '1px solid rgba(255,99,99,0.15)',
+                  borderRadius: '6px',
+                  padding: '8px 12px',
+                  letterSpacing: '0.2px',
+                }}
+              >
                 {displayError}
               </div>
             )}
 
+            {/* Primary CTA — pill shape per design system */}
             <button
               type="submit"
               disabled={loading || verifying}
-              className="w-full bg-accent-blue border-none rounded-btn py-3.5
-                text-white font-display text-sm font-bold cursor-pointer
-                transition-all hover:-translate-y-[2px] hover:shadow-[0_8px_40px_rgba(0,180,216,0.35)]
-                active:translate-y-0 disabled:opacity-70 disabled:cursor-not-allowed disabled:transform-none
-                flex items-center justify-center gap-2"
+              style={{
+                width: '100%',
+                padding: '11px 0',
+                background: 'hsla(0, 0%, 100%, 0.815)',
+                color: '#18191a',
+                border: 'none',
+                borderRadius: '86px',
+                fontSize: '14px',
+                fontWeight: 600,
+                letterSpacing: '0.3px',
+                cursor: loading || verifying ? 'not-allowed' : 'pointer',
+                opacity: loading || verifying ? 0.5 : 1,
+                transition: 'opacity 0.15s',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                boxShadow: 'rgba(255,255,255,0.05) 0px 1px 0px 0px inset, rgba(255,255,255,0.25) 0px 0px 0px 1px, rgba(0,0,0,0.2) 0px -1px 0px 0px inset',
+              }}
+              onMouseEnter={(e) => { if (!loading && !verifying) e.currentTarget.style.opacity = '0.6' }}
+              onMouseLeave={(e) => { if (!loading && !verifying) e.currentTarget.style.opacity = '1' }}
             >
-              <span className={verifying ? 'opacity-50' : ''}>Verify & Connect</span>
-              {verifying && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+              <span>Verify &amp; Connect</span>
+              {verifying && (
+                <div
+                  className="animate-spin"
+                  style={{ width: '14px', height: '14px', border: '2px solid rgba(24,25,26,0.3)', borderTopColor: '#18191a', borderRadius: '50%' }}
+                />
+              )}
             </button>
           </form>
 
           {/* Footer */}
-          <div className="mt-6 pt-5 border-t border-border flex items-center justify-between">
+          <div
+            className="mt-6 pt-5 flex items-center justify-between"
+            style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}
+          >
             {isUpgrade ? (
               <>
                 <button
                   type="button"
                   onClick={() => window.history.back()}
-                  className="font-mono text-[11px] text-content-dim no-underline hover:text-content-primary
-                    transition-colors cursor-pointer bg-transparent border-none p-0"
+                  style={ghostBtnStyle}
+                  onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.6')}
+                  onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
                 >
-                  ← Back to Profile
+                  Back to Profile
                 </button>
                 <div className="flex items-center gap-2">
-                  <a
-                    href="mailto:admin@mayatrail.tech?subject=MayaTrail%20IAM%20Role%20Setup%20Help"
-                    className="font-mono text-[11px] text-accent-blue no-underline hover:text-content-primary transition-colors
-                      border border-accent-blue/30 rounded-btn px-4 py-2 hover:bg-accent-blue/[0.08]"
-                  >
-                    Ask Support
-                  </a>
-                  <button
-                    type="button"
-                    onClick={logout}
-                    className="font-mono text-[11px] text-content-dim no-underline hover:text-content-primary transition-colors
-                      border border-border rounded-btn px-4 py-2 hover:bg-surface-elevated
-                      cursor-pointer bg-transparent"
-                  >
-                    Sign out
-                  </button>
+                  <SupportLink />
+                  <SignOutButton onClick={logout} />
                 </div>
               </>
             ) : (
               <>
-                <span className="text-xs text-content-dim">Need help setting up the role?</span>
+                <span style={{ fontSize: '12px', color: '#6a6b6c' }}>Need help setting up the role?</span>
                 <div className="flex items-center gap-2">
-                  <a
-                    href="mailto:admin@mayatrail.tech?subject=MayaTrail%20IAM%20Role%20Setup%20Help"
-                    className="font-mono text-[11px] text-accent-blue no-underline hover:text-content-primary transition-colors
-                      border border-accent-blue/30 rounded-btn px-4 py-2 hover:bg-accent-blue/[0.08]"
-                  >
-                    Ask Support
-                  </a>
-                  <button
-                    type="button"
-                    onClick={logout}
-                    className="font-mono text-[11px] text-content-dim no-underline hover:text-content-primary transition-colors
-                      border border-border rounded-btn px-4 py-2 hover:bg-surface-elevated
-                      cursor-pointer bg-transparent"
-                  >
-                    Sign out
-                  </button>
+                  <SupportLink />
+                  <SignOutButton onClick={logout} />
                 </div>
               </>
             )}
           </div>
         </div>
 
-        {/* Right — Sample Policy with explanations */}
-        <div className="bg-surface-card border border-border rounded-card flex-1 relative overflow-hidden flex flex-col max-h-[680px]">
-          {/* Top accent */}
-          <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-accent-cyan to-transparent" />
+        {/* Right — Required IAM Policy panel */}
+        <div
+          className="flex-1 relative overflow-hidden flex flex-col"
+          style={{
+            backgroundColor: '#101111',
+            border: '1px solid rgba(255,255,255,0.06)',
+            borderRadius: '16px',
+            boxShadow: 'rgb(27, 28, 30) 0px 0px 0px 1px, rgb(7, 8, 10) 0px 0px 0px 1px inset',
+            maxHeight: '80vh',
+          }}
+        >
+          {/* Top accent hairline */}
+          <div
+            className="absolute top-0 left-0 right-0"
+            style={{ height: '1px', background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.12) 40%, transparent)' }}
+          />
 
-          {/* Header */}
-          <div className="px-6 pt-6 pb-4 border-b border-border shrink-0">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-base">📋</span>
-              <span className="font-display text-sm font-bold text-content-primary">Required IAM Policy</span>
+          {/* Panel header */}
+          <div
+            className="px-6 pt-6 pb-4 shrink-0"
+            style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <svg className="w-4 h-4 shrink-0" style={{ color: '#9c9c9d' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z" />
+              </svg>
+              <span style={{ fontSize: '13px', fontWeight: 600, color: '#f9f9f9' }}>Required IAM Policy</span>
             </div>
-            <p className="text-xs text-content-secondary leading-relaxed">
+            <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.6 }}>
               MayaTrail's Pulumi engine deploys isolated simulation infrastructure in your account.
-              The policy below grants only the permissions needed for deployment and emulation —
-              here's why each group is required.
+              The policy below grants only the permissions needed — here's why each group is required.
             </p>
           </div>
 
           {/* Scrollable content */}
-          <div className="overflow-y-auto flex-1 px-6 py-4 flex flex-col gap-5">
-
-            {/* S3 permissions */}
+          <div className="overflow-y-auto flex-1 px-6 py-4 flex flex-col gap-4">
             <PolicyGroup
-              icon="🪣"
               title="S3 — Simulation Storage"
+              accent="#55b3ff"
               actions={['s3:CreateBucket', 's3:DeleteBucket', 's3:PutObject', 's3:GetObject', 's3:DeleteObject', 's3:ListBucket']}
-              reason="Pulumi creates S3 buckets as target infrastructure for emulations like ransomware (S3 initial access, KMS re-encryption). Buckets and objects are created, populated, and torn down per simulation run."
+              reason="Pulumi creates S3 buckets as target infrastructure for emulations like ransomware initial access and KMS re-encryption. Buckets and objects are created and torn down per simulation run."
             />
-
-            {/* IAM permissions */}
             <PolicyGroup
-              icon="👤"
               title="IAM — Identity Simulation"
+              accent="#5fc992"
               actions={['iam:CreateRole', 'iam:DeleteRole', 'iam:AttachRolePolicy', 'iam:DetachRolePolicy', 'iam:PutRolePolicy', 'iam:DeleteRolePolicy', 'iam:CreateUser', 'iam:DeleteUser', 'iam:CreateAccessKey', 'iam:DeleteAccessKey', 'iam:ListAccessKeys']}
-              reason="Emulations test IAM privilege escalation and policy manipulation. Pulumi provisions short-lived IAM users and roles to simulate real-world attacker behaviour like policy attachment and access key theft."
+              reason="Emulations test IAM privilege escalation and policy manipulation. Short-lived IAM users and roles are provisioned to simulate attacker behavior like policy attachment and access key theft."
             />
-
-            {/* STS permissions */}
             <PolicyGroup
-              icon="🔐"
               title="STS — Role Assumption"
+              accent="#ffbc33"
               actions={['sts:AssumeRole', 'sts:GetCallerIdentity']}
-              reason="STS is used to verify this connector (AssumeRole) and for emulations that test cross-account role chaining and eventual consistency exploitation."
+              reason="STS is used to verify this connector and for emulations that test cross-account role chaining and eventual consistency exploitation."
             />
-
-            {/* KMS permissions */}
             <PolicyGroup
-              icon="🔑"
               title="KMS — Encryption Simulation"
+              accent="#FF6363"
               actions={['kms:CreateKey', 'kms:ScheduleKeyDeletion', 'kms:Encrypt', 'kms:Decrypt', 'kms:GenerateDataKey']}
               reason="KMS ransomware emulations create encryption keys, re-encrypt S3 objects under attacker-controlled keys, then schedule key deletion — simulating real cloud ransomware techniques."
             />
 
-            {/* Raw policy */}
-            <div className="mt-2 pt-4 border-t border-border">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-xs">📄</span>
-                <span className="font-mono text-[10px] text-content-dim tracking-wider uppercase">Full Policy JSON</span>
-              </div>
-              <pre className="font-mono text-[11px] leading-[1.7] text-accent-cyan whitespace-pre bg-surface-deep rounded-lg p-4 border border-border">
+            {/* Full policy JSON */}
+            <div className="pt-4" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+              <p style={{ fontSize: '10px', fontFamily: 'Geist Mono, monospace', color: '#6a6b6c', letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '8px' }}>
+                Full Policy JSON
+              </p>
+              <pre
+                style={{
+                  fontFamily: 'Geist Mono, monospace',
+                  fontSize: '11px',
+                  lineHeight: 1.7,
+                  color: '#55b3ff',
+                  whiteSpace: 'pre',
+                  background: '#07080a',
+                  borderRadius: '8px',
+                  padding: '16px',
+                  border: '1px solid rgba(255,255,255,0.06)',
+                  overflowX: 'auto',
+                }}
+              >
                 {SAMPLE_POLICY}
               </pre>
             </div>
           </div>
 
-          {/* Footer */}
-          <div className="px-6 py-3 border-t border-border shrink-0">
-            <p className="font-mono text-[10px] text-content-dim leading-relaxed">
+          {/* Panel footer */}
+          <div
+            className="px-6 py-3 shrink-0"
+            style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}
+          >
+            <p style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: '#434345', lineHeight: 1.6 }}>
               All resources are created in an isolated Pulumi stack and destroyed after each run.
               The role must trust MayaTrail's AWS account to assume it.
             </p>
@@ -396,29 +490,111 @@ export function ConnectorPage() {
   )
 }
 
-function PolicyGroup({ icon, title, actions, reason }: {
-  icon: string
+/* ── Policy Group ── */
+function PolicyGroup({
+  title, accent, actions, reason,
+}: {
   title: string
+  accent: string
   actions: string[]
   reason: string
 }) {
   return (
-    <div className="bg-surface-elevated/50 border border-border rounded-lg p-4">
+    <div
+      style={{
+        background: 'rgba(255,255,255,0.02)',
+        border: '1px solid rgba(255,255,255,0.06)',
+        borderRadius: '10px',
+        padding: '14px 16px',
+      }}
+    >
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-base">{icon}</span>
-        <span className="font-display text-[13px] font-bold text-content-primary">{title}</span>
+        <div
+          className="w-1.5 h-1.5 rounded-full shrink-0"
+          style={{ background: accent, boxShadow: `0 0 6px ${accent}66` }}
+        />
+        <span style={{ fontSize: '13px', fontWeight: 600, color: '#f9f9f9' }}>{title}</span>
       </div>
-      <p className="text-xs text-content-secondary leading-relaxed mb-3">{reason}</p>
+      <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.6, marginBottom: '10px' }}>{reason}</p>
       <div className="flex flex-wrap gap-1.5">
         {actions.map((action) => (
           <span
             key={action}
-            className="font-mono text-[10px] text-accent-cyan bg-accent-cyan/[0.08] border border-accent-cyan/20 rounded px-2 py-0.5"
+            style={{
+              fontFamily: 'Geist Mono, monospace',
+              fontSize: '10px',
+              color: accent,
+              background: `${accent}12`,
+              border: `1px solid ${accent}25`,
+              borderRadius: '4px',
+              padding: '2px 7px',
+              letterSpacing: '0.2px',
+            }}
           >
             {action}
           </span>
         ))}
       </div>
     </div>
+  )
+}
+
+/* ── Shared small components ── */
+
+const ghostBtnStyle: React.CSSProperties = {
+  fontSize: '11px',
+  fontFamily: 'Geist Mono, monospace',
+  color: '#6a6b6c',
+  background: 'none',
+  border: 'none',
+  cursor: 'pointer',
+  padding: 0,
+  letterSpacing: '0.2px',
+  transition: 'opacity 0.15s',
+}
+
+const outlineBtnStyle: React.CSSProperties = {
+  fontSize: '11px',
+  fontFamily: 'Geist Mono, monospace',
+  color: '#9c9c9d',
+  background: 'transparent',
+  border: '1px solid rgba(255,255,255,0.08)',
+  borderRadius: '6px',
+  padding: '6px 14px',
+  cursor: 'pointer',
+  letterSpacing: '0.2px',
+  transition: 'opacity 0.15s',
+}
+
+function SupportLink() {
+  return (
+    <a
+      href="mailto:admin@mayatrail.tech?subject=MayaTrail%20IAM%20Role%20Setup%20Help"
+      style={{
+        ...outlineBtnStyle,
+        color: '#55b3ff',
+        borderColor: 'rgba(85,179,255,0.2)',
+        textDecoration: 'none',
+        display: 'inline-block',
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.6')}
+      onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+    >
+      Ask Support
+    </a>
+  )
+}
+
+function SignOutButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={outlineBtnStyle}
+      onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.6')}
+      onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+    >
+      Sign out
+    </button>
   )
 }

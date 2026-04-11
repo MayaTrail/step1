@@ -3,9 +3,11 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import mayatrailLogo from '@/assets/mayatrail-logo.png'
 
-// GIS is loaded via a <script> tag in index.html.
-// Declaring a minimal subset of the API keeps TypeScript happy without a
-// separate @types package.
+/*
+ * Google Identity Services type declaration.
+ * GIS is loaded via <script> in index.html — no npm package needed.
+ * Declaring a minimal API subset keeps TypeScript happy.
+ */
 declare global {
   interface Window {
     google?: {
@@ -46,7 +48,6 @@ export function LoginPage() {
 
   const handleSignupComplete = () => {
     setSignupSuccess(true)
-    // Auto-switch to sign-in tab after a short delay
     setTimeout(() => {
       setActiveTab('signin')
       setSignupSuccess(false)
@@ -54,93 +55,136 @@ export function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center overflow-x-hidden bg-surface-deep text-content-primary font-display relative">
-      {/* Background effects — matched to frontend hero grid */}
+    <div
+      className="min-h-screen flex items-center justify-center overflow-x-hidden relative"
+      style={{ backgroundColor: '#07080a', color: '#f9f9f9', fontFamily: 'Inter, system-ui, sans-serif' }}
+    >
+      {/* Background — grid and ambient glows */}
       <div className="fixed inset-0 pointer-events-none z-0">
-        {/* Grid */}
         <div
           className="absolute inset-0"
           style={{
             backgroundImage:
-              'linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px)',
+              'linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px)',
             backgroundSize: '60px 60px',
-            maskImage: 'radial-gradient(ellipse at center, black 30%, transparent 70%)',
-            WebkitMaskImage: 'radial-gradient(ellipse at center, black 30%, transparent 70%)',
+            maskImage: 'radial-gradient(ellipse at center, black 60%, transparent 90%)',
+            WebkitMaskImage: 'radial-gradient(ellipse at center, black 60%, transparent 90%)',
           }}
         />
-        {/* Glow 1 — danger red */}
-        <div className="absolute w-[500px] h-[500px] rounded-full blur-[120px] opacity-[0.08] bg-danger -top-[150px] -right-[100px]" />
-        {/* Glow 2 — accent blue */}
-        <div className="absolute w-[400px] h-[400px] rounded-full blur-[120px] opacity-[0.08] bg-accent-blue -bottom-[100px] -left-[80px]" />
+        {/* Raycast Red ambient glow — punctuation, not dominant */}
+        <div
+          className="absolute w-[700px] h-[700px] rounded-full -top-[200px] -right-[150px]"
+          style={{ background: 'radial-gradient(circle, rgba(255,99,99,0.06) 0%, transparent 70%)' }}
+        />
+        <div
+          className="absolute w-[600px] h-[600px] rounded-full -bottom-[150px] -left-[100px]"
+          style={{ background: 'radial-gradient(circle, rgba(85,179,255,0.04) 0%, transparent 70%)' }}
+        />
       </div>
 
-      {/* Content */}
-      <div className="relative z-[1] flex gap-12 items-center p-6 max-w-[960px] w-full">
+      {/* Content — clamp-based widths so the layout scales from 14-inch to 24-inch */}
+      <div className="relative z-[1] flex gap-16 items-center p-8" style={{ width: 'min(1200px, 90vw)' }}>
+
         {/* Login Card */}
-        <div className="bg-surface-card border border-border rounded-card px-9 py-10 w-[420px] shrink-0 relative overflow-hidden">
-          {/* Top gradient border — danger to accent-blue */}
-          <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-danger via-[#ff6644] to-accent-blue" />
+        <div
+          className="shrink-0 relative overflow-hidden"
+          style={{
+            width: 'clamp(400px, 38vw, 520px)',
+            backgroundColor: '#101111',
+            border: '1px solid rgba(255,255,255,0.06)',
+            borderRadius: '16px',
+            boxShadow: 'rgb(27, 28, 30) 0px 0px 0px 1px, rgb(7, 8, 10) 0px 0px 0px 1px inset',
+            padding: '36px 32px 32px',
+          }}
+        >
+          {/* Top accent line — Raycast Red, hairline */}
+          <div
+            className="absolute top-0 left-0 right-0"
+            style={{ height: '1px', background: 'linear-gradient(90deg, transparent, #FF6363 40%, transparent)' }}
+          />
 
           {/* Header */}
           <div className="text-center mb-8">
-            <div className="flex items-center justify-center gap-2.5 mb-2">
+            <div className="flex items-center justify-center gap-2.5 mb-3">
               <img
                 src={mayatrailLogo}
                 alt="MayaTrail"
-                className="w-9 h-9 rounded-lg object-cover"
+                className="w-8 h-8 rounded-lg object-cover"
               />
-              <span className="font-display text-2xl font-extrabold text-content-primary tracking-[-0.5px]">MayaTrail</span>
+              <span style={{ fontSize: '20px', fontWeight: 600, letterSpacing: '-0.3px', color: '#f9f9f9' }}>
+                MayaTrail
+              </span>
             </div>
-            <p className="font-mono text-[11px] text-content-dim tracking-[1.5px] uppercase">
+            <p style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: '#6a6b6c', letterSpacing: '1.5px', textTransform: 'uppercase' }}>
               APT Emulation Platform
             </p>
           </div>
 
           {/* Success Banner */}
           {signupSuccess && (
-            <div className="mb-6 bg-green/[0.08] border border-green/30 rounded-lg px-4 py-3.5 flex items-start gap-3
-              animate-[fadeSlideIn_0.3s_ease-out]">
-              <svg className="w-5 h-5 mt-0.5 shrink-0 text-green" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+            <div
+              className="mb-6 flex items-start gap-3 animate-fadeSlideIn"
+              style={{
+                background: 'rgba(95, 201, 146, 0.08)',
+                border: '1px solid rgba(95, 201, 146, 0.2)',
+                borderRadius: '8px',
+                padding: '12px 14px',
+              }}
+            >
+              <svg className="w-4 h-4 mt-0.5 shrink-0" style={{ color: '#5fc992' }} viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+              </svg>
               <div>
-                <p className="text-sm font-bold text-green mb-0.5">Account Verified!</p>
-                <p className="text-xs text-content-secondary leading-relaxed">
-                  Your email has been verified successfully. You can now sign in with your credentials.
+                <p style={{ fontSize: '13px', fontWeight: 600, color: '#5fc992', marginBottom: '2px' }}>Account Verified</p>
+                <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.5 }}>
+                  Your email has been verified. You can now sign in.
                 </p>
               </div>
             </div>
           )}
 
           {/* Auth Tabs */}
-          <div className="flex mb-6 border border-border rounded-lg overflow-hidden">
+          <div
+            className="flex mb-7"
+            style={{ border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', overflow: 'hidden' }}
+          >
             <TabButton active={activeTab === 'signin'} onClick={() => switchTab('signin')}>Sign In</TabButton>
             <TabButton active={activeTab === 'signup'} onClick={() => switchTab('signup')}>Sign Up</TabButton>
           </div>
 
           {/* Forms */}
-          {activeTab === 'signin' ? <SignInForm /> : <SignUpForm onComplete={handleSignupComplete} />}
+          {activeTab === 'signin'
+            ? <SignInForm />
+            : <SignUpForm onComplete={handleSignupComplete} />
+          }
 
           {/* Footer */}
-          <div className="text-center mt-7 pt-5 border-t border-border">
-            <p className="font-mono text-[10px] text-content-dim tracking-wide">MayaTrail</p>
+          <div
+            className="text-center mt-7 pt-5"
+            style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}
+          >
+            <p style={{ fontSize: '10px', fontFamily: 'Geist Mono, monospace', color: '#434345', letterSpacing: '1px' }}>
+              MayaTrail — Use only in isolated test accounts
+            </p>
           </div>
         </div>
 
         {/* Info Panel */}
-        <div className="flex flex-col gap-4 flex-1">
+        <div className="flex flex-col gap-3 flex-1">
           <InfoCard
-            icon="&#127919;"
             title="Adversary Emulation"
             body="Real-world APT techniques across AWS, GCP, Azure, AI and Kubernetes environments."
+            accent="#FF6363"
           />
           <InfoCard
-            icon="&#128203;"
             title="IR Playbooks"
             body="Step-by-step incident response guides mapped to each threat actor's behavior."
+            accent="#55b3ff"
           />
           <InfoCard
-            icon="&#128737;"
             title="Detection Engineering"
             body="SIGMA, KQL, and YARA rules auto-generated from every emulation run."
+            accent="#5fc992"
           />
         </div>
       </div>
@@ -185,8 +229,8 @@ function SignInForm() {
   }, [googleSSO, clearError]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <form className="flex flex-col gap-5" onSubmit={handleSubmit}>
-      <FormField label="Username or Email" icon="&#9993;">
+    <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+      <FormField label="Username or Email">
         <input
           type="text"
           value={username}
@@ -194,14 +238,13 @@ function SignInForm() {
           placeholder="you@company.com"
           required
           autoComplete="username"
-          className="w-full bg-surface-elevated border border-border rounded-lg py-3 pl-[42px] pr-3.5
-            text-content-primary font-mono text-[13px] outline-none
-            transition-all focus:border-danger/40 focus:shadow-[0_0_0_3px_rgba(255,34,68,0.08)]
-            placeholder:text-content-dim"
+          style={inputStyle}
+          onFocus={(e) => applyFocusStyle(e.target)}
+          onBlur={(e) => removeFocusStyle(e.target)}
         />
       </FormField>
 
-      <FormField label="Password" icon="&#128274;">
+      <FormField label="Password">
         <input
           type="password"
           value={password}
@@ -209,48 +252,37 @@ function SignInForm() {
           placeholder="Enter your password"
           required
           autoComplete="current-password"
-          className="w-full bg-surface-elevated border border-border rounded-lg py-3 pl-[42px] pr-3.5
-            text-content-primary font-mono text-[13px] outline-none
-            transition-all focus:border-danger/40 focus:shadow-[0_0_0_3px_rgba(255,34,68,0.08)]
-            placeholder:text-content-dim"
+          style={inputStyle}
+          onFocus={(e) => applyFocusStyle(e.target)}
+          onBlur={(e) => removeFocusStyle(e.target)}
         />
       </FormField>
 
       <div className="flex items-center justify-between">
         <label className="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" className="w-3.5 h-3.5 accent-danger cursor-pointer" />
-          <span className="text-xs text-content-secondary">Remember me</span>
+          <input type="checkbox" style={{ accentColor: '#FF6363', width: '13px', height: '13px' }} />
+          <span style={{ fontSize: '12px', color: '#9c9c9d' }}>Remember me</span>
         </label>
-        <a href="#" className="font-mono text-[11px] text-danger no-underline hover:text-content-primary transition-colors">
+        <a
+          href="#"
+          style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: '#FF6363', textDecoration: 'none', letterSpacing: '0.3px' }}
+          onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.6')}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+        >
           Forgot password?
         </a>
       </div>
 
-      {error && (
-        <div className="font-mono text-[11px] text-danger bg-danger/[0.06] border border-danger/20 rounded-lg px-3.5 py-2.5 animate-fadeSlideIn">
-          {error}
-        </div>
-      )}
+      {error && <ErrorBanner message={error} />}
 
-      <button
-        type="submit"
-        disabled={loading}
-        className="w-full bg-danger border-none rounded-btn py-3.5
-          text-white font-display text-sm font-bold cursor-pointer
-          transition-all hover:-translate-y-[2px] hover:shadow-[0_8px_40px_rgba(255,34,68,0.4)]
-          active:translate-y-0 disabled:opacity-70 disabled:cursor-not-allowed disabled:transform-none
-          flex items-center justify-center gap-2"
-      >
-        <span className={loading ? 'opacity-50' : ''}>Sign In</span>
-        {loading && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
-      </button>
+      <PrimaryButton type="submit" loading={loading}>Sign In</PrimaryButton>
 
       <GoogleSignInButton onCredential={handleGoogleCredential} />
     </form>
   )
 }
 
-/* ── Sign Up Form (multi-step: fields → OTP → success) ── */
+/* ── Sign Up Form (multi-step: details → OTP → success) ── */
 type SignUpStep = 'details' | 'otp'
 
 function SignUpForm({ onComplete }: { onComplete: () => void }) {
@@ -259,7 +291,6 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
   const [step, setStep] = useState<SignUpStep>('details')
   const [pendingEmail, setPendingEmail] = useState('')
 
-  // Details fields
   const [inviteCode, setInviteCode] = useState('')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -271,12 +302,10 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
     e.preventDefault()
     clearError()
     setLocalError('')
-
     if (password !== confirm) {
       setLocalError('Passwords do not match')
       return
     }
-
     try {
       const res = await signup({ name, email, password, inviteCode })
       setPendingEmail(res.email)
@@ -286,12 +315,6 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
     }
   }
 
-  const handleOTPVerified = () => {
-    onComplete()
-  }
-
-  // Google SSO on the sign-up tab creates or links the account and
-  // navigates directly — no OTP step required.
   const handleGoogleCredential = useCallback(async (idToken: string) => {
     clearError()
     try {
@@ -317,15 +340,15 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
         clearError={clearError}
         verifyOTP={verifyOTP}
         resendOTP={resendOTP}
-        onVerified={handleOTPVerified}
+        onVerified={onComplete}
         onBack={() => { clearError(); setStep('details') }}
       />
     )
   }
 
   return (
-    <form className="flex flex-col gap-5" onSubmit={handleDetailsSubmit}>
-      <FormField label="Invite Code" icon="&#128273;">
+    <form className="flex flex-col gap-4" onSubmit={handleDetailsSubmit}>
+      <FormField label="Invite Code">
         <input
           type="text"
           value={inviteCode}
@@ -333,14 +356,13 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
           placeholder="Enter your invite code"
           required
           autoComplete="off"
-          className="w-full bg-surface-elevated border border-border rounded-lg py-3 pl-[42px] pr-3.5
-            text-content-primary font-mono text-[13px] outline-none
-            transition-all focus:border-danger/40 focus:shadow-[0_0_0_3px_rgba(255,34,68,0.08)]
-            placeholder:text-content-dim"
+          style={inputStyle}
+          onFocus={(e) => applyFocusStyle(e.target)}
+          onBlur={(e) => removeFocusStyle(e.target)}
         />
       </FormField>
 
-      <FormField label="Full Name" icon="&#128100;">
+      <FormField label="Full Name">
         <input
           type="text"
           value={name}
@@ -348,14 +370,13 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
           placeholder="Jane Doe"
           required
           autoComplete="name"
-          className="w-full bg-surface-elevated border border-border rounded-lg py-3 pl-[42px] pr-3.5
-            text-content-primary font-mono text-[13px] outline-none
-            transition-all focus:border-danger/40 focus:shadow-[0_0_0_3px_rgba(255,34,68,0.08)]
-            placeholder:text-content-dim"
+          style={inputStyle}
+          onFocus={(e) => applyFocusStyle(e.target)}
+          onBlur={(e) => removeFocusStyle(e.target)}
         />
       </FormField>
 
-      <FormField label="Email" icon="&#9993;">
+      <FormField label="Email">
         <input
           type="email"
           value={email}
@@ -363,14 +384,13 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
           placeholder="you@company.com"
           required
           autoComplete="email"
-          className="w-full bg-surface-elevated border border-border rounded-lg py-3 pl-[42px] pr-3.5
-            text-content-primary font-mono text-[13px] outline-none
-            transition-all focus:border-danger/40 focus:shadow-[0_0_0_3px_rgba(255,34,68,0.08)]
-            placeholder:text-content-dim"
+          style={inputStyle}
+          onFocus={(e) => applyFocusStyle(e.target)}
+          onBlur={(e) => removeFocusStyle(e.target)}
         />
       </FormField>
 
-      <FormField label="Password" icon="&#128274;">
+      <FormField label="Password">
         <input
           type="password"
           value={password}
@@ -379,14 +399,13 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
           required
           minLength={8}
           autoComplete="new-password"
-          className="w-full bg-surface-elevated border border-border rounded-lg py-3 pl-[42px] pr-3.5
-            text-content-primary font-mono text-[13px] outline-none
-            transition-all focus:border-danger/40 focus:shadow-[0_0_0_3px_rgba(255,34,68,0.08)]
-            placeholder:text-content-dim"
+          style={inputStyle}
+          onFocus={(e) => applyFocusStyle(e.target)}
+          onBlur={(e) => removeFocusStyle(e.target)}
         />
       </FormField>
 
-      <FormField label="Confirm Password" icon="&#128274;">
+      <FormField label="Confirm Password">
         <input
           type="password"
           value={confirm}
@@ -394,29 +413,15 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
           placeholder="Re-enter password"
           required
           autoComplete="new-password"
-          className="w-full bg-surface-elevated border border-border rounded-lg py-3 pl-[42px] pr-3.5
-            text-content-primary font-mono text-[13px] outline-none
-            transition-all focus:border-danger/40 focus:shadow-[0_0_0_3px_rgba(255,34,68,0.08)]
-            placeholder:text-content-dim"
+          style={inputStyle}
+          onFocus={(e) => applyFocusStyle(e.target)}
+          onBlur={(e) => removeFocusStyle(e.target)}
         />
       </FormField>
 
-      {displayError && (
-        <div className="font-mono text-[11px] text-danger">{displayError}</div>
-      )}
+      {displayError && <ErrorBanner message={displayError} />}
 
-      <button
-        type="submit"
-        disabled={loading}
-        className="w-full bg-danger border-none rounded-btn py-3.5
-          text-white font-display text-sm font-bold cursor-pointer
-          transition-all hover:-translate-y-[2px] hover:shadow-[0_8px_40px_rgba(255,34,68,0.4)]
-          active:translate-y-0 disabled:opacity-70 disabled:cursor-not-allowed disabled:transform-none
-          flex items-center justify-center gap-2"
-      >
-        <span className={loading ? 'opacity-50' : ''}>Create Account</span>
-        {loading && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
-      </button>
+      <PrimaryButton type="submit" loading={loading}>Create Account</PrimaryButton>
 
       <GoogleSignInButton onCredential={handleGoogleCredential} />
     </form>
@@ -425,14 +430,7 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
 
 /* ── OTP Verification Form ── */
 function OTPVerificationForm({
-  email,
-  loading,
-  error,
-  clearError,
-  verifyOTP,
-  resendOTP,
-  onVerified,
-  onBack,
+  email, loading, error, clearError, verifyOTP, resendOTP, onVerified, onBack,
 }: {
   email: string
   loading: boolean
@@ -448,22 +446,15 @@ function OTPVerificationForm({
   const [resendMsg, setResendMsg] = useState('')
   const inputRefs = useRef<(HTMLInputElement | null)[]>([])
 
-  // Auto-focus first input on mount
-  useEffect(() => {
-    inputRefs.current[0]?.focus()
-  }, [])
+  useEffect(() => { inputRefs.current[0]?.focus() }, [])
 
-  // Countdown timer for resend cooldown
   useEffect(() => {
     if (resendCooldown <= 0) return
-    const timer = setInterval(() => {
-      setResendCooldown((c) => c - 1)
-    }, 1000)
+    const timer = setInterval(() => setResendCooldown((c) => c - 1), 1000)
     return () => clearInterval(timer)
   }, [resendCooldown])
 
   const handleDigitChange = useCallback((index: number, value: string) => {
-    // Only allow single digit
     const digit = value.replace(/\D/g, '').slice(-1)
     setDigits((prev) => {
       const next = [...prev]
@@ -471,11 +462,7 @@ function OTPVerificationForm({
       return next
     })
     clearError()
-
-    // Auto-advance to next input
-    if (digit && index < 5) {
-      inputRefs.current[index + 1]?.focus()
-    }
+    if (digit && index < 5) inputRefs.current[index + 1]?.focus()
   }, [clearError])
 
   const handleKeyDown = useCallback((index: number, e: React.KeyboardEvent) => {
@@ -489,20 +476,15 @@ function OTPVerificationForm({
     const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6)
     if (!pasted) return
     const newDigits = [...digits]
-    for (let i = 0; i < 6; i++) {
-      newDigits[i] = pasted[i] ?? ''
-    }
+    for (let i = 0; i < 6; i++) newDigits[i] = pasted[i] ?? ''
     setDigits(newDigits)
-    // Focus the last filled or the next empty input
-    const focusIdx = Math.min(pasted.length, 5)
-    inputRefs.current[focusIdx]?.focus()
+    inputRefs.current[Math.min(pasted.length, 5)]?.focus()
   }, [digits])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     const otp = digits.join('')
     if (otp.length !== 6) return
-
     try {
       await verifyOTP({ email, otp })
       onVerified()
@@ -518,7 +500,7 @@ function OTPVerificationForm({
     try {
       const res = await resendOTP({ email })
       setResendMsg(res.message)
-      setResendCooldown(60) // 60-second cooldown
+      setResendCooldown(60)
       setDigits(['', '', '', '', '', ''])
       inputRefs.current[0]?.focus()
     } catch {
@@ -531,22 +513,24 @@ function OTPVerificationForm({
 
   return (
     <form className="flex flex-col gap-5" onSubmit={handleSubmit}>
-      {/* Header */}
       <div className="text-center">
-        <div className="w-14 h-14 rounded-full bg-danger/[0.12] border border-danger/20 flex items-center justify-center mx-auto mb-3">
-          <svg className="w-7 h-7 text-danger" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="4" width="20" height="16" rx="3" /><path d="M2 7l10 6 10-6" /></svg>
+        <div
+          className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3"
+          style={{ background: 'rgba(255,99,99,0.08)', border: '1px solid rgba(255,99,99,0.15)' }}
+        >
+          <svg className="w-5 h-5" style={{ color: '#FF6363' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <rect x="2" y="4" width="20" height="16" rx="3" />
+            <path d="M2 7l10 6 10-6" />
+          </svg>
         </div>
-        <p className="text-sm font-bold text-content-primary mb-1">
-          Check your email
-        </p>
-        <p className="text-xs text-content-secondary leading-relaxed">
+        <p style={{ fontSize: '14px', fontWeight: 600, color: '#f9f9f9', marginBottom: '4px' }}>Check your email</p>
+        <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.5 }}>
           We sent a 6-digit code to{' '}
-          <span className="font-mono text-content-primary">{maskedEmail}</span>
+          <span style={{ fontFamily: 'Geist Mono, monospace', color: '#cecece' }}>{maskedEmail}</span>
         </p>
       </div>
 
-      {/* OTP Inputs */}
-      <div className="flex justify-center gap-2.5" onPaste={handlePaste}>
+      <div className="flex justify-center gap-2" onPaste={handlePaste}>
         {digits.map((digit, i) => (
           <input
             key={i}
@@ -557,86 +541,81 @@ function OTPVerificationForm({
             value={digit}
             onChange={(e) => handleDigitChange(i, e.target.value)}
             onKeyDown={(e) => handleKeyDown(i, e)}
-            className={`w-11 h-14 text-center font-mono text-xl font-bold rounded-lg border outline-none
-              transition-all bg-surface-elevated text-content-primary
-              ${digit
-                ? 'border-danger/40 shadow-[0_0_0_2px_rgba(255,34,68,0.08)]'
-                : 'border-border'
-              }
-              focus:border-danger/60 focus:shadow-[0_0_0_3px_rgba(255,34,68,0.12)]`}
             aria-label={`Digit ${i + 1}`}
+            style={{
+              width: '42px',
+              height: '52px',
+              textAlign: 'center',
+              fontFamily: 'Geist Mono, monospace',
+              fontSize: '20px',
+              fontWeight: 600,
+              borderRadius: '8px',
+              border: digit ? '1px solid rgba(255,99,99,0.3)' : '1px solid rgba(255,255,255,0.06)',
+              background: '#07080a',
+              color: '#f9f9f9',
+              outline: 'none',
+              boxShadow: digit ? 'rgba(255,99,99,0.08) 0px 0px 0px 3px' : 'none',
+              transition: 'border-color 0.15s, box-shadow 0.15s',
+            }}
           />
         ))}
       </div>
 
-      {/* Error */}
-      {error && (
-        <div className="font-mono text-[11px] text-danger bg-danger/[0.06] border border-danger/20 rounded-lg px-3.5 py-2.5 text-center">
-          {error}
-        </div>
-      )}
+      {error && <ErrorBanner message={error} />}
 
-      {/* Resend message */}
       {resendMsg && !error && (
-        <div className="font-mono text-[11px] text-green bg-green/[0.06] border border-green/20 rounded-lg px-3.5 py-2.5 text-center">
+        <div
+          style={{
+            fontSize: '11px',
+            fontFamily: 'Geist Mono, monospace',
+            color: '#5fc992',
+            background: 'rgba(95,201,146,0.06)',
+            border: '1px solid rgba(95,201,146,0.2)',
+            borderRadius: '6px',
+            padding: '8px 12px',
+            textAlign: 'center',
+          }}
+        >
           {resendMsg}
         </div>
       )}
 
-      {/* Verify button */}
-      <button
-        type="submit"
-        disabled={loading || !isComplete}
-        className="w-full bg-danger border-none rounded-btn py-3.5
-          text-white font-display text-sm font-bold cursor-pointer
-          transition-all hover:-translate-y-[2px] hover:shadow-[0_8px_40px_rgba(255,34,68,0.4)]
-          active:translate-y-0 disabled:opacity-70 disabled:cursor-not-allowed disabled:transform-none
-          flex items-center justify-center gap-2"
-      >
-        <span className={loading ? 'opacity-50' : ''}>Verify Email</span>
-        {loading && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
-      </button>
+      <PrimaryButton type="submit" loading={loading} disabled={!isComplete}>Verify Email</PrimaryButton>
 
-      {/* Resend + Back */}
       <div className="flex items-center justify-between">
         <button
           type="button"
           onClick={onBack}
-          className="font-mono text-[11px] text-content-dim no-underline hover:text-content-primary
-            transition-colors cursor-pointer bg-transparent border-none p-0"
+          style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: '#6a6b6c', background: 'none', border: 'none', cursor: 'pointer', padding: 0, transition: 'opacity 0.15s' }}
+          onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.6')}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
         >
-          ← Back
+          Back
         </button>
-
         <button
           type="button"
           onClick={handleResend}
           disabled={resendCooldown > 0 || loading}
-          className="font-mono text-[11px] text-danger no-underline hover:text-content-primary
-            transition-colors cursor-pointer bg-transparent border-none p-0
-            disabled:text-content-dim disabled:cursor-not-allowed"
+          style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: resendCooldown > 0 ? '#434345' : '#FF6363', background: 'none', border: 'none', cursor: resendCooldown > 0 ? 'not-allowed' : 'pointer', padding: 0, transition: 'opacity 0.15s' }}
+          onMouseEnter={(e) => { if (resendCooldown <= 0) e.currentTarget.style.opacity = '0.6' }}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
         >
           {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend code'}
         </button>
       </div>
 
-      {/* Expiry note */}
-      <p className="font-mono text-[10px] text-content-dim text-center">
-        Code expires in 10 minutes · Up to 5 attempts
+      <p style={{ fontSize: '10px', fontFamily: 'Geist Mono, monospace', color: '#434345', textAlign: 'center', letterSpacing: '0.3px' }}>
+        Expires in 10 minutes — up to 5 attempts
       </p>
     </form>
   )
 }
 
-/**
- * Renders a Google Identity Services sign-in button.
+/* ── Google Sign-In Button ──
  *
- * GIS is initialized once per mount using the client ID from the Vite env
- * var VITE_GOOGLE_CLIENT_ID.  On a successful Google sign-in, the provided
- * onCredential callback receives the raw Google ID token string.
- *
- * Renders nothing when VITE_GOOGLE_CLIENT_ID is empty or when the GIS
- * library has not yet loaded (defensive against slow networks).
+ * Renders a GIS button using renderButton() into a ref div.
+ * Polls for the GIS script to load (up to 3 seconds) before initializing.
+ * Returns null when VITE_GOOGLE_CLIENT_ID is not set.
  */
 function GoogleSignInButton({ onCredential }: { onCredential: (idToken: string) => void }) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -645,98 +624,215 @@ function GoogleSignInButton({ onCredential }: { onCredential: (idToken: string) 
   useEffect(() => {
     if (!clientId || !containerRef.current) return
 
-    // GIS may not be available yet if the <script> is still loading.
-    // Poll up to ~3 seconds before giving up.
     let attempts = 0
     const MAX_ATTEMPTS = 30
 
     const tryInit = () => {
       if (!containerRef.current) return
-
       if (!window.google?.accounts?.id) {
         attempts += 1
-        if (attempts < MAX_ATTEMPTS) {
-          setTimeout(tryInit, 100)
-        }
+        if (attempts < MAX_ATTEMPTS) setTimeout(tryInit, 100)
         return
       }
-
       window.google.accounts.id.initialize({
         client_id: clientId,
-        callback: (response) => {
-          onCredential(response.credential)
-        },
+        callback: (response) => onCredential(response.credential),
         auto_select: false,
       })
-
       window.google.accounts.id.renderButton(containerRef.current, {
         theme: 'filled_black',
         size: 'large',
-        width: 342,
+        width: 336,
         text: 'continue_with',
       })
     }
 
     tryInit()
-    // onCredential is stable (wrapped in useCallback by callers) — safe to omit.
   }, [clientId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!clientId) return null
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3 mt-1">
       <div className="flex items-center gap-3">
-        <div className="flex-1 h-px bg-border" />
-        <span className="font-mono text-[10px] text-content-dim tracking-[1px] uppercase">or</span>
-        <div className="flex-1 h-px bg-border" />
+        <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.06)' }} />
+        <span style={{ fontSize: '10px', fontFamily: 'Geist Mono, monospace', color: '#434345', letterSpacing: '1px', textTransform: 'uppercase' }}>or</span>
+        <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.06)' }} />
       </div>
-      {/* GIS injects an iframe-based button into this div */}
       <div ref={containerRef} className="flex justify-center" />
     </div>
   )
 }
 
 /* ── Shared Components ── */
+
 function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`flex-1 py-2.5 border-none font-mono text-xs font-bold tracking-wide cursor-pointer transition-all
-        ${active
-          ? 'bg-danger/[0.08] text-danger'
-          : 'bg-surface-elevated text-content-dim hover:text-content-secondary'
-        }
-        first:border-r first:border-r-border`}
+      style={{
+        flex: 1,
+        padding: '9px 0',
+        border: 'none',
+        borderRight: active ? 'none' : '1px solid rgba(255,255,255,0.06)',
+        fontFamily: 'Geist Mono, monospace',
+        fontSize: '11px',
+        fontWeight: 600,
+        letterSpacing: '0.8px',
+        textTransform: 'uppercase',
+        cursor: 'pointer',
+        transition: 'opacity 0.15s',
+        background: active ? 'rgba(255,99,99,0.06)' : 'transparent',
+        color: active ? '#FF6363' : '#6a6b6c',
+      }}
+      onMouseEnter={(e) => { if (!active) e.currentTarget.style.opacity = '0.7' }}
+      onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
     >
       {children}
     </button>
   )
 }
 
-function FormField({ label, icon, children }: { label: string; icon: string; children: React.ReactNode }) {
+function FormField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="font-mono text-[10px] tracking-[1px] text-content-dim uppercase">{label}</label>
-      <div className="relative">
-        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-content-dim pointer-events-none">
-          {icon}
-        </span>
-        {children}
-      </div>
+      <label style={{ fontSize: '11px', fontWeight: 500, color: '#9c9c9d', letterSpacing: '0.3px' }}>
+        {label}
+      </label>
+      {children}
     </div>
   )
 }
 
-function InfoCard({ icon, title, body }: { icon: string; title: string; body: string }) {
+function PrimaryButton({
+  children, type = 'button', loading = false, disabled = false,
+}: {
+  children: React.ReactNode
+  type?: 'button' | 'submit'
+  loading?: boolean
+  disabled?: boolean
+}) {
   return (
-    <div className="bg-surface-card border border-border rounded-card px-6 py-5 transition-all duration-[400ms]
-      hover:border-[rgba(255,34,68,0.2)] hover:-translate-y-1 hover:shadow-[0_20px_60px_rgba(0,0,0,0.3)]
-      relative overflow-hidden group">
-      <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-danger to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-[400ms]" />
-      <div className="w-12 h-12 rounded-btn bg-danger/[0.15] flex items-center justify-center text-[22px] mb-4">{icon}</div>
-      <div className="text-sm font-bold font-display text-content-primary mb-1.5 tracking-[-0.3px]">{title}</div>
-      <div className="text-[0.9rem] text-content-secondary leading-[1.65]">{body}</div>
+    <button
+      type={type}
+      disabled={loading || disabled}
+      style={{
+        width: '100%',
+        padding: '11px 0',
+        background: 'hsla(0, 0%, 100%, 0.815)',
+        color: '#18191a',
+        border: 'none',
+        borderRadius: '86px',
+        fontSize: '14px',
+        fontWeight: 600,
+        letterSpacing: '0.3px',
+        cursor: loading || disabled ? 'not-allowed' : 'pointer',
+        opacity: loading || disabled ? 0.5 : 1,
+        transition: 'opacity 0.15s',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '8px',
+        boxShadow: 'rgba(255,255,255,0.05) 0px 1px 0px 0px inset, rgba(255,255,255,0.25) 0px 0px 0px 1px, rgba(0,0,0,0.2) 0px -1px 0px 0px inset',
+      }}
+      onMouseEnter={(e) => { if (!loading && !disabled) e.currentTarget.style.opacity = '0.6' }}
+      onMouseLeave={(e) => { if (!loading && !disabled) e.currentTarget.style.opacity = '1' }}
+    >
+      <span>{children}</span>
+      {loading && (
+        <div
+          className="animate-spin"
+          style={{ width: '14px', height: '14px', border: '2px solid rgba(24,25,26,0.3)', borderTopColor: '#18191a', borderRadius: '50%' }}
+        />
+      )}
+    </button>
+  )
+}
+
+function ErrorBanner({ message }: { message: string }) {
+  return (
+    <div
+      style={{
+        fontSize: '12px',
+        fontFamily: 'Geist Mono, monospace',
+        color: '#FF6363',
+        background: 'rgba(255,99,99,0.06)',
+        border: '1px solid rgba(255,99,99,0.15)',
+        borderRadius: '6px',
+        padding: '8px 12px',
+        letterSpacing: '0.2px',
+      }}
+    >
+      {message}
     </div>
   )
+}
+
+function InfoCard({ title, body, accent }: { title: string; body: string; accent: string }) {
+  return (
+    <div
+      className="relative overflow-hidden group"
+      style={{
+        backgroundColor: '#101111',
+        border: '1px solid rgba(255,255,255,0.06)',
+        borderRadius: '12px',
+        padding: '20px 22px',
+        boxShadow: 'rgb(27, 28, 30) 0px 0px 0px 1px, rgb(7, 8, 10) 0px 0px 0px 1px inset',
+        transition: 'border-color 0.3s',
+        cursor: 'default',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = `${accent}22`
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)'
+      }}
+    >
+      {/* Hover accent hairline */}
+      <div
+        className="absolute top-0 left-0 right-0 opacity-0 group-hover:opacity-100"
+        style={{ height: '1px', background: `linear-gradient(90deg, transparent, ${accent}, transparent)`, transition: 'opacity 0.3s' }}
+      />
+      {/* Accent dot */}
+      <div
+        className="w-1.5 h-1.5 rounded-full mb-3"
+        style={{ background: accent, boxShadow: `0 0 8px ${accent}66` }}
+      />
+      <p style={{ fontSize: '13px', fontWeight: 600, color: '#f9f9f9', marginBottom: '6px', letterSpacing: '-0.1px' }}>
+        {title}
+      </p>
+      <p style={{ fontSize: '13px', fontWeight: 400, color: '#9c9c9d', lineHeight: 1.6, letterSpacing: '0.2px' }}>
+        {body}
+      </p>
+    </div>
+  )
+}
+
+/* ── Input style helpers ── */
+
+const inputStyle: React.CSSProperties = {
+  width: '100%',
+  background: '#07080a',
+  border: '1px solid rgba(255,255,255,0.08)',
+  borderRadius: '8px',
+  padding: '10px 14px',
+  color: '#f9f9f9',
+  fontSize: '13px',
+  fontWeight: 500,
+  fontFamily: 'Inter, system-ui, sans-serif',
+  letterSpacing: '0.2px',
+  outline: 'none',
+  transition: 'border-color 0.15s, box-shadow 0.15s',
+  boxSizing: 'border-box',
+}
+
+function applyFocusStyle(el: HTMLInputElement) {
+  el.style.borderColor = 'rgba(85, 179, 255, 0.4)'
+  el.style.boxShadow = 'hsla(202, 100%, 67%, 0.12) 0px 0px 0px 3px'
+}
+
+function removeFocusStyle(el: HTMLInputElement) {
+  el.style.borderColor = 'rgba(255,255,255,0.08)'
+  el.style.boxShadow = 'none'
 }

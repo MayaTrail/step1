@@ -15,6 +15,7 @@ Dockerfile
 # Documentation
 README.md
 *.md
+DESIGN.md
 
 # Legacy vanilla JS files (not used in React build)
 mayatrail_ui.html
