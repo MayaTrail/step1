@@ -1,0 +1,479 @@
+{
+  "version": "1.0",
+  "playbooks": {
+    "PB-AWS-IAM-ENUM-01": {
+      "api_call": "iam:SimulatePrincipalPolicy",
+      "service": "IAM",
+      "cloud": "AWS",
+      "path": "aws/iam/PB-AWS-IAM-ENUM-01.md",
+      "mitre": ["T1580"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID"],
+      "provided_outputs": ["ALLOWED_ACTIONS", "ENUMERATED_SERVICES", "SOURCE_IP"]
+    },
+    "PB-AWS-IAM-PRIVESC-01": {
+      "api_call": "iam:AttachRolePolicy",
+      "service": "IAM",
+      "cloud": "AWS",
+      "path": "aws/iam/PB-AWS-IAM-PRIVESC-01.md",
+      "mitre": ["T1098"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ROLE_NAME", "ROLE_SESSION_NAME", "ACCOUNT_ID", "POLICY_ARN"],
+      "provided_outputs": ["ATTACHED_POLICY_ARN", "ESCALATED_ROLE_NAME", "SESSION_ACTIONS_LOG"]
+    },
+    "PB-AWS-STS-GetCallerIdentity-01": {
+      "api_call": "sts:GetCallerIdentity",
+      "service": "STS",
+      "cloud": "AWS",
+      "path": "aws/sts/PB-AWS-STS-GetCallerIdentity-01.md",
+      "mitre": ["T1087.004", "T1082"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME"],
+      "provided_outputs": ["CALLER_ARN", "ACCOUNT_ID", "USER_ID", "SOURCE_IP"]
+    },
+    "PB-AWS-STS-AssumeRole-01": {
+      "api_call": "sts:AssumeRole",
+      "service": "STS",
+      "cloud": "AWS",
+      "path": "aws/sts/PB-AWS-STS-AssumeRole-01.md",
+      "mitre": ["T1078.004", "T1550.001"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ASSUMED_ROLE_NAME", "ACCOUNT_ID"],
+      "provided_outputs": ["ROLE_SESSION_NAME", "ASSUMED_ROLE_ARN", "SESSION_CREDENTIALS", "SOURCE_IP"]
+    },
+    "PB-AWS-IAM-ListRoles-01": {
+      "api_call": "iam:ListRoles",
+      "service": "IAM",
+      "cloud": "AWS",
+      "path": "aws/iam/PB-AWS-IAM-ListRoles-01.md",
+      "mitre": ["T1087.004", "T1580"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "CALLER_ARN"],
+      "provided_outputs": ["ENUMERATED_ROLE_NAMES", "ENUMERATED_ROLE_ARNS"]
+    },
+    "PB-AWS-IAM-CreateAccessKey-01": {
+      "api_call": "iam:CreateAccessKey",
+      "service": "IAM",
+      "cloud": "AWS",
+      "path": "aws/iam/PB-AWS-IAM-CreateAccessKey-01.md",
+      "mitre": ["T1098.001", "T1136.003"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID"],
+      "provided_outputs": ["CREATED_ACCESS_KEY_ID", "KEY_CREATION_TIME", "SOURCE_IP"]
+    },
+    "PB-AWS-IAM-DeleteAccessKey-01": {
+      "api_call": "iam:DeleteAccessKey",
+      "service": "IAM",
+      "cloud": "AWS",
+      "path": "aws/iam/PB-AWS-IAM-DeleteAccessKey-01.md",
+      "mitre": ["T1531", "T1070.004"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCESS_KEY_ID", "ACCOUNT_ID"],
+      "provided_outputs": ["DELETED_KEY_ID", "DELETION_TIME", "SOURCE_IP"]
+    },
+    "PB-AWS-IAM-ListUserPolicies-01": {
+      "api_call": "iam:ListUserPolicies",
+      "service": "IAM",
+      "cloud": "AWS",
+      "path": "aws/iam/PB-AWS-IAM-ListUserPolicies-01.md",
+      "mitre": ["T1087.004", "T1580"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID"],
+      "provided_outputs": ["ENUMERATED_POLICY_NAMES", "SOURCE_IP"]
+    },
+    "PB-AWS-IAM-DeleteUserPolicy-01": {
+      "api_call": "iam:DeleteUserPolicy",
+      "service": "IAM",
+      "cloud": "AWS",
+      "path": "aws/iam/PB-AWS-IAM-DeleteUserPolicy-01.md",
+      "mitre": ["T1562.007", "T1070"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "POLICY_NAME", "ACCOUNT_ID"],
+      "provided_outputs": ["DELETED_POLICY_NAME", "POLICY_DOCUMENT_BACKUP", "SOURCE_IP"]
+    },
+    "PB-AWS-IAM-ListAttachedRolePolicies-01": {
+      "api_call": "iam:ListAttachedRolePolicies",
+      "service": "IAM",
+      "cloud": "AWS",
+      "path": "aws/iam/PB-AWS-IAM-ListAttachedRolePolicies-01.md",
+      "mitre": ["T1087.004", "T1580"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "ROLE_NAME", "ACCOUNT_ID"],
+      "provided_outputs": ["ATTACHED_POLICY_ARNS", "ATTACHED_POLICY_NAMES", "SOURCE_IP"]
+    },
+    "PB-AWS-IAM-DetachRolePolicy-01": {
+      "api_call": "iam:DetachRolePolicy",
+      "service": "IAM",
+      "cloud": "AWS",
+      "path": "aws/iam/PB-AWS-IAM-DetachRolePolicy-01.md",
+      "mitre": ["T1562.007", "T1070"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "ROLE_NAME", "POLICY_ARN", "ACCOUNT_ID"],
+      "provided_outputs": ["DETACHED_POLICY_ARN", "DETACHED_ROLE_NAME", "SOURCE_IP"]
+    },
+    "PB-AWS-IAM-DeleteRole-01": {
+      "api_call": "iam:DeleteRole",
+      "service": "IAM",
+      "cloud": "AWS",
+      "path": "aws/iam/PB-AWS-IAM-DeleteRole-01.md",
+      "mitre": ["T1485", "T1531"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "ROLE_NAME", "ACCOUNT_ID"],
+      "provided_outputs": ["DELETED_ROLE_NAME", "DELETED_ROLE_ARN", "SOURCE_IP"]
+    },
+    "PB-AWS-S3-ListBuckets-01": {
+      "api_call": "s3:ListBuckets",
+      "service": "S3",
+      "cloud": "AWS",
+      "path": "aws/s3/PB-AWS-S3-ListBuckets-01.md",
+      "mitre": ["T1580"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID"],
+      "provided_outputs": ["ENUMERATED_BUCKET_NAMES", "ENUMERATED_BUCKET_ARNS", "SOURCE_IP"]
+    },
+    "PB-AWS-S3-GetBucketPolicy-01": {
+      "api_call": "s3:GetBucketPolicy",
+      "service": "S3",
+      "cloud": "AWS",
+      "path": "aws/s3/PB-AWS-S3-GetBucketPolicy-01.md",
+      "mitre": ["T1580"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID", "BUCKET_NAME"],
+      "provided_outputs": ["BUCKET_POLICY_DOCUMENT", "SOURCE_IP"]
+    },
+    "PB-AWS-S3-ListObjectsV2-01": {
+      "api_call": "s3:ListObjectsV2",
+      "service": "S3",
+      "cloud": "AWS",
+      "path": "aws/s3/PB-AWS-S3-ListObjectsV2-01.md",
+      "mitre": ["T1083"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID", "BUCKET_NAME"],
+      "provided_outputs": ["ENUMERATED_OBJECT_KEYS", "OBJECT_COUNT", "SOURCE_IP"]
+    },
+    "PB-AWS-S3-GetObject-01": {
+      "api_call": "s3:GetObject",
+      "service": "S3",
+      "cloud": "AWS",
+      "path": "aws/s3/PB-AWS-S3-GetObject-01.md",
+      "mitre": ["T1530"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID", "BUCKET_NAME", "OBJECT_KEY"],
+      "provided_outputs": ["EXFILTRATED_OBJECT_KEYS", "DATA_VOLUME_BYTES", "SOURCE_IP"]
+    },
+    "PB-AWS-S3-DeleteObjects-01": {
+      "api_call": "s3:DeleteObjects",
+      "service": "S3",
+      "cloud": "AWS",
+      "path": "aws/s3/PB-AWS-S3-DeleteObjects-01.md",
+      "mitre": ["T1485"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID", "BUCKET_NAME"],
+      "provided_outputs": ["DELETED_OBJECT_KEYS", "DELETION_COUNT", "SOURCE_IP"]
+    },
+    "PB-AWS-S3-DeleteBucket-01": {
+      "api_call": "s3:DeleteBucket",
+      "service": "S3",
+      "cloud": "AWS",
+      "path": "aws/s3/PB-AWS-S3-DeleteBucket-01.md",
+      "mitre": ["T1485"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID", "BUCKET_NAME"],
+      "provided_outputs": ["DELETED_BUCKET_NAME", "DELETION_TIME", "SOURCE_IP"]
+    },
+    "PB-AWS-S3-CreateBucket-01": {
+      "api_call": "s3:CreateBucket",
+      "service": "S3",
+      "cloud": "AWS",
+      "path": "aws/s3/PB-AWS-S3-CreateBucket-01.md",
+      "mitre": ["T1537"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID", "BUCKET_NAME", "REGION"],
+      "provided_outputs": ["CREATED_BUCKET_NAME", "BUCKET_REGION", "SOURCE_IP"]
+    },
+    "PB-AWS-S3-PutObject-01": {
+      "api_call": "s3:PutObject",
+      "service": "S3",
+      "cloud": "AWS",
+      "path": "aws/s3/PB-AWS-S3-PutObject-01.md",
+      "mitre": ["T1486", "T1491.002"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID", "BUCKET_NAME", "OBJECT_KEY"],
+      "provided_outputs": ["UPLOADED_OBJECT_KEY", "OBJECT_SIZE_BYTES", "SOURCE_IP"]
+    },
+    "PB-AWS-KMS-CreateKey-01": {
+      "api_call": "kms:CreateKey",
+      "service": "KMS",
+      "cloud": "AWS",
+      "path": "aws/kms/PB-AWS-KMS-CreateKey-01.md",
+      "mitre": ["T1486"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID"],
+      "provided_outputs": ["KEY_ID", "KEY_ARN", "KEY_ORIGIN", "SOURCE_IP"]
+    },
+    "PB-AWS-KMS-GetParametersForImport-01": {
+      "api_call": "kms:GetParametersForImport",
+      "service": "KMS",
+      "cloud": "AWS",
+      "path": "aws/kms/PB-AWS-KMS-GetParametersForImport-01.md",
+      "mitre": ["T1486"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID", "KEY_ID"],
+      "provided_outputs": ["IMPORT_TOKEN", "WRAPPING_ALGORITHM", "SOURCE_IP"]
+    },
+    "PB-AWS-KMS-ImportKeyMaterial-01": {
+      "api_call": "kms:ImportKeyMaterial",
+      "service": "KMS",
+      "cloud": "AWS",
+      "path": "aws/kms/PB-AWS-KMS-ImportKeyMaterial-01.md",
+      "mitre": ["T1486"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID", "KEY_ID"],
+      "provided_outputs": ["IMPORTED_KEY_ID", "EXPIRATION_MODEL", "SOURCE_IP"]
+    },
+    "PB-AWS-S3-CopyObject-01": {
+      "api_call": "s3:CopyObject",
+      "service": "S3",
+      "cloud": "AWS",
+      "path": "aws/s3/PB-AWS-S3-CopyObject-01.md",
+      "mitre": ["T1486"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID", "BUCKET_NAME", "OBJECT_KEY", "KMS_KEY_ID"],
+      "provided_outputs": ["COPIED_OBJECT_KEYS", "ENCRYPTION_KEY_ARN", "SOURCE_IP"]
+    },
+    "PB-AWS-KMS-DeleteImportedKeyMaterial-01": {
+      "api_call": "kms:DeleteImportedKeyMaterial",
+      "service": "KMS",
+      "cloud": "AWS",
+      "path": "aws/kms/PB-AWS-KMS-DeleteImportedKeyMaterial-01.md",
+      "mitre": ["T1486", "T1485"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID", "KEY_ID"],
+      "provided_outputs": ["DELETED_KEY_MATERIAL_KEY_ID", "KEY_STATE_AFTER_DELETION", "SOURCE_IP"]
+    },
+    "PB-AWS-IAM-CreateUser-01": {
+      "api_call": "iam:CreateUser",
+      "service": "IAM",
+      "cloud": "AWS",
+      "path": "aws/iam/PB-AWS-IAM-CreateUser-01.md",
+      "mitre": ["T1136.003"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID", "CALLER_ARN"],
+      "provided_outputs": ["CREATED_USERNAME", "CREATION_TIME", "SOURCE_IP"]
+    },
+    "PB-AWS-IAM-ListUsers-01": {
+      "api_call": "iam:ListUsers",
+      "service": "IAM",
+      "cloud": "AWS",
+      "path": "aws/iam/PB-AWS-IAM-ListUsers-01.md",
+      "mitre": ["T1087.004"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID", "CALLER_ARN"],
+      "provided_outputs": ["ENUMERATED_USERNAMES", "SOURCE_IP"]
+    },
+    "PB-AWS-Lambda-ListFunctions-01": {
+      "api_call": "lambda:ListFunctions",
+      "service": "Lambda",
+      "cloud": "AWS",
+      "path": "aws/lambda/PB-AWS-Lambda-ListFunctions-01.md",
+      "mitre": ["T1526"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "CALLER_ARN", "ACCOUNT_ID", "REGION"],
+      "provided_outputs": ["ENUMERATED_FUNCTION_NAMES", "FUNCTION_COUNT", "SOURCE_IP"]
+    },
+    "PB-AWS-Lambda-GetFunction-01": {
+      "api_call": "lambda:GetFunction",
+      "service": "Lambda",
+      "cloud": "AWS",
+      "path": "aws/lambda/PB-AWS-Lambda-GetFunction-01.md",
+      "mitre": ["T1530", "T1005"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "CALLER_ARN", "ACCOUNT_ID", "FUNCTION_NAME"],
+      "provided_outputs": ["FUNCTION_CODE_URL", "FUNCTION_RUNTIME", "SOURCE_IP"]
+    },
+    "PB-AWS-Lambda-ListVersionsByFunction-01": {
+      "api_call": "lambda:ListVersionsByFunction",
+      "service": "Lambda",
+      "cloud": "AWS",
+      "path": "aws/lambda/PB-AWS-Lambda-ListVersionsByFunction-01.md",
+      "mitre": ["T1552.001"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "CALLER_ARN", "ACCOUNT_ID", "FUNCTION_NAME"],
+      "provided_outputs": ["EXPOSED_ENV_VARS", "VERSION_COUNT", "SOURCE_IP"]
+    },
+    "PB-AWS-Lambda-GetPolicy-01": {
+      "api_call": "lambda:GetPolicy",
+      "service": "Lambda",
+      "cloud": "AWS",
+      "path": "aws/lambda/PB-AWS-Lambda-GetPolicy-01.md",
+      "mitre": ["T1526"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "CALLER_ARN", "ACCOUNT_ID", "FUNCTION_NAME"],
+      "provided_outputs": ["POLICY_DOCUMENT", "ALLOWED_PRINCIPALS", "SOURCE_IP"]
+    },
+    "PB-AWS-Lambda-ListEventSourceMappings-01": {
+      "api_call": "lambda:ListEventSourceMappings",
+      "service": "Lambda",
+      "cloud": "AWS",
+      "path": "aws/lambda/PB-AWS-Lambda-ListEventSourceMappings-01.md",
+      "mitre": ["T1526"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "CALLER_ARN", "ACCOUNT_ID", "FUNCTION_NAME"],
+      "provided_outputs": ["EVENT_SOURCE_ARNS", "MAPPING_COUNT", "SOURCE_IP"]
+    },
+    "PB-AWS-Lambda-ListTags-01": {
+      "api_call": "lambda:ListTags",
+      "service": "Lambda",
+      "cloud": "AWS",
+      "path": "aws/lambda/PB-AWS-Lambda-ListTags-01.md",
+      "mitre": ["T1526"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "CALLER_ARN", "ACCOUNT_ID", "FUNCTION_ARN"],
+      "provided_outputs": ["FUNCTION_TAGS", "SOURCE_IP"]
+    },
+    "PB-AWS-Lambda-ListAliases-01": {
+      "api_call": "lambda:ListAliases",
+      "service": "Lambda",
+      "cloud": "AWS",
+      "path": "aws/lambda/PB-AWS-Lambda-ListAliases-01.md",
+      "mitre": ["T1526"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "CALLER_ARN", "ACCOUNT_ID", "FUNCTION_NAME"],
+      "provided_outputs": ["ALIAS_NAMES", "ALIAS_VERSIONS", "SOURCE_IP"]
+    },
+    "PB-AWS-CloudTrail-DescribeTrails-01": {
+      "api_call": "cloudtrail:DescribeTrails",
+      "service": "CloudTrail",
+      "cloud": "AWS",
+      "path": "aws/cloudtrail/PB-AWS-CloudTrail-DescribeTrails-01.md",
+      "mitre": ["T1526", "T1580"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "CALLER_ARN", "ACCOUNT_ID", "REGION"],
+      "provided_outputs": ["TRAIL_NAMES", "TRAIL_ARNS", "S3_BUCKET_NAMES", "SOURCE_IP"]
+    },
+    "PB-AWS-CloudTrail-StopLogging-01": {
+      "api_call": "cloudtrail:StopLogging",
+      "service": "CloudTrail",
+      "cloud": "AWS",
+      "path": "aws/cloudtrail/PB-AWS-CloudTrail-StopLogging-01.md",
+      "mitre": ["T1562.008"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "CALLER_ARN", "ACCOUNT_ID", "TRAIL_NAME", "REGION"],
+      "provided_outputs": ["DISABLED_TRAIL_ARN", "STOP_LOGGING_TIME", "BLIND_WINDOW_DURATION", "SOURCE_IP"]
+    },
+    "SCARLETEEL-V1-CHRONOLOGICAL": {
+      "type": "campaign",
+      "campaign": "SCARLETEEL",
+      "service": "Multi-Service",
+      "cloud": "AWS",
+      "path": "campaigns/SCARLETEEL-V1-CHRONOLOGICAL.md",
+      "mitre": ["T1190", "T1552.005", "T1136.003", "T1098.001", "T1526", "T1530", "T1562.008", "T1078.004"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "ACCOUNT_ID", "REGION", "COMPROMISED_INSTANCE_ID"],
+      "provided_outputs": ["ATTACKER_SOURCE_IP", "COMPROMISED_ROLE_ARN", "LATERAL_USER_ARN", "EXFILTRATED_ASSETS", "BLIND_WINDOW_START", "BLIND_WINDOW_END"],
+      "chained_playbooks": [
+        "PB-AWS-IAM-CreateUser-01",
+        "PB-AWS-IAM-CreateAccessKey-01",
+        "PB-AWS-IAM-ListUsers-01",
+        "PB-AWS-S3-ListBuckets-01",
+        "PB-AWS-S3-ListObjectsV2-01",
+        "PB-AWS-S3-GetObject-01",
+        "PB-AWS-Lambda-ListFunctions-01",
+        "PB-AWS-Lambda-GetFunction-01",
+        "PB-AWS-Lambda-ListVersionsByFunction-01",
+        "PB-AWS-Lambda-GetPolicy-01",
+        "PB-AWS-Lambda-ListAliases-01",
+        "PB-AWS-Lambda-ListTags-01",
+        "PB-AWS-Lambda-ListEventSourceMappings-01",
+        "PB-AWS-CloudTrail-DescribeTrails-01",
+        "PB-AWS-CloudTrail-StopLogging-01",
+        "PB-AWS-STS-GetCallerIdentity-01"
+      ]
+    },
+    "SCARLETEEL-V1-STOPLOGGING-FIRST": {
+      "type": "campaign-alert-driven",
+      "campaign": "SCARLETEEL",
+      "service": "Multi-Service",
+      "cloud": "AWS",
+      "path": "campaigns/SCARLETEEL-V1-STOPLOGGING-FIRST.md",
+      "mitre": ["T1190", "T1552.005", "T1098.001", "T1526", "T1530", "T1562.008", "T1078.004"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "ACCOUNT_ID", "REGION", "TRAIL_NAME"],
+      "provided_outputs": ["ATTACKER_SOURCE_IP", "COMPROMISED_ROLE_ARN", "LATERAL_USER_ARN", "BLIND_WINDOW_START", "BLIND_WINDOW_END"]
+    },
+    "PB-AWS-SecretsManager-ListSecrets-01": {
+      "api_call": "secretsmanager:ListSecrets",
+      "service": "SecretsManager",
+      "cloud": "AWS",
+      "path": "aws/secretsmanager/PB-AWS-SecretsManager-ListSecrets-01.md",
+      "mitre": ["T1526", "T1087.004"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "CALLER_ARN", "ACCOUNT_ID", "REGION"],
+      "provided_outputs": ["ENUMERATED_SECRET_NAMES", "SECRET_COUNT", "SOURCE_IP"]
+    },
+    "PB-AWS-SecretsManager-GetSecretValue-01": {
+      "api_call": "secretsmanager:GetSecretValue",
+      "service": "SecretsManager",
+      "cloud": "AWS",
+      "path": "aws/secretsmanager/PB-AWS-SecretsManager-GetSecretValue-01.md",
+      "mitre": ["T1528", "T1552.001"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "CALLER_ARN", "ACCOUNT_ID", "SECRET_ID", "REGION"],
+      "provided_outputs": ["STOLEN_SECRET_NAME", "STOLEN_SECRET_ARN", "SOURCE_IP"]
+    },
+    "PB-AWS-IAM-DeleteUser-01": {
+      "api_call": "iam:DeleteUser",
+      "service": "IAM",
+      "cloud": "AWS",
+      "path": "aws/iam/PB-AWS-IAM-DeleteUser-01.md",
+      "mitre": ["T1070.004", "T1531"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "USERNAME", "ACCOUNT_ID", "CALLER_ARN", "DELETED_USERNAME"],
+      "provided_outputs": ["DELETED_USERNAME", "DELETION_TIME", "SOURCE_IP"]
+    },
+    "SCARLETEEL-V2-CHRONOLOGICAL": {
+      "type": "campaign",
+      "campaign": "SCARLETEEL 2.0",
+      "service": "Multi-Service",
+      "cloud": "AWS",
+      "path": "campaigns/SCARLETEEL-V2-CHRONOLOGICAL.md",
+      "mitre": ["T1190", "T1552.005", "T1136.003", "T1070.004", "T1098.001", "T1526", "T1530", "T1562.008", "T1078.004", "T1528"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "ACCOUNT_ID", "REGION", "COMPROMISED_INSTANCE_ID"],
+      "provided_outputs": ["ATTACKER_SOURCE_IP", "ATTACKER_SOURCE_IPV6", "COMPROMISED_ROLE_ARN", "LATERAL_USER_ARN", "EXFILTRATED_ASSETS", "STOLEN_SECRETS", "BLIND_WINDOW_START", "BLIND_WINDOW_END"],
+      "chained_playbooks": [
+        "PB-AWS-IAM-ListUsers-01",
+        "PB-AWS-IAM-ListRoles-01",
+        "PB-AWS-IAM-CreateUser-01",
+        "PB-AWS-IAM-DeleteUser-01",
+        "PB-AWS-IAM-CreateAccessKey-01",
+        "PB-AWS-S3-ListBuckets-01",
+        "PB-AWS-S3-ListObjectsV2-01",
+        "PB-AWS-S3-GetObject-01",
+        "PB-AWS-Lambda-ListFunctions-01",
+        "PB-AWS-Lambda-GetFunction-01",
+        "PB-AWS-Lambda-ListVersionsByFunction-01",
+        "PB-AWS-Lambda-GetPolicy-01",
+        "PB-AWS-Lambda-ListAliases-01",
+        "PB-AWS-Lambda-ListTags-01",
+        "PB-AWS-Lambda-ListEventSourceMappings-01",
+        "PB-AWS-CloudTrail-DescribeTrails-01",
+        "PB-AWS-CloudTrail-StopLogging-01",
+        "PB-AWS-STS-GetCallerIdentity-01",
+        "PB-AWS-SecretsManager-ListSecrets-01",
+        "PB-AWS-SecretsManager-GetSecretValue-01"
+      ]
+    },
+    "SCARLETEEL-V2-STOPLOGGING-FIRST": {
+      "type": "campaign-alert-driven",
+      "campaign": "SCARLETEEL 2.0",
+      "service": "Multi-Service",
+      "cloud": "AWS",
+      "path": "campaigns/SCARLETEEL-V2-STOPLOGGING-FIRST.md",
+      "mitre": ["T1190", "T1552.005", "T1136.003", "T1070.004", "T1098.001", "T1526", "T1530", "T1562.008", "T1078.004", "T1528"],
+      "version": "1.0",
+      "required_inputs": ["INCIDENT_START_TIME", "ACCOUNT_ID", "REGION", "TRAIL_NAME"],
+      "provided_outputs": ["ATTACKER_SOURCE_IP", "ATTACKER_SOURCE_IPV6", "COMPROMISED_ROLE_ARN", "LATERAL_USER_ARN", "STOLEN_SECRETS", "BLIND_WINDOW_START", "BLIND_WINDOW_END"]
+    }
+  }
+}
