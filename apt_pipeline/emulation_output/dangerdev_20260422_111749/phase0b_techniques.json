@@ -1,0 +1,958 @@
+{
+  "techniques": [
+    {
+      "mitre_id": "T1078.004",
+      "name": "Valid Accounts: Cloud Accounts",
+      "tactic": "Initial Access",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Use accidentally exposed IAM long-term access key with AdministratorAccess to authenticate.",
+      "api_calls": [
+        "iam:GetUser",
+        "iam:ListAttachedUserPolicies"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "GetUser",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "ListAttachedUserPolicies",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: UnauthorizedAccess:IAMUser/MaliciousIPCaller",
+        "GuardDuty: Discovery:IAMUser/AnomalousBehavior"
+      ],
+      "phase_in_chain": 1,
+      "dependencies": [],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "Exposed IAM long-term access key in public/leaked storage"
+        ],
+        "target": [
+          "AWS IAM admin account"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Deactivate and delete compromised access key via iam:UpdateAccessKey and iam:DeleteAccessKey",
+        "Revoke all active sessions for the account"
+      ],
+      "opsec_notes": "TA deliberately avoided GetCallerIdentity to evade detection rules. API calls originated from Indonesian IPs via commercial VPN."
+    },
+    {
+      "mitre_id": "T1526",
+      "name": "Cloud Service Discovery",
+      "tactic": "Discovery",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Enumerate SES sending quota and registered identities to assess phishing/spam capacity.",
+      "api_calls": [
+        "ses:GetSendQuota",
+        "ses:ListIdentities"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "GetSendQuota",
+          "eventSource": "ses.amazonaws.com"
+        },
+        {
+          "eventName": "ListIdentities",
+          "eventSource": "ses.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: Discovery:IAMUser/AnomalousBehavior"
+      ],
+      "phase_in_chain": 1,
+      "dependencies": [
+        "T1078.004"
+      ],
+      "severity": "medium",
+      "resources_needed": {
+        "attack_surface": [
+          "Valid AWS credentials with ses:GetSendQuota and ses:ListIdentities"
+        ],
+        "target": [
+          "Amazon SES"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "No resources created; no cleanup required"
+      ],
+      "opsec_notes": "Activity repeated on two separate days two weeks apart; user-agent pattern suggests automation."
+    },
+    {
+      "mitre_id": "T1087.004",
+      "name": "Account Discovery: Cloud Account",
+      "tactic": "Discovery",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "List all IAM users to identify accounts for targeting and inform masquerade naming.",
+      "api_calls": [
+        "iam:ListUsers"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "ListUsers",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: Discovery:IAMUser/AnomalousBehavior"
+      ],
+      "phase_in_chain": 1,
+      "dependencies": [
+        "T1078.004"
+      ],
+      "severity": "medium",
+      "resources_needed": {
+        "attack_surface": [
+          "IAM credentials with iam:ListUsers permission"
+        ],
+        "target": [
+          "AWS IAM"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "No resources created; no cleanup required"
+      ],
+      "opsec_notes": "TA skipped GetCallerIdentity and ListAttachedUserPolicies; automated based on user-agent and call frequency."
+    },
+    {
+      "mitre_id": "T1136.003",
+      "name": "Create Account: Cloud Account",
+      "tactic": "Persistence",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Create IAM user DangerDev@protonmail.me with console login to establish persistent access.",
+      "api_calls": [
+        "iam:CreateUser",
+        "iam:CreateLoginProfile"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "CreateUser",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "CreateLoginProfile",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: Persistence:IAMUser/UserPermissions"
+      ],
+      "phase_in_chain": 1,
+      "dependencies": [
+        "T1087.004"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "IAM credentials with iam:CreateUser and iam:CreateLoginProfile"
+        ],
+        "target": [
+          "AWS IAM"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "iam:DeleteLoginProfile",
+        "iam:DeleteUser for created account"
+      ],
+      "opsec_notes": "Email-style username. Subsequent activity shifts to new user to distance activity from original compromised key."
+    },
+    {
+      "mitre_id": "T1098.003",
+      "name": "Account Manipulation: Additional Cloud Roles",
+      "tactic": "Privilege Escalation",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Attach AWS-managed AdministratorAccess policy to newly created IAM user via AttachUserPolicy.",
+      "api_calls": [
+        "iam:AttachUserPolicy"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "AttachUserPolicy",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: Persistence:IAMUser/UserPermissions",
+        "GuardDuty: PrivilegeEscalation:IAMUser/AdministrativePermissions",
+        "AWS Security Hub: IAM.1"
+      ],
+      "phase_in_chain": 1,
+      "dependencies": [
+        "T1136.003"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "IAM credentials with iam:AttachUserPolicy permission"
+        ],
+        "target": [
+          "Newly created IAM user"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "iam:DetachUserPolicy to remove arn:aws:iam::aws:policy/AdministratorAccess"
+      ],
+      "opsec_notes": "Uses AWS-managed policy to avoid creating custom policy artifacts that might trigger detection."
+    },
+    {
+      "mitre_id": "T1580",
+      "name": "Cloud Infrastructure Discovery",
+      "tactic": "Discovery",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Enumerate EC2 instances, security groups, VPCs, and regions via management console within one hour.",
+      "api_calls": [
+        "ec2:DescribeInstances",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeVpcs",
+        "ec2:DescribeRegions",
+        "ec2:DescribeInstanceTypes",
+        "ec2:DescribeAvailabilityZones"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "DescribeInstances",
+          "eventSource": "ec2.amazonaws.com"
+        },
+        {
+          "eventName": "DescribeSecurityGroups",
+          "eventSource": "ec2.amazonaws.com"
+        },
+        {
+          "eventName": "DescribeVpcs",
+          "eventSource": "ec2.amazonaws.com"
+        },
+        {
+          "eventName": "DescribeRegions",
+          "eventSource": "ec2.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: Discovery:EC2/AnomalousBehavior"
+      ],
+      "phase_in_chain": 2,
+      "dependencies": [
+        "T1136.003",
+        "T1098.003"
+      ],
+      "severity": "medium",
+      "resources_needed": {
+        "attack_surface": [
+          "IAM credentials with EC2 read permissions"
+        ],
+        "target": [
+          "AWS EC2",
+          "AWS VPC"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "No resources created; no cleanup required"
+      ],
+      "opsec_notes": "sessionCredentialFromConsole=true indicates management console use; less likely scripted at this stage."
+    },
+    {
+      "mitre_id": "T1578.002",
+      "name": "Modify Cloud Compute Infrastructure: Create Cloud Instance",
+      "tactic": "Defense Evasion",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Launch EC2 t2.micro test instance then GPU p3.16xlarge instances; create VPC, key pair, and open security group.",
+      "api_calls": [
+        "ec2:CreateKeyPair",
+        "ec2:CreateSecurityGroup",
+        "ec2:CreateDefaultVpc",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:RunInstances",
+        "ec2:TerminateInstances"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "RunInstances",
+          "eventSource": "ec2.amazonaws.com"
+        },
+        {
+          "eventName": "CreateSecurityGroup",
+          "eventSource": "ec2.amazonaws.com"
+        },
+        {
+          "eventName": "AuthorizeSecurityGroupIngress",
+          "eventSource": "ec2.amazonaws.com"
+        },
+        {
+          "eventName": "CreateKeyPair",
+          "eventSource": "ec2.amazonaws.com"
+        },
+        {
+          "eventName": "CreateDefaultVpc",
+          "eventSource": "ec2.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM",
+        "VPC Flow Logs"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: CryptoCurrency:EC2/BitcoinTool.B",
+        "GuardDuty: Backdoor:EC2/C&CActivity",
+        "AWS Security Hub: EC2.19 \u2014 security group allows unrestricted access"
+      ],
+      "phase_in_chain": 2,
+      "dependencies": [
+        "T1580"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "IAM credentials with ec2:RunInstances and related permissions",
+          "Account service limits permitting p3.16xlarge"
+        ],
+        "target": [
+          "AWS EC2",
+          "AWS VPC"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "ec2:TerminateInstances",
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:DeleteSecurityGroup",
+        "ec2:DeleteKeyPair"
+      ],
+      "opsec_notes": "TA tested lifecycle with t2.micro before GPU deployment. p3.16xlarge hit account limits; TA submitted support case to increase."
+    },
+    {
+      "mitre_id": "T1021.001",
+      "name": "Remote Services: Remote Desktop Protocol",
+      "tactic": "Lateral Movement",
+      "platform": "aws",
+      "execution_plane": "data_plane",
+      "execution_context": "lateral_movement",
+      "emulation_category": "simulated",
+      "description": "RDP into EC2 Windows instance via port 3389 opened to 0.0.0.0/0 in security group.",
+      "api_calls": [],
+      "data_plane_actions": [
+        "TCP connection to EC2 public IP on port 3389 from external TA IP",
+        "Interactive RDP session on EC2 Windows instance"
+      ],
+      "host_commands": [],
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": [
+        "VPC Flow Logs",
+        "IDS",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: UnauthorizedAccess:EC2/RDPBruteForce",
+        "Network Firewall alert on inbound port 3389 from foreign IP"
+      ],
+      "phase_in_chain": 2,
+      "dependencies": [
+        "T1578.002"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "EC2 Windows instance with port 3389 open to 0.0.0.0/0",
+          "Valid Windows credentials for the instance"
+        ],
+        "target": [
+          "AWS EC2 Windows instance"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Terminate EC2 instance",
+        "ec2:RevokeSecurityGroupIngress for port 3389"
+      ],
+      "opsec_notes": "No CloudTrail record of RDP session content; VPC flow logs are the primary detection source."
+    },
+    {
+      "mitre_id": "T1496",
+      "name": "Resource Hijacking",
+      "tactic": "Impact",
+      "platform": "aws",
+      "execution_plane": "host_plane",
+      "execution_context": "host_attack",
+      "emulation_category": "documented",
+      "description": "Execute cryptomining workload on EC2 GPU instances (p3.16xlarge) accessed via SSH/RDP.",
+      "api_calls": [],
+      "data_plane_actions": [],
+      "host_commands": [
+        "[cryptominer_binary] --pool [stratum_endpoint] --wallet [wallet_address] --gpu"
+      ],
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": [
+        "GuardDuty",
+        "EDR",
+        "VPC Flow Logs",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: CryptoCurrency:EC2/BitcoinTool.B",
+        "GuardDuty: CryptoCurrency:EC2/BitcoinTool.B!DNS"
+      ],
+      "phase_in_chain": 2,
+      "dependencies": [
+        "T1578.002",
+        "T1021.001"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "EC2 GPU instances with outbound internet access to mining pool endpoints"
+        ],
+        "target": [
+          "AWS EC2 p3.16xlarge and other GPU instance types"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Terminate all GPU instances",
+        "Review AWS billing for unexpected charges",
+        "Enable AWS Cost Anomaly Detection"
+      ],
+      "opsec_notes": "Cannot safely emulate at scale: p3.16xlarge ~$24/hr. Use t2.micro with benign CPU-bound workload for instance lifecycle testing only."
+    },
+    {
+      "mitre_id": "T1036.005",
+      "name": "Masquerading: Match Legitimate Name or Location",
+      "tactic": "Defense Evasion",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Create IAM user 'ses' and roles named AWSeservedSSO_* and AWSLanding-Zones-ConfigRecorderRoles to blend in.",
+      "api_calls": [
+        "iam:CreateUser",
+        "iam:CreateRole"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "CreateUser",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "CreateRole",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "AWS Security Hub: IAM.1",
+        "SIEM alert on IAM resource names deviating from established naming convention by one character"
+      ],
+      "phase_in_chain": 3,
+      "dependencies": [
+        "T1087.004"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "IAM credentials with iam:CreateUser and iam:CreateRole",
+          "Knowledge of victim account IAM naming conventions"
+        ],
+        "target": [
+          "AWS IAM"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "iam:DeleteUser for 'ses'",
+        "iam:DeleteRole for AWSeservedSSO_* and AWSLanding-Zones-ConfigRecorderRoles"
+      ],
+      "opsec_notes": "AWSeservedSSO_* vs AWSReservedSSO_* differs by one character (lowercase 'e' vs 'R'). 'ses' mimics ses-smtp-user.<datetime> auto-created accounts."
+    },
+    {
+      "mitre_id": "T1199",
+      "name": "Trusted Relationship",
+      "tactic": "Initial Access",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "simulated",
+      "description": "Create IAM roles with cross-account trust policies allowing TA-controlled AWS accounts to AssumeRole with AdministratorAccess.",
+      "api_calls": [
+        "iam:CreateRole",
+        "iam:AttachRolePolicy",
+        "sts:AssumeRole"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "CreateRole",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "AttachRolePolicy",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "AssumeRole",
+          "eventSource": "sts.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: Persistence:IAMUser/UserPermissions",
+        "GuardDuty: PrivilegeEscalation:IAMUser/AdministrativePermissions"
+      ],
+      "phase_in_chain": 3,
+      "dependencies": [
+        "T1036.005"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "IAM credentials with iam:CreateRole and iam:AttachRolePolicy",
+          "Attacker-controlled external AWS account"
+        ],
+        "target": [
+          "AWS IAM",
+          "AWS STS"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "iam:DetachRolePolicy",
+        "iam:DeleteRole for both backdoor roles",
+        "Block accounts 265857590823 and 671050157472 via SCPs"
+      ],
+      "opsec_notes": "Backdoor survives IAM user deletion; no user artifact in victim account. Simulation requires isolated adversary-controlled AWS account."
+    },
+    {
+      "mitre_id": "T1098",
+      "name": "Account Manipulation",
+      "tactic": "Persistence",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Create new access keys for existing victim accounts and reset console passwords via UpdateLoginProfile.",
+      "api_calls": [
+        "iam:CreateAccessKey",
+        "iam:UpdateLoginProfile"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "CreateAccessKey",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "UpdateLoginProfile",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: Persistence:IAMUser/UserPermissions",
+        "AWS Security Hub: IAM.3"
+      ],
+      "phase_in_chain": 3,
+      "dependencies": [
+        "T1136.003"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "IAM credentials with iam:CreateAccessKey and iam:UpdateLoginProfile on other accounts"
+        ],
+        "target": [
+          "Existing AWS IAM users in victim account"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "iam:DeleteAccessKey for all TA-created keys",
+        "Force password reset on all affected accounts",
+        "Audit all recently created access keys"
+      ],
+      "opsec_notes": "TA created keys on pre-existing accounts to maintain access after DangerDev account removal. UpdateLoginProfile invoked using originally compromised key."
+    },
+    {
+      "mitre_id": "T1530",
+      "name": "Data from Cloud Storage",
+      "tactic": "Collection",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "List all S3 buckets to identify data for potential exfiltration or abuse.",
+      "api_calls": [
+        "s3:ListBuckets"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "ListBuckets",
+          "eventSource": "s3.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: Discovery:S3/AnomalousBehavior",
+        "GuardDuty: Discovery:S3/MaliciousIPCaller"
+      ],
+      "phase_in_chain": 3,
+      "dependencies": [
+        "T1136.003"
+      ],
+      "severity": "medium",
+      "resources_needed": {
+        "attack_surface": [
+          "IAM credentials with s3:ListBuckets"
+        ],
+        "target": [
+          "AWS S3"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "No resources created; no cleanup required"
+      ],
+      "opsec_notes": "Enumeration only; no confirmed data exfiltration observed in this incident. Paired with ListInstanceProfiles, ListGroupsForUser, ListSSHPublicKeys."
+    },
+    {
+      "mitre_id": "T1518.001",
+      "name": "Software Discovery: Security Software Discovery",
+      "tactic": "Discovery",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Review GuardDuty findings and use SimulatePrincipalPolicy to probe SSM and Secrets Manager permissions without triggering those services.",
+      "api_calls": [
+        "guardduty:ListFindings",
+        "guardduty:GetFindings",
+        "iam:SimulatePrincipalPolicy"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "ListFindings",
+          "eventSource": "guardduty.amazonaws.com"
+        },
+        {
+          "eventName": "GetFindings",
+          "eventSource": "guardduty.amazonaws.com"
+        },
+        {
+          "eventName": "SimulatePrincipalPolicy",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "SIEM alert on GuardDuty console access from anomalous user-agent (RDS console)",
+        "SIEM alert on SimulatePrincipalPolicy for sensitive service actions"
+      ],
+      "phase_in_chain": 3,
+      "dependencies": [
+        "T1136.003"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "IAM credentials with guardduty:ListFindings, guardduty:GetFindings, iam:SimulatePrincipalPolicy"
+        ],
+        "target": [
+          "AWS GuardDuty",
+          "AWS IAM Policy Simulator"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "No resources created; no cleanup required"
+      ],
+      "opsec_notes": "TA accessed GuardDuty via RDS console user-agent anomalously. SimulatePrincipalPolicy checks permissions without making actual SSM/SecretsManager calls, avoiding those service's own detection."
+    },
+    {
+      "mitre_id": "T1070",
+      "name": "Indicator Removal",
+      "tactic": "Defense Evasion",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Delete IAM users, detach and delete policies, and deactivate/delete access keys to erase attack artifacts.",
+      "api_calls": [
+        "iam:DeleteUser",
+        "iam:DetachUserPolicy",
+        "iam:DeleteUserPolicy",
+        "iam:UpdateAccessKey",
+        "iam:DeleteAccessKey"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "DeleteUser",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "DetachUserPolicy",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "DeleteUserPolicy",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "UpdateAccessKey",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "DeleteAccessKey",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "SIEM alert on high-frequency IAM deletion events",
+        "GuardDuty: Stealth:IAMUser/PasswordPolicyChange"
+      ],
+      "phase_in_chain": 3,
+      "dependencies": [
+        "T1136.003",
+        "T1098"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "IAM credentials with iam:DeleteUser, iam:DetachUserPolicy, iam:DeleteAccessKey"
+        ],
+        "target": [
+          "IAM users and keys created during attack"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "CloudTrail deletions are themselves logged; restore deleted user context from CloudTrail history"
+      ],
+      "opsec_notes": "Deletion events are fully logged in CloudTrail; cover-up attempt is itself forensic evidence. TA also inspected GuardDuty findings before cleanup to scope what was detected."
+    },
+    {
+      "mitre_id": "T1583.001",
+      "name": "Acquire Infrastructure: Domains",
+      "tactic": "Resource Development",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "documented",
+      "description": "Register four PayPal-mimicking domains via Route53 for spearphishing and scam infrastructure.",
+      "api_calls": [
+        "route53domains:RegisterDomain"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "RegisterDomain",
+          "eventSource": "route53domains.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "SIEM alert on route53domains:RegisterDomain from anomalous principal",
+        "AWS billing alert on unexpected Route53 domain charges"
+      ],
+      "phase_in_chain": 3,
+      "dependencies": [
+        "T1136.003"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "IAM credentials with route53domains:RegisterDomain",
+          "AWS account with valid payment method"
+        ],
+        "target": [
+          "AWS Route53 Domains"
+        ],
+        "bait": [
+          "PayPal-mimicking domain names for credential harvesting pages"
+        ]
+      },
+      "cleanup_actions": [
+        "route53domains:DeleteDomain or let expire",
+        "Notify domain registrar of abuse",
+        "Submit to threat intel feeds"
+      ],
+      "opsec_notes": "Cannot safely emulate with PayPal-mimicking domains: real internet-facing registration, legal/financial implications. Use clearly non-malicious test domain in isolated account only."
+    },
+    {
+      "mitre_id": "T1566.002",
+      "name": "Phishing: Spearphishing Link",
+      "tactic": "Initial Access",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "phishing_attack",
+      "emulation_category": "documented",
+      "description": "Send phishing/spam emails via SES targeting cryptocurrency exchange credentials and PayPal accounts.",
+      "api_calls": [
+        "ses:CreateEmailIdentity",
+        "ses:SendEmail",
+        "ses:SendRawEmail"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "CreateEmailIdentity",
+          "eventSource": "ses.amazonaws.com"
+        },
+        {
+          "eventName": "SendEmail",
+          "eventSource": "ses.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "AWS Trust & Safety abuse notification triggering account review",
+        "SES sending suspension for spam policy violation"
+      ],
+      "phase_in_chain": 3,
+      "dependencies": [
+        "T1526",
+        "T1583.001"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "SES production mode (out of sandbox)",
+          "Verified SES sender identities",
+          "Elevated SES sending quota via support case"
+        ],
+        "target": [
+          "External email recipients \u2014 Japanese website users, crypto exchange users, PayPal users"
+        ],
+        "bait": [
+          "PayPal credential phishing page on registered domain",
+          "Cryptocurrency exchange credential harvester"
+        ]
+      },
+      "cleanup_actions": [
+        "ses:DeleteEmailIdentity",
+        "Request SES quota revocation",
+        "Notify abuse targets",
+        "ses:UpdateAccountSendingEnabled to disable sending"
+      ],
+      "opsec_notes": "Cannot safely emulate: sends real phishing to real recipients. Use SES sandbox mode to prevent external delivery. Support case interaction with AWS Trust & Safety was the incident trigger."
+    }
+  ]
+}

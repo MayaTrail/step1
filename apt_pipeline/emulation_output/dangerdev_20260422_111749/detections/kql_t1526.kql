@@ -1,0 +1,26 @@
+// T1526 Cloud Service Discovery — SES Quota and Identity Enumeration
+// DangerDev: GetSendQuota + ListIdentities to assess phishing capacity before persistence.
+// Pattern repeats ~14 days apart — correlated sessions indicate automation.
+
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "ses.amazonaws.com"
+| where EventName in ("GetSendQuota", "ListIdentities")
+| where UserIdentityType == "IAMUser"
+| where UserIdentityArn !contains "SESAdmin"
+| where UserIdentityArn !contains "ses-smtp-user"
+| where UserIdentityArn !contains ":root"
+| summarize
+    SESReconEvents = make_set(EventName),
+    EventCount     = count(),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated),
+    SourceIPs      = make_set(SourceIpAddress),
+    Regions        = make_set(AwsRegion)
+    by UserIdentityUserName, UserIdentityArn
+| extend BothCallsSeen = array_length(SESReconEvents) >= 2
+| extend Severity = iff(BothCallsSeen, "High", "Medium")
+| extend AlertTitle = "SES Capacity Recon — Pre-Phishing Discovery (DangerDev Pattern)"
+| project FirstSeen, LastSeen, Severity, AlertTitle, BothCallsSeen,
+          UserIdentityUserName, UserIdentityArn, SESReconEvents, SourceIPs, Regions
+| sort by FirstSeen desc

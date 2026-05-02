@@ -1,0 +1,146 @@
+Falco Feeds extends the power of Falco by giving open source-focused companies access to expert-written rules that are continuously updated as new threats are discovered.
+The Sysdig Threat Research Team (TRT) has uncovered a novel cloud-native cryptojacking operation which they've named AMBERSQUID. This operation leverages AWS services not commonly used by attackers, such as AWS Amplify, AWS Fargate, and Amazon SageMaker. The uncommon nature of these services means that they are often overlooked from a security perspective, and the AMBERSQUID operation can cost victims more than $10,000/day.
+The AMBERSQUID operation was able to exploit cloud services without triggering the AWS requirement for approval of more resources, as would be the case if they only spammed EC2 instances. Targeting multiple services also poses additional challenges, like incident response, since it requires finding and killing all miners in each exploited service.
+We discovered AMBERSQUID by performing an analysis of over 1.7M Linux images in order to understand what kind of malicious payloads are hiding in the containers images on Docker Hub.
+This dangerous container image didn't raise any alarms during static scanning for known indicators or malicious binaries. It was only when the container was run that its cross-service cryptojacking activities became obvious. This is consistent with the findings of our 2023 Cloud Threat Report, in which we noted that 10% of malicious images are missed by static scanning alone.
+With medium confidence, we attribute this operation to Indonesian attackers based on the use of Indonesian language in scripts and usernames. We also regularly see freejacking and cryptojacking attacks as a lucrative source of income for Indonesian attackers due to their low cost of living.
+Technical Analysis
+Docker Hub
+The original container that initiated our investigation was found on Docker Hub, but the scope quickly expanded to include a number of accounts. Most of these accounts started with very basic container images running a cryptominer. However, they eventually switched over to the AWS-specific services described in this research.
+Timeline
+It is interesting to note that the first account was created in May 2022, and its development continued through August. The attackers continued pushing cryptominer images with different accounts until March 2023, when they created a GitHub account. Before creating their own repositories, making their operation a bit more evasive, the attackers downloaded miners from popular GitHub repositories and imported them into the layers of the Docker images. Their repositories don't have any source code (yet) but they do provide the miners inside archives downloadable as releases. Those binaries are usually called "test," packed with UPX and malformed so they cannot be easily unpacked.
+Below is the list of known Docker Hub users related to this operation. Some of the accounts seem to have been abandoned, while others continue to be active.
+Malicious images from Docker Hub
+If we dig deeper into delbidaluan/epicx, we discover a GitHub account that the attacker uses to store the Amplify application source code and the mining scripts mentioned above. They have different versions of their code to prevent being tracked by the GitHub search engine.
+For instance:
+- toolbar repository, release 2.0.0 used by delbidaluan/tidex
+- romy repository, release 2.0.0 used by delbidaluan/ecsx and delbidaluan/cpoolx
+- profile repository, release 1.0.0 used by delbidaluan/epicx, delbidaluan/zephx and delbidaluan/abipdnx
+Before creating their Github account, the attacker used the cryptominer binaries without any obfuscation.
+We have deduced that the images ending with "x" download the miners from the attackers' repository releases and run them when launched, which can be seen in the layers. The epicx image, in particular, has over 100,000 downloads.
+The images without the final "x" run the scripts targeting AWS.
+AWS Artifacts
+Let's begin with the artifact analysis using the container image delbidaluan/epic. The ENTRYPOINT of the Docker image is entrypoint.sh
+. All of the different images have the same format but can execute different scripts. In this case, the execution starts with the following:
+They set up the AWS credentials with the environment variables or by passing them when deploying the image. Then, the GIT user and email are taken from the GeeksforGeeks example. The username exists on GitHub but with no activity.
+The entrypoint.sh
+proceeds with the following scripts:
+Let's explain each artifact and service the attacker is using to accomplish their cryptojacking operation.
+Roles and permissions
+The first script executed by the container, amplify-role.sh
+, creates the "AWSCodeCommit-Role" role. This new role is one of several used by the attacker throughout the operation as they add additional permissions for other AWS services. The first service, which is given access, is AWS Amplify. We will discuss the specifics around Amplify later in the article.
+Where amplify-role.json
+is:
+Then, it attaches the full access policies of CodeCommit, CloudWatch, and Amplify to that role.
+Some inline policies are added as well:
+These policies grant full privileges of Amplify and amplifybackend services to all resources.
+Finally, amplify-role.sh
+creates another role, "sugo-role," with full access to SageMaker, as shown below:
+Where sugo.json
+is:
+In the same way, the ecs.sh
+script starts creating the role, "ecsTaskExecutionRole," with full access to ECS, other than administrative privileges.
+Where ecsTaskExecutionRole.json
+is:
+CodeCommit
+AWS CodeCommit is a secure, highly scalable, fully-managed source control service that hosts private Git repositories. The attackers used this service to generate the private repository which they then used in different services as a source. This allows their operation to stay fully contained within AWS.
+The repo.sh
+script creates a CodeCommit repository named "test" in every region.
+Interestingly, "selesai" means "completed" in Indonesian.
+Right after creating each, it executes code.sh
+which pushes via Git the source code of an Amplify app to the remote repository.
+Amplify
+AWS Amplify is a development platform that allows developers to build and deploy scalable web and mobile applications. It provides a framework to integrate the app with multiple other AWS services, such as AWS Cognito for authentication, AWS AppSync for APIs, and AWS S3 for storage. Most importantly, Amplify provides the attacker access to compute resources.
+Once the attackers created the private repositories, the next script jalan.sh
+executes another script, sup0.sh
+, in each region.
+The sup0.sh
+script creates five Amplify web apps from the previously created repositories. The "amplify-app" directory present in code.sh
+includes the files needed to run their miners using Amplify, as some services do require file backing as seen here.
+What follows is amplify.yml
+:
+While this is the content of index.py
+:
+It runs the following start
+script, which executes the cryptominer:
+The "test" binary is a cryptominer, which was packed with UPX and malformed in order to make analysis more difficult. Also, it is undetected by VirusTotal. The results in Telemetry show that it was previously uploaded as "SRBMiner-MULTI", which finds confirmation in the documentation related to Epic Cash mining:
+We can assume that the attackers do this to avoid any downloads from outside the account's own repository, thus avoiding possible alerts.
+The other script they run in amplify.yml
+, named time, is used to make the build last as long as possible while the miner process is running:
+The attackers use their scripts to create several Amplify web apps to be deployed with Amplify Hosting. In the configuration file for the build settings, they inserted the commands to run a miner that is executed during the build phase of the app. The following code is part of sup0.sh
+script:
+The commands are then executed inside build instances: EC2 instances provided by AWS used to build the application.
+For the first time, we discover attackers abusing AWS Amplify for cryptojacking.
+It is also interesting to see how they enable auto-build, so that once the applications are created, the repo code is updated with the update.sh
+script so that they are deployed again.
+Additionally, in another image (tegarhuta/ami) from a user who is part of the same pool, we discovered instructions for creating an Amplify app in the same folder where the cryptomining scripts were stored. One of the URLs is an Amplify app that appears to be running at the time of writing.
+The site was hosted at `https://master[.]d19tgz4vpyd5[.]amplifyapp[.]com/
+.`
+Elastic Container Service (ECS) / Fargate
+The next script, ecs.sh
+, is obviously used to do cryptojacking in AWS ECS service. Amazon ECS is an orchestration service used to manage and deploy containers. Tasks and services are grouped in ECS clusters, which can run on EC2 instances, AWS Fargate (serverless), or on-premises virtual machines.
+This script creates the "ecsTaskExecutionRole" role that can be assumed from the ECS tasks service. Then, it attaches the "AdministratorAccess", "AmazonECS_FullAccess," and "AmazonECSTaskExecutionRolePolicy" policies to it. This is the same process described above in the IAM section.
+After that, it writes an ECS task definition where the image used to start the container is delbidaluan/epicx, a miner image belonging to the same Docker Hub user. The resources are set so that the container has 2 vCPu and 4 GB of memory. It is also configured to run on Fargate by setting the option ""requiresCompatibilities": [ "FARGATE" ]".
+Then, for each region:
+- It creates an ECS cluster in Fargate
+- It registers the previous task definition
+- It queries the quota of Fargate On-Demand vCPU available and creates an ECS service according to that result:
+- If the quota equals 30.0, the "desiredCount" of the service is set to 30.
+- Otherwise, the "desiredCount" of the service is set to 6.
+According to the documentation, the desiredCount is "the number of instantiations of the specified task definition to place and keep running in your service. If the number of tasks running in a service drops below the desiredCount, Amazon ECS runs another copy of the task in the specified cluster."
+The final entrypoint script, ulang.sh
+, runs restart.sh
+for every region. This script simply queries all the jobs of all the Amplify apps and, if their status is different from "RUNNING" and "PENDING," it re-runs them.
+Codebuild scripts
+AWS CodeBuild is a continuous integration (CI) service that can be used to compile and test source code and produce deployable artifacts without managing build servers. When creating a project, users can specify several settings in the build specification, including build commands.
+This is where the attackers put the command to run their miner.
+As shown above, attackers create three new projects in each region with the previously created repository and run the index.py
+when the project starts building. As for Amplify, the malicious code is executed inside build instances. The previous code snippet shows the specifications of the build, the OS, the Docker image to be used, its compute type, and information about the logs of the build project — in this case, CloudWatch.
+Also, they set the "timeout-in-minutes" to 480 (8 hours). This parameter, according to the documentation, specifies "how long, in minutes, from 5 to 480 (8 hours), for CodeBuild to wait before it times out any build that has not been marked as completed."
+CloudFormation
+AWS CloudFormation is an infrastructure as code service that allows users to deploy AWS and third-party resources via templates. Templates are text files that describe the resources to be provisioned in the AWS CloudFormation stacks. Stacks are collections of AWS resources that can be managed as single units. This means that users are able to operate directly with the stack instead of the single resources.
+The attackers' scripts create several CloudFormation stacks that originated from a template that defines an EC2 Image Builder component. Within this component, they put commands to run a miner during the build phase of the image. This is similar to the commands that can be defined in a Dockerfile.
+For each region, it creates a CloudFormation stack where they insert the commands to run the miner inside the ImageBuilder Component:
+They also specified the possible instance types for the build instance to be created:
+Then, it creates eight EC2 image pipelines with the following input JSON file:
+The most significant part of the previous code snippet is the cron expression since it tells the pipeline to start a new build every minute.
+Their Docker images contain one of those JSON files that was previously used in a real environment and leaks an AWS Account ID (it might belong to one of the attackers' testing environments):
+EC2 Auto Scaling
+Amazon EC2 Auto Scaling is a feature that allows users to handle the availability of compute capacity by adding or removing EC2 instances using scaling policies of their choice. Launch templates can be used to define the EC2 instances to be deployed.
+The script scale.sh
+creates the following EC2 launch template for each region:
+The instance AMI is Amazon Linux 2, with the minimum requirements set to 4 vCPU and 8 GB of memory. The Base64 decoded script inserted in the UserData contains the commands to run one of the attackers' Docker images running a cryptominer:
+Then, the script creates two auto scaling groups, named "task" and "task1," that spin up instances using the previous launch template as shown below:
+Each group includes eight instances: the first group has only On-Demand Instances ("OnDemandPercentageAboveBaseCapacity" is set to 100) while the second group has only Spot Instances ("OnDemandPercentageAboveBaseCapacity" is set to 0). Also, by setting "SpotAllocationStrategy" to "capacity-optimized," the attackers choose the strategy that has the lowest risk of interruption according to the documentation.
+Sagemaker
+Amazon SageMaker is a platform to build, train, and deploy machine learning (ML) models. Users can write code to train, deploy, and validate models with notebook instances that are ML compute instances running the Jupyter Notebook App. For every notebook instance, users can define a lifecycle configuration, which is a collection of shell scripts that run upon the creation or start of a notebook instance. This is precisely where the attackers put the script to run their miner after creating several notebook instances with the same configuration.
+For each region, the attacker runs note.sh
+. This script creates a SageMaker notebook instance with type ml.t3.medium. The "OnStart" field in the configuration contains "a shell script that runs every time you start a notebook instance," and here they inserted the following commands encoded in base64 to run the miner:
+Other scripts
+salah.sh
+("salah" means "wrong" in Indonesian) is run for each region and in turn runs delete.sh
+. This script deletes all the CodeCommit repositories previously created.
+stoptrigger.sh
+, for each region, this script stops some Glue triggers.
+Cost to the Victim
+In consideration of the amount of services that are used in this operation, we wanted to make a simulation of the cost that this would entail for a victim. These costs make assumptions based on regions and scale which can be easily changed by the attacker.
+| Service | Deploy | Cost/day |
+| Amplify (pricing) | 8 regions x 5 apps x 1440 min | $576 |
+| CodeBuild (pricing) | 8 regions x 3 projects (small, medium and large) x 1440 min | $403 |
+| Cloudformation (pricing) | 8 regions x 8 tasks (c5.xlarge, c5a.xlarge, r5.xlarge, r5a,xlarge) x (0.2 * 24 h) | $307 |
+| Sagemaker (pricing) | 4 regions x 8 instances (ml.t3.2xlarge) x (0.399 * 24 h) | $306 |
+| EC2 Auto Scaling groups (pricing) | 4 regions x 16 instances x (0.2 * 24 h) | $307 |
+| ECS (pricing) | 16 regions x 24 h x 30 tasks x (2 vCPU * 0.013 + 4GB * 0.001) | $345 |
+| Total | $2244 |
+Another point to consider with the table above is that the default scripts are not operating at full power. For example, in some services they exploit only four regions, sometimes eight, and other times 16. The cost would be much higher if they always target all regions and scale up their resource usage.
+Wallets and Revenues
+| Cryptocurrency | Wallet addresses | Notes |
+| Zephyr | ZEPHYR2vyrpcg2e2sJaA88EM6aGaLCBdiYfiHffrs5b3Fa4p1qpoEPH4UabmhJr5YYF7CxJykLTJmESQWaB9ARNuhb6jvptapVq3v | Received: 3251.16 ZEPH = $6,924 |
+| Tidecoin | TFrQ7u9spKk8MBgX6Bze3oxPbs3Yh1tAsq | Received: 250,381 TDC = $6,993 |
+| Verus | RNu4dQGeFDSPP5iHthijkfnzgxcW2nPde9 | Received: 4561.913 VRSC = $1,916 |
+| Monero | 89v8xC6Mu2tX27WZKhefTuSnN7f3JMHQSAuoD7ZRe1bV2wfExSTDZe4JwaM4qpjKAoWbAbbnqLBmGCFECiwnXdfSKHt85H3 (2miners) 8B7ommXjcEpTAHKFFyci1v5ADrqvEbphhHrzbBfJgvqjecbik7vcLonh8rYSstbBxgD8AccrJYEukDaXZB8ns3kTLiXL8BN (c3pool) 837MGitRYxgEV158RDenxVUfb5mN6qzz78Z1WeaDoiqC4K7H8Pj556vHJoVXL2MCJ5WCGVZTBiRmqJFxeJG3WSQmGKhPC31 (nanopool) | Paid: 17.636 XMR = $2,506 |
+| QRL | Q010500bc3733dbd0576ca26a8595d59b577a4d1e09c019856abfa103b8f08ec0ed36735e0e2f35 Q01050074da7be4fe8216f789041227c08ccbf310617362641336e1f282c398937635a5d3ebbdbf | N/A |
+| Bamboo | 007DE31E4FD8213FBCE3586A3D2260C962142BBC605BB41C41 | N/A |
+Conclusion
+Cloud Service Providers (CSPs) like AWS provide a vast array of different services for their customers. While most financially motivated attackers target compute services, such as EC2, it is important to remember that many other services also provide access to compute resources (albeit more indirectly). It is easy for these services to be overlooked from a security perspective since there is less visibility compared to that available through runtime threat detection.
+All services provided by a CSP must be monitored for malicious use. If runtime threat detection isn't possible, higher level logging about the services usage should be monitored in order to catch threats like AMBERSQUID. If malicious activity is detected, response actions should be taken quickly to disable the involved services and limit the damage. While this operation occurred on AWS, other CSPs could easily be the next target.

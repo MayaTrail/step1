@@ -1,0 +1,46 @@
+// T1530 Data from Cloud Storage — S3 + IAM Enumeration Cluster
+// DangerDev: ListBuckets + ListObjects on prod-data-archive + ListInstanceProfiles
+//            + ListGroupsForUser + ListSSHPublicKeys in same session window.
+// Prod-named bucket access (prod, archive, backup, export) escalates to High.
+
+let recon_window = 60s;
+
+let s3_events = AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "s3.amazonaws.com"
+| where EventName in ("ListBuckets", "ListObjects", "ListObjectsV2")
+| where UserIdentityType == "IAMUser"
+| extend BucketName  = tostring(parse_json(RequestParameters).bucketName)
+| extend IsProdBucket = BucketName matches regex @"(prod|production|master|sensitive|archive|backup|dump|export|customer)"
+| project TimeGenerated, EventName, BucketName, IsProdBucket,
+          UserIdentityArn, UserIdentityUserName, SourceIpAddress;
+
+let iam_recon = AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName in ("ListInstanceProfiles", "ListGroupsForUser", "ListSSHPublicKeys")
+| where UserIdentityType == "IAMUser"
+| project IAMTime = TimeGenerated, IAMEvent = EventName, UserIdentityArn;
+
+s3_events
+| join kind=leftouter (iam_recon) on UserIdentityArn
+| where isempty(IAMTime)
+    or IAMTime between (TimeGenerated .. (TimeGenerated + recon_window))
+    or TimeGenerated between (IAMTime .. (IAMTime + recon_window))
+| summarize
+    S3Events      = make_set(EventName),
+    IAMEvents     = make_set(IAMEvent),
+    ProdBuckets   = make_set_if(BucketName, IsProdBucket == true),
+    FirstSeen     = min(TimeGenerated),
+    SourceIPs     = make_set(SourceIpAddress)
+    by UserIdentityUserName, UserIdentityArn
+| extend ClusterSize = array_length(S3Events) + array_length(IAMEvents)
+| extend Severity = case(
+    array_length(ProdBuckets) > 0 and ClusterSize >= 3, "High",
+    ClusterSize >= 4,                                    "High",
+    "Medium"
+  )
+| extend AlertTitle = "S3 + IAM Enumeration Cluster — Pre-Collection Data Discovery"
+| project FirstSeen, Severity, AlertTitle, UserIdentityUserName, UserIdentityArn,
+          S3Events, IAMEvents, ProdBuckets, ClusterSize, SourceIPs
+| sort by FirstSeen desc

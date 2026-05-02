@@ -1,0 +1,166 @@
+{
+  "run_id": "20260426_053635",
+  "start_time": "2026-04-26T00:06:35.687892+00:00",
+  "phases": {
+    "pipeline": {
+      "status": "complete",
+      "timestamp": "2026-05-02T11:25:52.080750+00:00",
+      "mode": "full-apt",
+      "input": "https://www.sysdig.com/blog/ambersquid",
+      "tool_versions": {
+        "tiktoken": "0.12.0",
+        "trafilatura": "2.0.0",
+        "claude": "2.1.114 (Claude Code)",
+        "pulumi": "v3.224.0",
+        "python": "Python 3.9.13",
+        "aws_arn": "arn:aws:iam::940482414561:user/admin"
+      },
+      "end_time": "2026-05-02T11:25:52.080305+00:00",
+      "tokens": {
+        "total_input_tokens": 22374,
+        "total_output_tokens": 888,
+        "total_tokens": 23262,
+        "estimated_cost_usd": 0.08,
+        "calls": 2,
+        "per_model": {
+          "claude-sonnet-4-6": {
+            "calls": 2,
+            "input_tokens": 22374,
+            "output_tokens": 888,
+            "cost_usd": 0.0804
+          }
+        },
+        "breakdown": [
+          {
+            "label": "PHASE-5A",
+            "timestamp": "2026-05-02T11:22:11.836590+00:00",
+            "input_tokens": 7413,
+            "output_tokens": 471,
+            "model": "claude-sonnet-4-6",
+            "elapsed_s": 277.5,
+            "source": "tiktoken"
+          },
+          {
+            "label": "PHASE-5B",
+            "timestamp": "2026-05-02T11:25:35.260633+00:00",
+            "input_tokens": 14961,
+            "output_tokens": 417,
+            "model": "claude-sonnet-4-6",
+            "elapsed_s": 203.4,
+            "source": "tiktoken"
+          }
+        ]
+      },
+      "fallback_count": 0,
+      "fallback_phases": [],
+      "error": "Aborted at attack plan review."
+    },
+    "phase_0b": {
+      "status": "complete",
+      "timestamp": "2026-04-26T09:00:43.300960+00:00",
+      "techniques": 13,
+      "threat_actor": "AMBERSQUID",
+      "execution_planes": {
+        "control_plane": 11,
+        "data_plane": 2
+      },
+      "tokens": {
+        "input_tokens": 134125,
+        "output_tokens": 18945,
+        "model": "claude-sonnet-4-6",
+        "elapsed_s": 253.5,
+        "cost_usd": 0.5894838
+      }
+    },
+    "phase_1": {
+      "status": "complete",
+      "timestamp": "2026-04-26T09:04:01.837481+00:00",
+      "resources": 17,
+      "categories": {
+        "attack_surface": 5,
+        "support": 6,
+        "target": 3,
+        "bait": 3
+      },
+      "tokens": {
+        "input_tokens": 2966,
+        "output_tokens": 5049,
+        "model": "claude-sonnet-4-6",
+        "elapsed_s": 198.5,
+        "source": "tiktoken"
+      }
+    },
+    "PHASE-2_iter_1": {
+      "status": "approved",
+      "timestamp": "2026-04-26T09:07:52.679859+00:00"
+    },
+    "phase_2": {
+      "status": "complete",
+      "timestamp": "2026-04-26T09:07:52.689444+00:00",
+      "verdict": "APPROVED",
+      "fallback": false
+    },
+    "phase_3": {
+      "status": "complete",
+      "timestamp": "2026-04-26T15:38:00.000000+00:00",
+      "steps": 13,
+      "credential_pivots": 4,
+      "note": "Manually marked complete \u2014 attack_plan.json on disk is valid (0 schema errors, 13 steps, 4 credential pivots). Pipeline exited due to rate-limit before it could record this entry."
+    },
+    "PHASE-4_iter_1": {
+      "status": "approved",
+      "timestamp": "2026-04-27T01:56:16.261258+00:00"
+    },
+    "phase_4": {
+      "status": "complete",
+      "timestamp": "2026-04-27T01:56:16.286080+00:00",
+      "verdict": "APPROVED",
+      "fidelity_score": 0.91,
+      "fallback": false
+    },
+    "phase_5": {
+      "status": "complete",
+      "note": "reset \u2014 infra/__main__.py written directly by Claude Code (520 lines, complete); attack.py never generated (Phase 5B timed out x3 at 600s; timeout now fixed to 1500s)",
+      "timestamp": "2026-05-02T11:25:52.070169+00:00",
+      "pulumi_files": 3,
+      "attack_files": 1,
+      "validation_errors": 3,
+      "technique_coverage_pct": 100.0
+    },
+    "phase_6": {
+      "status": "complete",
+      "timestamp": "2026-04-28T09:20:37.344699+00:00",
+      "sigma": 11,
+      "kql": 11,
+      "detection_notes": 4,
+      "playbooks": 1,
+      "guardrails": 0,
+      "note": "detections recovered from pre-fix root/detections/ folder and moved to correct output path; guardrails not generated (rate limited)"
+    },
+    "phase_0a": {
+      "status": "complete",
+      "timestamp": "2026-04-28T08:44:52.426813+00:00",
+      "services": {
+        "CloudTrail": {
+          "enabled": false,
+          "trails": 0
+        },
+        "GuardDuty": {
+          "enabled": false
+        },
+        "SecurityHub": {
+          "enabled": false
+        }
+      }
+    },
+    "phase_cost": {
+      "status": "complete",
+      "timestamp": "2026-05-02T11:17:34.343597+00:00",
+      "hourly": 0.00266,
+      "daily": 0.0638,
+      "monthly": 1.92,
+      "per_run_usd": 0.0
+    }
+  },
+  "last_updated": "2026-05-02T11:25:52.080760+00:00"
+}

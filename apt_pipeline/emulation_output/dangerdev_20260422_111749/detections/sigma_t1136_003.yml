@@ -1,0 +1,35 @@
+title: DangerDev — Email-Format IAM User Created with Console Login + Access Key
+id: d4e5f6a7-b8c9-4123-def0-123456789003
+status: experimental
+description: >
+  Detects IAM CreateUser where the username contains '@' (email format), which is
+  anomalous in production AWS accounts. DangerDev created DangerDev@protonmail.me
+  immediately followed by CreateLoginProfile and CreateAccessKey to establish a
+  fully-operational console + programmatic backdoor account in one automated burst.
+  Email-format IAM usernames are the highest-confidence single-event DangerDev IoC.
+references:
+    - https://attack.mitre.org/techniques/T1136/003/
+    - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.persistence
+    - attack.t1136.003
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: iam.amazonaws.com
+        eventName: CreateUser
+        requestParameters.userName|contains: '@'
+    filter_idp_provisioning:
+        userIdentity.arn|contains:
+            - 'assumed-role/IdentitySync'
+            - 'assumed-role/HRProvisioning'
+            - 'assumed-role/SSOProvision'
+    condition: selection and not filter_idp_provisioning
+falsepositives:
+    - Identity federation systems that mirror email as IAM username (non-standard, rare)
+    - Lab/sandbox accounts explicitly using email-format usernames for testing
+level: high

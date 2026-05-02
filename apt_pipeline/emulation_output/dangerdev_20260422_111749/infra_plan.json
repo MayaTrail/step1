@@ -1,0 +1,417 @@
+{
+  "status": "PHASE_1_COMPLETE",
+  "platform": "aws",
+  "sandbox_vpc": {
+    "cidr": "10.99.0.0/16",
+    "subnets": [
+      {
+        "cidr": "10.99.1.0/24",
+        "az": "us-east-1a",
+        "type": "public"
+      }
+    ],
+    "isolation_rules": "No VPC peering, no Transit Gateway, no Direct Connect. NAT Gateway omitted \u2014 EC2 instance uses IGW directly for inbound RDP simulation. All inbound controlled by security group. VPC flow logs enabled on ALL traffic.",
+    "flow_logs": true
+  },
+  "resources": [
+    {
+      "name": "dangerdev-log-bucket",
+      "pulumi_type": "aws.s3.Bucket",
+      "resource_category": "support",
+      "purpose": "Central sink for CloudTrail logs, VPC flow logs, GuardDuty finding exports, and S3 access logs. Must exist before all other resources that write logs.",
+      "techniques_served": [],
+      "configuration_notes": "Bucket name: dangerdev-lab-logs-{account_id}. Block all public access. Bucket policy: allow cloudtrail.amazonaws.com and guardduty.amazonaws.com service principals to PutObject under their respective prefixes. SSE: aws:kms. Lifecycle: expire after 90 days. Enable MFA delete.",
+      "depends_on": [],
+      "cleanup_method": "aws s3 rb s3://dangerdev-lab-logs-{account_id} --force",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-sandbox-vpc",
+      "pulumi_type": "aws.ec2.Vpc",
+      "resource_category": "support",
+      "purpose": "Isolated VPC for all EC2 infrastructure. Provides network boundary and flow log telemetry for T1021.001 RDP detection.",
+      "techniques_served": [
+        "T1578.002",
+        "T1021.001"
+      ],
+      "configuration_notes": "CIDR: 10.99.0.0/16. enable_dns_hostnames: true. enable_dns_support: true. Attach VPC flow log (ALL traffic) to IAM role with s3:PutObject on dangerdev-log-bucket/flow-logs/. Do NOT peer or attach Transit Gateway.",
+      "depends_on": [
+        "dangerdev-log-bucket"
+      ],
+      "cleanup_method": "pulumi destroy \u2014 must run after all dependent EC2 resources are terminated",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-internet-gateway",
+      "pulumi_type": "aws.ec2.InternetGateway",
+      "resource_category": "support",
+      "purpose": "Internet Gateway enabling inbound RDP to the attack-surface EC2 instance and simulated outbound mining pool traffic.",
+      "techniques_served": [
+        "T1578.002",
+        "T1021.001"
+      ],
+      "configuration_notes": "Attach to dangerdev-sandbox-vpc. Create a route table with 0.0.0.0/0 \u2192 igw and associate it with dangerdev-public-subnet.",
+      "depends_on": [
+        "dangerdev-sandbox-vpc"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-public-subnet",
+      "pulumi_type": "aws.ec2.Subnet",
+      "resource_category": "support",
+      "purpose": "Public subnet hosting the RDP-exposed EC2 instance.",
+      "techniques_served": [
+        "T1578.002"
+      ],
+      "configuration_notes": "CIDR: 10.99.1.0/24. AZ: us-east-1a. map_public_ip_on_launch: true. Associate with the IGW route table created in dangerdev-internet-gateway.",
+      "depends_on": [
+        "dangerdev-sandbox-vpc",
+        "dangerdev-internet-gateway"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-exposed-admin-user",
+      "pulumi_type": "aws.iam.User",
+      "resource_category": "attack_surface",
+      "purpose": "Pre-existing victim IAM user with AdministratorAccess whose long-term access key is leaked into the bait tfstate object. This is the T1078.004 initial access vector \u2014 the accidentally exposed credential.",
+      "techniques_served": [
+        "T1078.004"
+      ],
+      "configuration_notes": "Username: lab-infra-admin. Attach arn:aws:iam::aws:policy/AdministratorAccess. Create one long-term access key via aws_iam_access_key resource; export key_id and secret into the dangerdev-leaked-creds-bucket tfstate object during provisioning (see bait bucket). Do NOT enable MFA \u2014 replicates the real exposure. No password / console login needed; key-only access.",
+      "depends_on": [],
+      "cleanup_method": "iam:DeleteAccessKey; iam:DetachUserPolicy; iam:DeleteUser",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-decoy-user-alice",
+      "pulumi_type": "aws.iam.User",
+      "resource_category": "bait",
+      "purpose": "Realistic IAM user visible in ListUsers (T1087.004 discovery) and targeted for access key creation and password reset during T1098 account manipulation emulation.",
+      "techniques_served": [
+        "T1087.004",
+        "T1098"
+      ],
+      "configuration_notes": "Username: alice.chen. Attach arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess. Create console login profile with password 'ChangeMe2024!'. Create one existing access key (the emulation will add a second key via iam:CreateAccessKey and reset the password via iam:UpdateLoginProfile). This user is the manipulation target.",
+      "depends_on": [],
+      "cleanup_method": "iam:DeleteAccessKey (both keys); iam:DeleteLoginProfile; iam:DetachUserPolicy; iam:DeleteUser",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-decoy-user-ops",
+      "pulumi_type": "aws.iam.User",
+      "resource_category": "bait",
+      "purpose": "Service-account-style IAM user populating the ListUsers response to inform realistic masquerade naming (T1036.005). The 'ses' masquerade mimics auto-generated SES SMTP service account patterns.",
+      "techniques_served": [
+        "T1087.004",
+        "T1036.005"
+      ],
+      "configuration_notes": "Username: ops-automation. Attach arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess. No console login. Create one access key (key is not used \u2014 exists to simulate a real service account). Also create a second decoy user named ses-smtp-user.20231105-091212 (mimics the SES auto-generated SMTP credential username format that DangerDev's 'ses' username was designed to blend into).",
+      "depends_on": [],
+      "cleanup_method": "iam:DeleteAccessKey; iam:DetachUserPolicy; iam:DeleteUser (both users)",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-honey-iam-user",
+      "pulumi_type": "aws.iam.User",
+      "resource_category": "bait",
+      "purpose": "Canary IAM user whose credentials, if used, trigger an immediate CloudWatch alert \u2014 detects credential replay. Appears in ListUsers output as a realistic service account.",
+      "techniques_served": [
+        "T1087.004"
+      ],
+      "configuration_notes": "Username: backup-restore-svc. Create access key and store securely. Configure EventBridge rule: source=aws.iam OR any CloudTrail event where userIdentity.userName=backup-restore-svc \u2192 SNS topic alert. The access key itself is never distributed; any API call using it indicates unauthorized replay.",
+      "depends_on": [],
+      "cleanup_method": "iam:DeleteAccessKey; iam:DeleteUser; remove EventBridge rule and SNS topic",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-leaked-creds-bucket",
+      "pulumi_type": "aws.s3.Bucket",
+      "resource_category": "bait",
+      "purpose": "S3 bucket containing a terraform.tfstate object with plaintext IAM credentials embedded, simulating the external storage exposure that enables T1078.004 initial access.",
+      "techniques_served": [
+        "T1078.004"
+      ],
+      "configuration_notes": "Bucket name: dangerdev-infra-state-{account_id}. Block all public access (no ACL, no bucket policy granting public). Object key: infra/prod/terraform.tfstate \u2014 a realistic Terraform state JSON containing the access_key_id and secret_access_key from dangerdev-exposed-admin-user embedded under a resource block (e.g., aws_iam_access_key.lab_admin). Enable S3 server access logging to dangerdev-log-bucket/s3-access/. Versioning: enabled.",
+      "depends_on": [
+        "dangerdev-exposed-admin-user",
+        "dangerdev-log-bucket"
+      ],
+      "cleanup_method": "aws s3 rb s3://dangerdev-infra-state-{account_id} --force",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-sensitive-s3-bucket",
+      "pulumi_type": "aws.s3.Bucket",
+      "resource_category": "target",
+      "purpose": "Bucket with realistic-looking objects discovered via s3:ListBuckets during T1530 collection phase. Provides a credible discovery target without real PII.",
+      "techniques_served": [
+        "T1530"
+      ],
+      "configuration_notes": "Bucket name: dangerdev-prod-data-archive-{account_id}. Block all public access. SSE: AES256. Versioning: enabled. S3 access logging to dangerdev-log-bucket. Objects (empty files with realistic names): customers/export_2024_q4.csv, backups/db_dump_prod.sql.gz, reports/financial_summary_2024.xlsx. Enable CloudTrail S3 data events (GetObject, PutObject) on this bucket specifically.",
+      "depends_on": [
+        "dangerdev-log-bucket"
+      ],
+      "cleanup_method": "aws s3 rb s3://dangerdev-prod-data-archive-{account_id} --force",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-secretsmanager-secret",
+      "pulumi_type": "aws.secretsmanager.Secret",
+      "resource_category": "target",
+      "purpose": "Secrets Manager secret probed indirectly via iam:SimulatePrincipalPolicy during T1518.001 \u2014 TA checks permissions without triggering actual GetSecretValue calls on the service.",
+      "techniques_served": [
+        "T1518.001"
+      ],
+      "configuration_notes": "Secret name: prod/database/master_credentials. Value (fake): {\"username\":\"admin\",\"password\":\"Sup3rS3cr3t!\",\"host\":\"prod-mysql.us-east-1.rds.amazonaws.com\",\"port\":3306}. Resource policy: deny GetSecretValue from any principal except lab operator role (to make SimulatePrincipalPolicy return 'implicitDeny' \u2014 exactly what TA was checking). Rotation: disabled. This value is entirely fabricated and contains no real credentials.",
+      "depends_on": [],
+      "cleanup_method": "aws secretsmanager delete-secret --secret-id prod/database/master_credentials --force-delete-without-recovery",
+      "estimated_cost_usd_hr": 0.0004
+    },
+    {
+      "name": "dangerdev-ses-email-identity",
+      "pulumi_type": "aws.ses.EmailIdentity",
+      "resource_category": "attack_surface",
+      "purpose": "Verified SES email identity enabling T1526 discovery calls (GetSendQuota, ListIdentities) and logging T1566.002 SendEmail API calls in CloudTrail \u2014 SES sandbox mode blocks all external delivery.",
+      "techniques_served": [
+        "T1526",
+        "T1566.002"
+      ],
+      "configuration_notes": "Verify a lab-controlled domain only (e.g., emulation-lab-noreply.example.com via Route53 hosted zone). Keep account in SES sandbox \u2014 do NOT submit a sending limit increase request or request production access. This ensures ses:SendEmail calls are fully logged in CloudTrail but zero external delivery occurs. Configure DKIM signing for realism. Do NOT use PayPal-mimicking or any third-party brand domains.",
+      "depends_on": [],
+      "cleanup_method": "aws ses delete-identity --identity emulation-lab-noreply.example.com",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-open-sg",
+      "pulumi_type": "aws.ec2.SecurityGroup",
+      "resource_category": "attack_surface",
+      "purpose": "Security group with RDP (3389) and SSH (22) open to 0.0.0.0/0, replicating the wide-open group DangerDev created for EC2 access. Intentionally violates Security Hub EC2.19 to generate findings.",
+      "techniques_served": [
+        "T1578.002",
+        "T1021.001"
+      ],
+      "configuration_notes": "VPC: dangerdev-sandbox-vpc. Ingress: TCP 3389 from 0.0.0.0/0; TCP 22 from 0.0.0.0/0. Egress: all traffic (0.0.0.0/0) \u2014 required for simulated outbound mining pool traffic observable in flow logs. Name tag: dangerdev-open-sg so it is obvious this is a lab artifact.",
+      "depends_on": [
+        "dangerdev-sandbox-vpc"
+      ],
+      "cleanup_method": "ec2:RevokeSecurityGroupIngress (both rules); ec2:DeleteSecurityGroup",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-ec2-keypair",
+      "pulumi_type": "aws.ec2.KeyPair",
+      "resource_category": "support",
+      "purpose": "EC2 key pair created as part of the T1578.002 instance setup sequence. Required to RDP into the Windows instance for T1021.001 simulation.",
+      "techniques_served": [
+        "T1578.002"
+      ],
+      "configuration_notes": "Key pair name: dangerdev-lab-key. Generate externally and import public key, or use aws_key_pair with generated RSA key. Store .pem locally in lab secrets vault \u2014 do NOT commit to source control or upload to S3.",
+      "depends_on": [],
+      "cleanup_method": "ec2:DeleteKeyPair --key-name dangerdev-lab-key",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-ssm-instance-role",
+      "pulumi_type": "aws.iam.Role",
+      "resource_category": "support",
+      "purpose": "Minimal IAM role for the EC2 instance profile \u2014 grants SSM Session Manager access for lab operator management only. Deliberately narrow to prevent host-plane privilege escalation during emulation.",
+      "techniques_served": [],
+      "configuration_notes": "Assume role policy: ec2.amazonaws.com. Attach arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore only. This allows lab operators to shell into the instance via SSM without requiring the 0.0.0.0/0 SSH rule to be open to their own IPs (that rule is the attack surface, not the access method).",
+      "depends_on": [],
+      "cleanup_method": "iam:RemoveRoleFromInstanceProfile; iam:DetachRolePolicy; iam:DeleteRole; iam:DeleteInstanceProfile",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-ec2-instance-profile",
+      "pulumi_type": "aws.iam.InstanceProfile",
+      "resource_category": "support",
+      "purpose": "Instance profile wrapping dangerdev-ssm-instance-role for attachment to the EC2 Windows instance.",
+      "techniques_served": [],
+      "configuration_notes": "Associate with dangerdev-ssm-instance-role. Attach to dangerdev-ec2-windows-instance via iam_instance_profile argument.",
+      "depends_on": [
+        "dangerdev-ssm-instance-role"
+      ],
+      "cleanup_method": "iam:DeleteInstanceProfile (after removing role)",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-ec2-windows-instance",
+      "pulumi_type": "aws.ec2.Instance",
+      "resource_category": "attack_surface",
+      "purpose": "EC2 Windows t2.micro with port 3389 open to 0.0.0.0/0, serving as the RDP attack surface for T1021.001 and the lifecycle anchor for T1578.002. Substitutes for p3.16xlarge per T1496 documented-only constraint.",
+      "techniques_served": [
+        "T1578.002",
+        "T1021.001",
+        "T1496"
+      ],
+      "configuration_notes": "AMI: latest Windows Server 2022 Base (us-east-1). Instance type: t2.micro \u2014 NOT p3.16xlarge (GPU mining is documented-only per cannot_safely_emulate). subnet_id: dangerdev-public-subnet. security_groups: [dangerdev-open-sg]. key_name: dangerdev-lab-key. iam_instance_profile: dangerdev-ec2-instance-profile. metadata_options: http_tokens=optional (IMDSv1 \u2014 mirrors DangerDev's default VPC behavior). associate_public_ip_address: true. user_data: see userdata_actions.",
+      "depends_on": [
+        "dangerdev-open-sg",
+        "dangerdev-ec2-keypair",
+        "dangerdev-ec2-instance-profile",
+        "dangerdev-public-subnet"
+      ],
+      "cleanup_method": "ec2:TerminateInstances \u2014 wait for terminated state before destroying security group",
+      "estimated_cost_usd_hr": 0.0116
+    },
+    {
+      "name": "dangerdev-cross-account-backdoor-role",
+      "pulumi_type": "aws.iam.Role",
+      "resource_category": "attack_surface",
+      "purpose": "IAM role named AWSeservedSSO_AdminAccess (lowercase 'e' masquerade of AWSReservedSSO_*) with cross-account trust, simulating T1199 trusted relationship backdoor and T1036.005 masquerading.",
+      "techniques_served": [
+        "T1199",
+        "T1036.005"
+      ],
+      "configuration_notes": "Role name: AWSeservedSSO_AdminAccess. Trust policy principal: arn:aws:iam::ADVERSARY_LAB_ACCOUNT_ID:root \u2014 replace ADVERSARY_LAB_ACCOUNT_ID with the ID of a separately provisioned isolated adversary AWS account used only for this emulation. Attach arn:aws:iam::aws:policy/AdministratorAccess. The one-character difference (lowercase 'e' vs uppercase 'R') from AWSReservedSSO_* is the masquerade per T1036.005. NOTE: AssumeRole execution requires the adversary lab account to be separately configured and credentialed.",
+      "depends_on": [],
+      "cleanup_method": "iam:DetachRolePolicy; iam:DeleteRole",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-configrecorder-backdoor-role",
+      "pulumi_type": "aws.iam.Role",
+      "resource_category": "attack_surface",
+      "purpose": "Second IAM backdoor role named AWSLanding-Zones-ConfigRecorderRoles masquerading as a legitimate AWS Config service role, used for T1036.005 masquerading and T1199 cross-account persistence.",
+      "techniques_served": [
+        "T1199",
+        "T1036.005"
+      ],
+      "configuration_notes": "Role name: AWSLanding-Zones-ConfigRecorderRoles. Trust policy principal: arn:aws:iam::ADVERSARY_LAB_ACCOUNT_ID:root (same isolated adversary account as dangerdev-cross-account-backdoor-role). Attach arn:aws:iam::aws:policy/AdministratorAccess. This role mimics legitimate AWS Config Recorder roles that exist in AWS Organizations landing zones \u2014 chosen by DangerDev specifically because it blends into enterprise AWS environments.",
+      "depends_on": [],
+      "cleanup_method": "iam:DetachRolePolicy; iam:DeleteRole",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "dangerdev-guardduty-detector",
+      "pulumi_type": "aws.guardduty.Detector",
+      "resource_category": "target",
+      "purpose": "GuardDuty detector generating findings for all emulated techniques. Required as a target for T1518.001 where DangerDev reviews ListFindings/GetFindings to assess their detection exposure before cleanup.",
+      "techniques_served": [
+        "T1518.001"
+      ],
+      "configuration_notes": "enable: true. finding_publishing_frequency: FIFTEEN_MINUTES during active emulation runs (change to SIX_HOURS at rest to reduce cost). Enable S3 protection. Do NOT configure suppression rules \u2014 all findings must remain visible for detection validation. Configure finding export to dangerdev-log-bucket/guardduty-findings/ via aws.guardduty.PublishingDestination.",
+      "depends_on": [
+        "dangerdev-log-bucket"
+      ],
+      "cleanup_method": "aws guardduty delete-detector --detector-id {detector_id}",
+      "estimated_cost_usd_hr": 0.02
+    },
+    {
+      "name": "dangerdev-cloudtrail",
+      "pulumi_type": "aws.cloudtrail.Trail",
+      "resource_category": "support",
+      "purpose": "Multi-region CloudTrail capturing all management and data events for every emulated technique. Primary audit source for detection validation across all 15 emulated techniques.",
+      "techniques_served": [
+        "T1078.004",
+        "T1526",
+        "T1087.004",
+        "T1136.003",
+        "T1098.003",
+        "T1580",
+        "T1578.002",
+        "T1036.005",
+        "T1199",
+        "T1098",
+        "T1530",
+        "T1518.001",
+        "T1070",
+        "T1583.001",
+        "T1566.002"
+      ],
+      "configuration_notes": "Trail name: dangerdev-emulation-trail. is_multi_region_trail: true. include_global_service_events: true (required to capture IAM events which are global). s3_bucket_name: dangerdev-log-bucket, prefix: cloudtrail/. enable_log_file_validation: true. CloudWatch Logs integration: create log group /aws/cloudtrail/dangerdev and IAM role allowing cloudtrail.amazonaws.com to CreateLogStream and PutLogEvents. Data events: enable s3:GetObject and s3:PutObject on both dangerdev-sensitive-s3-bucket and dangerdev-leaked-creds-bucket. Management events: ALL (Read + Write).",
+      "depends_on": [
+        "dangerdev-log-bucket"
+      ],
+      "cleanup_method": "aws cloudtrail delete-trail --name dangerdev-emulation-trail",
+      "estimated_cost_usd_hr": 0.01
+    }
+  ],
+  "userdata_actions": [
+    {
+      "technique_id": "T1578.002",
+      "description": "Enable RDP at the Windows OS level to match the security group exposure. Without this, the open security group port would be blocked by Windows Firewall, preventing T1021.001 simulation.",
+      "commands": [
+        "<powershell>",
+        "Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name 'fDenyTSConnections' -Value 0",
+        "Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'",
+        "netsh advfirewall firewall set rule group='remote desktop' new enable=yes",
+        "</powershell>"
+      ],
+      "emulation_category": "emulated"
+    },
+    {
+      "technique_id": "T1496",
+      "description": "Simulate GPU cryptomining lifecycle using a benign CPU-bound workload on t2.micro. Runs for 5 minutes then exits \u2014 produces a CPU spike observable in CloudWatch metrics and generates VPC flow log outbound traffic patterns. Does NOT install or run any real mining software. GPU instances (p3.16xlarge) are excluded per cannot_safely_emulate constraint.",
+      "commands": [
+        "<powershell>",
+        "$end = (Get-Date).AddMinutes(5)",
+        "while ((Get-Date) -lt $end) {",
+        "  [Math]::Sqrt([Math]::PI * (Get-Random -Minimum 1 -Maximum 1000000)) | Out-Null",
+        "}",
+        "Write-EventLog -LogName Application -Source 'Application' -EventId 9999 -Message 'T1496-simulation: benign CPU workload complete'",
+        "</powershell>"
+      ],
+      "emulation_category": "simulated"
+    }
+  ],
+  "vulnerable_app": null,
+  "iam_policies": [
+    {
+      "name": "dangerdev-exposed-admin-user-policy",
+      "attached_to": "dangerdev-exposed-admin-user",
+      "policy_arn": "arn:aws:iam::aws:policy/AdministratorAccess",
+      "reason_over_permissioned": "Intentional: replicates T1078.004 \u2014 victim account had AdministratorAccess attached to the user whose long-term key was accidentally exposed. This is the exact policy attachment that made the credential leak catastrophic."
+    },
+    {
+      "name": "dangerdev-cross-account-backdoor-role-policy",
+      "attached_to": "dangerdev-cross-account-backdoor-role",
+      "policy_arn": "arn:aws:iam::aws:policy/AdministratorAccess",
+      "reason_over_permissioned": "Intentional: replicates T1199 cross-account persistence. DangerDev attached AdministratorAccess to the backdoor role so the external account could assume full control even after the original IAM user was deleted. Backdoor survives user deletion \u2014 no user artifact remains in the victim account."
+    },
+    {
+      "name": "dangerdev-configrecorder-backdoor-role-policy",
+      "attached_to": "dangerdev-configrecorder-backdoor-role",
+      "policy_arn": "arn:aws:iam::aws:policy/AdministratorAccess",
+      "reason_over_permissioned": "Intentional: replicates second T1199 backdoor. Named to impersonate an AWS Config service role (legitimate AWS Config roles carry AWSConfigRole, not AdministratorAccess) \u2014 the policy mismatch is itself a detection opportunity for T1036.005."
+    }
+  ],
+  "permission_boundaries": [],
+  "resource_dependency_order": [
+    "dangerdev-log-bucket",
+    "dangerdev-sandbox-vpc",
+    "dangerdev-internet-gateway",
+    "dangerdev-public-subnet",
+    "dangerdev-open-sg",
+    "dangerdev-ec2-keypair",
+    "dangerdev-ssm-instance-role",
+    "dangerdev-ec2-instance-profile",
+    "dangerdev-exposed-admin-user",
+    "dangerdev-leaked-creds-bucket",
+    "dangerdev-decoy-user-alice",
+    "dangerdev-decoy-user-ops",
+    "dangerdev-honey-iam-user",
+    "dangerdev-ses-email-identity",
+    "dangerdev-cross-account-backdoor-role",
+    "dangerdev-configrecorder-backdoor-role",
+    "dangerdev-sensitive-s3-bucket",
+    "dangerdev-secretsmanager-secret",
+    "dangerdev-guardduty-detector",
+    "dangerdev-ec2-windows-instance",
+    "dangerdev-cloudtrail"
+  ],
+  "naming_convention": "dangerdev-{resource_name}",
+  "estimated_total_cost_usd_hr": 0.042,
+  "tags": {
+    "MayaTrail": "true",
+    "Purpose": "adversary-emulation",
+    "ThreatActor": "DangerDev",
+    "EmulationPhase": "lab",
+    "Owner": "security-team",
+    "AutoDestroy": "true"
+  }
+}

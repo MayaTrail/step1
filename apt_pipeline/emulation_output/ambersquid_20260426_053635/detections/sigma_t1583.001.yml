@@ -1,0 +1,47 @@
+# FILE: sigma_t1583.001.yml
+title: AMBERSQUID - Amplify App Creation Producing Attacker-Controlled Subdomain
+id: e2a7f1b9-4c3d-8e5a-f7b2-1d9c6e3a8f4b
+status: experimental
+description: >
+  T1583.001 (Acquire Infrastructure: Domains) generates NO CloudTrail events for AMBERSQUID.
+  The attacker's amplifyapp.com subdomain (e.g. master.d19tgz4vpyd5.amplifyapp.com) is
+  a side-effect of CreateApp calls made in victim accounts during prior campaigns — the
+  domain is assigned automatically by AWS. Detection requires external threat intel
+  correlation (PassiveDNS, WHOIS, Amplify subdomain enumeration) rather than CloudTrail.
+
+  This rule detects the closest observable proxy: Amplify CreateApp events from
+  non-console IAM sessions using assumed roles, which is the mechanism AMBERSQUID uses
+  to acquire amplifyapp.com subdomains as attacker infrastructure. Cross-reference the
+  resulting app default domain against threat intel on known attacker domains.
+references:
+    - https://attack.mitre.org/techniques/T1583/001/
+    - https://unit42.paloaltonetworks.com/ambersquid/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.resource_development
+    - attack.t1583.001
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: amplify.amazonaws.com
+        eventName: CreateApp
+    filter_console:
+        userAgent|contains:
+            - 'console.aws.amazon.com'
+            - 'Amplify Console'
+    filter_cicd:
+        userIdentity.arn|contains:
+            - ':assumed-role/AWSServiceRoleForAmplify'
+    condition: selection and not filter_console and not filter_cicd
+falsepositives:
+    - Legitimate Amplify apps created by developers via CLI or SDK
+    - Infrastructure-as-code pipelines (CDK, Terraform) provisioning Amplify apps
+    - CI/CD automation creating preview environments
+level: informational
+# NOTE: Primary detection for AMBERSQUID domain acquisition requires PassiveDNS
+# monitoring for newly registered amplifyapp.com subdomains correlated with
+# CloudTrail CreateApp events and threat intel IOC feeds.
+# AMBERSQUID IOC domain: master.d19tgz4vpyd5.amplifyapp.com

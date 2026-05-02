@@ -1,0 +1,150 @@
+{
+  "run_id": "20260422_111749",
+  "start_time": "2026-04-22T05:47:49.017562+00:00",
+  "phases": {
+    "phase_0b": {
+      "status": "complete",
+      "timestamp": "2026-04-22T05:55:11.881077+00:00",
+      "techniques": 17,
+      "threat_actor": "DangerDev",
+      "execution_planes": {
+        "control_plane": 15,
+        "data_plane": 1,
+        "host_plane": 1
+      },
+      "tokens": {
+        "input_tokens": 148193,
+        "output_tokens": 30431,
+        "model": "claude-sonnet-4-6",
+        "elapsed_s": 440.79999999999995,
+        "cost_usd": 0.8096332500000001
+      }
+    },
+    "phase_1": {
+      "status": "complete",
+      "timestamp": "2026-04-22T06:10:07.022048+00:00",
+      "resources": 21,
+      "categories": {
+        "support": 8,
+        "attack_surface": 6,
+        "bait": 4,
+        "target": 3
+      },
+      "tokens": {
+        "input_tokens": 7714,
+        "output_tokens": 6051,
+        "model": "claude-sonnet-4-6",
+        "elapsed_s": 295.0,
+        "source": "tiktoken"
+      }
+    },
+    "PHASE-2_iter_1": {
+      "status": "approved",
+      "timestamp": "2026-04-22T06:13:27.613567+00:00"
+    },
+    "phase_2": {
+      "status": "complete",
+      "timestamp": "2026-04-22T06:13:27.625652+00:00",
+      "verdict": "APPROVED",
+      "fallback": false
+    },
+    "phase_0a": {
+      "status": "complete",
+      "timestamp": "2026-04-23T06:17:45.515796+00:00",
+      "services": {
+        "CloudTrail": {
+          "enabled": false,
+          "trails": 0
+        },
+        "GuardDuty": {
+          "enabled": false
+        },
+        "SecurityHub": {
+          "enabled": false
+        }
+      }
+    },
+    "phase_3": {
+      "status": "complete",
+      "timestamp": "2026-04-23T06:28:41.663685+00:00",
+      "steps": 17,
+      "credential_pivots": 5,
+      "source": "claude_code_file_tool",
+      "tokens": {
+        "input_tokens": 0,
+        "output_tokens": 10453,
+        "model": "claude-sonnet-4-6",
+        "note": "written directly by Claude Code tool"
+      }
+    },
+    "PHASE-4_iter_1": {
+      "status": "revision_required",
+      "timestamp": "2026-04-23T06:33:46.916612+00:00"
+    },
+    "PHASE-4_iter_2": {
+      "status": "approved",
+      "timestamp": "2026-04-23T06:45:42.851869+00:00"
+    },
+    "phase_4": {
+      "status": "complete",
+      "timestamp": "2026-04-23T06:45:42.865879+00:00",
+      "verdict": "APPROVED",
+      "fidelity_score": 0.93,
+      "fallback": true
+    },
+    "phase_5": {
+      "status": "complete",
+      "timestamp": "2026-04-24T19:44:58.679477+00:00",
+      "pulumi_files": 2,
+      "attack_files": 1,
+      "validation_errors": 1,
+      "technique_coverage_pct": 100.0
+    },
+    "pipeline": {
+      "status": "complete",
+      "timestamp": "2026-04-25T10:08:57.292733+00:00",
+      "mode": "full-apt",
+      "input": "https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me",
+      "end_time": "2026-04-25T10:08:57.291917+00:00",
+      "tokens": {
+        "total_input_tokens": 20037,
+        "total_output_tokens": 10213,
+        "total_tokens": 30250,
+        "estimated_cost_usd": 0.21,
+        "calls": 1,
+        "per_model": {
+          "claude-sonnet-4-6": {
+            "calls": 1,
+            "input_tokens": 20037,
+            "output_tokens": 10213,
+            "cost_usd": 0.2133
+          }
+        },
+        "breakdown": [
+          {
+            "label": "PHASE-6B",
+            "timestamp": "2026-04-25T10:08:57.263652+00:00",
+            "input_tokens": 20037,
+            "output_tokens": 10213,
+            "model": "claude-sonnet-4-6",
+            "elapsed_s": 206.0,
+            "source": "tiktoken"
+          }
+        ]
+      },
+      "fallback_count": 1,
+      "fallback_phases": [
+        "phase_4"
+      ]
+    },
+    "phase_6": {
+      "status": "complete",
+      "timestamp": "2026-04-25T10:08:57.268574+00:00",
+      "sigma": 0,
+      "kql": 0,
+      "playbooks": 1,
+      "guardrails": 0
+    }
+  },
+  "last_updated": "2026-04-25T10:08:57.292753+00:00"
+}

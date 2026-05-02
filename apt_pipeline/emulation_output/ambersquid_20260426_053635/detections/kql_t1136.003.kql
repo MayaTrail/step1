@@ -1,0 +1,60 @@
+// FILE: kql_t1136.003.kql
+// T1136.003 Create Account: Cloud Account - AMBERSQUID IAM Role Burst Creation
+// Detects creation of 2+ IAM roles within a 5-minute window from a non-console
+// IAMUser session, especially when AdministratorAccess policy is attached.
+// Also detects known AMBERSQUID IOC role names regardless of burst timing.
+
+// Rule 1: AdministratorAccess attached to any role from non-console session
+let AdminPolicyAttach = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "iam.amazonaws.com"
+| where EventName == "AttachRolePolicy"
+| where RequestParameters contains "AdministratorAccess"
+| where UserAgent !contains "console.aws.amazon.com"
+| where UserAgent !contains "AWSConsole"
+| extend RoleName = tostring(parse_json(RequestParameters).roleName)
+| extend PolicyArn = tostring(parse_json(RequestParameters).policyArn)
+| project TimeGenerated, EventName, RoleName, PolicyArn, UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend AlertType = "AdministratorAccess attached from non-console session";
+
+// Rule 2: Known AMBERSQUID IOC role names created or manipulated
+let IOCRoleNames = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "iam.amazonaws.com"
+| where EventName in ("CreateRole", "AttachRolePolicy", "PutRolePolicy")
+| where RequestParameters has_any ("AWSCodeCommit-Role", "sugo-role", "ecsTaskExecutionRole")
+| extend RoleName = tostring(parse_json(RequestParameters).roleName)
+| extend PolicyArn = tostring(parse_json(RequestParameters).policyArn)
+| project TimeGenerated, EventName, RoleName, PolicyArn, UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend AlertType = "AMBERSQUID IOC role name matched";
+
+// Rule 3: Burst - 3+ distinct CreateRole calls within 5 minutes from same source
+let RoleCreationBurst = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "iam.amazonaws.com"
+| where EventName == "CreateRole"
+| where UserAgent !contains "console.aws.amazon.com"
+| where UserAgent !contains "cloudformation.amazonaws.com"
+| extend RoleName = tostring(parse_json(RequestParameters).roleName)
+| summarize
+    RoleCount = count(),
+    RoleNames = make_set(RoleName),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated)
+  by SourceIpAddress, UserIdentityArn, bin(TimeGenerated, 5m), RecipientAccountId, AWSRegion
+| where RoleCount >= 2
+| extend AlertType = "IAM role creation burst (2+ roles within 5 minutes)"
+| project
+    FirstSeen,
+    LastSeen,
+    AlertType,
+    RoleCount,
+    RoleNames,
+    UserIdentityArn,
+    SourceIpAddress,
+    AWSRegion,
+    RecipientAccountId;
+
+// Union all signals
+union AdminPolicyAttach, IOCRoleNames, RoleCreationBurst
+| sort by TimeGenerated desc

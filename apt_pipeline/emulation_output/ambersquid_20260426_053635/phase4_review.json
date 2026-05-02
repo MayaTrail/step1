@@ -1,0 +1,15 @@
+{
+  "verdict": "APPROVED",
+  "operator_notes": [
+    "Step 7 (T1059.009) creates a CodeBuild project but never calls codebuild:StartBuild \u2014 AMBERSQUID actively starts builds to mine via CodeBuild. Add a StartBuild with the benign buildspec ('echo mining') for CloudTrail event fidelity; the expected_audit_events already list StartBuild but it will not fire without this.",
+    "Step 6 (T1098.001) expected_audit_events list AttachRolePolicy and UpdateAssumeRolePolicy, but only sts:AssumeRole is called in this step \u2014 those IAM events fire in step 5, not step 6. Fix expected_audit_events to only list AssumeRole for accurate detection engineering.",
+    "Step 12 (T1070) expected_audit_events include DeleteTrail but implementation only calls StopLogging \u2014 remove DeleteTrail from expected events or add the actual call if the trail should be deleted.",
+    "Inter-phase delays are 2-8s for most phase transitions but TI specifies inter_phase_delay [30,120]s. Only the phase 1\u21922 transition (step 3) uses a proper 30-60s delay. Increase phase-boundary delays to match AMBERSQUID's documented operational tempo.",
+    "credential_chain used_in_phases for victim_creds lists values [4,5,6,9,11,12,13] \u2014 these are STEP numbers, not phase numbers (phases go 1-11). Rename the field or align the values to avoid confusion during implementation.",
+    "Step 7 SageMaker create_notebook_instance has no SubnetId or SecurityGroupIds \u2014 the notebook lands outside the sandbox VPC. Low risk since it has no lifecycle config and is stopped immediately, but consider specifying the sandbox subnet for defense-in-depth.",
+    "Phase 4 creates IAM roles with AdministratorAccess \u2014 ensure the AWS account has an SCP or permissions boundary preventing these roles from affecting production resources outside the sandbox scope.",
+    "Cleanup step 3-4 (SageMaker StopNotebookInstance \u2192 DeleteNotebookInstance) can take 2-3 minutes \u2014 attack.py cleanup should poll for Stopped state before attempting delete, with a timeout and failure handler."
+  ],
+  "fidelity_score": 0.91,
+  "risk_assessment": "LOW \u2014 all emulated actions scoped to sandbox account; T1496/T1610/T1578.002 correctly simulated as dry-run or mock; mining pool ports blocked by security group; CloudTrail re-enabled as first cleanup step; S3 versioning protects deleted log objects"
+}

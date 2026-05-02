@@ -1,0 +1,3 @@
+name: ambersquid-emulation
+runtime: python
+description: AMBERSQUID adversary emulation lab - AWS cloud cryptomining threat actor

@@ -1,0 +1,39 @@
+title: DangerDev — Cross-User IAM Credential Manipulation (Key Creation + Password Reset)
+id: d0e1f2a3-b4c5-4789-def0-789000000009
+status: experimental
+description: >
+  Detects CreateAccessKey or UpdateLoginProfile where the acting IAM principal is
+  different from the target username. DangerDev created a second access key on alice.chen
+  and reset her console password using DangerDev@protonmail.me — establishing persistent
+  access on a legitimate account that survives the T1070 self-cleanup. alice.chen then
+  held 2 active access keys, triggering Security Hub IAM.3. Cross-user credential
+  manipulation from a non-provisioning role is almost never legitimate.
+references:
+    - https://attack.mitre.org/techniques/T1098/
+    - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.persistence
+    - attack.t1098
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: iam.amazonaws.com
+        eventName:
+            - CreateAccessKey
+            - UpdateLoginProfile
+    filter_provisioning:
+        userIdentity.arn|contains:
+            - ':assumed-role/HRProvisioningRole'
+            - ':assumed-role/IdentitySync'
+            - ':assumed-role/BreakGlassAdmin'
+            - ':root'
+    condition: selection and not filter_provisioning
+falsepositives:
+    - IT helpdesk resetting compromised user passwords via authorized provisioning role
+    - Automated key rotation tooling using service roles (should not appear — filter covers it)
+    - Initial onboarding workflows by IAM administrators
+level: high

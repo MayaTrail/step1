@@ -1,0 +1,1037 @@
+{
+  "status": "PHASE_0B_COMPLETE",
+  "threat_actor": {
+    "name": "AMBERSQUID",
+    "aliases": [],
+    "motivation": "financial - cryptocurrency mining",
+    "attribution_country": "Indonesia",
+    "tools_used": [
+      "SRBMiner-MULTI",
+      "UPX",
+      "Docker",
+      "AWS CLI",
+      "Git"
+    ]
+  },
+  "platform": "aws",
+  "targeted_services": [
+    "AWS Amplify",
+    "Amazon ECS",
+    "AWS Fargate",
+    "Amazon SageMaker",
+    "AWS CodeCommit",
+    "AWS CodeBuild",
+    "AWS CloudFormation",
+    "EC2 Auto Scaling",
+    "EC2 Image Builder",
+    "AWS Glue"
+  ],
+  "kill_chain_order": [
+    "T1583.001",
+    "T1608.001",
+    "T1204.003",
+    "T1078.004",
+    "T1136.003",
+    "T1098.001",
+    "T1059.009",
+    "T1525",
+    "T1580",
+    "T1610",
+    "T1578.002",
+    "T1070",
+    "T1496"
+  ],
+  "credential_chain": [
+    {
+      "phase": 3,
+      "source": "victim AWS credentials passed as container environment variables",
+      "source_technique": "T1204.003",
+      "credential_type": "AWS access key + secret",
+      "used_in_phases": [
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ],
+      "expiration": "long-lived"
+    },
+    {
+      "phase": 5,
+      "source": "IAM role AWSCodeCommit-Role created by attacker",
+      "source_technique": "T1136.003",
+      "credential_type": "IAM role with Amplify/CodeCommit/CloudWatch full access",
+      "used_in_phases": [
+        8,
+        12
+      ],
+      "expiration": "indefinite"
+    },
+    {
+      "phase": 5,
+      "source": "IAM role sugo-role created by attacker",
+      "source_technique": "T1136.003",
+      "credential_type": "IAM role with SageMaker full access",
+      "used_in_phases": [
+        11
+      ],
+      "expiration": "indefinite"
+    },
+    {
+      "phase": 5,
+      "source": "IAM role ecsTaskExecutionRole created by attacker",
+      "source_technique": "T1136.003",
+      "credential_type": "IAM role with AdministratorAccess and ECS full access",
+      "used_in_phases": [
+        10
+      ],
+      "expiration": "indefinite"
+    }
+  ],
+  "iocs": {
+    "ip_addresses": [],
+    "domains": [
+      "master.d19tgz4vpyd5.amplifyapp.com"
+    ],
+    "file_paths": [
+      "entrypoint.sh",
+      "amplify-role.sh",
+      "repo.sh",
+      "code.sh",
+      "jalan.sh",
+      "sup0.sh",
+      "ecs.sh",
+      "ulang.sh",
+      "note.sh",
+      "salah.sh",
+      "delete.sh",
+      "stoptrigger.sh",
+      "scale.sh",
+      "restart.sh",
+      "amplify.yml",
+      "index.py",
+      "amplify-role.json",
+      "sugo.json",
+      "ecsTaskExecutionRole.json"
+    ],
+    "service_names": [
+      "AWSCodeCommit-Role",
+      "sugo-role",
+      "ecsTaskExecutionRole",
+      "task",
+      "task1"
+    ],
+    "tool_names": [
+      "SRBMiner-MULTI",
+      "UPX",
+      "Docker"
+    ],
+    "exfil_endpoints": [
+      "2miners",
+      "c3pool",
+      "nanopool"
+    ],
+    "crypto_wallets": [
+      "ZEPHYR2vyrpcg2e2sJaA88EM6aGaLCBdiYfiHffrs5b3Fa4p1qpoEPH4UabmhJr5YYF7CxJykLTJmESQWaB9ARNuhb6jvptapVq3v",
+      "TFrQ7u9spKk8MBgX6Bze3oxPbs3Yh1tAsq",
+      "RNu4dQGeFDSPP5iHthijkfnzgxcW2nPde9",
+      "89v8xC6Mu2tX27WZKhefTuSnN7f3JMHQSAuoD7ZRe1bV2wfExSTDZe4JwaM4qpjKAoWbAbbnqLBmGCFECiwnXdfSKHt85H3",
+      "8B7ommXjcEpTAHKFFyci1v5ADrqvEbphhHrzbBfJgvqjecbik7vcLonh8rYSstbBxgD8AccrJYEukDaXZB8ns3kTLiXL8BN",
+      "837MGitRYxgEV158RDenxVUfb5mN6qzz78Z1WeaDoiqC4K7H8Pj556vHJoVXL2MCJ5WCGVZTBiRmqJFxeJG3WSQmGKhPC31",
+      "Q010500bc3733dbd0576ca26a8595d59b577a4d1e09c019856abfa103b8f08ec0ed36735e0e2f35",
+      "Q01050074da7be4fe8216f789041227c08ccbf310617362641336e1f282c398937635a5d3ebbdbf",
+      "007DE31E4FD8213FBCE3586A3D2260C962142BBC605BB41C41"
+    ],
+    "user_agents": []
+  },
+  "operational_notes": {
+    "estimated_attack_duration_minutes": 60,
+    "inter_call_delay_seconds": [
+      1,
+      5
+    ],
+    "inter_phase_delay_seconds": [
+      30,
+      120
+    ],
+    "attack_creates_resources": [
+      "IAM roles: AWSCodeCommit-Role, sugo-role, ecsTaskExecutionRole",
+      "CodeCommit repo 'test' per region (up to 16 regions)",
+      "Amplify web apps: 5 per region across 8 regions",
+      "CodeBuild projects: 3 per region (small/medium/large)",
+      "CloudFormation stacks with EC2 ImageBuilder components per region",
+      "EC2 ImageBuilder pipelines: 8 per region (cron every minute)",
+      "EC2 Auto Scaling groups: task (on-demand) and task1 (spot), 8 instances each, 4 regions",
+      "ECS clusters + Fargate services: up to 30 tasks per region across 16 regions",
+      "SageMaker notebook instances: 8x ml.t3.2xlarge across 4 regions"
+    ],
+    "cannot_safely_emulate": [
+      {
+        "technique": "T1496",
+        "reason": "Real multi-region cryptomining costs ~$10k/day in victim AWS account",
+        "simulation": "mock miner binary that sleeps and exits immediately without network connections"
+      },
+      {
+        "technique": "T1578.002",
+        "reason": "EC2 Auto Scaling groups and CloudFormation stacks with real instance types incur immediate AWS charges",
+        "simulation": "dry-run CreateLaunchTemplate and describe-quota calls only"
+      },
+      {
+        "technique": "T1610",
+        "reason": "Launching ECS Fargate services with desiredCount 30 across 16 regions creates massive compute charges",
+        "simulation": "register task definition only, do not create service"
+      },
+      {
+        "technique": "T1525",
+        "reason": "Pushing miner binaries to CodeCommit requires victim AWS account with real credentials",
+        "simulation": "create empty CodeCommit repo without pushing malicious content"
+      }
+    ]
+  },
+  "source_url": "https://www.sysdig.com/blog/ambersquid",
+  "extraction_confidence": "high",
+  "techniques": [
+    {
+      "mitre_id": "T1583.001",
+      "name": "Acquire Infrastructure: Domains",
+      "tactic": "Resource Development",
+      "platform": "multi_cloud",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "documented",
+      "description": "Attacker registered Docker Hub accounts and amplifyapp domain for staging malicious images",
+      "api_calls": [],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": [
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "Threat Intelligence Feed: malicious Docker Hub image hash match"
+      ],
+      "phase_in_chain": 1,
+      "dependencies": [],
+      "severity": "medium",
+      "resources_needed": {
+        "attack_surface": [
+          "Docker Hub public registry",
+          "domain registrar"
+        ],
+        "target": [
+          "Docker Hub",
+          "amplifyapp.com subdomain"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Remove malicious Docker Hub images and account"
+      ],
+      "opsec_notes": "Pre-attack infra registered outside victim environment; no victim-side audit trail"
+    },
+    {
+      "mitre_id": "T1608.001",
+      "name": "Stage Capabilities: Upload Malware",
+      "tactic": "Resource Development",
+      "platform": "multi_cloud",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "simulated",
+      "description": "Upload UPX-packed SRBMiner container image to Docker Hub bypassing static AV scanning",
+      "api_calls": [
+        "POST /v2/{name}/manifests/{reference}",
+        "POST /v2/{name}/blobs/uploads/"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": [
+        "SIEM",
+        "WAF"
+      ],
+      "expected_alert_findings": [
+        "Container image registry scan: packed binary detected",
+        "Falco: newly pushed image with suspicious entrypoint"
+      ],
+      "phase_in_chain": 2,
+      "dependencies": [
+        "T1583.001"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "Docker Hub repository"
+        ],
+        "target": [
+          "Docker Hub public registry"
+        ],
+        "bait": [
+          "entrypoint.sh embedding SRBMiner-MULTI packed with UPX",
+          "amplify.yml build spec"
+        ]
+      },
+      "cleanup_actions": [
+        "Delete staged Docker Hub image repository"
+      ],
+      "opsec_notes": "UPX packing defeats static hash-based scanning; malicious code runs only at container start"
+    },
+    {
+      "mitre_id": "T1204.003",
+      "name": "User Execution: Malicious Image",
+      "tactic": "Execution",
+      "platform": "aws",
+      "execution_plane": "data_plane",
+      "execution_context": "container_attack",
+      "emulation_category": "emulated",
+      "description": "Victim runs malicious container image with AWS credentials injected as environment variables",
+      "api_calls": [],
+      "data_plane_actions": [
+        "docker run <malicious-image> with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY env vars",
+        "container executes entrypoint.sh launching attack scripts"
+      ],
+      "host_commands": [],
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": [
+        "Container Runtime",
+        "EDR",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "Sysdig: container launched from untrusted Docker Hub image",
+        "Falco: Outbound network from newly spawned container",
+        "CrowdStrike: suspicious container process tree"
+      ],
+      "phase_in_chain": 3,
+      "dependencies": [
+        "T1608.001"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "Docker host with internet access"
+        ],
+        "target": [
+          "victim Docker environment"
+        ],
+        "bait": [
+          "AWS_ACCESS_KEY_ID",
+          "AWS_SECRET_ACCESS_KEY",
+          "AWS_DEFAULT_REGION as container env vars"
+        ]
+      },
+      "cleanup_actions": [
+        "Stop and remove malicious container",
+        "Rotate exposed AWS credentials immediately"
+      ],
+      "opsec_notes": "No AWS audit event on container run; attack only visible via container runtime telemetry"
+    },
+    {
+      "mitre_id": "T1078.004",
+      "name": "Valid Accounts: Cloud Accounts",
+      "tactic": "Defense Evasion",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Container uses victim long-lived IAM credentials from env vars to authenticate AWS APIs",
+      "api_calls": [
+        "sts:GetCallerIdentity",
+        "sts:AssumeRole"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "GetCallerIdentity",
+          "eventSource": "sts.amazonaws.com"
+        },
+        {
+          "eventName": "AssumeRole",
+          "eventSource": "sts.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.InsideAWS",
+        "GuardDuty: CredentialAccess:IAMUser/AnomalousBehavior"
+      ],
+      "phase_in_chain": 4,
+      "dependencies": [
+        "T1204.003"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "victim AWS IAM long-lived access key"
+        ],
+        "target": [
+          "AWS STS"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Rotate compromised IAM key pair",
+        "Revoke all active sessions for principal",
+        "Enable MFA delete on credentials"
+      ],
+      "opsec_notes": "Long-lived keys have no expiry; attacker API calls appear as legitimate victim identity in CloudTrail"
+    },
+    {
+      "mitre_id": "T1136.003",
+      "name": "Create Account: Cloud Account",
+      "tactic": "Persistence",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Creates IAM roles AWSCodeCommit-Role, sugo-role, ecsTaskExecutionRole for persistent cross-service access",
+      "api_calls": [
+        "iam:CreateRole",
+        "iam:AttachRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:CreateInstanceProfile",
+        "iam:AddRoleToInstanceProfile"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "CreateRole",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "AttachRolePolicy",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "PutRolePolicy",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: Persistence:IAMUser/AnomalousBehavior",
+        "AWS Security Hub: IAM.1 Root account MFA not enabled"
+      ],
+      "phase_in_chain": 5,
+      "dependencies": [
+        "T1078.004"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "victim IAM permissions: iam:CreateRole iam:AttachRolePolicy"
+        ],
+        "target": [
+          "AWS IAM"
+        ],
+        "bait": [
+          "amplify-role.json",
+          "sugo.json",
+          "ecsTaskExecutionRole.json role trust policy documents"
+        ]
+      },
+      "cleanup_actions": [
+        "iam:DetachRolePolicy for all attached policies",
+        "iam:DeleteRole for AWSCodeCommit-Role sugo-role ecsTaskExecutionRole",
+        "iam:RemoveRoleFromInstanceProfile",
+        "iam:DeleteInstanceProfile"
+      ],
+      "opsec_notes": "Role names blend with legitimate AWS service role naming conventions"
+    },
+    {
+      "mitre_id": "T1098.001",
+      "name": "Account Manipulation: Additional Cloud Credentials",
+      "tactic": "Persistence",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Attaches AdministratorAccess and full-service managed policies to attacker-created IAM roles",
+      "api_calls": [
+        "iam:AttachRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:UpdateAssumeRolePolicy"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "AttachRolePolicy",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "PutRolePolicy",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "UpdateAssumeRolePolicy",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: Persistence:IAMUser/AnomalousBehavior",
+        "AWS Security Hub: IAM.6 Hardware MFA not enabled for root",
+        "Prowler: IAM role with AdministratorAccess"
+      ],
+      "phase_in_chain": 6,
+      "dependencies": [
+        "T1136.003"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "victim IAM permissions: iam:AttachRolePolicy"
+        ],
+        "target": [
+          "AWS IAM roles created in T1136.003"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Detach all policies from attacker roles before deletion",
+        "Audit all IAM roles created after compromise timestamp"
+      ],
+      "opsec_notes": "ecsTaskExecutionRole granted AdministratorAccess enabling further privilege escalation"
+    },
+    {
+      "mitre_id": "T1059.009",
+      "name": "Command and Scripting Interpreter: Cloud API",
+      "tactic": "Execution",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Shell scripts invoke AWS CLI across 16 regions to deploy miners on Amplify, ECS, SageMaker, CodeBuild",
+      "api_calls": [
+        "amplify:CreateApp",
+        "amplify:CreateBranch",
+        "amplify:StartDeployment",
+        "codecommit:CreateRepository",
+        "codebuild:CreateProject",
+        "codebuild:StartBuild",
+        "imagebuilder:CreateImagePipeline",
+        "imagebuilder:StartImagePipelineExecution",
+        "sagemaker:CreateNotebookInstance",
+        "ecs:CreateCluster",
+        "ecs:RegisterTaskDefinition",
+        "ecs:CreateService",
+        "autoscaling:CreateAutoScalingGroup",
+        "cloudformation:CreateStack"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "CreateApp",
+          "eventSource": "amplify.amazonaws.com"
+        },
+        {
+          "eventName": "CreateRepository",
+          "eventSource": "codecommit.amazonaws.com"
+        },
+        {
+          "eventName": "CreateProject",
+          "eventSource": "codebuild.amazonaws.com"
+        },
+        {
+          "eventName": "StartBuild",
+          "eventSource": "codebuild.amazonaws.com"
+        },
+        {
+          "eventName": "CreateNotebookInstance",
+          "eventSource": "sagemaker.amazonaws.com"
+        },
+        {
+          "eventName": "CreateCluster",
+          "eventSource": "ecs.amazonaws.com"
+        },
+        {
+          "eventName": "RegisterTaskDefinition",
+          "eventSource": "ecs.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: Execution:IAMUser/AnomalousBehavior",
+        "GuardDuty: CryptoCurrency:EC2/BitcoinTool.B!DNS",
+        "AWS Cost Anomaly Detection: unexpected spend spike"
+      ],
+      "phase_in_chain": 7,
+      "dependencies": [
+        "T1098.001",
+        "T1580"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "victim IAM permissions for all targeted services"
+        ],
+        "target": [
+          "AWS Amplify",
+          "AWS CodeBuild",
+          "Amazon SageMaker",
+          "Amazon ECS",
+          "EC2 Image Builder",
+          "EC2 Auto Scaling",
+          "CloudFormation"
+        ],
+        "bait": [
+          "amplify-role.sh",
+          "ecs.sh",
+          "jalan.sh",
+          "scale.sh",
+          "note.sh shell scripts"
+        ]
+      },
+      "cleanup_actions": [
+        "Terminate all resources created by attack scripts per region",
+        "Use delete.sh equivalent to enumerate and remove"
+      ],
+      "opsec_notes": "Scripts deploy across up to 16 regions simultaneously to maximize compute and complicate IR"
+    },
+    {
+      "mitre_id": "T1525",
+      "name": "Implant Internal Image",
+      "tactic": "Persistence",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "simulated",
+      "description": "Push miner scripts and binaries to CodeCommit as build source for Amplify and CodeBuild pipelines",
+      "api_calls": [
+        "codecommit:CreateRepository",
+        "codecommit:GitPush",
+        "codecommit:PutFile",
+        "codecommit:CreateCommit"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "CreateRepository",
+          "eventSource": "codecommit.amazonaws.com"
+        },
+        {
+          "eventName": "GitPush",
+          "eventSource": "codecommit.amazonaws.com"
+        },
+        {
+          "eventName": "PutFile",
+          "eventSource": "codecommit.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: Persistence:IAMUser/AnomalousBehavior",
+        "AWS Security Hub: CodeCommit repository with suspicious commit"
+      ],
+      "phase_in_chain": 8,
+      "dependencies": [
+        "T1059.009",
+        "T1136.003"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "victim codecommit:CreateRepository permission"
+        ],
+        "target": [
+          "AWS CodeCommit repository named test"
+        ],
+        "bait": [
+          "amplify.yml",
+          "index.py",
+          "SRBMiner-MULTI binary embedded in repo"
+        ]
+      },
+      "cleanup_actions": [
+        "codecommit:DeleteRepository for each region",
+        "Remove Amplify app connected to repo"
+      ],
+      "opsec_notes": "Simulation: push empty repo without miner content; do not commit real malicious binaries"
+    },
+    {
+      "mitre_id": "T1580",
+      "name": "Cloud Infrastructure Discovery",
+      "tactic": "Discovery",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Scripts enumerate available AWS regions and account quotas to plan multi-region miner deployment",
+      "api_calls": [
+        "ec2:DescribeRegions",
+        "sts:GetCallerIdentity",
+        "iam:GetAccountSummary",
+        "servicequotas:ListServiceQuotas",
+        "ec2:DescribeAvailabilityZones"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "DescribeRegions",
+          "eventSource": "ec2.amazonaws.com"
+        },
+        {
+          "eventName": "GetCallerIdentity",
+          "eventSource": "sts.amazonaws.com"
+        },
+        {
+          "eventName": "GetAccountSummary",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: Recon:IAMUser/CloudTrailLoggingDisabled",
+        "GuardDuty: Discovery:IAMUser/AnomalousBehavior"
+      ],
+      "phase_in_chain": 9,
+      "dependencies": [
+        "T1078.004"
+      ],
+      "severity": "medium",
+      "resources_needed": {
+        "attack_surface": [
+          "victim IAM read permissions"
+        ],
+        "target": [
+          "AWS EC2 STS IAM Service Quotas APIs"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "No persistent resources created; no cleanup needed"
+      ],
+      "opsec_notes": "Discovery calls blend with normal CloudTrail noise; volume and breadth across services is the anomaly signal"
+    },
+    {
+      "mitre_id": "T1610",
+      "name": "Deploy Container",
+      "tactic": "Defense Evasion",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "container_attack",
+      "emulation_category": "simulated",
+      "description": "Launch ECS Fargate tasks up to 30 per region across 16 regions running SRBMiner-MULTI",
+      "api_calls": [
+        "ecs:CreateCluster",
+        "ecs:RegisterTaskDefinition",
+        "ecs:CreateService",
+        "ecs:UpdateService",
+        "ec2:CreateVpc",
+        "ec2:CreateSubnet",
+        "ec2:CreateSecurityGroup",
+        "ec2:CreateInternetGateway"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "CreateCluster",
+          "eventSource": "ecs.amazonaws.com"
+        },
+        {
+          "eventName": "RegisterTaskDefinition",
+          "eventSource": "ecs.amazonaws.com"
+        },
+        {
+          "eventName": "CreateService",
+          "eventSource": "ecs.amazonaws.com"
+        },
+        {
+          "eventName": "UpdateService",
+          "eventSource": "ecs.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "Container Runtime",
+        "VPC Flow Logs",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: CryptoCurrency:Runtime/BitcoinTool.B",
+        "GuardDuty: Execution:ECS/MaliciousFile",
+        "Sysdig: Cryptomining detected in ECS Fargate task"
+      ],
+      "phase_in_chain": 10,
+      "dependencies": [
+        "T1136.003",
+        "T1059.009"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "victim ecs:CreateService permission",
+          "ecsTaskExecutionRole with AdministratorAccess"
+        ],
+        "target": [
+          "Amazon ECS Fargate across 16 regions"
+        ],
+        "bait": [
+          "ecs.sh",
+          "ulang.sh scripts"
+        ]
+      },
+      "cleanup_actions": [
+        "ecs:UpdateService desiredCount=0",
+        "ecs:DeleteService",
+        "ecs:DeleteCluster",
+        "Terminate associated VPC and networking resources"
+      ],
+      "opsec_notes": "Simulation: register task definition only, do not create service to avoid compute charges"
+    },
+    {
+      "mitre_id": "T1578.002",
+      "name": "Modify Cloud Compute Infrastructure: Create Cloud Instance",
+      "tactic": "Defense Evasion",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "simulated",
+      "description": "Create EC2 Auto Scaling groups, CloudFormation stacks, SageMaker notebooks, EC2 Image Builder pipelines for mining",
+      "api_calls": [
+        "autoscaling:CreateAutoScalingGroup",
+        "autoscaling:CreateLaunchConfiguration",
+        "cloudformation:CreateStack",
+        "imagebuilder:CreateImagePipeline",
+        "imagebuilder:StartImagePipelineExecution",
+        "sagemaker:CreateNotebookInstance",
+        "ec2:RunInstances",
+        "ec2:CreateLaunchTemplate"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "CreateAutoScalingGroup",
+          "eventSource": "autoscaling.amazonaws.com"
+        },
+        {
+          "eventName": "CreateStack",
+          "eventSource": "cloudformation.amazonaws.com"
+        },
+        {
+          "eventName": "CreateNotebookInstance",
+          "eventSource": "sagemaker.amazonaws.com"
+        },
+        {
+          "eventName": "StartImagePipelineExecution",
+          "eventSource": "imagebuilder.amazonaws.com"
+        },
+        {
+          "eventName": "RunInstances",
+          "eventSource": "ec2.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: CryptoCurrency:EC2/BitcoinTool.B!DNS",
+        "GuardDuty: Execution:EC2/MaliciousFile",
+        "AWS Cost Anomaly Detection: unexpected SageMaker and EC2 spend",
+        "AWS Trusted Advisor: service limit approaching"
+      ],
+      "phase_in_chain": 11,
+      "dependencies": [
+        "T1059.009",
+        "T1136.003"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "victim permissions for autoscaling cloudformation sagemaker imagebuilder ec2"
+        ],
+        "target": [
+          "EC2 Auto Scaling",
+          "CloudFormation",
+          "Amazon SageMaker",
+          "EC2 Image Builder across 4-8 regions"
+        ],
+        "bait": [
+          "scale.sh",
+          "jalan.sh",
+          "sup0.sh",
+          "salah.sh scripts",
+          "sugo.json SageMaker config"
+        ]
+      },
+      "cleanup_actions": [
+        "autoscaling:DeleteAutoScalingGroup",
+        "cloudformation:DeleteStack",
+        "sagemaker:DeleteNotebookInstance",
+        "imagebuilder:DeleteImagePipeline",
+        "ec2:TerminateInstances"
+      ],
+      "opsec_notes": "Simulation: dry-run CreateLaunchTemplate and describe-quota calls only; real deployment costs $10k+/day"
+    },
+    {
+      "mitre_id": "T1070",
+      "name": "Indicator Removal",
+      "tactic": "Defense Evasion",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "delete.sh removes IAM roles, CodeCommit repos, Amplify apps, ECS services to destroy evidence",
+      "api_calls": [
+        "iam:DetachRolePolicy",
+        "iam:DeleteRole",
+        "codecommit:DeleteRepository",
+        "amplify:DeleteApp",
+        "ecs:UpdateService",
+        "ecs:DeleteService",
+        "ecs:DeleteCluster",
+        "autoscaling:DeleteAutoScalingGroup",
+        "cloudformation:DeleteStack",
+        "sagemaker:DeleteNotebookInstance"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "DeleteRole",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "DeleteRepository",
+          "eventSource": "codecommit.amazonaws.com"
+        },
+        {
+          "eventName": "DeleteApp",
+          "eventSource": "amplify.amazonaws.com"
+        },
+        {
+          "eventName": "DeleteService",
+          "eventSource": "ecs.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: Stealth:IAMUser/CloudTrailLoggingDisabled",
+        "GuardDuty: Defense Evasion:IAMUser/AnomalousBehavior",
+        "AWS Security Hub: suspicious mass resource deletion"
+      ],
+      "phase_in_chain": 12,
+      "dependencies": [
+        "T1496"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "victim delete permissions across all targeted services"
+        ],
+        "target": [
+          "all attacker-created AWS resources"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Verify all attacker-created resources removed per region",
+        "Enable CloudTrail log file integrity validation to confirm logs not tampered"
+      ],
+      "opsec_notes": "Delete API calls are themselves logged in CloudTrail; attacker cannot erase the audit trail without explicit CloudTrail disable"
+    },
+    {
+      "mitre_id": "T1496",
+      "name": "Resource Hijacking",
+      "tactic": "Impact",
+      "platform": "aws",
+      "execution_plane": "data_plane",
+      "execution_context": "container_attack",
+      "emulation_category": "simulated",
+      "description": "SRBMiner-MULTI mines ZEPHYR and Monero across Amplify, Fargate, SageMaker, CodeBuild instances",
+      "api_calls": [],
+      "data_plane_actions": [
+        "SRBMiner-MULTI --disable-cpu --algorithm randomx --pool stratum+tcp://<pool>:4444 --wallet <address>",
+        "outbound TCP 3333/4444 stratum protocol to 2miners c3pool nanopool pools",
+        "sustained CPU/GPU utilization on all spawned compute instances"
+      ],
+      "host_commands": [],
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": [
+        "VPC Flow Logs",
+        "DNS Logs",
+        "SIEM",
+        "IDS",
+        "Container Runtime"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: CryptoCurrency:EC2/BitcoinTool.B!DNS",
+        "GuardDuty: CryptoCurrency:Runtime/BitcoinTool.B",
+        "Sysdig: Cryptominer binary executed in container",
+        "Falco: outbound connection to known mining pool",
+        "AWS Cost Anomaly Detection: anomalous compute spend >$10k/day"
+      ],
+      "phase_in_chain": 13,
+      "dependencies": [
+        "T1610",
+        "T1578.002",
+        "T1525"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "all spawned compute across Amplify Fargate SageMaker CodeBuild EC2 Image Builder"
+        ],
+        "target": [
+          "mining pools: 2miners c3pool nanopool"
+        ],
+        "bait": [
+          "ZEPHYR and Monero wallet addresses"
+        ]
+      },
+      "cleanup_actions": [
+        "Kill all miner processes",
+        "Terminate all spawned compute resources",
+        "Block mining pool IPs/domains at VPC level"
+      ],
+      "opsec_notes": "Simulation: mock miner binary that sleeps and exits without network connections; never connect to real pool endpoints"
+    }
+  ]
+}

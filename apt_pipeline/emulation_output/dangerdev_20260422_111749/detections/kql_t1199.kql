@@ -1,0 +1,41 @@
+// T1199 Trusted Relationship — Cross-Account Backdoor Role Escalation + Verification
+// DangerDev: AttachRolePolicy (AdministratorAccess) on masquerade cross-account roles,
+// then AssumeRole (AccessDenied expected from victim account) to verify trust is live.
+// AccessDenied AssumeRole is still CloudTrail-logged — it is forensic evidence.
+
+let escalation_window = 120s;
+
+let admin_attach = AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName == "AttachRolePolicy"
+| extend PolicyArn  = tostring(parse_json(RequestParameters).policyArn)
+| extend TargetRole = tostring(parse_json(RequestParameters).roleName)
+| where PolicyArn == "arn:aws:iam::aws:policy/AdministratorAccess"
+| project AttachTime = TimeGenerated, ActorArn = UserIdentityArn,
+          ActorUser = UserIdentityUserName, TargetRole, SourceIpAddress;
+
+let assume_attempts = AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "sts.amazonaws.com"
+| where EventName == "AssumeRole"
+| extend RoleArn  = tostring(parse_json(RequestParameters).roleArn)
+| extend RoleName = tostring(split(RoleArn, "/")[-1])
+| project AssumeTime = TimeGenerated, ActorArn = UserIdentityArn,
+          RoleName, ErrorCode;
+
+admin_attach
+| join kind=inner (assume_attempts) on ActorArn
+| where AssumeTime between (AttachTime .. (AttachTime + escalation_window))
+| where RoleName == TargetRole
+| extend IsAccessDenied   = ErrorCode == "AccessDenied"
+| extend ElapsedSeconds   = datetime_diff('second', AssumeTime, AttachTime)
+| extend IsDangerDevRole  = TargetRole startswith "AWSeserved"
+    or TargetRole startswith "AWSLanding-Zones-ConfigRecorder"
+| extend AlertTitle = iff(IsAccessDenied,
+    "CRITICAL: Cross-Account Backdoor Role Verified (AttachPolicy + AccessDenied AssumeRole)",
+    "CRITICAL: Cross-Account Backdoor Role Activated (AttachPolicy + Successful AssumeRole)"
+  )
+| project AttachTime, "Critical" as Severity, AlertTitle, IsDangerDevRole,
+          ActorUser, ActorArn, TargetRole, IsAccessDenied, ElapsedSeconds, SourceIpAddress
+| sort by AttachTime desc

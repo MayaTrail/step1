@@ -1,0 +1,125 @@
+{
+  "region": "us-east-1",
+  "platform": "aws",
+  "standing_cost": {
+    "hourly_usd": 0.00266,
+    "daily_usd": 0.0638,
+    "monthly_usd": 1.92,
+    "breakdown": [
+      {
+        "resource": "ambersquid-victim-iam-user",
+        "type": "aws.iam.User",
+        "detail": "aws.iam.User",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "ambersquid-victim-access-key",
+        "type": "aws.iam.AccessKey",
+        "detail": "aws.iam.AccessKey",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "ambersquid-victim-policy",
+        "type": "aws.iam.UserPolicy",
+        "detail": "aws.iam.UserPolicy (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "ambersquid-ecs-cluster",
+        "type": "aws.ecs.Cluster",
+        "detail": "aws.ecs.Cluster (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "ambersquid-task-definition",
+        "type": "aws.ecs.TaskDefinition",
+        "detail": "aws.ecs.TaskDefinition (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "ambersquid-ecs-execution-role",
+        "type": "aws.iam.Role",
+        "detail": "aws.iam.Role",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "ambersquid-codecommit-repo",
+        "type": "aws.codecommit.Repository",
+        "detail": "aws.codecommit.Repository (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "ambersquid-cloudtrail-bucket",
+        "type": "aws.s3.BucketV2",
+        "detail": "aws.s3.BucketV2 (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "ambersquid-cloudtrail",
+        "type": "aws.cloudtrail.Trail",
+        "detail": "CloudTrail trail",
+        "hourly_usd": 0.0014
+      },
+      {
+        "resource": "ambersquid-terraform-state-bucket",
+        "type": "aws.s3.BucketV2",
+        "detail": "aws.s3.BucketV2 (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "ambersquid-honey-iam-user",
+        "type": "aws.iam.User",
+        "detail": "aws.iam.User",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "ambersquid-canary-secret",
+        "type": "aws.secretsmanager.Secret",
+        "detail": "Secrets Manager secret",
+        "hourly_usd": 0.00056
+      },
+      {
+        "resource": "ambersquid-vpc",
+        "type": "aws.ec2.Vpc",
+        "detail": "aws.ec2.Vpc",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "ambersquid-public-subnet",
+        "type": "aws.ec2.Subnet",
+        "detail": "aws.ec2.Subnet",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "ambersquid-igw",
+        "type": "aws.ec2.InternetGateway",
+        "detail": "aws.ec2.InternetGateway",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "ambersquid-task-sg",
+        "type": "aws.ec2.SecurityGroup",
+        "detail": "aws.ec2.SecurityGroup",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "ambersquid-log-group",
+        "type": "aws.cloudwatch.LogGroup",
+        "detail": "CloudWatch log group",
+        "hourly_usd": 0.0007
+      }
+    ]
+  },
+  "per_run_cost": {
+    "estimated_usd": 0.0,
+    "detail": "No transient resources defined in attack plan",
+    "breakdown": []
+  },
+  "cost_drivers": [
+    "CloudTrail trail ($0.0014/hr)",
+    "Secrets Manager secret ($0.0006/hr)",
+    "CloudWatch log group ($0.0007/hr)"
+  ],
+  "warnings": [],
+  "summary_table": "+---------------------------------------------------------------------+\n|               COST ESTIMATE -- Ambersquid (us-east-1)               |\n+------------------------------------------+---------+---------+---------+\n| Resource                                 |    $/hr |   $/day |    $/mo |\n+------------------------------------------+---------+---------+---------+\n| aws.iam.User                             | 0.000000 |  0.0000 |    0.00 |\n| aws.iam.AccessKey                        | 0.000000 |  0.0000 |    0.00 |\n| aws.iam.UserPolicy (unrecognised \u2014 no pr | 0.000000 |  0.0000 |    0.00 |\n| aws.ecs.Cluster (unrecognised \u2014 no price | 0.000000 |  0.0000 |    0.00 |\n| aws.ecs.TaskDefinition (unrecognised \u2014 n | 0.000000 |  0.0000 |    0.00 |\n| aws.iam.Role                             | 0.000000 |  0.0000 |    0.00 |\n| aws.codecommit.Repository (unrecognised  | 0.000000 |  0.0000 |    0.00 |\n| aws.s3.BucketV2 (unrecognised \u2014 no price | 0.000000 |  0.0000 |    0.00 |\n| CloudTrail trail                         |  0.0014 |   0.034 |    1.01 |\n| aws.s3.BucketV2 (unrecognised \u2014 no price | 0.000000 |  0.0000 |    0.00 |\n| aws.iam.User                             | 0.000000 |  0.0000 |    0.00 |\n| Secrets Manager secret                   | 0.000560 |   0.013 |    0.40 |\n| aws.ec2.Vpc                              | 0.000000 |  0.0000 |    0.00 |\n| aws.ec2.Subnet                           | 0.000000 |  0.0000 |    0.00 |\n| aws.ec2.InternetGateway                  | 0.000000 |  0.0000 |    0.00 |\n| aws.ec2.SecurityGroup                    | 0.000000 |  0.0000 |    0.00 |\n| CloudWatch log group                     | 0.000700 |   0.017 |    0.50 |\n+------------------------------------------+---------+---------+---------+\n| TOTAL (standing infra)                   |  0.0027 |   0.064 |    1.92 |\n+------------------------------------------+---------+---------+---------+\n| Per attack run (no transient resources defined)                     |\n+---------------------------------------------------------------------+"
+}

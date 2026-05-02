@@ -1,0 +1,186 @@
+{
+  "status": "PHASE_0B_COMPLETE",
+  "threat_actor": {
+    "name": "DangerDev",
+    "aliases": [
+      "DangerDev@protonmail.me"
+    ],
+    "motivation": "Financial \u2014 cryptomining, SES spam/phishing for cryptocurrency credentials, PayPal credential theft via spearphishing",
+    "attribution_country": "Indonesia",
+    "tools_used": [
+      "AWS CLI (automated scripts)",
+      "AWS Management Console",
+      "SES",
+      "Route53",
+      "EC2 GPU instances"
+    ]
+  },
+  "platform": "aws",
+  "targeted_services": [
+    "IAM",
+    "SES",
+    "EC2",
+    "Route53",
+    "LightSail",
+    "GuardDuty",
+    "SSM",
+    "Secrets Manager",
+    "VPC",
+    "AWS Support"
+  ],
+  "kill_chain_order": [
+    "T1078.004",
+    "T1526",
+    "T1087.004",
+    "T1136.003",
+    "T1098.003",
+    "T1580",
+    "T1578.002",
+    "T1021.001",
+    "T1496",
+    "T1036.005",
+    "T1199",
+    "T1098",
+    "T1530",
+    "T1518.001",
+    "T1070",
+    "T1583.001",
+    "T1566.002"
+  ],
+  "credential_chain": [
+    {
+      "phase": 1,
+      "source": "Accidentally exposed IAM admin long-term access key in external storage",
+      "source_technique": "T1078.004",
+      "credential_type": "AWS IAM long-term access key (AdministratorAccess)",
+      "used_in_phases": [
+        1,
+        2,
+        3
+      ],
+      "expiration": "long-term (no expiry)"
+    },
+    {
+      "phase": 1,
+      "source": "IAM CreateUser + CreateLoginProfile + AttachUserPolicy for DangerDev@protonmail.me",
+      "source_technique": "T1136.003",
+      "credential_type": "AWS IAM console password + access key (AdministratorAccess)",
+      "used_in_phases": [
+        2,
+        3
+      ],
+      "expiration": "long-term"
+    },
+    {
+      "phase": 3,
+      "source": "IAM CreateUser + CreateAccessKey for masquerading 'ses' account",
+      "source_technique": "T1136.003",
+      "credential_type": "AWS IAM long-term access key",
+      "used_in_phases": [
+        3
+      ],
+      "expiration": "long-term"
+    },
+    {
+      "phase": 3,
+      "source": "IAM CreateRole with external trust policy; AssumeRole from TA-controlled account 671050157472",
+      "source_technique": "T1199",
+      "credential_type": "AWS STS temporary credentials (AdministratorAccess)",
+      "used_in_phases": [
+        3
+      ],
+      "expiration": "short-term (~1 hour, renewable)"
+    },
+    {
+      "phase": 3,
+      "source": "CreateAccessKey on existing victim IAM accounts",
+      "source_technique": "T1098",
+      "credential_type": "AWS IAM long-term access key",
+      "used_in_phases": [
+        3
+      ],
+      "expiration": "long-term"
+    },
+    {
+      "phase": 3,
+      "source": "UpdateLoginProfile using initially compromised account to reset another account's console password",
+      "source_technique": "T1098",
+      "credential_type": "AWS IAM console password",
+      "used_in_phases": [
+        3
+      ],
+      "expiration": "long-term"
+    }
+  ],
+  "iocs": {
+    "ip_addresses": [],
+    "domains": [],
+    "file_paths": [],
+    "service_names": [
+      "265857590823 (confirmed malicious AWS account)",
+      "671050157472 (confirmed malicious AWS account \u2014 used for cross-account AssumeRole)",
+      "AWSLanding-Zones-ConfigRecorderRoles (malicious backdoor role)",
+      "AWSeservedSSO_* (malicious role masquerading as AWSReservedSSO_*)",
+      "ses (masquerading IAM username)"
+    ],
+    "tool_names": [
+      "AWS CLI",
+      "AWS Management Console",
+      "ses-smtp-user (legitimate naming convention abused for masquerade)"
+    ],
+    "exfil_endpoints": [],
+    "crypto_wallets": [],
+    "user_agents": [
+      "Amazon Relational Database Service console (used anomalously to access GuardDuty)"
+    ]
+  },
+  "operational_notes": {
+    "estimated_attack_duration_minutes": 43200,
+    "inter_call_delay_seconds": [
+      1,
+      60
+    ],
+    "inter_phase_delay_seconds": [
+      604800,
+      1209600
+    ],
+    "attack_creates_resources": [
+      "IAM user: DangerDev@protonmail.me (AdministratorAccess)",
+      "IAM user: ses (masquerade, with access key)",
+      "IAM role: AWSLanding-Zones-ConfigRecorderRoles (cross-account backdoor to account 265857590823)",
+      "IAM role: AWSeservedSSO_* (cross-account backdoor to account 671050157472)",
+      "EC2 key pair",
+      "EC2 security group (inbound RDP/3389 and SSH/22 open to 0.0.0.0/0)",
+      "EC2 default VPC",
+      "EC2 instances: t2.micro (test), p3.16xlarge x3 (GPU mining), multiple GPU-enabled instance types",
+      "LightSail VPS instance (RDP-accessed)",
+      "SES email identities (Japanese-themed domains)",
+      "Route53 domains (PayPal-mimicking, 4 registered)",
+      "AWS support case (SES sending quota increase request)"
+    ],
+    "cannot_safely_emulate": [
+      {
+        "technique": "T1566.002 \u2014 SES phishing/spam campaign",
+        "reason": "Sending real phishing emails to real targets is illegal and harms third parties",
+        "simulation": "Log CreateEmailIdentity and SendEmail API calls; verify SES sandbox mode blocks delivery"
+      },
+      {
+        "technique": "T1583.001 \u2014 Route53 RegisterDomain for PayPal-mimicking domains",
+        "reason": "Creates real internet-facing domains with financial and legal implications; domain may be cached/indexed",
+        "simulation": "Document RegisterDomain API call structure; use a clearly non-malicious test domain in a sandboxed account"
+      },
+      {
+        "technique": "T1199 \u2014 Cross-account AssumeRole from TA-controlled accounts 265857590823 / 671050157472",
+        "reason": "Requires access to confirmed malicious external AWS accounts; simulating requires a controlled adversary account",
+        "simulation": "Create isolated adversary AWS account, establish cross-account trust role, and AssumeRole in a lab environment only"
+      },
+      {
+        "technique": "T1496 \u2014 GPU cryptomining via p3.16xlarge",
+        "reason": "Extremely expensive ($24+/hr per instance); creates real AWS billing impact and may violate ToS",
+        "simulation": "Launch a t2.micro with a benign CPU-bound workload to validate instance launch/terminate lifecycle only"
+      }
+    ]
+  },
+  "source_url": "https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me",
+  "extraction_confidence": "high"
+}

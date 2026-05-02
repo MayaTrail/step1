@@ -1,0 +1,6 @@
+# MayaTrail APT Pipeline v2
+requests>=2.31.0      # Article fetching
+boto3>=1.34.0         # API index validation + security service checks
+pyyaml>=6.0           # SIGMA rule validation
+tiktoken>=0.7.0       # Accurate token counting (replaces len()//3 heuristic)
+trafilatura>=1.6.0    # Article body extraction (replaces regex HTML stripping)

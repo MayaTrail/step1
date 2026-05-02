@@ -1,0 +1,13 @@
+name: dangerdev-emulation-lab
+runtime:
+  name: python
+  options:
+    virtualenv: .venv
+description: DangerDev adversary emulation lab — AWS infrastructure for controlled threat emulation
+config:
+  adversaryAccountId:
+    default: "111111111111"
+  sesEmail:
+    default: "noreply@emulation-lab.internal"
+  labOperatorEmail:
+    default: "security-team@example.com"

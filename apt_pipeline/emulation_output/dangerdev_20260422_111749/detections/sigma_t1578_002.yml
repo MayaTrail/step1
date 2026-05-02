@@ -1,0 +1,37 @@
+title: DangerDev — EC2 RunInstances from IAM User Into Open Security Group
+id: a7b8c9d0-e1f2-4456-abcd-456789000006
+status: experimental
+description: >
+  Detects EC2 RunInstances called by an IAM user principal (not a service/automation role)
+  into a security group permitting inbound 0.0.0.0/0 on ports 3389 or 22. DangerDev's
+  pattern: test t2.micro first to validate the instance lifecycle, then deploy GPU
+  instances (p3.16xlarge x3) for cryptomining. GPU instance type in requestParameters
+  is a critical escalation signal. Correlate with Security Hub EC2.19 findings.
+references:
+    - https://attack.mitre.org/techniques/T1578/002/
+    - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1578.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: ec2.amazonaws.com
+        eventName: RunInstances
+        userIdentity.type: IAMUser
+    filter_approved:
+        userIdentity.arn|contains:
+            - ':assumed-role/EC2DeployRole'
+            - ':assumed-role/AutoScaling'
+            - ':assumed-role/InfraCI'
+            - ':assumed-role/AWSServiceRole'
+    condition: selection and not filter_approved
+falsepositives:
+    - Developer sandbox accounts where IAM users are permitted to launch instances
+    - Initial AWS account setup by administrators
+    - Infrastructure-as-code runners using long-term IAM user credentials (discouraged)
+level: high

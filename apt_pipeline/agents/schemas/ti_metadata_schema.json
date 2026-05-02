@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "ti_metadata_schema",
+  "description": "JSON Schema for Phase 0B call 1 — TI extract metadata fields (no techniques array). Passed to the Claude CLI --json-schema flag to constrain model output at generation time.",
+  "type": "object",
+  "required": [
+    "status",
+    "threat_actor",
+    "platform",
+    "kill_chain_order",
+    "targeted_services"
+  ],
+  "properties": {
+    "status": { "type": "string" },
+    "threat_actor": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name":                { "type": "string" },
+        "aliases":             { "type": "array", "items": { "type": "string" } },
+        "motivation":          { "type": "string" },
+        "attribution_country": { "type": "string" },
+        "tools_used":          { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "targeted_services": { "type": "array", "items": { "type": "string" } },
+    "platform": {
+      "type": "string",
+      "enum": ["aws", "azure", "gcp", "saas", "identity_provider", "on_premises", "multi_cloud"]
+    },
+    "kill_chain_order": { "type": "array", "items": { "type": "string" } },
+    "credential_chain": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "phase":            { "type": "integer" },
+          "source":           { "type": "string" },
+          "source_technique": { "type": "string" },
+          "credential_type":  { "type": "string" },
+          "used_in_phases":   { "type": "array", "items": { "type": "integer" } },
+          "expiration":       { "type": "string" }
+        }
+      }
+    },
+    "iocs": {
+      "type": "object",
+      "properties": {
+        "ip_addresses":    { "type": "array", "items": { "type": "string" } },
+        "domains":         { "type": "array", "items": { "type": "string" } },
+        "file_paths":      { "type": "array", "items": { "type": "string" } },
+        "service_names":   { "type": "array", "items": { "type": "string" } },
+        "tool_names":      { "type": "array", "items": { "type": "string" } },
+        "exfil_endpoints": { "type": "array", "items": { "type": "string" } },
+        "crypto_wallets":  { "type": "array", "items": { "type": "string" } },
+        "user_agents":     { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "operational_notes": {
+      "type": "object",
+      "properties": {
+        "estimated_attack_duration_minutes": { "type": "integer" },
+        "inter_call_delay_seconds": {
+          "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2
+        },
+        "inter_phase_delay_seconds": {
+          "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2
+        },
+        "attack_creates_resources": { "type": "array", "items": { "type": "string" } },
+        "cannot_safely_emulate": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "technique":  { "type": "string" },
+              "reason":     { "type": "string" },
+              "simulation": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "source_url":            { "type": "string" },
+    "extraction_confidence": { "type": "string", "enum": ["high", "medium", "low"] }
+  }
+}

@@ -1,0 +1,39 @@
+// T1578.002 Create Cloud Instance — RunInstances from IAM User; GPU = Critical
+// DangerDev: t2.micro test → GPU p3.16xlarge x3 for cryptomining.
+// Correlate preceding AuthorizeSecurityGroupIngress 0.0.0.0/0:3389/22 for high confidence.
+
+let run_instances = AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "ec2.amazonaws.com"
+| where EventName == "RunInstances"
+| where UserIdentityType == "IAMUser"
+| extend InstanceType  = tostring(parse_json(RequestParameters).instanceType)
+| extend IsGPUInstance = InstanceType matches regex @"^(p3|p4d|g4dn|g4ad|p2|p3dn)\."
+| project LaunchTime = TimeGenerated, UserIdentityArn, UserIdentityUserName,
+          InstanceType, IsGPUInstance, SourceIpAddress, UserAgent, AwsRegion;
+
+// Open security group events in preceding 7 days
+let open_sgs = AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "ec2.amazonaws.com"
+| where EventName == "AuthorizeSecurityGroupIngress"
+| where RequestParameters has "0.0.0.0/0"
+| where RequestParameters has_any ("3389", "22")
+| extend OpenSGId = tostring(parse_json(RequestParameters).groupId)
+| project OpenSGId, OpenActor = UserIdentityArn;
+
+run_instances
+| join kind=leftouter (open_sgs) on $left.UserIdentityArn == $right.OpenActor
+| extend Severity = case(
+    IsGPUInstance == true, "Critical",
+    isnotempty(OpenSGId),  "High",
+    "Medium"
+  )
+| extend AlertTitle = case(
+    IsGPUInstance == true, "CRITICAL: GPU EC2 Instance Launched — Likely Cryptomining",
+    isnotempty(OpenSGId),  "High: EC2 Instance Launched into Open Security Group by IAM User",
+    "EC2 RunInstances from Non-Service IAM User"
+  )
+| project LaunchTime, Severity, AlertTitle, UserIdentityUserName, UserIdentityArn,
+          InstanceType, IsGPUInstance, OpenSGId, SourceIpAddress, AwsRegion
+| sort by LaunchTime desc

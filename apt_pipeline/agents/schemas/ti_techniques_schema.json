@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "ti_techniques_schema",
+  "description": "JSON Schema for Phase 0B call 2 — techniques array only. Passed to the Claude CLI --json-schema flag to constrain model output at generation time.",
+  "type": "object",
+  "required": ["techniques"],
+  "properties": {
+    "techniques": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "mitre_id",
+          "name",
+          "execution_plane",
+          "emulation_category"
+        ],
+        "properties": {
+          "mitre_id": { "type": "string" },
+          "name":     { "type": "string" },
+          "tactic":   { "type": "string" },
+          "platform": {
+            "type": "string",
+            "enum": ["aws", "azure", "gcp", "saas", "identity_provider", "on_premises", "multi_cloud"]
+          },
+          "execution_plane": {
+            "type": "string",
+            "enum": ["control_plane", "data_plane", "host_plane"]
+          },
+          "execution_context": {
+            "type": "string",
+            "enum": [
+              "api_attack", "host_attack", "container_attack",
+              "sso_attack", "saas_attack", "idp_attack",
+              "phishing_attack", "lateral_movement"
+            ]
+          },
+          "emulation_category": {
+            "type": "string",
+            "enum": ["emulated", "simulated", "documented"]
+          },
+          "description":         { "type": "string" },
+          "api_calls":           { "type": "array", "items": { "type": "string" } },
+          "data_plane_actions":  { "type": "array", "items": { "type": "string" } },
+          "host_commands":       { "type": "array", "items": { "type": "string" } },
+          "expected_audit_events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "eventName":   { "type": "string" },
+                "eventSource": { "type": "string" }
+              }
+            }
+          },
+          "audit_visible":    { "type": "boolean" },
+          "detection_sources": { "type": "array", "items": { "type": "string" } },
+          "expected_alert_findings": { "type": "array", "items": { "type": "string" } },
+          "phase_in_chain":   { "type": "integer" },
+          "dependencies":     { "type": "array", "items": { "type": "string" } },
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"]
+          },
+          "resources_needed": {
+            "type": "object",
+            "properties": {
+              "attack_surface": { "type": "array", "items": { "type": "string" } },
+              "target":         { "type": "array", "items": { "type": "string" } },
+              "bait":           { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "cleanup_actions": { "type": "array", "items": { "type": "string" } },
+          "opsec_notes":     { "type": "string" }
+        }
+      }
+    }
+  }
+}

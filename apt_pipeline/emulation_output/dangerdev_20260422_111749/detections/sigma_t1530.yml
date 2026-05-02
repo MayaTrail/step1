@@ -1,0 +1,41 @@
+title: DangerDev — S3 Bucket and Object Enumeration Paired with IAM Recon Cluster
+id: e1f2a3b4-c5d6-4890-ef01-890000000010
+status: experimental
+description: >
+  Detects S3 ListBuckets / ListObjects from an IAM user principal, especially when
+  paired within 60 seconds with IAM recon calls (ListInstanceProfiles, ListGroupsForUser,
+  ListSSHPublicKeys). DangerDev executed this multi-service enumeration cluster during
+  Phase 3, listing objects in dangerdev-prod-data-archive (customers/export_2024_q4.csv,
+  backups/db_dump_prod.sql.gz). Production-named bucket access escalates severity.
+references:
+    - https://attack.mitre.org/techniques/T1530/
+    - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.collection
+    - attack.t1530
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: s3.amazonaws.com
+        eventName:
+            - ListBuckets
+            - ListObjects
+            - ListObjectsV2
+        userIdentity.type: IAMUser
+    filter_data_roles:
+        userIdentity.arn|contains:
+            - ':assumed-role/DataEngineer'
+            - ':assumed-role/S3ReadOnly'
+            - ':assumed-role/BackupRole'
+            - ':assumed-role/AWSConfig'
+            - ':assumed-role/AWSServiceRole'
+    condition: selection and not filter_data_roles
+falsepositives:
+    - Developer IAM users with direct S3 access in sandbox environments
+    - Data science workflows using IAM user credentials (should be converted to roles)
+    - Backup scripts run via IAM user instead of role
+level: medium

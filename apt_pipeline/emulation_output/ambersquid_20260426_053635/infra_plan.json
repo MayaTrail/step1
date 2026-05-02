@@ -1,0 +1,383 @@
+{
+  "status": "PHASE_1_COMPLETE",
+  "platform": "aws",
+  "sandbox_vpc": {
+    "cidr": "10.99.0.0/16",
+    "subnets": [
+      {
+        "cidr": "10.99.1.0/24",
+        "az": "us-east-1a",
+        "type": "public"
+      }
+    ],
+    "isolation_rules": "No peering, no transit gateway, NAT for outbound only",
+    "flow_logs": true
+  },
+  "resources": [
+    {
+      "name": "ambersquid-victim-iam-user",
+      "pulumi_type": "aws.iam.User",
+      "resource_category": "attack_surface",
+      "purpose": "Over-permissioned IAM user whose long-lived access key is injected into ECS task environment variables, simulating the credential handoff that drives the entire AMBERSQUID kill chain (T1204.003, T1078.004)",
+      "techniques_served": [
+        "T1204.003",
+        "T1078.004",
+        "T1059.009"
+      ],
+      "configuration_notes": "No console access. Inline policy ambersquid-victim-policy attached. Access key output as Pulumi stack secret. Key ID and secret are injected verbatim into ambersquid-task-definition container environment as AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "ambersquid-victim-access-key",
+      "pulumi_type": "aws.iam.AccessKey",
+      "resource_category": "attack_surface",
+      "purpose": "Long-lived access key for victim IAM user \u2014 passed as plaintext env vars to ECS container, replicating how AMBERSQUID harvests credentials from the running container context (T1204.003)",
+      "techniques_served": [
+        "T1204.003",
+        "T1078.004"
+      ],
+      "configuration_notes": "status: Active. Export id and secret as Pulumi stack outputs with secret: true. These values are referenced by ambersquid-task-definition environment block.",
+      "depends_on": [
+        "ambersquid-victim-iam-user"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "ambersquid-victim-policy",
+      "pulumi_type": "aws.iam.UserPolicy",
+      "resource_category": "attack_surface",
+      "purpose": "INTENTIONALLY over-permissioned inline policy granting every AWS service AMBERSQUID abuses after stealing credentials \u2014 enables full emulation of T1136.003 (role creation), T1098.001 (credential manipulation), T1070 (trail deletion), and multi-service miner deployment (T1610, T1578.002 simulated). WHY over-permissioned: AMBERSQUID obtains victim creds and immediately creates AdministratorAccess-equivalent roles (ecsTaskExecutionRole) and deploys to 8+ services across 16 regions.",
+      "techniques_served": [
+        "T1078.004",
+        "T1136.003",
+        "T1098.001",
+        "T1070",
+        "T1580"
+      ],
+      "configuration_notes": "Attach inline to ambersquid-victim-iam-user. See iam_policies section for full document. Grants iam:CreateRole/AttachRolePolicy/PassRole, ecs:*, sagemaker:*, codecommit:*, codebuild:*, amplify:*, cloudformation:*, autoscaling:*, imagebuilder:*, glue:*, ecr:GetAuthorizationToken, cloudtrail:StopLogging/DeleteTrail, s3:DeleteObject, secretsmanager:GetSecretValue/ListSecrets, logs:*.",
+      "depends_on": [
+        "ambersquid-victim-iam-user"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "ambersquid-ecs-cluster",
+      "pulumi_type": "aws.ecs.Cluster",
+      "resource_category": "attack_surface",
+      "purpose": "ECS cluster where malicious container executes with victim credentials in environment \u2014 the initial execution plane for AMBERSQUID's container-based attack (T1204.003). Service creation is NOT performed (T1610 simulated \u2014 desiredCount=0).",
+      "techniques_served": [
+        "T1204.003",
+        "T1610"
+      ],
+      "configuration_notes": "settings: [{name: containerInsights, value: enabled}]. capacityProviders: [FARGATE]. No ECS service resource created \u2014 task definition is registered only. Simulates T1610 per operational_notes (launching Fargate services with desiredCount 30 across 16 regions creates massive compute charges).",
+      "depends_on": [
+        "ambersquid-vpc"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "ambersquid-task-definition",
+      "pulumi_type": "aws.ecs.TaskDefinition",
+      "resource_category": "attack_surface",
+      "purpose": "ECS task definition that injects victim AWS credentials as plaintext container environment variables \u2014 the structural representation of how AMBERSQUID's malicious image receives and exercises stolen credentials (T1204.003, T1078.004). Uses benign ubuntu image as stand-in for staged miner.",
+      "techniques_served": [
+        "T1204.003",
+        "T1078.004",
+        "T1496"
+      ],
+      "configuration_notes": "networkMode: awsvpc. requiresCompatibilities: [FARGATE]. cpu: 256, memory: 512. Container: name=miner-container, image=ubuntu:22.04 (benign stand-in for T1608.001 staged malicious image). command: [sleep, infinity] (simulates T1496 without cost \u2014 do NOT use real SRBMiner-MULTI binary). Environment: AWS_ACCESS_KEY_ID=${ambersquid-victim-access-key.id}, AWS_SECRET_ACCESS_KEY=${ambersquid-victim-access-key.secret}, AWS_DEFAULT_REGION=us-east-1. executionRoleArn: ambersquid-ecs-execution-role ARN. logConfiguration: awslogs, group=/ecs/ambersquid, region=us-east-1, stream-prefix=miner.",
+      "depends_on": [
+        "ambersquid-victim-access-key",
+        "ambersquid-ecs-execution-role",
+        "ambersquid-log-group"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "ambersquid-ecs-execution-role",
+      "pulumi_type": "aws.iam.Role",
+      "resource_category": "support",
+      "purpose": "Minimum-privilege ECS task execution role for image pull and log delivery \u2014 NOT the attacker-created ecsTaskExecutionRole (which is simulated via attack.py API calls, not provisioned here)",
+      "techniques_served": [],
+      "configuration_notes": "assumeRolePolicyDocument: {Service: ecs-tasks.amazonaws.com}. Attach only AmazonECSTaskExecutionRolePolicy managed policy. This is the legitimate infra role; the attacker-created ecsTaskExecutionRole with AdministratorAccess is created at runtime by the emulation script via iam:CreateRole calls using victim credentials.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "ambersquid-codecommit-repo",
+      "pulumi_type": "aws.codecommit.Repository",
+      "resource_category": "target",
+      "purpose": "CodeCommit repository named 'test' \u2014 replicates the empty repo AMBERSQUID creates per region before attempting to push miner binaries (T1525 simulated: repo created, no malicious content pushed per operational_notes). Also serves T1580 discovery.",
+      "techniques_served": [
+        "T1525",
+        "T1580"
+      ],
+      "configuration_notes": "repositoryName: test. description: Internal build artifacts. Repo is created empty. Do NOT push any content \u2014 T1525 is simulated because pushing miner binaries to CodeCommit requires real victim credentials and constitutes actual malicious staging.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "ambersquid-cloudtrail-bucket",
+      "pulumi_type": "aws.s3.BucketV2",
+      "resource_category": "target",
+      "purpose": "S3 bucket storing CloudTrail management events \u2014 primary target for AMBERSQUID's indicator removal phase (T1070: StopLogging, DeleteTrail, or DeleteObject on log files)",
+      "techniques_served": [
+        "T1070",
+        "T1580"
+      ],
+      "configuration_notes": "Bucket name: ambersquid-cloudtrail-logs-${accountId} (ASCII only, no special chars). versioning: enabled. serverSideEncryptionConfiguration: AES256/aws:kms. Do NOT attach a Deny on s3:DeleteObject \u2014 the emulation must be able to exercise T1070 by deleting log objects. Bucket policy: allow CloudTrail service principal to PutObject.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.001
+    },
+    {
+      "name": "ambersquid-cloudtrail",
+      "pulumi_type": "aws.cloudtrail.Trail",
+      "resource_category": "target",
+      "purpose": "Multi-region CloudTrail trail capturing all management events \u2014 detection mechanism for the entire attack chain AND direct target of T1070 (attacker calls cloudtrail:StopLogging or cloudtrail:DeleteTrail to blind defenders)",
+      "techniques_served": [
+        "T1070",
+        "T1580"
+      ],
+      "configuration_notes": "isMultiRegionTrail: true. includeGlobalServiceEvents: true. enableLogFileValidation: true. s3BucketName: ambersquid-cloudtrail-bucket. isLogging: true. eventSelectors: management events ReadWriteType=All. The trail is the authoritative detection source AND the T1070 target \u2014 emulation script calls cloudtrail:StopLogging using victim credentials.",
+      "depends_on": [
+        "ambersquid-cloudtrail-bucket"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.002
+    },
+    {
+      "name": "ambersquid-terraform-state-bucket",
+      "pulumi_type": "aws.s3.BucketV2",
+      "resource_category": "bait",
+      "purpose": "S3 bucket containing a realistic terraform.tfstate object with embedded decoy AWS credentials \u2014 honeypot discovered during T1580 enumeration, realistic bait for opportunistic credential harvesting",
+      "techniques_served": [
+        "T1580"
+      ],
+      "configuration_notes": "Bucket name: prod-infra-terraform-state-${accountId}. ACL: private but readable by ambersquid-victim-iam-user via s3:GetObject. Upload a terraform.tfstate object at key terraform.tfstate containing fake embedded AKIA access keys and plausible-looking secret values (use canarytokens.org or static canary strings). Realistic bucket name triggers AMBERSQUID-style opportunistic s3:ListBuckets discovery.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.001
+    },
+    {
+      "name": "ambersquid-honey-iam-user",
+      "pulumi_type": "aws.iam.User",
+      "resource_category": "bait",
+      "purpose": "Decoy IAM user 'prod-deploy-svc' with an active but policy-less access key \u2014 its use triggers AuthFailure CloudWatch alarm, surfacing T1580 discovery and T1098.001 credential enumeration attempts",
+      "techniques_served": [
+        "T1580",
+        "T1098.001"
+      ],
+      "configuration_notes": "userName: prod-deploy-svc. Tags: Environment=production, Team=platform, ManagedBy=terraform. Create one AccessKey (Status: Active) with no attached policies. Any API call using this key returns AuthFailure and generates a CloudTrail event that can be alarmed on. The key ID and secret should be stored in ambersquid-terraform-state-bucket's fake tfstate to complete the bait chain.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "ambersquid-canary-secret",
+      "pulumi_type": "aws.secretsmanager.Secret",
+      "resource_category": "bait",
+      "purpose": "SecretsManager secret named 'prod/database/master_credentials' \u2014 realistic discovery target during T1580 enumeration, surfaces attacker's secretsmanager:ListSecrets and GetSecretValue calls in CloudTrail",
+      "techniques_served": [
+        "T1580"
+      ],
+      "configuration_notes": "name: prod/database/master_credentials. description: RDS master credentials for production cluster. secretString: JSON with keys username, password, host, port using plausible-looking but entirely fake values (e.g., host=prod-db-cluster.cluster-xxxx.us-east-1.rds.amazonaws.com). Tags: Environment=production, Team=data. Accessible via secretsmanager:GetSecretValue by ambersquid-victim-iam-user.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0004
+    },
+    {
+      "name": "ambersquid-vpc",
+      "pulumi_type": "aws.ec2.Vpc",
+      "resource_category": "support",
+      "purpose": "Isolated lab VPC \u2014 enforces network boundary for ECS Fargate tasks, prevents mining pool egress at network layer",
+      "techniques_served": [],
+      "configuration_notes": "cidrBlock: 10.99.0.0/16. enableDnsHostnames: true. enableDnsSupport: true. No VPC peering. No transit gateway.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "ambersquid-public-subnet",
+      "pulumi_type": "aws.ec2.Subnet",
+      "resource_category": "support",
+      "purpose": "Public subnet for ECS Fargate task placement \u2014 requires internet route for AWS API calls made by the simulated miner using victim credentials",
+      "techniques_served": [],
+      "configuration_notes": "cidrBlock: 10.99.1.0/24. availabilityZone: us-east-1a. mapPublicIpOnLaunch: true. Associate with ambersquid-igw route table (0.0.0.0/0 \u2192 IGW).",
+      "depends_on": [
+        "ambersquid-vpc"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "ambersquid-igw",
+      "pulumi_type": "aws.ec2.InternetGateway",
+      "resource_category": "support",
+      "purpose": "Internet gateway providing outbound AWS API access for ECS tasks",
+      "techniques_served": [],
+      "configuration_notes": "Attach to ambersquid-vpc. Create route table with 0.0.0.0/0 \u2192 ambersquid-igw and associate with ambersquid-public-subnet.",
+      "depends_on": [
+        "ambersquid-vpc"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "ambersquid-task-sg",
+      "pulumi_type": "aws.ec2.SecurityGroup",
+      "resource_category": "support",
+      "purpose": "Security group for ECS tasks \u2014 allows only HTTPS egress for AWS API calls; explicitly blocks all known cryptomining pool ports to prevent T1496 from materializing even if emulation configuration changes",
+      "techniques_served": [],
+      "configuration_notes": "vpcId: ambersquid-vpc. Ingress: none. Egress rules: Allow TCP/443 to 0.0.0.0/0 (AWS API endpoint access). Deny (no rule = implicit deny) all of: TCP 3333, 4444, 5555, 7777, 8888, 9999, 14444, 45560 (common mining pool ports). This allows AWS SDK calls while preventing actual resource hijacking per T1496 operational note.",
+      "depends_on": [
+        "ambersquid-vpc"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "ambersquid-log-group",
+      "pulumi_type": "aws.cloudwatch.LogGroup",
+      "resource_category": "support",
+      "purpose": "CloudWatch log group for ECS container output and emulation event capture",
+      "techniques_served": [],
+      "configuration_notes": "name: /ecs/ambersquid. retentionInDays: 7.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0001
+    }
+  ],
+  "userdata_actions": [],
+  "vulnerable_app": null,
+  "iam_policies": [
+    {
+      "name": "ambersquid-victim-policy",
+      "attached_to": "ambersquid-victim-iam-user",
+      "policy_type": "inline",
+      "rationale": "INTENTIONALLY over-permissioned. AMBERSQUID obtains these credentials via malicious container env vars (T1204.003) then immediately creates AdministratorAccess-equivalent IAM roles (T1136.003) and deploys miners to ECS, SageMaker, CodeBuild, Amplify, CloudFormation, Auto Scaling, ImageBuilder, Glue (T1610/T1578.002 simulated). Indicator removal (T1070) requires cloudtrail:StopLogging and s3:DeleteObject.",
+      "policy_document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "IAMRoleAndCredentialManipulation",
+            "Effect": "Allow",
+            "Action": [
+              "iam:CreateRole",
+              "iam:DeleteRole",
+              "iam:AttachRolePolicy",
+              "iam:DetachRolePolicy",
+              "iam:PutRolePolicy",
+              "iam:DeleteRolePolicy",
+              "iam:PassRole",
+              "iam:CreateUser",
+              "iam:CreateAccessKey",
+              "iam:ListRoles",
+              "iam:ListUsers",
+              "iam:GetRole",
+              "iam:GetUser"
+            ],
+            "Resource": "*"
+          },
+          {
+            "Sid": "MinerDeploymentServices",
+            "Effect": "Allow",
+            "Action": [
+              "ecs:*",
+              "sagemaker:*",
+              "codebuild:*",
+              "amplify:*",
+              "imagebuilder:*",
+              "autoscaling:*",
+              "glue:*",
+              "ec2:DescribeInstances",
+              "ec2:DescribeRegions",
+              "ec2:DescribeSubnets",
+              "ec2:DescribeSecurityGroups",
+              "ec2:DescribeVpcs",
+              "ec2:CreateLaunchTemplate",
+              "ec2:DescribeLaunchTemplates"
+            ],
+            "Resource": "*"
+          },
+          {
+            "Sid": "CodeAndInfraServices",
+            "Effect": "Allow",
+            "Action": [
+              "codecommit:*",
+              "cloudformation:*"
+            ],
+            "Resource": "*"
+          },
+          {
+            "Sid": "ContainerRegistry",
+            "Effect": "Allow",
+            "Action": [
+              "ecr:GetAuthorizationToken",
+              "ecr:BatchGetImage",
+              "ecr:DescribeRepositories",
+              "ecr:ListImages"
+            ],
+            "Resource": "*"
+          },
+          {
+            "Sid": "DiscoveryAndIndicatorRemoval",
+            "Effect": "Allow",
+            "Action": [
+              "logs:*",
+              "cloudtrail:StopLogging",
+              "cloudtrail:DeleteTrail",
+              "cloudtrail:UpdateTrail",
+              "cloudtrail:DescribeTrails",
+              "cloudtrail:GetTrailStatus",
+              "s3:ListAllMyBuckets",
+              "s3:ListBucket",
+              "s3:GetObject",
+              "s3:PutObject",
+              "s3:DeleteObject",
+              "secretsmanager:ListSecrets",
+              "secretsmanager:GetSecretValue"
+            ],
+            "Resource": "*"
+          }
+        ]
+      }
+    }
+  ],
+  "permission_boundaries": [],
+  "resource_dependency_order": [
+    "ambersquid-vpc",
+    "ambersquid-igw",
+    "ambersquid-public-subnet",
+    "ambersquid-task-sg",
+    "ambersquid-log-group",
+    "ambersquid-cloudtrail-bucket",
+    "ambersquid-cloudtrail",
+    "ambersquid-terraform-state-bucket",
+    "ambersquid-canary-secret",
+    "ambersquid-victim-iam-user",
+    "ambersquid-victim-policy",
+    "ambersquid-victim-access-key",
+    "ambersquid-honey-iam-user",
+    "ambersquid-ecs-execution-role",
+    "ambersquid-ecs-cluster",
+    "ambersquid-task-definition",
+    "ambersquid-codecommit-repo"
+  ],
+  "naming_convention": "ambersquid-{resource_name}",
+  "estimated_total_cost_usd_hr": 0.006,
+  "tags": {
+    "MayaTrail": "true",
+    "Purpose": "adversary-emulation",
+    "ThreatActor": "AMBERSQUID",
+    "Platform": "aws"
+  }
+}

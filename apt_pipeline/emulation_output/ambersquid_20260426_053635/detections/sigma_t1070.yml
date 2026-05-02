@@ -1,0 +1,81 @@
+# FILE: sigma_t1070.yml
+title: AMBERSQUID - CloudTrail Logging Disabled and Evidence Cleanup
+id: b8e1c4f9-7a3d-2b6e-c8f1-4a9e7b3c6d2f
+status: experimental
+description: >
+  Detects AMBERSQUID's indicator removal phase: disabling CloudTrail logging
+  (StopLogging), deleting recent log files from the CloudTrail S3 bucket (DeleteObject),
+  and CodeCommit repository deletion as evidence cleanup. StopLogging is the
+  highest-fidelity detection opportunity in the entire AMBERSQUID kill chain:
+  the event fires BEFORE logging is actually disabled, meaning this event will
+  always be visible to defenders even if the attacker succeeds. A CloudWatch alarm
+  on StopLogging fires within seconds, before any subsequent evidence removal.
+  AMBERSQUID also deletes all attacker-created resources (miner-app, miner-notebook,
+  miner-cluster, attacker IAM roles) using CodeCommit-Role and victim_creds sessions.
+references:
+    - https://attack.mitre.org/techniques/T1070/
+    - https://unit42.paloaltonetworks.com/ambersquid/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1070
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_stop_logging:
+        eventSource: cloudtrail.amazonaws.com
+        eventName: StopLogging
+    selection_delete_trail:
+        eventSource: cloudtrail.amazonaws.com
+        eventName: DeleteTrail
+    selection_update_trail_disable:
+        eventSource: cloudtrail.amazonaws.com
+        eventName: UpdateTrail
+        requestParameters.isLogging: 'false'
+    selection_delete_log_objects:
+        eventSource: s3.amazonaws.com
+        eventName: DeleteObject
+        requestParameters.bucketName|contains:
+            - 'cloudtrail'
+            - 'trail-logs'
+            - 'audit-logs'
+    selection_resource_cleanup:
+        eventSource:
+            - amplify.amazonaws.com
+            - codecommit.amazonaws.com
+            - ecs.amazonaws.com
+            - sagemaker.amazonaws.com
+            - codebuild.amazonaws.com
+        eventName:
+            - DeleteApp
+            - DeleteRepository
+            - DeleteCluster
+            - DeleteNotebookInstance
+            - DeleteProject
+        userIdentity.type: AssumedRole
+    filter_console:
+        userAgent|contains:
+            - 'console.aws.amazon.com'
+        eventName: StopLogging
+    filter_legitimate_trail_mgmt:
+        userIdentity.arn|contains:
+            - ':assumed-role/AWSServiceRoleForConfig'
+        eventName: UpdateTrail
+    condition: >
+      (selection_stop_logging or selection_delete_trail or
+       selection_update_trail_disable or selection_delete_log_objects or
+       selection_resource_cleanup)
+      and not filter_console and not filter_legitimate_trail_mgmt
+falsepositives:
+    - Authorized security team disabling a CloudTrail during cost optimization testing
+    - Infrastructure decommissioning workflows deleting S3 log objects before bucket deletion
+    - Authorized resource cleanup scripts after test environment teardown
+level: critical
+# StopLogging fires BEFORE logging stops — this event always captures itself.
+# CloudWatch alarm pre-configured on StopLogging provides < 60 second detection time.
+# DeleteObject on CloudTrail log bucket prefix within 5 minutes of StopLogging
+# is a compound indicator: log deletion follows disable to prevent forensic recovery.
+# AMBERSQUID sequence: StopLogging -> DeleteObject(log files) -> DeleteApp ->
+# DeleteCluster -> DetachRolePolicy -> DeleteRole -> DeleteRepository

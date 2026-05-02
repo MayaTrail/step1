@@ -1,0 +1,37 @@
+// T1580 Cloud Infrastructure Discovery — EC2 Survey with GPU Instance Filter
+// DangerDev: DescribeInstanceTypes filtering p3.*/p4d.*/g4dn.* = cryptomining recon.
+// Alert on burst ≥3 events within 10m; escalate to Critical when GPU filter is present.
+
+let survey_window = 10m;
+
+AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "ec2.amazonaws.com"
+| where EventName in (
+    "DescribeRegions", "DescribeInstances", "DescribeSecurityGroups",
+    "DescribeVpcs", "DescribeInstanceTypes", "DescribeAvailabilityZones"
+  )
+| extend IsGPUQuery = RequestParameters has "p3."
+    or RequestParameters has "p4d."
+    or RequestParameters has "g4dn."
+| summarize
+    SurveyEvents = make_set(EventName),
+    GPUQuerySeen = max(toint(IsGPUQuery)),
+    EventCount   = count(),
+    FirstSeen    = min(TimeGenerated),
+    LastSeen     = max(TimeGenerated),
+    SourceIPs    = make_set(SourceIpAddress),
+    UserAgents   = make_set(UserAgent)
+    by UserIdentityArn, UserIdentityUserName, bin(TimeGenerated, survey_window), AwsRegion
+| where EventCount >= 3
+| extend BreadthScore = array_length(SurveyEvents)
+| extend Severity = case(
+    GPUQuerySeen == 1 and BreadthScore >= 4, "Critical",
+    GPUQuerySeen == 1, "High",
+    BreadthScore >= 5, "High",
+    "Medium"
+  )
+| extend AlertTitle = "EC2 Infrastructure Survey — DangerDev Pre-Mining Recon"
+| project FirstSeen, LastSeen, Severity, AlertTitle, UserIdentityUserName,
+          UserIdentityArn, SurveyEvents, GPUQuerySeen, BreadthScore, SourceIPs, AwsRegion
+| sort by FirstSeen desc
