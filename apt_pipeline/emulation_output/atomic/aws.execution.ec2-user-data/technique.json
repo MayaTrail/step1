@@ -1,0 +1,13 @@
+{
+  "id": "aws.execution.ec2-user-data",
+  "name": "Execute Malicious Code via EC2 User Data",
+  "platform": "aws",
+  "tactic": "execution",
+  "mitre_attack_id": "T1059",
+  "description": "Simulates an attacker stopping an EC2 instance, replacing its user-data script with a malicious shell script (C2 callback), then restarting it — causing the malicious code to execute as root on the next boot.",
+  "has_prerequisites": true,
+  "prerequisites": "EC2 instance (stratus-red-team-user-data-instance) in a running state",
+  "detection_signal": "ec2:ModifyInstanceAttribute with attribute=userData on a stopped instance, especially when followed by ec2:StartInstances",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ec2-user-data/"
+}

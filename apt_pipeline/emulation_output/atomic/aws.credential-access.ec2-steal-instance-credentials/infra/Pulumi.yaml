@@ -1,0 +1,3 @@
+name: ec2-steal-instance-credentials
+runtime: python
+description: Prerequisites for aws.credential-access.ec2-steal-instance-credentials

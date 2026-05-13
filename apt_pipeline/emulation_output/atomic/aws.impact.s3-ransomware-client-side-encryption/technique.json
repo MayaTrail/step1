@@ -1,0 +1,13 @@
+{
+  "id": "aws.impact.s3-ransomware-client-side-encryption",
+  "name": "S3 Ransomware via Client-Side Encryption",
+  "platform": "aws",
+  "tactic": "impact",
+  "mitre_attack_id": "T1486",
+  "description": "Simulates a ransomware attack that downloads each S3 object, encrypts it client-side with a symmetric key, re-uploads as <key>.encrypted, and deletes the original — leaving data inaccessible without the attacker's key.",
+  "has_prerequisites": true,
+  "prerequisites": "S3 bucket with sample objects (stratus-red-team-ransomware-encrypt-*)",
+  "detection_signal": "Pattern of GetObject + PutObject (new key with .encrypted suffix) + DeleteObject for the same object — classic ransomware CloudTrail signature",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.impact.s3-ransomware-client-side-encryption/"
+}

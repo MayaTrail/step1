@@ -1,0 +1,13 @@
+{
+  "id": "aws.persistence.iam-backdoor-role",
+  "name": "Backdoor IAM Role Trust Policy",
+  "platform": "aws",
+  "tactic": "persistence",
+  "mitre_attack_id": "T1098",
+  "description": "Simulates an attacker modifying an existing IAM role's trust policy to add an external account (193672423079) as a trusted principal, enabling them to assume the role from outside the AWS organization.",
+  "has_prerequisites": true,
+  "prerequisites": "IAM role with an existing trust policy (stratus-red-team-backdoor-role-target)",
+  "detection_signal": "iam:UpdateAssumeRolePolicy with an external account principal added to an existing role's trust policy",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-backdoor-role/"
+}

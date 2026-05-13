@@ -1,0 +1,3 @@
+name: iam-backdoor-role
+runtime: python
+description: Prerequisites for aws.persistence.iam-backdoor-role

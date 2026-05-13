@@ -1,0 +1,13 @@
+{
+  "id": "aws.persistence.iam-create-backdoor-role",
+  "name": "Create IAM Backdoor Role with Admin Access",
+  "platform": "aws",
+  "tactic": "persistence",
+  "mitre_attack_id": "T1098",
+  "description": "Simulates an attacker creating a new IAM role trusted by an external account (193672423079) and attaching AdministratorAccess, establishing persistent admin-level access that survives credential rotation.",
+  "has_prerequisites": false,
+  "prerequisites": "None — the attack creates and cleans up its own resources",
+  "detection_signal": "iam:CreateRole with a cross-account trust principal followed by iam:AttachRolePolicy attaching AdministratorAccess or broad managed policies",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-backdoor-role/"
+}

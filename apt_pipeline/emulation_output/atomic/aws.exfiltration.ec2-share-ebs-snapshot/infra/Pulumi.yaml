@@ -1,0 +1,3 @@
+name: ec2-share-ebs-snapshot
+runtime: python
+description: Prerequisites for aws.exfiltration.ec2-share-ebs-snapshot

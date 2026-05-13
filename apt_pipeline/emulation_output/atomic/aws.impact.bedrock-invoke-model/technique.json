@@ -1,0 +1,13 @@
+{
+  "id": "aws.impact.bedrock-invoke-model",
+  "name": "Invoke Bedrock Model for Resource Exhaustion",
+  "platform": "aws",
+  "tactic": "impact",
+  "mitre_attack_id": "T1496",
+  "description": "Simulates an attacker invoking Amazon Bedrock foundation models in a loop to exhaust quota and generate unexpected costs — analogous to cryptomining but targeting LLM inference billing.",
+  "has_prerequisites": false,
+  "prerequisites": "None — requires bedrock:InvokeModel permission and Bedrock model access enabled in the account/region",
+  "detection_signal": "bedrock:InvokeModel called at high volume or from an unexpected principal; sudden spike in Bedrock spend in cost explorer",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.impact.bedrock-invoke-model/"
+}

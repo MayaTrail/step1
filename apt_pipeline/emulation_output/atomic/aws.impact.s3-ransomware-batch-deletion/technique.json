@@ -1,0 +1,13 @@
+{
+  "id": "aws.impact.s3-ransomware-batch-deletion",
+  "name": "S3 Ransomware via Batch Object Deletion",
+  "platform": "aws",
+  "tactic": "impact",
+  "mitre_attack_id": "T1485",
+  "description": "Simulates a ransomware attack that deletes S3 objects in large batches using s3:DeleteObjects, which creates fewer CloudTrail events per object than individual deletion — a common evasion technique.",
+  "has_prerequisites": true,
+  "prerequisites": "S3 bucket with sample objects (stratus-red-team-ransomware-batch-*)",
+  "detection_signal": "s3:DeleteObjects with a large number of objects in a single call, especially without concurrent PUT operations — indicates mass destruction rather than normal churn",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.impact.s3-ransomware-batch-deletion/"
+}

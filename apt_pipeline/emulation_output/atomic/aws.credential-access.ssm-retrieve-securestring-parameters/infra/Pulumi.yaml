@@ -1,0 +1,3 @@
+name: ssm-retrieve-securestring-parameters
+runtime: python
+description: Prerequisites for aws.credential-access.ssm-retrieve-securestring-parameters

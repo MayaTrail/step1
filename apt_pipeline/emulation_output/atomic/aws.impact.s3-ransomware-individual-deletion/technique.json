@@ -1,0 +1,13 @@
+{
+  "id": "aws.impact.s3-ransomware-individual-deletion",
+  "name": "S3 Ransomware via Individual Object Deletion",
+  "platform": "aws",
+  "tactic": "impact",
+  "mitre_attack_id": "T1485",
+  "description": "Simulates a ransomware attack that deletes S3 objects one at a time using s3:DeleteObject — generating a high-volume stream of individual CloudTrail events, each representing a single deleted object.",
+  "has_prerequisites": true,
+  "prerequisites": "S3 bucket with sample objects (stratus-red-team-ransomware-individual-*)",
+  "detection_signal": "High volume of individual s3:DeleteObject events (not DeleteObjects) in rapid succession from a single principal — each appears as a separate CloudTrail event",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.impact.s3-ransomware-individual-deletion/"
+}

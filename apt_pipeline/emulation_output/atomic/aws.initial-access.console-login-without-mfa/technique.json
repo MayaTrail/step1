@@ -1,0 +1,13 @@
+{
+  "id": "aws.initial-access.console-login-without-mfa",
+  "name": "Console Login Without MFA",
+  "platform": "aws",
+  "tactic": "initial-access",
+  "mitre_attack_id": "T1078.004",
+  "description": "Simulates an attacker logging into the AWS console using IAM user credentials without MFA, generating a CloudTrail ConsoleLogin event with MFAUsed=No — a high-signal indicator for accounts that should enforce MFA.",
+  "has_prerequisites": true,
+  "prerequisites": "IAM user with a console login profile and no MFA device configured (stratus-red-team-no-mfa-user)",
+  "detection_signal": "CloudTrail ConsoleLogin event with additionalEventData.MFAUsed=No for users that should have MFA enforced",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.initial-access.console-login-without-mfa/"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "aws.persistence.lambda-overwrite-code",
+  "name": "Overwrite Lambda Function Code",
+  "platform": "aws",
+  "tactic": "persistence",
+  "mitre_attack_id": "T1525",
+  "description": "Simulates an attacker overwriting a Lambda function's code with a malicious payload using lambda:UpdateFunctionCode, replacing legitimate business logic with attacker-controlled code.",
+  "has_prerequisites": true,
+  "prerequisites": "Lambda function with known code (stratus-red-team-overwrite-lambda)",
+  "detection_signal": "lambda:UpdateFunctionCode from an unexpected principal or at an unusual time — especially if the update replaces legitimate code",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.lambda-overwrite-code/"
+}

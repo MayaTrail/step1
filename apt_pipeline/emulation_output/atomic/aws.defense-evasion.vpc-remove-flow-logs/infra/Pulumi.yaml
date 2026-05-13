@@ -1,0 +1,3 @@
+name: vpc-remove-flow-logs
+runtime: python
+description: Prerequisites for aws.defense-evasion.vpc-remove-flow-logs

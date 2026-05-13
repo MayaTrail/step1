@@ -1,0 +1,13 @@
+{
+  "id": "aws.persistence.lambda-backdoor-function",
+  "name": "Backdoor Lambda Function via Resource Policy",
+  "platform": "aws",
+  "tactic": "persistence",
+  "mitre_attack_id": "T1098",
+  "description": "Simulates an attacker adding a resource-based policy to an existing Lambda function, granting an external AWS account (193672423079) the ability to invoke it — establishing a persistent execution backdoor.",
+  "has_prerequisites": true,
+  "prerequisites": "Lambda function (stratus-red-team-backdoor-lambda)",
+  "detection_signal": "lambda:AddPermission granting cross-account or wildcard invoke access to a Lambda function",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.lambda-backdoor-function/"
+}

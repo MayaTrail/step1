@@ -1,0 +1,3 @@
+name: ssm-start-session
+runtime: python
+description: Prerequisites for aws.execution.ssm-start-session

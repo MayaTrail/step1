@@ -1,0 +1,13 @@
+{
+  "id": "aws.persistence.iam-create-admin-user",
+  "name": "Create an IAM User with an Inline Admin Policy",
+  "platform": "aws",
+  "tactic": "persistence",
+  "mitre_attack_id": "T1136.003",
+  "description": "Simulates an attacker creating a backdoor IAM user with AdministratorAccess and generating access keys. No prerequisites required — the attack creates and then cleans up its own resources.",
+  "has_prerequisites": false,
+  "prerequisites": null,
+  "detection_signal": "iam:CreateUser followed immediately by iam:AttachUserPolicy with AdministratorAccess in CloudTrail",
+  "guardduty_finding": "Persistence:IAMUser/UserPermissions",
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-admin-user/"
+}

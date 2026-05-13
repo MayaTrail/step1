@@ -1,0 +1,3 @@
+name: bedrock-invoke-model
+runtime: python
+description: Prerequisites for aws.impact.bedrock-invoke-model

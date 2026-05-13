@@ -1,0 +1,3 @@
+name: sts-federation-token
+runtime: python
+description: Prerequisites for aws.persistence.sts-federation-token

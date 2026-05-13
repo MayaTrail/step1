@@ -1,0 +1,13 @@
+{
+  "id": "aws.lateral-movement.ec2-serial-console-send-ssh-public-key",
+  "name": "Usage of EC2 Serial Console to Push an SSH Public Key",
+  "platform": "aws",
+  "tactic": "lateral-movement",
+  "mitre_attack_id": "T1021.004",
+  "description": "Simulates an attacker pushing their SSH public key to an EC2 instance via the serial console API, which bypasses security groups and network ACLs — providing access even when port 22 is blocked.",
+  "has_prerequisites": true,
+  "prerequisites": "An EC2 instance. Serial console access must be enabled at the account level.",
+  "detection_signal": "CloudTrail ec2-instance-connect:SendSerialConsoleSSHPublicKey — a niche API almost never called in normal operations",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.lateral-movement.ec2-serial-console-send-ssh-public-key/"
+}

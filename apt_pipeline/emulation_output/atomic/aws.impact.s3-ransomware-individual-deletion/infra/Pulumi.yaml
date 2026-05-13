@@ -1,0 +1,3 @@
+name: s3-ransomware-individual-deletion
+runtime: python
+description: Prerequisites for aws.impact.s3-ransomware-individual-deletion

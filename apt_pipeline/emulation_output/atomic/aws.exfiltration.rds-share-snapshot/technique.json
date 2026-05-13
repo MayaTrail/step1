@@ -1,0 +1,13 @@
+{
+  "id": "aws.exfiltration.rds-share-snapshot",
+  "name": "Exfiltrate RDS Snapshot by Sharing",
+  "platform": "aws",
+  "tactic": "exfiltration",
+  "mitre_attack_id": "T1537",
+  "description": "Simulates an attacker sharing an RDS DB snapshot with an external AWS account, granting the attacker the ability to restore the database and access all its data.",
+  "has_prerequisites": true,
+  "prerequisites": "An RDS DB instance and a manual snapshot (created by Pulumi infra). Note: RDS provisioning takes 5-10 minutes.",
+  "detection_signal": "CloudTrail rds:ModifyDBSnapshotAttribute event adding restore permission for an external account ID",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.exfiltration.rds-share-snapshot/"
+}

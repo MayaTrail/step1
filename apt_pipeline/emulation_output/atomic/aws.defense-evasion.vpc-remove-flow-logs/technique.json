@@ -1,0 +1,13 @@
+{
+  "id": "aws.defense-evasion.vpc-remove-flow-logs",
+  "name": "Remove VPC Flow Logs",
+  "platform": "aws",
+  "tactic": "defense-evasion",
+  "mitre_attack_id": "T1562.001",
+  "description": "Simulates an attacker deleting VPC Flow Logs to eliminate network traffic visibility, preventing detection of lateral movement, data exfiltration, and C2 communications over the network.",
+  "has_prerequisites": true,
+  "prerequisites": "VPC with flow logs enabled (stratus-red-team-flow-logs-vpc)",
+  "detection_signal": "ec2:DeleteFlowLogs — removal of network visibility is a strong defense evasion signal",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.vpc-remove-flow-logs/"
+}

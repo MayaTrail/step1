@@ -1,0 +1,13 @@
+{
+  "id": "aws.execution.ec2-launch-unusual-instances",
+  "name": "Launch Unusual EC2 Instance Types for Cryptomining",
+  "platform": "aws",
+  "tactic": "execution",
+  "mitre_attack_id": "T1204.003",
+  "description": "Simulates an attacker launching GPU or compute-optimized EC2 instances (p2.xlarge or similar) associated with cryptocurrency mining, triggering GuardDuty findings and unexpected cost spikes.",
+  "has_prerequisites": false,
+  "prerequisites": "None — the attack creates and immediately terminates its own EC2 instance",
+  "detection_signal": "ec2:RunInstances with unusual instance types (GPU, high-compute) not in baseline; GuardDuty CryptoCurrency:EC2/BitcoinTool.B if mining traffic detected",
+  "guardduty_finding": "CryptoCurrency:EC2/BitcoinTool.B",
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ec2-launch-unusual-instances/"
+}

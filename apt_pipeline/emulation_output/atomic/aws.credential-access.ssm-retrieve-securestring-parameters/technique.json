@@ -1,0 +1,13 @@
+{
+  "id": "aws.credential-access.ssm-retrieve-securestring-parameters",
+  "name": "Retrieve SSM Parameters from the Parameter Store",
+  "platform": "aws",
+  "tactic": "credential-access",
+  "mitre_attack_id": "T1552.007",
+  "description": "Simulates an attacker enumerating and decrypting SSM SecureString parameters. Calls DescribeParameters to enumerate then GetParameters with WithDecryption=true in batches of 10.",
+  "has_prerequisites": true,
+  "prerequisites": "42 SSM SecureString parameters at /credentials/stratus-red-team/{0..41}",
+  "detection_signal": "ssm:GetParameters with withDecryption=true for large number of parameters from single principal",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.ssm-retrieve-securestring-parameters/"
+}

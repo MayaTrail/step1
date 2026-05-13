@@ -1,0 +1,3 @@
+name: ec2-download-user-data
+runtime: python
+description: Prerequisites for aws.discovery.ec2-download-user-data

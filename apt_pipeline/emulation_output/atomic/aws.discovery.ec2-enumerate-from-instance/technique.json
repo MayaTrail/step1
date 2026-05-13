@@ -1,0 +1,13 @@
+{
+  "id": "aws.discovery.ec2-enumerate-from-instance",
+  "name": "Enumerate AWS Environment from EC2 Instance",
+  "platform": "aws",
+  "tactic": "discovery",
+  "mitre_attack_id": "T1580",
+  "description": "Simulates an attacker using SSM to run a series of AWS CLI discovery commands from a compromised EC2 instance, using its attached IAM role to enumerate VPCs, instances, buckets, and IAM users.",
+  "has_prerequisites": true,
+  "prerequisites": "EC2 instance with ReadOnlyAccess IAM role and SSM agent (stratus-red-team-discover-instance)",
+  "detection_signal": "Rapid ec2:Describe*, s3:ListBuckets, iam:ListUsers called from an EC2 instance role — especially if the instance is not a known bastion or operations server",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.discovery.ec2-enumerate-from-instance/"
+}

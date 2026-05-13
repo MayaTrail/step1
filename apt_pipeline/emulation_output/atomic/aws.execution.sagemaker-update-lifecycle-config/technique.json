@@ -1,0 +1,13 @@
+{
+  "id": "aws.execution.sagemaker-update-lifecycle-config",
+  "name": "Malicious Script Execution via SageMaker Lifecycle Config",
+  "platform": "aws",
+  "tactic": "execution",
+  "mitre_attack_id": "T1059",
+  "description": "Simulates an attacker backdooring a SageMaker Notebook Instance lifecycle configuration with a malicious OnStart shell script that downloads and executes a payload on every notebook restart.",
+  "has_prerequisites": true,
+  "prerequisites": "A SageMaker Notebook Instance lifecycle configuration (created by Pulumi infra)",
+  "detection_signal": "CloudTrail sagemaker:UpdateNotebookInstanceLifecycleConfig with a base64-encoded OnStart script from an unexpected principal",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.sagemaker-update-lifecycle-config/"
+}

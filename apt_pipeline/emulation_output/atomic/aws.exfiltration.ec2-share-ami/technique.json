@@ -1,0 +1,13 @@
+{
+  "id": "aws.exfiltration.ec2-share-ami",
+  "name": "Exfiltrate an AMI by Sharing It",
+  "platform": "aws",
+  "tactic": "exfiltration",
+  "mitre_attack_id": "T1537",
+  "description": "Simulates an attacker sharing an EC2 AMI with an external AWS account, enabling the attacker to launch instances from the victim's machine image and access any data baked into it.",
+  "has_prerequisites": true,
+  "prerequisites": "An EC2 AMI owned by the current account",
+  "detection_signal": "CloudTrail ec2:ModifyImageAttribute event adding a launch permission for an external AWS account ID",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.exfiltration.ec2-share-ami/"
+}

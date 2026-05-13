@@ -1,0 +1,3 @@
+name: secretsmanager-retrieve-secrets
+runtime: python
+description: Prerequisites for aws.credential-access.secretsmanager-retrieve-secrets

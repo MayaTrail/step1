@@ -1,0 +1,3 @@
+name: ssm-send-command
+runtime: python
+description: Prerequisites for aws.execution.ssm-send-command

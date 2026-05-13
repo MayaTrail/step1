@@ -1,0 +1,13 @@
+{
+  "id": "aws.discovery.ec2-download-user-data",
+  "name": "Download EC2 Instance User Data",
+  "platform": "aws",
+  "tactic": "discovery",
+  "mitre_attack_id": "T1552.001",
+  "description": "Simulates an attacker enumerating all EC2 instances and downloading their user-data scripts, which often contain secrets, credentials, configuration values, or bootstrap commands that can be leveraged for lateral movement.",
+  "has_prerequisites": false,
+  "prerequisites": "None — reads existing EC2 instances in the account",
+  "detection_signal": "ec2:DescribeInstanceAttribute with Attribute=userData called on multiple instances in rapid succession from a principal without normal operational need",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.discovery.ec2-download-user-data/"
+}

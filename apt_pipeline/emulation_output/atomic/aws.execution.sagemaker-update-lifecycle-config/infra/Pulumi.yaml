@@ -1,0 +1,3 @@
+name: sagemaker-update-lifecycle-config
+runtime: python
+description: Stratus Red Team - aws.execution.sagemaker-update-lifecycle-config

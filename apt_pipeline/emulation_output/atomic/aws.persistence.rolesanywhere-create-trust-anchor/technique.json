@@ -1,0 +1,13 @@
+{
+  "id": "aws.persistence.rolesanywhere-create-trust-anchor",
+  "name": "Create IAM Roles Anywhere Trust Anchor",
+  "platform": "aws",
+  "tactic": "persistence",
+  "mitre_attack_id": "T1550.001",
+  "description": "Simulates an attacker creating an IAM Roles Anywhere trust anchor using a self-signed certificate, enabling external workloads to assume IAM roles using X.509 certificates without long-term AWS credentials.",
+  "has_prerequisites": false,
+  "prerequisites": "None — the attack creates and cleans up its own trust anchor",
+  "detection_signal": "rolesanywhere:CreateTrustAnchor — rare API call almost never made outside initial IAM Roles Anywhere setup; warrants immediate investigation",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.rolesanywhere-create-trust-anchor/"
+}

@@ -1,0 +1,33 @@
+title: CloudTrail Logging Disabled (SCARLETEEL Phase 4)
+id: scarleteel-t1562-008-cloudtrail-stop
+status: stable
+description: |
+  Detects CloudTrail StopLogging event — a critical defense evasion technique used by
+  SCARLETEEL to blind the victim account before data exfiltration and lateral movement.
+  This should NEVER occur in normal operations outside of authorized maintenance windows.
+references:
+  - https://sysdig.com/blog/cloud-breach-scarleteel/
+  - https://attack.mitre.org/techniques/T1562/008/
+author: APT Pipeline (SCARLETEEL emulation)
+date: 2026-03-27
+tags:
+  - attack.defense_evasion
+  - attack.t1562.008
+  - scarleteel
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: cloudtrail.amazonaws.com
+    eventName: StopLogging
+  condition: selection
+falsepositives:
+  - Authorized CloudTrail maintenance (extremely rare — document expected windows)
+  - Terraform destroy of emulation environment
+level: critical
+fields:
+  - eventTime
+  - userIdentity.arn
+  - sourceIPAddress
+  - requestParameters.name

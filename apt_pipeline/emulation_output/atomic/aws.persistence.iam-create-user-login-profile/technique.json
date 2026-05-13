@@ -1,0 +1,13 @@
+{
+  "id": "aws.persistence.iam-create-user-login-profile",
+  "name": "Create IAM User with Console Access",
+  "platform": "aws",
+  "tactic": "persistence",
+  "mitre_attack_id": "T1136.003",
+  "description": "Simulates an attacker creating a new IAM user with a console login profile (password), enabling persistent console access as a new identity that may evade user-based alerting.",
+  "has_prerequisites": false,
+  "prerequisites": "None — the attack creates and cleans up its own resources",
+  "detection_signal": "iam:CreateUser followed by iam:CreateLoginProfile — new console-enabled user created outside normal IAM provisioning pipeline",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-user-login-profile/"
+}

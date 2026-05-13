@@ -1,0 +1,6 @@
+name: scarleteel2
+runtime:
+  name: python
+  options:
+    virtualenv: venv
+description: SCARLETEEL 2.0 APT emulation — vulnerable AWS environment with Pacu recon and SecretsManager pivot

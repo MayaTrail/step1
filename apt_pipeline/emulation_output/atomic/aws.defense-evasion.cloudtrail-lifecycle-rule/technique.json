@@ -1,0 +1,13 @@
+{
+  "id": "aws.defense-evasion.cloudtrail-lifecycle-rule",
+  "name": "Delete CloudTrail Logs via S3 Lifecycle Rule",
+  "platform": "aws",
+  "tactic": "defense-evasion",
+  "mitre_attack_id": "T1562.001",
+  "description": "Simulates an attacker adding a 1-day S3 lifecycle expiration rule on the CloudTrail log bucket, causing all historical and future logs to be automatically deleted within 24 hours.",
+  "has_prerequisites": true,
+  "prerequisites": "CloudTrail trail (stratus-red-team-ct-lifecycle-trail) with associated S3 bucket",
+  "detection_signal": "s3:PutBucketLifecycleConfiguration on a bucket storing CloudTrail logs, especially with short expiration periods",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.cloudtrail-lifecycle-rule/"
+}

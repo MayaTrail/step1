@@ -1,0 +1,13 @@
+{
+  "id": "aws.lateral-movement.ec2-instance-connect",
+  "name": "Usage of EC2 Instance Connect on Multiple Instances",
+  "platform": "aws",
+  "tactic": "lateral-movement",
+  "mitre_attack_id": "T1021.004",
+  "description": "Simulates an attacker pushing their SSH public key to an EC2 instance via EC2 Instance Connect, granting a 60-second SSH window without persisting any key on the instance.",
+  "has_prerequisites": true,
+  "prerequisites": "An EC2 instance with port 22 accessible and EC2 Instance Connect agent installed (standard on Amazon Linux 2)",
+  "detection_signal": "CloudTrail ec2-instance-connect:SendSSHPublicKey from an unexpected principal or source IP address",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.lateral-movement.ec2-instance-connect/"
+}

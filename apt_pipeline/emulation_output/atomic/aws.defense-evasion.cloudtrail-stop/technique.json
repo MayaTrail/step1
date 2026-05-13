@@ -1,0 +1,13 @@
+{
+  "id": "aws.defense-evasion.cloudtrail-stop",
+  "name": "Stop CloudTrail Trail",
+  "platform": "aws",
+  "tactic": "defense-evasion",
+  "mitre_attack_id": "T1562.008",
+  "description": "Simulates an attacker disabling CloudTrail logging by calling StopLogging on a trail. Generates a single high-signal CloudTrail event and a GuardDuty finding.",
+  "has_prerequisites": true,
+  "prerequisites": "CloudTrail trail + S3 bucket with correct bucket policy",
+  "detection_signal": "cloudtrail:StopLogging event from non-CloudTrail service principal",
+  "guardduty_finding": "Stealth:IAMUser/CloudTrailLoggingDisabled",
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.cloudtrail-stop/"
+}

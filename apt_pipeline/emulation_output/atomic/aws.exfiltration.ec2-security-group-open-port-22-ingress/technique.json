@@ -1,0 +1,13 @@
+{
+  "id": "aws.exfiltration.ec2-security-group-open-port-22-ingress",
+  "name": "Open Ingress Port 22 on Security Group",
+  "platform": "aws",
+  "tactic": "exfiltration",
+  "mitre_attack_id": "T1562.007",
+  "description": "Simulates an attacker opening port 22 (SSH) to the world (0.0.0.0/0) on a security group to allow direct access to EC2 instances, bypassing network-layer controls.",
+  "has_prerequisites": true,
+  "prerequisites": "VPC with a security group (stratus-red-team-sg-port22)",
+  "detection_signal": "ec2:AuthorizeSecurityGroupIngress with CidrIp=0.0.0.0/0 or CidrIpv6=::/0 on port 22 — indicates deliberate exposure of SSH access",
+  "guardduty_finding": "UnauthorizedAccess:EC2/SSHBruteForce (if traffic follows)",
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.exfiltration.ec2-security-group-open-port-22-ingress/"
+}

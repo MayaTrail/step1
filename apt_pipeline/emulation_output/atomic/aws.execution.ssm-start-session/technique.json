@@ -1,0 +1,13 @@
+{
+  "id": "aws.execution.ssm-start-session",
+  "name": "Open SSM Sessions to Multiple EC2 Instances",
+  "platform": "aws",
+  "tactic": "execution",
+  "mitre_attack_id": "T1021.004",
+  "description": "Simulates an attacker opening SSM interactive sessions to multiple EC2 instances in rapid succession, using ssm:StartSession as an alternative to SSH that leaves fewer network traces.",
+  "has_prerequisites": true,
+  "prerequisites": "3 EC2 instances with SSM agent and AmazonSSMManagedInstanceCore role (stratus-red-team-ssm-session-*)",
+  "detection_signal": "ssm:StartSession called on multiple instances in rapid succession from unexpected principals — especially combined with ssm:TerminateSession",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ssm-start-session/"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "aws.exfiltration.s3-backdoor-bucket-policy",
+  "name": "Backdoor an S3 Bucket via a Bucket Policy",
+  "platform": "aws",
+  "tactic": "exfiltration",
+  "mitre_attack_id": "T1537",
+  "description": "Simulates an attacker applying a malicious bucket policy that grants an external AWS account read access (s3:GetObject, s3:ListBucket) to an S3 bucket, enabling data exfiltration.",
+  "has_prerequisites": true,
+  "prerequisites": "S3 bucket with sample objects",
+  "detection_signal": "s3:PutBucketPolicy in CloudTrail granting access to an external AWS account principal",
+  "guardduty_finding": "Policy:S3/BucketAnonymousAccessGranted or Policy:S3/BucketBlockPublicAccessDisabled",
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.exfiltration.s3-backdoor-bucket-policy/"
+}

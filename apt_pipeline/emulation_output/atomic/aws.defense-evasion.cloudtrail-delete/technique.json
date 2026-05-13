@@ -1,0 +1,13 @@
+{
+  "id": "aws.defense-evasion.cloudtrail-delete",
+  "name": "Delete CloudTrail Trail",
+  "platform": "aws",
+  "tactic": "defense-evasion",
+  "mitre_attack_id": "T1562.001",
+  "description": "Simulates an attacker permanently deleting a CloudTrail trail to eliminate audit logging for subsequent actions. This is the most destructive CloudTrail evasion technique — the trail cannot be recovered.",
+  "has_prerequisites": true,
+  "prerequisites": "CloudTrail trail (stratus-red-team-ct-delete-trail) with associated S3 bucket",
+  "detection_signal": "cloudtrail:DeleteTrail — extremely high signal, near-certain indicator of malicious intent; should trigger immediate incident response",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.cloudtrail-delete/"
+}

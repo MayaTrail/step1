@@ -1,0 +1,3 @@
+name: rds-share-snapshot
+runtime: python
+description: Stratus Red Team - aws.exfiltration.rds-share-snapshot

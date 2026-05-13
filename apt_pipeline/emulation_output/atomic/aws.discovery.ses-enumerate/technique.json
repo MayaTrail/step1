@@ -1,0 +1,13 @@
+{
+  "id": "aws.discovery.ses-enumerate",
+  "name": "Enumerate SES for Phishing Capability",
+  "platform": "aws",
+  "tactic": "discovery",
+  "mitre_attack_id": "T1087",
+  "description": "Simulates an attacker probing AWS SES to assess phishing capability: checks sending limits, verified identities, and account sending status. Multiple read APIs called in rapid succession reveal the attacker's intent to abuse email infrastructure.",
+  "has_prerequisites": false,
+  "prerequisites": "None — reads existing SES configuration in the account",
+  "detection_signal": "Multiple SES read APIs (ses:GetAccountSendingEnabled, ses:GetSendQuota, ses:ListIdentities, ses:GetIdentityVerificationAttributes) called in rapid succession from unexpected principals",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.discovery.ses-enumerate/"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "aws.persistence.sts-federation-token",
+  "name": "Backdoor IAM User with Federated Token",
+  "platform": "aws",
+  "tactic": "persistence",
+  "mitre_attack_id": "T1550.001",
+  "description": "Simulates an attacker using sts:GetFederationToken to mint long-lived federated credentials (up to 36 hours) with an attacker-controlled inline policy, providing persistent access that survives access key rotation.",
+  "has_prerequisites": false,
+  "prerequisites": "None — requires sts:GetFederationToken permission (available to IAM users, not roles)",
+  "detection_signal": "sts:GetFederationToken called with a permissive inline policy or from an unexpected principal; federated sessions appear in CloudTrail with token source info",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.sts-federation-token/"
+}

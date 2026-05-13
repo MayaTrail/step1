@@ -1,0 +1,3 @@
+name: cloudtrail-delete
+runtime: python
+description: Prerequisites for aws.defense-evasion.cloudtrail-delete

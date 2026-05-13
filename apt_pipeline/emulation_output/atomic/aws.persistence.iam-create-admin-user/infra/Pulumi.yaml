@@ -1,0 +1,3 @@
+name: iam-create-admin-user
+runtime: python
+description: "No prerequisites for aws.persistence.iam-create-admin-user (attack creates its own resources)"

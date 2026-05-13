@@ -1,0 +1,3 @@
+name: dns-delete-logs
+runtime: python
+description: Prerequisites for aws.defense-evasion.dns-delete-logs

@@ -1,0 +1,13 @@
+{
+  "id": "aws.defense-evasion.cloudtrail-event-selectors",
+  "name": "Disable CloudTrail Write Event Logging via Event Selectors",
+  "platform": "aws",
+  "tactic": "defense-evasion",
+  "mitre_attack_id": "T1562.001",
+  "description": "Simulates an attacker using PutEventSelectors to restrict CloudTrail logging to read-only events only, effectively silencing write-event logging — the events most relevant for detecting attacks.",
+  "has_prerequisites": true,
+  "prerequisites": "CloudTrail trail (stratus-red-team-ct-selectors-trail) with associated S3 bucket",
+  "detection_signal": "cloudtrail:PutEventSelectors with IncludeManagementEvents=false or ReadWriteType=ReadOnly — silences write activity from CloudTrail",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.cloudtrail-event-selectors/"
+}

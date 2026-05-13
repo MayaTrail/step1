@@ -1,0 +1,13 @@
+{
+  "id": "aws.defense-evasion.dns-delete-logs",
+  "name": "Delete Route53 Resolver Query Log Config",
+  "platform": "aws",
+  "tactic": "defense-evasion",
+  "mitre_attack_id": "T1562.001",
+  "description": "Simulates an attacker deleting a Route53 Resolver query logging configuration, eliminating DNS query visibility that is essential for detecting C2 communication and data exfiltration over DNS.",
+  "has_prerequisites": true,
+  "prerequisites": "Route53 Resolver query log configuration (stratus-red-team-dns-log-config) attached to a VPC",
+  "detection_signal": "route53resolver:DeleteResolverQueryLogConfig — eliminating DNS visibility is a strong defense evasion indicator",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.dns-delete-logs/"
+}

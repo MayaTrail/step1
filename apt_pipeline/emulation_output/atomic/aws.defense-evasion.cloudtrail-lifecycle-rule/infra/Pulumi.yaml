@@ -1,0 +1,3 @@
+name: cloudtrail-lifecycle-rule
+runtime: python
+description: Prerequisites for aws.defense-evasion.cloudtrail-lifecycle-rule

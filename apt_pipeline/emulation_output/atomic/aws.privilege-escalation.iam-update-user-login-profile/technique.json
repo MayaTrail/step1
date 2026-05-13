@@ -1,0 +1,13 @@
+{
+  "id": "aws.privilege-escalation.iam-update-user-login-profile",
+  "name": "Backdoor IAM User Console Login via UpdateLoginProfile",
+  "platform": "aws",
+  "tactic": "privilege-escalation",
+  "mitre_attack_id": "T1098.001",
+  "description": "Simulates an attacker with iam:UpdateLoginProfile permission changing a legitimate IAM user's console password to one they control, enabling console login as that user. High-signal single API call with no prerequisites beyond the target user existing.",
+  "has_prerequisites": true,
+  "prerequisites": "IAM user with an existing console login profile (stratus-red-team-update-login-profile-user)",
+  "detection_signal": "iam:UpdateLoginProfile in CloudTrail where the caller is not an expected administrator or password-reset automation",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.privilege-escalation.iam-update-user-login-profile/"
+}

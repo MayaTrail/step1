@@ -1,0 +1,13 @@
+{
+  "id": "aws.persistence.iam-backdoor-user",
+  "name": "Backdoor IAM User with Additional Access Key",
+  "platform": "aws",
+  "tactic": "persistence",
+  "mitre_attack_id": "T1098.001",
+  "description": "Simulates an attacker creating a second access key for an existing IAM user, giving them persistent programmatic access even if the original key is rotated. A single iam:CreateAccessKey call is the only CloudTrail evidence.",
+  "has_prerequisites": true,
+  "prerequisites": "IAM user with no existing access keys (stratus-red-team-backdoor-user-target)",
+  "detection_signal": "iam:CreateAccessKey on an existing user where the requesting principal is NOT the user themselves — indicates an external actor creating credentials",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-backdoor-user/"
+}

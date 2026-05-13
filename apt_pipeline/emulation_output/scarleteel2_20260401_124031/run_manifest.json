@@ -1,0 +1,70 @@
+{
+  "run_id": "20260401_124031",
+  "start_time": "2026-04-01T12:40:31.000000+00:00",
+  "phases": {
+    "phase_0b": {
+      "status": "complete",
+      "timestamp": "2026-04-01T12:40:31.000000+00:00",
+      "techniques": 10,
+      "threat_actor": "SCARLETEEL 2.0",
+      "execution_planes": {
+        "control_plane": 7,
+        "data_plane": 1,
+        "host_plane": 2
+      }
+    },
+    "phase_1": {
+      "status": "complete",
+      "timestamp": "2026-04-01T12:40:31.000000+00:00",
+      "resources": 18,
+      "categories": {
+        "support": 6,
+        "attack_surface": 4,
+        "bait": 5,
+        "target": 3
+      }
+    },
+    "phase_2": {
+      "status": "complete",
+      "timestamp": "2026-04-01T12:40:31.000000+00:00",
+      "verdict": "APPROVED",
+      "fallback": false
+    },
+    "phase_3": {
+      "status": "complete",
+      "timestamp": "2026-04-01T12:40:31.000000+00:00",
+      "steps": 6,
+      "credential_pivots": 2
+    },
+    "phase_4": {
+      "status": "complete",
+      "timestamp": "2026-04-01T12:40:31.000000+00:00",
+      "verdict": "APPROVED",
+      "fidelity_score": 0.95
+    },
+    "phase_5": {
+      "status": "complete",
+      "timestamp": "2026-04-01T12:40:31.000000+00:00",
+      "pulumi_files": 2,
+      "attack_files": 1,
+      "validation_errors": 0,
+      "technique_coverage_pct": 100.0
+    },
+    "phase_6": {
+      "status": "complete",
+      "timestamp": "2026-04-01T12:40:31.000000+00:00",
+      "sigma": 4,
+      "kql": 4,
+      "playbooks": 1,
+      "guardrails": 0
+    },
+    "pipeline": {
+      "status": "complete",
+      "timestamp": "2026-04-01T12:40:31.000000+00:00",
+      "mode": "full-apt",
+      "input": "SCARLETEEL 2.0 adversary emulation (expanded campaign with Pacu recon, AdminJoe bypass, SecretsManager harvest)",
+      "end_time": "2026-04-01T12:47:38.000000+00:00"
+    }
+  },
+  "last_updated": "2026-04-01T12:47:38.000000+00:00"
+}

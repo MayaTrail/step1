@@ -1,0 +1,13 @@
+{
+  "id": "aws.credential-access.secretsmanager-retrieve-secrets",
+  "name": "Retrieve a High Number of Secrets Manager Secrets",
+  "platform": "aws",
+  "tactic": "credential-access",
+  "mitre_attack_id": "T1555",
+  "description": "Simulates an attacker retrieving a high number of Secrets Manager secrets by first enumerating them via ListSecrets then calling GetSecretValue on each. Generates high-volume GetSecretValue CloudTrail events from a single principal.",
+  "has_prerequisites": true,
+  "prerequisites": "20 Secrets Manager secrets tagged StratusRedTeam=true",
+  "detection_signal": "High volume of secretsmanager:GetSecretValue from single principal in short window",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.secretsmanager-retrieve-secrets/"
+}

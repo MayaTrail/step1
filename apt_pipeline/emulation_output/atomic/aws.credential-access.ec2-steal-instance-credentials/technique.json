@@ -1,0 +1,13 @@
+{
+  "id": "aws.credential-access.ec2-steal-instance-credentials",
+  "name": "Steal EC2 Instance Credentials via IMDS",
+  "platform": "aws",
+  "tactic": "credential-access",
+  "mitre_attack_id": "T1552.005",
+  "description": "Simulates an attacker using SSM to execute a curl command against the EC2 Instance Metadata Service (IMDS) to steal the attached IAM role's temporary credentials, then uses those credentials to prove access via STS and EC2 APIs.",
+  "has_prerequisites": true,
+  "prerequisites": "EC2 instance with an attached IAM role and SSM agent (stratus-red-team-steal-creds-instance)",
+  "detection_signal": "ssm:SendCommand executing IMDS queries; sts:GetCallerIdentity or ec2:DescribeInstances called with instance-profile credentials from an IP not associated with the instance",
+  "guardduty_finding": "UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration",
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.ec2-steal-instance-credentials/"
+}

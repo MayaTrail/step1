@@ -1,0 +1,13 @@
+{
+  "id": "aws.persistence.lambda-layer-extension",
+  "name": "Persist via Lambda Layer",
+  "platform": "aws",
+  "tactic": "persistence",
+  "mitre_attack_id": "T1525",
+  "description": "Simulates an attacker publishing a malicious Lambda layer and attaching it to a legitimate function, injecting code that executes alongside every function invocation without modifying the function's own code.",
+  "has_prerequisites": true,
+  "prerequisites": "Lambda function (stratus-red-team-layer-lambda)",
+  "detection_signal": "lambda:PublishLayerVersion followed by lambda:UpdateFunctionConfiguration adding an unexpected layer — especially a newly created layer from an unknown principal",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.lambda-layer-extension/"
+}

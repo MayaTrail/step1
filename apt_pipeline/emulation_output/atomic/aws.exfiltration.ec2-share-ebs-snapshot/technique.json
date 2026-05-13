@@ -1,0 +1,13 @@
+{
+  "id": "aws.exfiltration.ec2-share-ebs-snapshot",
+  "name": "Exfiltrate an AMI by Sharing It",
+  "platform": "aws",
+  "tactic": "exfiltration",
+  "mitre_attack_id": "T1537",
+  "description": "Simulates an attacker sharing an EBS snapshot with an external AWS account to exfiltrate data. The snapshot can then be mounted in the attacker's account to access its contents.",
+  "has_prerequisites": true,
+  "prerequisites": "EBS volume (1 GB) and a snapshot of it",
+  "detection_signal": "ec2:ModifySnapshotAttribute in CloudTrail with createVolumePermission action adding an external account",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.exfiltration.ec2-share-ebs-snapshot/"
+}

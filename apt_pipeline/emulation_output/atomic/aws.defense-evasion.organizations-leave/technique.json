@@ -1,0 +1,13 @@
+{
+  "id": "aws.defense-evasion.organizations-leave",
+  "name": "Attempt to Leave AWS Organization",
+  "platform": "aws",
+  "tactic": "defense-evasion",
+  "mitre_attack_id": "T1562",
+  "description": "Simulates an attacker attempting to remove the current AWS account from its Organization, which would disable SCPs, Config aggregation, and CloudTrail org trails. The call is expected to fail (AccessDenied or NotInOrganization), but the CloudTrail event is the detection signal.",
+  "has_prerequisites": false,
+  "prerequisites": "None — expected to fail with AccessDenied or AWSOrganizationsNotInUseException",
+  "detection_signal": "organizations:LeaveOrganization in CloudTrail — extremely rare outside legitimate org management; any occurrence warrants investigation",
+  "guardduty_finding": null,
+  "stratus_source": "https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.organizations-leave/"
+}

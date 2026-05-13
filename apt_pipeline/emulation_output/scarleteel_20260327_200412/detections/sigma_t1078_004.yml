@@ -1,0 +1,50 @@
+title: IAM Write Operations from EC2 Instance Role (SCARLETEEL Phase 2)
+id: scarleteel-t1078-004-iam-write-from-ec2
+status: stable
+description: |
+  Detects IAM write API calls (CreateUser, CreateAccessKey, AttachUserPolicy) made by an
+  EC2 instance role principal (UserIdentity containing ':i-'). After SCARLETEEL steals
+  EC2 instance credentials via IMDSv1, it immediately attempts privilege escalation by
+  creating a backdoor IAM user or additional access keys. EC2 compute roles should NEVER
+  perform IAM write operations — this is unconditional evidence of post-exploitation activity.
+  Note: even AccessDenied errors are significant — they confirm the attacker tried and the
+  IAM policy blocked them.
+references:
+  - https://sysdig.com/blog/cloud-breach-scarleteel/
+  - https://attack.mitre.org/techniques/T1078/004/
+author: APT Pipeline (SCARLETEEL emulation)
+date: 2026-03-27
+tags:
+  - attack.privilege_escalation
+  - attack.defense_evasion
+  - attack.t1078.004
+  - attack.t1098
+  - scarleteel
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  iam_write:
+    eventSource: iam.amazonaws.com
+    eventName:
+      - CreateUser
+      - CreateAccessKey
+      - AttachUserPolicy
+      - AttachRolePolicy
+      - PutUserPolicy
+      - PutRolePolicy
+      - CreateLoginProfile
+  ec2_principal:
+    userIdentity.principalId|contains: ':i-'
+  condition: iam_write and ec2_principal
+falsepositives:
+  - Intentional over-privilege for management/bastion EC2 hosts (document known instances and roles)
+level: high
+fields:
+  - eventTime
+  - userIdentity.arn
+  - userIdentity.principalId
+  - sourceIPAddress
+  - eventName
+  - requestParameters
+  - errorCode

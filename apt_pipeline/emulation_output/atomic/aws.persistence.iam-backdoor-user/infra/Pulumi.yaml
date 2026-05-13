@@ -1,0 +1,3 @@
+name: iam-backdoor-user
+runtime: python
+description: Prerequisites for aws.persistence.iam-backdoor-user

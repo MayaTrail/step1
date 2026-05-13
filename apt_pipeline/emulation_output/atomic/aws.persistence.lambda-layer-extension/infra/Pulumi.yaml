@@ -1,0 +1,3 @@
+name: lambda-layer-extension
+runtime: python
+description: Prerequisites for aws.persistence.lambda-layer-extension
