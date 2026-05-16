@@ -1,9 +1,0 @@
-{
-  "status": "APPROVED",
-  "verdict": "APPROVED",
-  "timestamp": "2026-03-27T20:04:12.000000+00:00",
-  "approved_by": "human_reviewer",
-  "fidelity_score": 0.91,
-  "notes": "High-fidelity SCARLETEEL emulation. All 6 attack phases implemented. IMDSv1 credential theft, S3/Lambda enumeration, CloudTrail StopLogging, and lateral movement via terraform state all confirmed functional.",
-  "attack_plan_ref": "attack_plan.json"
-}
