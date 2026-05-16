@@ -1,0 +1,40 @@
+title: LUCR-3 SAML Federation Pivot - AssumeRoleWithSAML from Anomalous IP
+id: b7e4d2a1-3c9f-4e8b-a6d0-2f7c5e1b4a8d
+status: experimental
+description: >
+  Detects sts:AssumeRoleWithSAML calls from IP addresses that do not match
+  known corporate egress ranges. LUCR-3 bridges an Okta IDP compromise into
+  AWS by exchanging a SAML assertion for temporary STS credentials, then using
+  those credentials for discovery, persistence, and exfiltration.
+references:
+    - https://attack.mitre.org/techniques/T1078/004/
+    - https://permiso.io/blog/s/unmasking-guivil-new-cloud-threat-actor/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.initial_access
+    - attack.defense_evasion
+    - attack.t1078.004
+    - lucr3
+    - scattered_spider
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: 'AssumeRoleWithSAML'
+        eventSource: 'sts.amazonaws.com'
+    filter_expected_cidr:
+        sourceIPAddress|cidr:
+            - '10.0.0.0/8'
+            - '172.16.0.0/12'
+            - '192.168.0.0/16'
+    filter_automation:
+        userAgent|contains:
+            - 'aws-sdk'
+            - 'Terraform'
+    condition: selection and not (filter_expected_cidr or filter_automation)
+falsepositives:
+    - Legitimate federated users connecting via VPN from non-RFC1918 addresses
+    - Contractor or partner access via SAML from known external IPs
+level: high

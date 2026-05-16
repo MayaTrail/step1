@@ -1,0 +1,31 @@
+title: LUCR-3 MFA Fatigue - Repeated MFA Challenge Events in Short Window
+id: c9a5e3b2-7d1f-4c8a-b5e9-3a8f2c6d1e4b
+status: experimental
+description: >
+  Detects repeated user.authentication.auth_via_mfa events for a single user
+  within a short time window, indicating MFA push-fatigue or SMS-flood attacks.
+  LUCR-3 (Scattered Spider) is well-documented for triggering repeated MFA
+  notifications to fatigue victims into approving a fraudulent session.
+references:
+    - https://attack.mitre.org/techniques/T1621/
+    - https://www.cisa.gov/sites/default/files/2023-11/aa23-320a_scattered_spider.pdf
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.credential_access
+    - attack.t1621
+    - lucr3
+    - scattered_spider
+    - mfa_fatigue
+logsource:
+    product: okta
+    service: okta
+detection:
+    selection:
+        eventType: 'user.authentication.auth_via_mfa'
+    timeframe: 5m
+    condition: selection | count() by actor.alternateId > 3
+falsepositives:
+    - User mis-tapping or retrying a failed MFA prompt
+    - Automated test harnesses running against Okta sandbox tenants
+level: high

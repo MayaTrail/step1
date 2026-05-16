@@ -1,0 +1,292 @@
+{
+  "techniques": [
+    {
+      "mitre_id": "T1078.004",
+      "name": "Valid Accounts: Cloud Accounts",
+      "tactic": "Initial Access",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Use compromised long-term IAM access key pair to authenticate to AWS APIs.",
+      "api_calls": [
+        "sts:GetCallerIdentity",
+        "s3:ListBuckets",
+        "s3:ListObjectsV2"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "GetCallerIdentity",
+          "eventSource": "sts.amazonaws.com"
+        },
+        {
+          "eventName": "ListBuckets",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "ListObjects",
+          "eventSource": "s3.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration",
+        "GuardDuty: Discovery:S3/MaliciousIPCaller"
+      ],
+      "phase_in_chain": 1,
+      "dependencies": [],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "Exposed IAM access key ID and secret"
+        ],
+        "target": [
+          "AWS account with S3 read/write permissions"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Rotate or deactivate IAM access key used"
+      ],
+      "opsec_notes": "Long-term IAM keys leave persistent CloudTrail entries tied to AccessKeyId; no MFA required for API calls."
+    },
+    {
+      "mitre_id": "T1530",
+      "name": "Data from Cloud Storage",
+      "tactic": "Collection",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Enumerate and read S3 bucket objects to identify high-value data for encryption targeting.",
+      "api_calls": [
+        "s3:ListBuckets",
+        "s3:ListObjectsV2",
+        "s3:GetObject",
+        "s3:HeadObject"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "ListObjects",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "GetObject",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "HeadObject",
+          "eventSource": "s3.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM",
+        "VPC Flow Logs"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: Discovery:S3/MaliciousIPCaller",
+        "GuardDuty: Exfiltration:S3/MaliciousIPCaller"
+      ],
+      "phase_in_chain": 2,
+      "dependencies": [
+        "T1078.004"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "S3 buckets readable by compromised IAM key"
+        ],
+        "target": [
+          "S3 objects containing business-critical data"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [],
+      "opsec_notes": "High-volume GetObject calls from unusual IP will trigger GuardDuty anomaly detection."
+    },
+    {
+      "mitre_id": "T1486",
+      "name": "Data Encrypted for Impact",
+      "tactic": "Impact",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "simulated",
+      "description": "Re-upload S3 objects encrypted with attacker-held SSE-C AES-256 key; AWS stores only HMAC of key.",
+      "api_calls": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "PutObject",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "DeleteObject",
+          "eventSource": "s3.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty: Impact:S3/MaliciousIPCaller",
+        "AWS Security Hub: S3.5 (SSE-C usage anomaly)"
+      ],
+      "phase_in_chain": 3,
+      "dependencies": [
+        "T1530"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "S3 buckets with s3:PutObject and s3:DeleteObject permissions"
+        ],
+        "target": [
+          "All objects in targeted S3 buckets"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Delete synthetic test objects encrypted with SSE-C key"
+      ],
+      "opsec_notes": "CloudTrail logs only HMAC of SSE-C key; data is irrecoverable without attacker key. Simulate on isolated test bucket only."
+    },
+    {
+      "mitre_id": "T1485",
+      "name": "Data Destruction",
+      "tactic": "Impact",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "simulated",
+      "description": "Configure S3 lifecycle policy to delete all bucket objects in 7 days to coerce ransom payment.",
+      "api_calls": [
+        "s3:PutBucketLifecycleConfiguration",
+        "s3:GetBucketLifecycleConfiguration",
+        "s3:PutObject"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "PutBucketLifecycleConfiguration",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "PutObject",
+          "eventSource": "s3.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM",
+        "AWS Config"
+      ],
+      "expected_alert_findings": [
+        "AWS Config: s3-bucket-lifecycle-policy-change",
+        "GuardDuty: Impact:S3/MaliciousIPCaller"
+      ],
+      "phase_in_chain": 4,
+      "dependencies": [
+        "T1486"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "S3 bucket with s3:PutBucketLifecycleConfiguration permission"
+        ],
+        "target": [
+          "All S3 buckets containing encrypted objects"
+        ],
+        "bait": [
+          "Ransom note object uploaded to each affected prefix"
+        ]
+      },
+      "cleanup_actions": [
+        "Remove lifecycle policy immediately after testing",
+        "Delete ransom note objects from test bucket"
+      ],
+      "opsec_notes": "Lifecycle deletion is irreversible after TTL expires; simulate with 1-day TTL on isolated test bucket only."
+    },
+    {
+      "mitre_id": "T1490",
+      "name": "Inhibit System Recovery",
+      "tactic": "Impact",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Disable S3 versioning and delete existing object versions to prevent recovery without attacker key.",
+      "api_calls": [
+        "s3:PutBucketVersioning",
+        "s3:DeleteObjectVersion",
+        "s3:GetBucketVersioning",
+        "s3:ListObjectVersions"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "PutBucketVersioning",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "DeleteObjectVersion",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "ListObjectVersions",
+          "eventSource": "s3.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM",
+        "AWS Config"
+      ],
+      "expected_alert_findings": [
+        "AWS Config: s3-bucket-versioning-enabled (drift alert)",
+        "GuardDuty: Impact:S3/MaliciousIPCaller"
+      ],
+      "phase_in_chain": 5,
+      "dependencies": [
+        "T1486",
+        "T1485"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "S3 bucket with s3:PutBucketVersioning and s3:DeleteObjectVersion permissions"
+        ],
+        "target": [
+          "Versioned S3 buckets with unencrypted prior versions"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Re-enable versioning on test bucket",
+        "Restore synthetic object versions deleted during test"
+      ],
+      "opsec_notes": "Without MFA delete enforcement, versioning can be disabled silently; prior versions are the only recovery path."
+    }
+  ]
+}

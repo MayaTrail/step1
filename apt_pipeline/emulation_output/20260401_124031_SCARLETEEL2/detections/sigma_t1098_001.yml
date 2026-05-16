@@ -1,0 +1,48 @@
+title: IAM Naming-Convention Bypass — AdminJoe CreateAccessKey (SCARLETEEL 2.0)
+id: scarleteel2-t1098-001-adminjoe-bypass
+status: experimental
+description: |
+  Detects the SCARLETEEL 2.0 naming-convention bypass technique: iam:CreateAccessKey
+  attempts on usernames that start with a capital letter followed by 'admin' (case-insensitive).
+  The victim's IAM permission boundary uses StringLike 'admin*' (case-sensitive) to deny
+  CreateAccessKey, but 'AdminJoe' (capital A) bypasses this condition because StringLike
+  is case-sensitive by default in IAM policies.
+  Detection: CreateAccessKey on usernames matching regex ^[A-Z][a-z]*(admin|Admin)
+  or specifically 'AdminJoe' — these attempts indicate the attacker is probing IAM policy
+  naming-convention weaknesses.
+references:
+  - https://sysdig.com/blog/scarleteel-2-0/
+  - https://attack.mitre.org/techniques/T1098/001/
+author: APT Pipeline (SCARLETEEL 2.0 emulation)
+date: 2026-04-01
+tags:
+  - attack.persistence
+  - attack.t1098.001
+  - scarleteel2
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: iam.amazonaws.com
+    eventName: CreateAccessKey
+  bypass_pattern:
+    # Cases: exact AdminJoe, or any username starting with capital letter where lowercase fails
+    requestParameters.userName|re: '^[A-Z][A-Za-z]*[Aa]dmin[A-Za-z]*$'
+  lowercase_denied:
+    # Pair: lowercase attempt (AccessDenied) followed by capital attempt
+    eventName: CreateAccessKey
+    errorCode: AccessDenied
+    requestParameters.userName|re: '^[a-z].*admin.*'
+  condition: selection and (bypass_pattern or lowercase_denied)
+falsepositives:
+  - Legitimate CreateAccessKey for users whose names happen to match the pattern
+  - Admin user key rotation (document expected usernames and principals)
+level: medium
+fields:
+  - eventTime
+  - userIdentity.arn
+  - sourceIPAddress
+  - eventName
+  - requestParameters.userName
+  - errorCode

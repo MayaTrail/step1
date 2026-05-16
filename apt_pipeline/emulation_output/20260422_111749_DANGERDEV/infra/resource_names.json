@@ -1,0 +1,25 @@
+{
+  "campaign": "DangerDev",
+  "csp": "aws",
+  "resources": {},
+  "pulumi_export_keys": {
+    "log_bucket_name":         "log_bucket_name",
+    "vpc_id":                  "vpc_id",
+    "ec2_instance_id":         "ec2_instance_id",
+    "ec2_public_ip":           "ec2_public_ip",
+    "guardduty_detector_id":   "guardduty_detector_id",
+    "cloudtrail_arn":          "cloudtrail_arn",
+    "sensitive_bucket_name":   "sensitive_bucket_name",
+    "leaked_creds_bucket_name":"leaked_creds_bucket_name",
+    "admin_user_name":         "admin_user_name",
+    "admin_access_key_id":     "admin_access_key_id",
+    "backdoor_role_1_arn":     "backdoor_role_1_arn",
+    "backdoor_role_2_arn":     "backdoor_role_2_arn",
+    "honey_alert_topic_arn":   "honey_alert_topic_arn",
+    "honey_access_key_id":     "honey_access_key_id",
+    "admin_access_key_secret": "admin_access_key_secret",
+    "alice_access_key_id":     "alice_access_key_id",
+    "alice_access_key_secret": "alice_access_key_secret",
+    "lab_private_key_pem":     "lab_private_key_pem"
+  }
+}

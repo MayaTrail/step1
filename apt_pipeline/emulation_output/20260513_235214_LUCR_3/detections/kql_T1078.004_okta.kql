@@ -1,0 +1,26 @@
+// T1078.004 - Valid Accounts: Cloud Accounts (Okta IDP)
+// Detects Okta session starts from non-RFC1918 IPs - LUCR-3 initial access vector
+// Log source: Okta System Log ingested to Sentinel as Okta_CL (Okta Data Connector)
+Okta_CL
+| where eventType_s == "user.session.start"
+| where outcome_result_s == "SUCCESS"
+| where isnotempty(client_ipAddress_s)
+| where not(ipv4_is_private(client_ipAddress_s))
+| extend
+    Actor       = actor_alternateId_s,
+    ActorName   = actor_displayName_s,
+    SourceIP    = client_ipAddress_s,
+    UserAgent   = client_userAgent_rawUserAgent_s,
+    Country     = client_geographicalContext_country_s,
+    City        = client_geographicalContext_city_s,
+    SessionId   = authenticationContext_externalSessionId_s
+| project
+    TimeGenerated,
+    Actor,
+    ActorName,
+    SourceIP,
+    Country,
+    City,
+    UserAgent,
+    SessionId
+| sort by TimeGenerated desc

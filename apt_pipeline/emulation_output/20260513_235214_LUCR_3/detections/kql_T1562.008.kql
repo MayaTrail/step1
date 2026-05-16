@@ -1,0 +1,21 @@
+// T1562.008 - Impair Defenses: Disable or Modify Cloud Logs (CloudTrail)
+// Detects StopLogging - the last CloudTrail event before the LUCR-3 forensic gap
+// Log source: AWSCloudTrail table in Microsoft Sentinel
+// IMPORTANT: correlate with subsequent silence in AWSCloudTrail from the same account
+AWSCloudTrail
+| where EventName == "StopLogging"
+| where EventSource == "cloudtrail.amazonaws.com"
+| where not(UserIdentityArn has_any (":role/TerraformRole", ":role/InfraDestroyRole"))
+| extend
+    Actor       = UserIdentityArn,
+    TrailArn    = tostring(parse_json(RequestParameters).name),
+    Region      = AWSRegion
+| project
+    TimeGenerated,
+    Actor,
+    TrailArn,
+    SourceIpAddress,
+    UserAgent,
+    Region,
+    ErrorCode
+| sort by TimeGenerated desc

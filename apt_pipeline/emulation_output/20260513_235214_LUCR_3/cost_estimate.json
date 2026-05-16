@@ -1,0 +1,181 @@
+{
+  "region": "us-east-1",
+  "platform": "multi_cloud",
+  "standing_cost": {
+    "hourly_usd": 0.05873,
+    "daily_usd": 1.4095,
+    "monthly_usd": 42.29,
+    "breakdown": [
+      {
+        "resource": "lucr3-okta-victim-user",
+        "type": "okta.user.User",
+        "detail": "okta.user.User (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "lucr3-okta-mfa-sms-policy",
+        "type": "okta.policy.MfaDefault",
+        "detail": "okta.policy.MfaDefault (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "lucr3-okta-attacker-device",
+        "type": "okta.TrustedOrigin",
+        "detail": "okta.TrustedOrigin (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "lucr3-azuread-saml-app",
+        "type": "azuread.Application",
+        "detail": "azuread.Application (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "lucr3-aws-saml-idp",
+        "type": "aws.iam.SamlProvider",
+        "detail": "aws.iam.SamlProvider (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "lucr3-privileged-federated-role",
+        "type": "aws.iam.Role",
+        "detail": "aws.iam.Role",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "lucr3-attacker-iam-user",
+        "type": "aws.iam.User",
+        "detail": "aws.iam.User",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "lucr3-cloudtrail",
+        "type": "aws.cloudtrail.Trail",
+        "detail": "CloudTrail trail",
+        "hourly_usd": 0.0014
+      },
+      {
+        "resource": "lucr3-guardduty-detector",
+        "type": "aws.guardduty.Detector",
+        "detail": "GuardDuty detector",
+        "hourly_usd": 0.005
+      },
+      {
+        "resource": "lucr3-s3-corporate-data",
+        "type": "aws.s3.Bucket",
+        "detail": "S3 bucket",
+        "hourly_usd": 3e-05
+      },
+      {
+        "resource": "lucr3-s3-engineering-artifacts",
+        "type": "aws.s3.Bucket",
+        "detail": "S3 bucket",
+        "hourly_usd": 3e-05
+      },
+      {
+        "resource": "lucr3-secrets-prod-db",
+        "type": "aws.secretsmanager.Secret",
+        "detail": "Secrets Manager secret",
+        "hourly_usd": 0.00056
+      },
+      {
+        "resource": "lucr3-secrets-stripe-api",
+        "type": "aws.secretsmanager.Secret",
+        "detail": "Secrets Manager secret",
+        "hourly_usd": 0.00056
+      },
+      {
+        "resource": "lucr3-dynamodb-customer-records",
+        "type": "aws.dynamodb.Table",
+        "detail": "aws.dynamodb.Table (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "lucr3-ec2-target",
+        "type": "aws.ec2.Instance",
+        "detail": "EC2 t3.micro. Linux on-demand",
+        "hourly_usd": 0.05
+      },
+      {
+        "resource": "lucr3-github-target-repo",
+        "type": "github.Repository",
+        "detail": "github.Repository (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "lucr3-m365-sharepoint-site",
+        "type": "manual_setup",
+        "detail": "manual_setup (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "lucr3-bait-terraform-state",
+        "type": "aws.s3.BucketObject",
+        "detail": "aws.s3.BucketObject (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "lucr3-bait-honey-iam-user",
+        "type": "aws.iam.User",
+        "detail": "aws.iam.User",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "lucr3-bait-honey-credentials",
+        "type": "aws.secretsmanager.Secret",
+        "detail": "Secrets Manager secret",
+        "hourly_usd": 0.00056
+      },
+      {
+        "resource": "lucr3-bait-github-pat-secret",
+        "type": "aws.secretsmanager.Secret",
+        "detail": "Secrets Manager secret",
+        "hourly_usd": 0.00056
+      },
+      {
+        "resource": "lucr3-vpc",
+        "type": "aws.ec2.Vpc",
+        "detail": "aws.ec2.Vpc",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "lucr3-subnet-pub",
+        "type": "aws.ec2.Subnet",
+        "detail": "aws.ec2.Subnet",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "lucr3-sg-ec2",
+        "type": "aws.ec2.SecurityGroup",
+        "detail": "aws.ec2.SecurityGroup",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "lucr3-log-bucket",
+        "type": "aws.s3.Bucket",
+        "detail": "S3 bucket",
+        "hourly_usd": 3e-05
+      },
+      {
+        "resource": "lucr3-instance-profile",
+        "type": "aws.iam.InstanceProfile",
+        "detail": "aws.iam.InstanceProfile",
+        "hourly_usd": 0.0
+      }
+    ]
+  },
+  "per_run_cost": {
+    "estimated_usd": 0.0,
+    "detail": "No transient resources defined in attack plan",
+    "breakdown": []
+  },
+  "cost_drivers": [
+    "CloudTrail trail ($0.0014/hr)",
+    "GuardDuty detector ($0.0050/hr)",
+    "S3 bucket ($0.0000/hr)",
+    "Secrets Manager secret ($0.0006/hr)",
+    "EC2 t3.micro. Linux ($0.0500/hr)"
+  ],
+  "warnings": [],
+  "summary_table": "+---------------------------------------------------------------------+\n|                 COST ESTIMATE -- Lucr3 (us-east-1)                  |\n+------------------------------------------+---------+---------+---------+\n| Resource                                 |    $/hr |   $/day |    $/mo |\n+------------------------------------------+---------+---------+---------+\n| okta.user.User (unrecognised \u2014 no price  | 0.000000 |  0.0000 |    0.00 |\n| okta.policy.MfaDefault (unrecognised \u2014 n | 0.000000 |  0.0000 |    0.00 |\n| okta.TrustedOrigin (unrecognised \u2014 no pr | 0.000000 |  0.0000 |    0.00 |\n| azuread.Application (unrecognised \u2014 no p | 0.000000 |  0.0000 |    0.00 |\n| aws.iam.SamlProvider (unrecognised \u2014 no  | 0.000000 |  0.0000 |    0.00 |\n| aws.iam.Role                             | 0.000000 |  0.0000 |    0.00 |\n| aws.iam.User                             | 0.000000 |  0.0000 |    0.00 |\n| CloudTrail trail                         |  0.0014 |   0.034 |    1.01 |\n| GuardDuty detector                       |  0.0050 |   0.120 |    3.60 |\n| S3 bucket                                | 0.000030 |  0.0007 |    0.02 |\n| S3 bucket                                | 0.000030 |  0.0007 |    0.02 |\n| Secrets Manager secret                   | 0.000560 |   0.013 |    0.40 |\n| Secrets Manager secret                   | 0.000560 |   0.013 |    0.40 |\n| aws.dynamodb.Table (unrecognised \u2014 no pr | 0.000000 |  0.0000 |    0.00 |\n| EC2 t3.micro. Linux on-demand            |  0.0500 |   1.200 |   36.00 |\n| github.Repository (unrecognised \u2014 no pri | 0.000000 |  0.0000 |    0.00 |\n| manual_setup (unrecognised \u2014 no price da | 0.000000 |  0.0000 |    0.00 |\n| aws.s3.BucketObject (unrecognised \u2014 no p | 0.000000 |  0.0000 |    0.00 |\n| aws.iam.User                             | 0.000000 |  0.0000 |    0.00 |\n| Secrets Manager secret                   | 0.000560 |   0.013 |    0.40 |\n| Secrets Manager secret                   | 0.000560 |   0.013 |    0.40 |\n| aws.ec2.Vpc                              | 0.000000 |  0.0000 |    0.00 |\n| aws.ec2.Subnet                           | 0.000000 |  0.0000 |    0.00 |\n| aws.ec2.SecurityGroup                    | 0.000000 |  0.0000 |    0.00 |\n| S3 bucket                                | 0.000030 |  0.0007 |    0.02 |\n| aws.iam.InstanceProfile                  | 0.000000 |  0.0000 |    0.00 |\n+------------------------------------------+---------+---------+---------+\n| TOTAL (standing infra)                   |  0.0587 |   1.409 |   42.29 |\n+------------------------------------------+---------+---------+---------+\n| Per attack run (no transient resources defined)                     |\n+---------------------------------------------------------------------+"
+}

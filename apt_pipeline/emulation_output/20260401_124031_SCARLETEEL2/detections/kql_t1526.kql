@@ -1,0 +1,26 @@
+// T1526 — Cloud Service Discovery: Lambda Enumeration Burst (SCARLETEEL Phase 3)
+// Detects 5+ Lambda read API calls from the same principal within 60 seconds.
+// SCARLETEEL performs automated Lambda enumeration: GetFunction + ListVersionsByFunction
+// reveals environment variables (DB_PASS) and source code download URLs.
+//
+// Source: https://sysdig.com/blog/cloud-breach-scarleteel/
+// MITRE: https://attack.mitre.org/techniques/T1526/
+
+let LambdaReadApis = dynamic([
+    "ListFunctions", "GetFunction", "ListVersionsByFunction",
+    "GetPolicy", "ListAliases", "ListTags", "ListEventSourceMappings"
+]);
+AWSCloudTrail
+| where EventSource == "lambda.amazonaws.com"
+| where EventName in (LambdaReadApis)
+| summarize
+    ApiCallCount = count(),
+    DistinctApis = dcount(EventName),
+    ApiList = make_set(EventName),
+    FunctionNames = make_set(tostring(parse_json(RequestParameters).functionName)),
+    FirstCall = min(TimeGenerated),
+    LastCall = max(TimeGenerated)
+    by bin(TimeGenerated, 60s), UserIdentityArn, SourceIpAddress
+| where ApiCallCount >= 5
+| extend DurationSeconds = datetime_diff('second', LastCall, FirstCall)
+| order by ApiCallCount desc

@@ -1,0 +1,39 @@
+title: LUCR-3 Bulk SecretsManager Harvest - ListSecrets + GetSecretValue from New IAM Key
+id: f4a2c8e0-7d5b-4f3a-d1c6-5e8b3a0f7c2d
+status: experimental
+description: >
+  Detects bulk GetSecretValue calls following ListSecrets from a principal that is
+  either a newly created IAM user or using a recently issued access key. LUCR-3
+  performs systematic SecretsManager enumeration after gaining programmatic access
+  to harvest database credentials, API keys, and GitHub PATs for downstream attacks.
+  Access to canary/honey secrets triggers immediate high-confidence alerts.
+references:
+    - https://attack.mitre.org/techniques/T1555/006/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.credential_access
+    - attack.t1555.006
+    - lucr3
+    - scattered_spider
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_list:
+        eventName: 'ListSecrets'
+        eventSource: 'secretsmanager.amazonaws.com'
+    selection_get:
+        eventName: 'GetSecretValue'
+        eventSource: 'secretsmanager.amazonaws.com'
+    filter_app_runtime:
+        userIdentity.arn|contains:
+            - ':role/AppRole'
+            - ':role/LambdaExecutionRole'
+            - ':role/ECSTaskRole'
+    timeframe: 10m
+    condition: (selection_list or selection_get) and not filter_app_runtime | count() by userIdentity.arn > 5
+falsepositives:
+    - Secrets rotation lambdas that enumerate and update multiple secrets
+    - Application deployment pipelines that retrieve configuration secrets at startup
+level: high

@@ -1,0 +1,9 @@
+{
+  "status": "APPROVED",
+  "verdict": "APPROVED",
+  "timestamp": "2026-04-01T12:40:31.000000+00:00",
+  "approved_by": "human_reviewer",
+  "fidelity_score": 0.95,
+  "notes": "High-fidelity SCARLETEEL 2.0 emulation. 9-step attack chain across 6 phases. Adds Pacu IAM recon, AdminJoe naming-convention bypass (capital A vs admin* StringLike), /dev/tcp exfil simulation, Russian S3 CloudTrail bypass documentation, SecretsManager harvest, and Pandora (Mirai) simulation.",
+  "attack_plan_ref": "attack_plan.json"
+}

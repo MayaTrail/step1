@@ -800,25 +800,34 @@ def phase_5_code_generation(
         f"  Do NOT call creds.invalidate() on a session in indicator-removal steps if later steps\n"
         f"  still need that session. Place the hijacked key deletion + invalidation in a dedicated\n"
         f"  post-attack cleanup block at the END of the last phase that uses the session.\n"
-        f"- HARD: MANDATORY STRUCTURE — resolve all resource names from Pulumi outputs at the start of main():\n"
-        f"  infra = get_pulumi_outputs(stack_dir)  # reads from pulumi stack output\n"
-        f"  cluster_name  = infra.get('cluster_name', '')\n"
-        f"  trail_name    = infra.get('trail_name', '')\n"
-        f"  task_family   = infra.get('task_family', '')\n"
-        f"  subnet_id     = infra.get('subnet_id', '')\n"
-        f"  task_sg_id    = infra.get('task_sg_id', '')\n"
-        f"  victim_key_id = infra.get('victim_access_key_id', '') or os.environ.get('AWS_VICTIM_ACCESS_KEY_ID', '')\n"
-        f"  victim_secret = infra.get('victim_secret_access_key', '') or os.environ.get('AWS_VICTIM_SECRET_ACCESS_KEY', '')\n"
-        f"  # ... and any other plan-specific names\n"
-        f"  Pass these variables as parameters to each phase function — NEVER hardcode any name.\n"
-        f"  Phase functions must accept resource names as parameters, not access module-level constants.\n"
-        f"- HARD: get_pulumi_outputs() MUST use ['pulumi','stack','output','--json','--show-secrets'] AND\n"
-        f"  pass env={{**os.environ,'PULUMI_CONFIG_PASSPHRASE':os.environ.get('PULUMI_CONFIG_PASSPHRASE','')}}.\n"
-        f"  Without --show-secrets, victim IAM keys come back as '[secret]' and the script aborts.\n"
-        f"- HARD: NEVER hardcode any AWS resource name string in a boto3 call. Every cluster=, Name=,\n"
-        f"  repositoryName=, trailName=, etc. must come from a variable resolved from infra dict.\n"
-        f"  Pulumi logical names (first positional arg like 'ambersquid-ecs-cluster') are NOT AWS names —\n"
-        f"  the AWS name is the `name=` kwarg value. The exported key (e.g. 'cluster_name') is the bridge.\n"
+        f"- HARD: MANDATORY STRUCTURE — load resource_names.json FIRST, then resolve dynamic values:\n"
+        f"  import json, pathlib\n"
+        f"  _NAMES_FILE = pathlib.Path(__file__).parent.parent / 'infra' / 'resource_names.json'\n"
+        f"  _NAMES = json.loads(_NAMES_FILE.read_text()) if _NAMES_FILE.exists() else {{'resources':{{}}, 'pulumi_export_keys':{{}}}}\n"
+        f"  _R   = _NAMES.get('resources', {{}})           # static names: IAM users, secret paths, table names\n"
+        f"  _PKS = _NAMES.get('pulumi_export_keys', {{}})  # semantic key -> pulumi export key for dynamic values\n"
+        f"  def _r(key, env_var=None, default=''):\n"
+        f"      return _R.get(key) or (os.environ.get(env_var, default) if env_var else default)\n"
+        f"  def _p(infra, key, env_var=None, default=''):\n"
+        f"      export_key = _PKS.get(key, key)\n"
+        f"      return infra.get(export_key) or (os.environ.get(env_var, default) if env_var else default)\n"
+        f"  def get_pulumi_outputs(stack_dir):\n"
+        f"      env = {{**os.environ, 'PULUMI_CONFIG_PASSPHRASE': os.environ.get('PULUMI_CONFIG_PASSPHRASE','')}}\n"
+        f"      r = subprocess.run(['pulumi','stack','output','--json','--show-secrets'],\n"
+        f"                         cwd=stack_dir, capture_output=True, text=True, env=env, timeout=60)\n"
+        f"      return json.loads(r.stdout) if r.returncode == 0 else {{}}\n"
+        f"  # In main(): infra = get_pulumi_outputs(stack_dir)\n"
+        f"  # Static names  -> _r('key_from_resource_names', 'FALLBACK_ENV_VAR', 'hardcoded_default')\n"
+        f"  # Dynamic values -> _p(infra, 'semantic_key_from_resource_names', 'FALLBACK_ENV_VAR')\n"
+        f"  # Keys for _r() and _p() MUST match keys in resource_names.json exactly.\n"
+        f"  # Keys for _p() map through pulumi_export_keys -> the actual pulumi.export() key.\n"
+        f"- HARD: NEVER use Pulumi logical names in boto3/SDK calls.\n"
+        f"  The logical name is the first arg to aws.xxx.Yyy('logical-name', ...) — it is NOT the AWS name.\n"
+        f"  The AWS name is the `name=` kwarg in __main__.py, and is in resource_names.json['resources'].\n"
+        f"  WRONG: sm.get_secret_value(SecretId='lucr3-secrets-prod-db')\n"
+        f"  RIGHT: sm.get_secret_value(SecretId=_r('secret_prod_db'))\n"
+        f"- HARD: get_pulumi_outputs() MUST pass env={{**os.environ,'PULUMI_CONFIG_PASSPHRASE':...}} and\n"
+        f"  use --show-secrets. Without it, victim IAM keys come back as '[secret]' and the script aborts.\n"
         f"- HARD: AWS managed policy AmplifyFullAccess NO LONGER EXISTS. Never attach it. "
         f"Use AWSAmplifyReadOnlyAccess or an inline policy if Amplify access is needed.\n"
         f"Output as a single ```python block with `# FILE: attack.py`"
@@ -873,6 +882,26 @@ def phase_5_code_generation(
                 results["validation"][filename] = val
                 status = "+" if val["valid"] else "!"
                 log("PHASE-5A", f"[{status}] {val['summary']}", "ok" if val["valid"] else "warn")
+            elif filename == "resource_names.json":
+                try:
+                    import json as _json
+                    rn = _json.loads(content)
+                    r_count  = len(rn.get("resources", {}))
+                    pk_count = len(rn.get("pulumi_export_keys", {}))
+                    log("PHASE-5A", f"[+] resource_names.json: {r_count} static + {pk_count} dynamic keys", "ok")
+                    results["resource_names"] = rn
+                except Exception as exc:
+                    log("PHASE-5A", f"[!] resource_names.json is not valid JSON: {exc}", "err")
+            elif filename == "requirements.json":
+                try:
+                    import json as _json
+                    req = _json.loads(content)
+                    prov_count = len(req.get("providers", {}))
+                    pkg_count  = len(req.get("python_packages", []))
+                    log("PHASE-5A", f"[+] requirements.json: {prov_count} providers, {pkg_count} packages", "ok")
+                    results["requirements"] = req
+                except Exception as exc:
+                    log("PHASE-5A", f"[!] requirements.json is not valid JSON: {exc}", "err")
 
     # ── 5A disk recovery ──
     # Claude Code runs with --dangerously-skip-permissions and can write files
@@ -884,18 +913,66 @@ def phase_5_code_generation(
     if not results["infra_files"]:
         infra_dir = out_dir / "infra"
         infra_dir.mkdir(exist_ok=True)
-        for fname in ("__main__.py", "Pulumi.yaml", "requirements.txt"):
+        for fname in ("resource_names.json", "requirements.json", "__main__.py", "Pulumi.yaml", "requirements.txt"):
             fpath = infra_dir / fname
             if fpath.exists():
                 content = fpath.read_text(encoding="utf-8")
                 results["infra_files"].append(fname)
-                if fname.endswith(".py"):
+                if fname == "resource_names.json":
+                    try:
+                        import json as _json
+                        rn = _json.loads(content)
+                        r_count  = len(rn.get("resources", {}))
+                        pk_count = len(rn.get("pulumi_export_keys", {}))
+                        log("PHASE-5A", f"[+] Recovered resource_names.json: {r_count} static + {pk_count} dynamic", "warn")
+                        results["resource_names"] = rn
+                    except Exception as exc:
+                        log("PHASE-5A", f"[!] Recovered resource_names.json is not valid JSON: {exc}", "err")
+                elif fname == "requirements.json":
+                    try:
+                        import json as _json
+                        req = _json.loads(content)
+                        prov_count = len(req.get("providers", {}))
+                        pkg_count  = len(req.get("python_packages", []))
+                        log("PHASE-5A", f"[+] Recovered requirements.json: {prov_count} providers, {pkg_count} packages", "warn")
+                        results["requirements"] = req
+                    except Exception as exc:
+                        log("PHASE-5A", f"[!] Recovered requirements.json is not valid JSON: {exc}", "err")
+                elif fname.endswith(".py"):
                     val = validate_generated_code(content, fname)
                     results["validation"][fname] = val
                     icon = "+" if val["valid"] else "!"
                     log("PHASE-5A", f"[{icon}] Recovered {fname} from infra/ — {val['summary']}", "warn")
                 else:
                     log("PHASE-5A", f"[+] Recovered {fname} from infra/ (written by Claude Code tools)", "warn")
+
+    # ── Validate resource_names.json is present before 5B runs ──
+    # attack.py loads this file at startup; if it's missing the script aborts.
+    rn_path = (out_dir / "infra" / "resource_names.json")
+    if rn_path.exists() and "resource_names" not in results:
+        import json as _json
+        try:
+            results["resource_names"] = _json.loads(rn_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    if "resource_names" not in results:
+        log("PHASE-5A",
+            "resource_names.json missing from infra/ — attack.py will not be able to resolve "
+            "resource names at runtime. Ensure the infra implementor writes this file.", "err")
+
+    # ── Validate requirements.json is present ──
+    # MayaTrail reads this before allowing execution to validate all credentials are present.
+    req_path = (out_dir / "infra" / "requirements.json")
+    if req_path.exists() and "requirements" not in results:
+        import json as _json
+        try:
+            results["requirements"] = _json.loads(req_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    if "requirements" not in results:
+        log("PHASE-5A",
+            "requirements.json missing from infra/ — MayaTrail will not be able to validate "
+            "prerequisites before execution. Ensure the infra implementor writes this file.", "warn")
 
     # ── Process 5B results ──
     attack_code_combined = ""
@@ -971,34 +1048,92 @@ def phase_5_code_generation(
             for w in cov["warnings"]:
                 log("PHASE-5B", f"  {w}", "dim")
 
-    # ── Cross-validate __main__.py ↔ attack.py ──────────────────────────────
+    # ── Cross-validate __main__.py ↔ attack.py (with retry loop) ────────────
     # Catches name/path/env-var mismatches that let both scripts pass individual
-    # validation but fail at runtime (wrong cluster name, missing --show-secrets, etc.)
+    # validation but fail at runtime. When blockers are found, regenerate attack.py
+    # with the error list as feedback (up to MAX_XVAL_RETRIES times).
+    MAX_XVAL_RETRIES = 2
+    xval_attempt = 0
+    xval = {"errors": [], "warnings": [], "error_count": 0, "warning_count": 0, "valid": True}
+
     infra_main_path = out_dir / "infra" / "__main__.py"
-    if infra_main_path.exists() and attack_code_combined:
+    while infra_main_path.exists() and attack_code_combined:
         infra_content = infra_main_path.read_text(encoding="utf-8")
-        xval = cross_validate_phase5(infra_content, attack_code_combined)
+        xval = cross_validate_phase5(
+            infra_content,
+            attack_code_combined,
+            resource_names=results.get("resource_names"),
+        )
         results["cross_validation"] = xval
+
         for w in xval.get("warnings", []):
             log("PHASE-5", f"[cross-val] {w}", "dim")
-        if xval["errors"]:
-            for err in xval["errors"]:
-                log("PHASE-5", f"[cross-val] DEPLOY BLOCKER: {err}", "err")
-            log("PHASE-5",
-                f"Cross-validation: {xval['error_count']} deploy blocker(s) — "
-                "fix before running pulumi up", "err")
-        else:
-            log("PHASE-5", "Cross-validation: __main__.py <-> attack.py consistent", "ok")
 
-    # Summary
+        if not xval["errors"]:
+            log("PHASE-5", "Cross-validation: __main__.py <-> attack.py consistent", "ok")
+            break
+
+        for err in xval["errors"]:
+            log("PHASE-5", f"[cross-val] DEPLOY BLOCKER: {err}", "err")
+
+        if xval_attempt >= MAX_XVAL_RETRIES:
+            log("PHASE-5",
+                f"Cross-validation: {xval['error_count']} blocker(s) remain after "
+                f"{MAX_XVAL_RETRIES} retries — manual fix required", "err")
+            break
+
+        xval_attempt += 1
+        log("PHASE-5",
+            f"Cross-validation: {xval['error_count']} blocker(s) — regenerating attack.py "
+            f"(retry {xval_attempt}/{MAX_XVAL_RETRIES})…", "warn")
+
+        # Feed errors back to the LLM as a correction prompt
+        error_bullets = "\n".join(f"  - {e}" for e in xval["errors"])
+        correction_prompt = (
+            f"{attack_prompt}\n\n"
+            f"CORRECTION REQUIRED — the previous attack.py had {xval['error_count']} deploy blockers:\n"
+            f"{error_bullets}\n\n"
+            f"Fix ALL of the above. Pay particular attention to:\n"
+            f"1. Use _r('key') for static names — key must match resource_names.json['resources'] exactly.\n"
+            f"2. Use _p(infra, 'key') for dynamic values — key must match resource_names.json['pulumi_export_keys'].\n"
+            f"3. NEVER use a Pulumi logical name (e.g. 'lucr3-secrets-prod-db') in a boto3 call.\n"
+            f"Output the complete corrected attack.py as a single ```python block."
+        )
+        try:
+            resp_retry, _ = call_claude(
+                SONNET, implementor_attack, correction_prompt,
+                f"PHASE-5B-RETRY-{xval_attempt}", timeout=1500,
+            )
+            save(out_dir / f"phase5b_retry{xval_attempt}_raw.md", resp_retry)
+            scripts_dir = out_dir / "emulation_scripts"
+            scripts_dir.mkdir(exist_ok=True)
+            attack_code_combined = ""
+            for filename, content, lang in extract_all_code_blocks(resp_retry):
+                if lang == "python":
+                    save(scripts_dir / filename, content)
+                    attack_code_combined += content + "\n"
+                    val = validate_generated_code(content, filename)
+                    results["validation"][f"{filename}_retry{xval_attempt}"] = val
+                    icon = "+" if val["valid"] else "!"
+                    log("PHASE-5B", f"[{icon}] Retry {xval_attempt} {val['summary']}", "ok" if val["valid"] else "warn")
+        except Exception as exc:
+            log("PHASE-5", f"Retry {xval_attempt} failed: {exc}", "err")
+            break
+
+    # Summary — include cross-validation errors in the total so the manifest
+    # accurately reflects deploy-readiness (not just syntax/import health).
     total_errors = sum(v.get("error_count", 0) for v in results["validation"].values())
+    total_errors += xval.get("error_count", 0)  # cross-val blockers count as errors
     log("PHASE-5", f"Done: {len(results['infra_files'])} infra + "
-        f"{len(results['attack_files'])} attack files ({total_errors} errors)", "ok")
+        f"{len(results['attack_files'])} attack files ({total_errors} errors, "
+        f"{xval_attempt} xval retries)", "ok")
 
     update_manifest(out_dir, "phase_5", _rate_limit_aware_status(errors, results["attack_files"]), {
         "infra_files": len(results["infra_files"]),
         "attack_files": len(results["attack_files"]),
         "validation_errors": total_errors,
+        "cross_validation_errors": xval.get("error_count", 0),
+        "xval_retries": xval_attempt,
         "technique_coverage_pct": results.get("technique_coverage", {}).get("coverage_pct"),
     })
     return results

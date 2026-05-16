@@ -1,0 +1,94 @@
+{
+  "status": "PHASE_0B_COMPLETE",
+  "threat_actor": {
+    "name": "Codefinger",
+    "aliases": [],
+    "motivation": "financial \u2014 ransomware extortion via S3 data encryption",
+    "attribution_country": "unknown",
+    "tools_used": [
+      "aws-cli",
+      "custom SSE-C encryption tooling"
+    ]
+  },
+  "platform": "aws",
+  "targeted_services": [
+    "Amazon S3",
+    "AWS IAM",
+    "AWS CloudTrail",
+    "S3 Object Lifecycle Management"
+  ],
+  "kill_chain_order": [
+    "T1078.004",
+    "T1530",
+    "T1486",
+    "T1485",
+    "T1490"
+  ],
+  "credential_chain": [
+    {
+      "phase": 1,
+      "source": "publicly exposed or compromised long-term IAM access key pair",
+      "source_technique": "T1552.001",
+      "credential_type": "AWS IAM Access Key (long-term)",
+      "used_in_phases": [
+        2,
+        3,
+        4,
+        5
+      ],
+      "expiration": "manual rotation required; no automatic expiry"
+    }
+  ],
+  "iocs": {
+    "ip_addresses": [],
+    "domains": [
+      "halcyon.ai"
+    ],
+    "file_paths": [
+      "ransom note deposited per affected S3 directory"
+    ],
+    "service_names": [
+      "Amazon S3",
+      "AWS CloudTrail",
+      "S3 Lifecycle Management"
+    ],
+    "tool_names": [
+      "aws s3 cp (SSE-C headers)",
+      "S3 PutBucketLifecycleConfiguration"
+    ],
+    "exfil_endpoints": [],
+    "crypto_wallets": [
+      "Bitcoin address included in ransom note (value not disclosed)"
+    ],
+    "user_agents": []
+  },
+  "operational_notes": {
+    "estimated_attack_duration_minutes": 30,
+    "inter_call_delay_seconds": [
+      1,
+      5
+    ],
+    "inter_phase_delay_seconds": [
+      5,
+      30
+    ],
+    "attack_creates_resources": [
+      "S3 lifecycle deletion policies (7-day TTL)",
+      "ransom note objects in each affected S3 prefix"
+    ],
+    "cannot_safely_emulate": [
+      {
+        "technique": "T1486",
+        "reason": "Re-encrypting real S3 data with attacker-held SSE-C key causes irrecoverable data loss",
+        "simulation": "Upload synthetic test objects to isolated S3 bucket; apply SSE-C with locally generated AES-256 key; verify HMAC-only CloudTrail log entry; then delete test objects"
+      },
+      {
+        "technique": "T1485",
+        "reason": "S3 lifecycle deletion policies cause permanent object deletion after 7 days on production data",
+        "simulation": "Set lifecycle rule on isolated test bucket with 1-day expiry on synthetic objects; verify policy API logs; immediately remove rule after verification"
+      }
+    ]
+  },
+  "source_url": "https://www.halcyon.ai/blog/abusing-aws-native-services-ransomware-encrypting-s3-buckets-with-sse-c",
+  "extraction_confidence": "high"
+}

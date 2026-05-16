@@ -1,0 +1,442 @@
+{
+  "guardrails": [
+    {
+      "technique_id": "T1078.004",
+      "platform": "aws",
+      "type": "SCP",
+      "name": "Deny Public S3 Bucket ACLs and Block Public Access Override",
+      "description": "Prevent any principal from disabling S3 Block Public Access settings at the account or bucket level, closing the bait-bucket misconfiguration vector Codefinger uses to harvest credentials from publicly exposed IaC state files.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "DenyS3PublicAccessOverride",
+            "Effect": "Deny",
+            "Action": [
+              "s3:PutBucketPublicAccessBlock",
+              "s3:DeletePublicAccessBlock",
+              "s3:PutAccountPublicAccessBlock"
+            ],
+            "Resource": "*",
+            "Condition": {
+              "StringNotLike": {
+                "aws:PrincipalArn": [
+                  "arn:aws:iam::*:role/OrgAdmin*",
+                  "arn:aws:iam::*:role/PlatformSRE*"
+                ]
+              }
+            }
+          },
+          {
+            "Sid": "DenyPublicBucketACL",
+            "Effect": "Deny",
+            "Action": "s3:PutBucketAcl",
+            "Resource": "*",
+            "Condition": {
+              "StringEquals": {
+                "s3:x-amz-acl": [
+                  "public-read",
+                  "public-read-write",
+                  "authenticated-read"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "applies_to": "All OUs \u2014 attach at Org root or workload OU level",
+      "effectiveness": "Prevents the bait-bucket misconfiguration that exposes terraform.tfvars with IAM credentials to anonymous callers. Does not stop a determined insider who can edit the SCP itself.",
+      "side_effects": "Breaks any workflow that deliberately makes a bucket public (static website hosting, public asset CDN). Allowlist those buckets via a separate resource tag condition or move them to a dedicated OU with a relaxed SCP.",
+      "testing_guidance": "From a non-admin IAM user, run: aws s3api put-public-access-block --bucket <bucket> --public-access-block-configuration BlockPublicAcls=false,... \u2014 expect AccessDenied. Then repeat as OrgAdmin role \u2014 expect success."
+    },
+    {
+      "technique_id": "T1078.004",
+      "platform": "aws",
+      "type": "IAM Permission Boundary",
+      "name": "Require MFA for Long-Term IAM Key API Calls",
+      "description": "Apply as a permission boundary to all human IAM users so that sensitive S3 and STS calls are denied unless the session was authenticated with MFA. Stolen long-term keys used outside an MFA-enabled session are blocked at the permission boundary level.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "AllowMFAManagement",
+            "Effect": "Allow",
+            "Action": [
+              "iam:CreateVirtualMFADevice",
+              "iam:EnableMFADevice",
+              "iam:GetUser",
+              "iam:ListMFADevices",
+              "iam:ListVirtualMFADevices",
+              "iam:ResyncMFADevice",
+              "sts:GetSessionToken"
+            ],
+            "Resource": "*"
+          },
+          {
+            "Sid": "DenySensitiveActionsWithoutMFA",
+            "Effect": "Deny",
+            "Action": [
+              "s3:GetObject",
+              "s3:PutObject",
+              "s3:DeleteObject",
+              "s3:ListBucket",
+              "s3:ListBucketVersions",
+              "s3:PutBucketVersioning",
+              "s3:PutLifecycleConfiguration",
+              "sts:AssumeRole",
+              "iam:CreateAccessKey",
+              "iam:UpdateAccessKey"
+            ],
+            "Resource": "*",
+            "Condition": {
+              "BoolIfExists": {
+                "aws:MultiFactorAuthPresent": "false"
+              }
+            }
+          },
+          {
+            "Sid": "AllowEverythingElseInBoundary",
+            "Effect": "Allow",
+            "Action": "*",
+            "Resource": "*"
+          }
+        ]
+      },
+      "applies_to": "All human IAM users via PermissionsBoundary attribute \u2014 attach during user provisioning via IaC",
+      "effectiveness": "Stolen long-term access keys used directly (not via assume-role with MFA) will be denied on every sensitive S3 API. Codefinger's attack flow relies on using harvested keys directly without MFA.",
+      "side_effects": "CI/CD pipelines and service accounts that use long-term keys for S3 access will break if this boundary is applied to them. Scope this boundary only to human users; service accounts should use IAM roles with instance/pod metadata credentials instead.",
+      "testing_guidance": "Create a test IAM user with this boundary. Generate a key pair. Call aws s3 ls s3://any-bucket without MFA session token \u2014 expect AccessDenied. Then call aws sts get-session-token --serial-number <mfa-arn> --token-code <code> and retry with those session credentials \u2014 expect success."
+    },
+    {
+      "technique_id": "T1530",
+      "platform": "aws",
+      "type": "RCP",
+      "name": "Restrict S3 Data-Plane Access to Known VPC Endpoints",
+      "description": "Resource Control Policy (RCP) on the S3 service that denies GetObject, ListBucket, and HeadObject unless the call originates from approved VPC endpoints or known corporate IP ranges. Codefinger enumerates and reads bucket contents from an external IP with no VPC context.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "DenyS3DataPlaneOutsideVPC",
+            "Effect": "Deny",
+            "Principal": "*",
+            "Action": [
+              "s3:GetObject",
+              "s3:HeadObject",
+              "s3:ListBucket",
+              "s3:ListBucketVersions",
+              "s3:ListObjectVersions"
+            ],
+            "Resource": "*",
+            "Condition": {
+              "StringNotEquals": {
+                "aws:SourceVpce": [
+                  "vpce-REPLACE_WITH_PROD_ENDPOINT_ID",
+                  "vpce-REPLACE_WITH_CORP_ENDPOINT_ID"
+                ]
+              },
+              "NotIpAddress": {
+                "aws:SourceIp": [
+                  "REPLACE_WITH_CORP_CIDR/24",
+                  "REPLACE_WITH_CICD_CIDR/32"
+                ]
+              },
+              "StringNotLike": {
+                "aws:PrincipalArn": [
+                  "arn:aws:iam::*:role/OrgAdmin*",
+                  "arn:aws:iam::*:role/SecurityAudit*"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "applies_to": "Attach as RCP at Org root or sensitive-data OU \u2014 applies to all S3 buckets in scope regardless of bucket policy",
+      "effectiveness": "Blocks external-IP enumeration and exfiltration. An attacker with only stolen IAM keys and no VPC access cannot read bucket contents. Eliminates T1530 collection from external networks.",
+      "side_effects": "Breaks S3 access for any service running outside the approved VPCs or IP ranges: Lambda in public subnets, third-party SaaS integrations, developer laptops. Requires discipline in maintaining the VPC endpoint and IP allowlist. Consider a phased rollout starting with the highest-sensitivity buckets via bucket-level resource policies before applying org-wide via RCP.",
+      "testing_guidance": "From an EC2 instance inside an approved VPC: aws s3 ls s3://target-bucket \u2014 expect success. From a non-VPC environment (local workstation outside CIDR): same command \u2014 expect AccessDenied. Monitor CloudTrail for unexpected denials after rollout."
+    },
+    {
+      "technique_id": "T1486",
+      "platform": "aws",
+      "type": "SCP",
+      "name": "Deny SSE-C PutObject Org-Wide",
+      "description": "Block all PutObject calls that include SSE-C (customer-provided encryption key) headers. Codefinger's entire ransomware mechanism depends on re-encrypting S3 objects with an attacker-controlled SSE-C key that AWS never stores, making recovery impossible without the attacker's key. Denying SSE-C eliminates this specific ransomware vector entirely.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "DenySSECPutObject",
+            "Effect": "Deny",
+            "Action": [
+              "s3:PutObject",
+              "s3:CopyObject"
+            ],
+            "Resource": "*",
+            "Condition": {
+              "Null": {
+                "s3:x-amz-server-side-encryption-customer-algorithm": "false"
+              },
+              "StringNotLike": {
+                "aws:PrincipalArn": "arn:aws:iam::*:role/OrgAdmin*"
+              }
+            }
+          }
+        ]
+      },
+      "applies_to": "All OUs \u2014 this is a zero-tolerance control. SSE-C has no legitimate use case in most enterprise S3 deployments; SSE-KMS or SSE-S3 cover all standard requirements.",
+      "effectiveness": "Completely prevents the Codefinger SSE-C ransomware technique. An attacker with valid IAM credentials cannot re-encrypt objects with an attacker-held key. This is the highest-value single guardrail for this threat actor.",
+      "side_effects": "Breaks any application that deliberately uses SSE-C (some client-side encryption libraries, certain database backup tools). Survey usage via CloudTrail before enforcing: filter on s3:PutObject events where requestParameters contains x-amz-server-side-encryption-customer-algorithm. In most AWS environments this header appears zero times in 30-day logs.",
+      "testing_guidance": "Generate a random 32-byte key and base64-encode it. Attempt: aws s3 cp file.txt s3://bucket/file.txt --sse-c AES256 --sse-c-key <base64key> -- expect AccessDenied. Verify standard aws s3 cp without SSE-C flags still succeeds."
+    },
+    {
+      "technique_id": "T1486",
+      "platform": "aws",
+      "type": "S3 Bucket Policy",
+      "name": "Enforce SSE-KMS on All PutObject Calls",
+      "description": "Bucket-level resource policy complement to the org SCP. Deny PutObject unless the SSE-KMS algorithm header is present with an approved CMK ARN. Ensures objects are encrypted with organization-managed keys (recoverable by the org) rather than attacker-held SSE-C keys (irrecoverable).",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "DenyNonKMSPutObject",
+            "Effect": "Deny",
+            "Principal": "*",
+            "Action": "s3:PutObject",
+            "Resource": "arn:aws:s3:::REPLACE_WITH_BUCKET_NAME/*",
+            "Condition": {
+              "StringNotEqualsIfExists": {
+                "s3:x-amz-server-side-encryption": "aws:kms"
+              },
+              "Null": {
+                "s3:x-amz-server-side-encryption": "false"
+              }
+            }
+          },
+          {
+            "Sid": "DenyNonApprovedKMSKey",
+            "Effect": "Deny",
+            "Principal": "*",
+            "Action": "s3:PutObject",
+            "Resource": "arn:aws:s3:::REPLACE_WITH_BUCKET_NAME/*",
+            "Condition": {
+              "StringNotLikeIfExists": {
+                "s3:x-amz-server-side-encryption-aws-kms-key-id": "arn:aws:kms:REPLACE_REGION:REPLACE_ACCOUNT_ID:key/*"
+              }
+            }
+          }
+        ]
+      },
+      "applies_to": "All S3 buckets containing sensitive data \u2014 deploy via AWS Config remediation rule or Terraform bucket module default",
+      "effectiveness": "Layered defense complementing the SSE-C SCP. Even if the SCP is bypassed (e.g., SCP not yet attached to a new account), the bucket policy blocks non-KMS writes.",
+      "side_effects": "Applications writing to S3 without specifying encryption headers will fail. Configure the S3 bucket default encryption to SSE-KMS so SDKs that omit the header still succeed (S3 applies the default and the condition is satisfied).",
+      "testing_guidance": "Attempt aws s3 cp file.txt s3://bucket/file.txt with no encryption flags \u2014 should succeed if bucket default encryption is SSE-KMS. Attempt with --sse-c flags \u2014 expect AccessDenied. Attempt with --sse-kms-key-id <wrong-account-key> \u2014 expect AccessDenied."
+    },
+    {
+      "technique_id": "T1485",
+      "platform": "aws",
+      "type": "SCP",
+      "name": "Deny PutBucketLifecycleConfiguration Without Approval Tag",
+      "description": "Block lifecycle policy creation or modification on S3 buckets unless the request includes a specific approval condition. Codefinger sets a short-TTL lifecycle rule to guarantee automated deletion of encrypted objects, extorting victims with a countdown timer. This SCP prevents unauthorized lifecycle policy writes.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "DenyUnauthorizedLifecycleWrite",
+            "Effect": "Deny",
+            "Action": [
+              "s3:PutLifecycleConfiguration",
+              "s3:DeleteLifecycleConfiguration"
+            ],
+            "Resource": "*",
+            "Condition": {
+              "StringNotLike": {
+                "aws:PrincipalArn": [
+                  "arn:aws:iam::*:role/OrgAdmin*",
+                  "arn:aws:iam::*:role/PlatformSRE*",
+                  "arn:aws:iam::*:role/DataRetentionAutomation*"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "applies_to": "All OUs \u2014 lifecycle configuration is a privileged infrastructure operation that should never be performed by application IAM users or stolen IAM keys",
+      "effectiveness": "Prevents the countdown-timer deletion mechanism. Without the ability to write lifecycle rules, Codefinger cannot automate object expiry. Significantly reduces leverage in ransom negotiations.",
+      "side_effects": "Any data-retention automation (Terraform, CloudFormation, custom scripts) that runs as an application IAM user rather than a dedicated infrastructure role will break. Audit existing lifecycle-setting IAM principals via CloudTrail before enforcing.",
+      "testing_guidance": "As an application IAM user (not OrgAdmin), run: aws s3api put-bucket-lifecycle-configuration --bucket <bucket> --lifecycle-configuration ... -- expect AccessDenied. As PlatformSRE role, same command -- expect success."
+    },
+    {
+      "technique_id": "T1485",
+      "platform": "aws",
+      "type": "SCP",
+      "name": "Deny Bulk DeleteObject Above Threshold Via SCP Tagging Gate",
+      "description": "Prevent mass DeleteObject operations by restricting the s3:DeleteObject action to principals with explicit data-deletion permissions. Codefinger bulk-deletes plaintext objects after re-encrypting them with SSE-C. Limiting delete to dedicated roles with break-glass controls reduces blast radius from a compromised application IAM user.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "DenyDeleteObjectForApplicationUsers",
+            "Effect": "Deny",
+            "Action": [
+              "s3:DeleteObject",
+              "s3:DeleteObjects"
+            ],
+            "Resource": "arn:aws:s3:::*-prod-*/*",
+            "Condition": {
+              "StringNotLike": {
+                "aws:PrincipalArn": [
+                  "arn:aws:iam::*:role/OrgAdmin*",
+                  "arn:aws:iam::*:role/DataPurge*",
+                  "arn:aws:iam::*:role/IncidentResponse*"
+                ]
+              },
+              "StringEquals": {
+                "aws:ResourceTag/DataClassification": [
+                  "confidential",
+                  "restricted"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "applies_to": "Production OUs \u2014 scope to buckets tagged DataClassification=confidential or restricted. Apply a broader deny-all-delete to all buckets as a starting point then relax as needed.",
+      "effectiveness": "Blocks the post-encryption delete sweep. Without delete permissions, Codefinger cannot remove plaintext originals (though SSE-C overwrites in-place still replace them via PutObject \u2014 combine with the SSE-C SCP for full coverage).",
+      "side_effects": "Application code that writes temporary objects and self-cleans will break if running as an application IAM user. Refactor cleanup jobs to use a dedicated DataPurge role.",
+      "testing_guidance": "Tag a test bucket with DataClassification=confidential. As an application IAM user, attempt aws s3api delete-object -- expect AccessDenied. As DataPurge role, same command -- expect success."
+    },
+    {
+      "technique_id": "T1490",
+      "platform": "aws",
+      "type": "SCP",
+      "name": "Deny S3 Versioning Suspension and Object Version Deletion",
+      "description": "Prevent disabling S3 object versioning and bulk-deleting object versions. Codefinger's final kill-chain step suspends versioning and purges all prior versions to eliminate rollback as an IR path. These controls make that technique impossible for non-admin principals.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "DenyVersioningSuspend",
+            "Effect": "Deny",
+            "Action": "s3:PutBucketVersioning",
+            "Resource": "*",
+            "Condition": {
+              "StringNotLike": {
+                "aws:PrincipalArn": [
+                  "arn:aws:iam::*:role/OrgAdmin*",
+                  "arn:aws:iam::*:role/PlatformSRE*"
+                ]
+              }
+            }
+          },
+          {
+            "Sid": "DenyObjectVersionDeletion",
+            "Effect": "Deny",
+            "Action": "s3:DeleteObjectVersion",
+            "Resource": "*",
+            "Condition": {
+              "StringNotLike": {
+                "aws:PrincipalArn": [
+                  "arn:aws:iam::*:role/OrgAdmin*",
+                  "arn:aws:iam::*:role/DataPurge*",
+                  "arn:aws:iam::*:role/IncidentResponse*"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "applies_to": "All OUs \u2014 versioning configuration is an infrastructure-level control; no application principal should ever need to suspend it",
+      "effectiveness": "Preserves the primary AWS recovery mechanism (version rollback) even if all other guardrails fail and an attacker successfully performs SSE-C re-encryption. IR teams retain the ability to restore from prior versions. This is the recovery backstop.",
+      "side_effects": "Compliance-driven version pruning workflows that delete specific object versions must be migrated to a DataPurge role. Check CloudTrail for existing DeleteObjectVersion callers before enforcing.",
+      "testing_guidance": "On a versioned bucket: as an application IAM user, run aws s3api put-bucket-versioning --versioning-configuration Status=Suspended -- expect AccessDenied. As OrgAdmin, same command -- expect success. Verify versioning status remains Enabled after the denied attempt."
+    },
+    {
+      "technique_id": "T1490",
+      "platform": "aws",
+      "type": "EventBridge + Lambda Automated Response",
+      "name": "Automated Response: Lock Bucket on PutBucketVersioning Event",
+      "description": "Compensating control that triggers an automated Lambda when CloudTrail detects PutBucketVersioning on any production bucket. The Lambda immediately re-enables versioning and fires a PagerDuty/SNS alert. Closes the window between the attack action and human IR response.",
+      "policy_json": {
+        "EventBridgeRule": {
+          "Name": "detect-versioning-suspend",
+          "EventPattern": {
+            "source": [
+              "aws.s3"
+            ],
+            "detail-type": [
+              "AWS API Call via CloudTrail"
+            ],
+            "detail": {
+              "eventName": [
+                "PutBucketVersioning"
+              ],
+              "requestParameters": {
+                "VersioningConfiguration": {
+                  "Status": [
+                    "Suspended"
+                  ]
+                }
+              }
+            }
+          },
+          "Targets": [
+            {
+              "Arn": "arn:aws:lambda:REPLACE_REGION:REPLACE_ACCOUNT_ID:function:s3-versioning-restore",
+              "Id": "RestoreVersioning"
+            }
+          ]
+        },
+        "LambdaLogic_pseudocode": [
+          "1. Extract bucketName from event detail.requestParameters.bucketName",
+          "2. Call s3.put_bucket_versioning(Bucket=bucketName, VersioningConfiguration={'Status': 'Enabled'})",
+          "3. Publish to SNS topic: 'ALERT: Versioning suspended on {bucketName} by {principalArn} - auto-restored'",
+          "4. Tag bucket with: SecurityIncident=versioning-suspend-detected, IncidentTime=<timestamp>",
+          "5. Optionally: call iam.put_user_policy to attach a DenyAll inline policy to the offending IAM user pending IR review"
+        ]
+      },
+      "applies_to": "All production accounts \u2014 deploy via CloudFormation StackSet across the Org",
+      "effectiveness": "Reduces attacker's versioning-suspension window to seconds (CloudTrail delivery latency ~60s). Combined with the SCP, this is defense-in-depth: SCP prevents the action; EventBridge auto-remediates if SCP is missing on a new account.",
+      "side_effects": "Lambda must have iam:PutUserPolicy and s3:PutBucketVersioning permissions \u2014 keep these scoped tightly. The auto-remediation will conflict with intentional versioning changes during DR drills; add a bypass tag (SecurityBypass=approved-change) that the Lambda checks before remediating.",
+      "testing_guidance": "In a non-production account without the SCP, manually call PutBucketVersioning to suspend versioning. Verify within 90 seconds that versioning is restored to Enabled and an SNS notification arrives. Check CloudWatch Logs for Lambda execution trace."
+    },
+    {
+      "technique_id": "T1078.004",
+      "platform": "aws",
+      "type": "AWS Config Rule",
+      "name": "Detect and Alert on Long-Term IAM Access Key Age",
+      "description": "Preventive-detective control: AWS Config managed rule access-keys-rotated flags IAM users with access keys older than 90 days. Stale long-term keys are the root credential vector for Codefinger \u2014 reducing key age reduces the exposure window for any exfiltrated key.",
+      "policy_json": {
+        "ConfigRule": {
+          "ConfigRuleName": "access-keys-rotated-90d",
+          "Source": {
+            "Owner": "AWS",
+            "SourceIdentifier": "ACCESS_KEYS_ROTATED"
+          },
+          "InputParameters": {
+            "maxAccessKeyAge": "90"
+          },
+          "Scope": {
+            "ComplianceResourceTypes": [
+              "AWS::IAM::User"
+            ]
+          }
+        },
+        "RemediationAction": {
+          "Type": "SSM Automation",
+          "DocumentName": "AWSConfigRemediation-RevokeUnusedIAMUserCredentials",
+          "Parameters": {
+            "AutomationAssumeRole": "arn:aws:iam::REPLACE_ACCOUNT_ID:role/ConfigRemediationRole",
+            "IAMUserName": "RESOURCE_ID"
+          },
+          "Automatic": false,
+          "Comment": "Manual approval required before disabling keys - automated revocation risks breaking production if key rotation has not been tested"
+        }
+      },
+      "applies_to": "All accounts \u2014 enable via AWS Config aggregator at Org level",
+      "effectiveness": "Detective not preventive \u2014 identifies the long-term key hygiene gap that enables Codefinger's credential harvest. Combined with an SCP requiring MFA, old keys become useless to an external attacker even if harvested.",
+      "side_effects": "None from the Config rule itself. The SSM remediation (if triggered) deactivates the key, which breaks workloads using it. Keep auto-remediation set to manual approval; use the finding as a forcing function for key rotation.",
+      "testing_guidance": "Create a test IAM user with a key. Manually set the creation date to 91 days ago via the AWS console (not possible via API - wait 91 days in a real test, or use a Config evaluator unit test with a mock evaluation). Verify the Config rule marks the resource as NON_COMPLIANT."
+    }
+  ]
+}

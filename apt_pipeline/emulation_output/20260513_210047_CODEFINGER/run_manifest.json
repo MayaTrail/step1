@@ -1,0 +1,270 @@
+{
+  "run_id": "20260513_210047",
+  "start_time": "2026-05-13T15:30:47.304657+00:00",
+  "phases": {
+    "pipeline": {
+      "status": "complete",
+      "timestamp": "2026-05-13T15:57:46.462309+00:00",
+      "mode": "full-apt",
+      "input": "https://www.halcyon.ai/blog/abusing-aws-native-services-ransomware-encrypting-s3-buckets-with-sse-c",
+      "tool_versions": {
+        "tiktoken": "0.12.0",
+        "trafilatura": "2.0.0",
+        "claude": "2.1.114 (Claude Code)",
+        "pulumi": "v3.224.0",
+        "python": "Python 3.9.13",
+        "aws_arn": "arn:aws:iam::940482414561:user/admin"
+      },
+      "error": "Aborted at TI extraction.",
+      "end_time": "2026-05-13T15:57:46.461661+00:00",
+      "tokens": {
+        "total_input_tokens": 58370,
+        "total_output_tokens": 25404,
+        "total_tokens": 83774,
+        "estimated_cost_usd": 0.83,
+        "calls": 11,
+        "per_model": {
+          "claude-sonnet-4-6": {
+            "calls": 8,
+            "input_tokens": 42528,
+            "output_tokens": 23934,
+            "cost_usd": 0.4866
+          },
+          "claude-opus-4-6": {
+            "calls": 3,
+            "input_tokens": 15842,
+            "output_tokens": 1470,
+            "cost_usd": 0.3479
+          }
+        },
+        "breakdown": [
+          {
+            "label": "PHASE-1",
+            "timestamp": "2026-05-13T15:37:08.524793+00:00",
+            "input_tokens": 2160,
+            "output_tokens": 2993,
+            "model": "claude-sonnet-4-6",
+            "elapsed_s": 114.6,
+            "source": "tiktoken"
+          },
+          {
+            "label": "PHASE-2-REVIEW-1",
+            "timestamp": "2026-05-13T15:38:30.390749+00:00",
+            "input_tokens": 3849,
+            "output_tokens": 693,
+            "model": "claude-opus-4-6",
+            "elapsed_s": 81.8,
+            "source": "tiktoken"
+          },
+          {
+            "label": "PHASE-2-REDRAFT",
+            "timestamp": "2026-05-13T15:40:19.788134+00:00",
+            "input_tokens": 5224,
+            "output_tokens": 3848,
+            "model": "claude-sonnet-4-6",
+            "elapsed_s": 109.4,
+            "source": "tiktoken"
+          },
+          {
+            "label": "PHASE-2-REVIEW-2",
+            "timestamp": "2026-05-13T15:40:42.527232+00:00",
+            "input_tokens": 5216,
+            "output_tokens": 398,
+            "model": "claude-opus-4-6",
+            "elapsed_s": 22.7,
+            "source": "tiktoken"
+          },
+          {
+            "label": "PHASE-3",
+            "timestamp": "2026-05-13T15:44:02.690004+00:00",
+            "input_tokens": 3606,
+            "output_tokens": 5043,
+            "model": "claude-sonnet-4-6",
+            "elapsed_s": 200.1,
+            "source": "tiktoken"
+          },
+          {
+            "label": "PHASE-4-REVIEW-1",
+            "timestamp": "2026-05-13T15:45:21.508634+00:00",
+            "input_tokens": 6777,
+            "output_tokens": 379,
+            "model": "claude-opus-4-6",
+            "elapsed_s": 78.8,
+            "source": "tiktoken"
+          },
+          {
+            "label": "PHASE-6B",
+            "timestamp": "2026-05-13T15:47:01.086652+00:00",
+            "input_tokens": 4793,
+            "output_tokens": 5424,
+            "model": "claude-sonnet-4-6",
+            "elapsed_s": 99.5,
+            "source": "tiktoken"
+          },
+          {
+            "label": "PHASE-6A",
+            "timestamp": "2026-05-13T15:50:37.205504+00:00",
+            "input_tokens": 5273,
+            "output_tokens": 374,
+            "model": "claude-sonnet-4-6",
+            "elapsed_s": 216.1,
+            "source": "tiktoken"
+          },
+          {
+            "label": "PHASE-5A",
+            "timestamp": "2026-05-13T15:53:07.068542+00:00",
+            "input_tokens": 6873,
+            "output_tokens": 346,
+            "model": "claude-sonnet-4-6",
+            "elapsed_s": 149.9,
+            "source": "tiktoken"
+          },
+          {
+            "label": "PHASE-5B",
+            "timestamp": "2026-05-13T15:55:38.592261+00:00",
+            "input_tokens": 9828,
+            "output_tokens": 346,
+            "model": "claude-sonnet-4-6",
+            "elapsed_s": 151.5,
+            "source": "tiktoken"
+          },
+          {
+            "label": "PHASE-6C",
+            "timestamp": "2026-05-13T15:57:46.298517+00:00",
+            "input_tokens": 4771,
+            "output_tokens": 5560,
+            "model": "claude-sonnet-4-6",
+            "elapsed_s": 127.7,
+            "source": "tiktoken"
+          }
+        ]
+      },
+      "fallback_count": 0,
+      "fallback_phases": []
+    },
+    "phase_0b_meta": {
+      "status": "complete",
+      "timestamp": "2026-05-13T15:31:38.585613+00:00",
+      "tokens": {
+        "input_tokens": 60358,
+        "output_tokens": 2189,
+        "model": "claude-sonnet-4-6",
+        "elapsed_s": 49.2,
+        "cost_usd": 0.15878985,
+        "stop_reason": "end_turn",
+        "source": "envelope"
+      }
+    },
+    "phase_0b_tech": {
+      "status": "complete",
+      "timestamp": "2026-05-13T15:32:36.933896+00:00",
+      "tokens": {
+        "input_tokens": 58981,
+        "output_tokens": 2201,
+        "model": "claude-sonnet-4-6",
+        "elapsed_s": 58.3,
+        "cost_usd": 0.15647985000000003,
+        "stop_reason": "end_turn",
+        "source": "envelope"
+      }
+    },
+    "phase_0b": {
+      "status": "complete",
+      "timestamp": "2026-05-13T15:32:36.994819+00:00",
+      "techniques": 5,
+      "threat_actor": "Codefinger",
+      "execution_planes": {
+        "control_plane": 5
+      },
+      "tokens": {
+        "input_tokens": 119339,
+        "output_tokens": 4390,
+        "model": "claude-sonnet-4-6",
+        "elapsed_s": 107.5,
+        "cost_usd": 0.31526970000000004
+      }
+    },
+    "phase_1": {
+      "status": "complete",
+      "timestamp": "2026-05-13T15:37:08.529229+00:00",
+      "resources": 12,
+      "categories": {
+        "attack_surface": 3,
+        "target": 3,
+        "bait": 3,
+        "support": 3
+      },
+      "tokens": {
+        "input_tokens": 2160,
+        "output_tokens": 2993,
+        "model": "claude-sonnet-4-6",
+        "elapsed_s": 114.6,
+        "source": "tiktoken"
+      }
+    },
+    "phase_cost": {
+      "status": "complete",
+      "timestamp": "2026-05-13T15:44:02.716733+00:00",
+      "hourly": 0.0014,
+      "daily": 0.0336,
+      "monthly": 1.01,
+      "per_run_usd": 0.0
+    },
+    "PHASE-2_iter_1": {
+      "status": "revision_required",
+      "timestamp": "2026-05-13T15:38:30.394550+00:00"
+    },
+    "PHASE-2_iter_2": {
+      "status": "approved",
+      "timestamp": "2026-05-13T15:40:42.543802+00:00"
+    },
+    "phase_2": {
+      "status": "complete",
+      "timestamp": "2026-05-13T15:40:42.565141+00:00",
+      "verdict": "APPROVED",
+      "fallback": false
+    },
+    "phase_3": {
+      "status": "complete",
+      "timestamp": "2026-05-13T15:44:02.695189+00:00",
+      "steps": 6,
+      "credential_pivots": 1,
+      "tokens": {
+        "input_tokens": 3606,
+        "output_tokens": 5043,
+        "model": "claude-sonnet-4-6",
+        "elapsed_s": 200.1,
+        "source": "tiktoken"
+      }
+    },
+    "PHASE-4_iter_1": {
+      "status": "approved",
+      "timestamp": "2026-05-13T15:45:21.512329+00:00"
+    },
+    "phase_4": {
+      "status": "complete",
+      "timestamp": "2026-05-13T15:45:21.539152+00:00",
+      "verdict": "APPROVED",
+      "fidelity_score": 0.92,
+      "fallback": false
+    },
+    "phase_5": {
+      "status": "complete",
+      "timestamp": "2026-05-13T15:55:38.759123+00:00",
+      "infra_files": 3,
+      "attack_files": 1,
+      "validation_errors": 2,
+      "technique_coverage_pct": 100.0
+    },
+    "phase_6": {
+      "status": "complete",
+      "timestamp": "2026-05-13T15:57:46.445504+00:00",
+      "sigma": 5,
+      "kql": 5,
+      "detection_notes": 1,
+      "playbooks": 1,
+      "guardrails": 10
+    }
+  },
+  "last_updated": "2026-05-13T15:57:46.462322+00:00"
+}

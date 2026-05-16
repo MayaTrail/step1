@@ -1,0 +1,155 @@
+{
+  "campaign": "LUCR-3",
+  "csp": "multi",
+  "providers": {
+    "aws": {
+      "required": true,
+      "credentials": [
+        {
+          "env_var": "AWS_ACCESS_KEY_ID",
+          "description": "AWS access key ID — must have permissions to create IAM (users, roles, SAML providers), Secrets Manager secrets, and CloudTrail resources"
+        },
+        {
+          "env_var": "AWS_SECRET_ACCESS_KEY",
+          "description": "AWS secret access key"
+        },
+        {
+          "env_var": "AWS_DEFAULT_REGION",
+          "description": "AWS region to deploy into",
+          "default": "us-east-1"
+        }
+      ],
+      "min_permissions": [
+        "iam:*",
+        "secretsmanager:*",
+        "cloudtrail:*",
+        "sts:*",
+        "s3:*"
+      ]
+    },
+    "okta": {
+      "required": true,
+      "credentials": [
+        {
+          "env_var": "OKTA_API_TOKEN",
+          "description": "Okta API token with org admin scope — used to provision users, groups, SAML apps, and MFA factors"
+        },
+        {
+          "env_var": "OKTA_ORG_NAME",
+          "description": "Okta org domain without https://, e.g. dev-12345678.okta.com"
+        }
+      ],
+      "min_permissions": [
+        "okta.apps.manage",
+        "okta.users.manage",
+        "okta.groups.manage",
+        "okta.factors.manage",
+        "okta.policies.manage"
+      ]
+    },
+    "azuread": {
+      "required": true,
+      "credentials": [
+        {
+          "env_var": "ARM_TENANT_ID",
+          "description": "Azure AD tenant ID (GUID) — the directory where the M365 / SharePoint resources are provisioned"
+        },
+        {
+          "env_var": "ARM_CLIENT_ID",
+          "description": "Azure AD service principal application (client) ID with Directory.ReadWrite.All and Application.ReadWrite.All"
+        },
+        {
+          "env_var": "ARM_CLIENT_SECRET",
+          "description": "Azure AD service principal client secret"
+        }
+      ],
+      "min_permissions": [
+        "Application.ReadWrite.All",
+        "Directory.ReadWrite.All",
+        "Group.ReadWrite.All"
+      ]
+    },
+    "github": {
+      "required": true,
+      "credentials": [
+        {
+          "env_var": "GITHUB_TOKEN",
+          "description": "GitHub personal access token with repo and admin:org scopes — used to provision bait repositories containing terraform.tfstate and GitHub Actions secrets"
+        },
+        {
+          "env_var": "GITHUB_OWNER",
+          "description": "GitHub organization or user name that owns the bait repositories"
+        }
+      ],
+      "min_permissions": [
+        "repo",
+        "admin:org",
+        "delete_repo"
+      ]
+    }
+  },
+  "pulumi_config": [
+    {
+      "key": "lucr3:okta_org_name",
+      "required": true,
+      "description": "Okta org domain (without https://) used to configure the AWS SAML identity provider and Okta app assignments",
+      "secret": false,
+      "how_to_get": "Found in Okta Admin Console > Settings > Account. Format: dev-XXXXXXXX or your-company.okta.com"
+    },
+    {
+      "key": "lucr3:azure_tenant_id",
+      "required": true,
+      "description": "Azure AD tenant ID (GUID) — same as ARM_TENANT_ID; stored in Pulumi config for use in SAML app configuration",
+      "secret": false,
+      "how_to_get": "Azure Portal > Azure Active Directory > Overview > Tenant ID"
+    },
+    {
+      "key": "lucr3:github_owner",
+      "required": true,
+      "description": "GitHub organization or user name that owns the bait repositories",
+      "secret": false,
+      "how_to_get": "Your GitHub organization name, e.g. my-company"
+    }
+  ],
+  "attack_env_vars": [
+    {
+      "env_var": "PULUMI_CONFIG_PASSPHRASE",
+      "required": true,
+      "description": "Passphrase for Pulumi stack encryption — must match the value used during pulumi up",
+      "how_to_get": "Set any secure passphrase before running pulumi up; reuse the same value here"
+    },
+    {
+      "env_var": "OKTA_VICTIM_USERNAME",
+      "required": true,
+      "description": "Username (email) of the victim Okta user that the phishing attack will target for MFA fatigue",
+      "how_to_get": "The victim user's email address — provisioned by pulumi up; run: pulumi stack output victim_okta_username"
+    },
+    {
+      "env_var": "OKTA_VICTIM_PASSWORD",
+      "required": true,
+      "description": "Password for the victim Okta user — set during provisioning",
+      "how_to_get": "Set during infra provisioning; check the Pulumi stack output or the Okta admin console"
+    },
+    {
+      "env_var": "OKTA_API_TOKEN",
+      "required": true,
+      "description": "Okta API token — attack.py uses it directly to read app assignments and enroll MFA factors on the victim account",
+      "how_to_get": "Okta Admin Console > Security > API > Tokens > Create Token (requires org admin)"
+    },
+    {
+      "env_var": "M365_CLIENT_ID",
+      "required": false,
+      "description": "Azure AD application (client) ID used for M365 / SharePoint data access after SAML pivot — resolved from stack outputs if not set",
+      "how_to_get": "Azure Portal > App registrations > your app > Application (client) ID"
+    }
+  ],
+  "python_packages": [
+    "pulumi>=3.0.0,<4.0.0",
+    "pulumi-aws>=7.0.0,<8.0.0",
+    "pulumi-okta>=4.0.0,<5.0.0",
+    "pulumi-azuread>=5.0.0,<6.0.0",
+    "pulumi-github>=6.0.0,<7.0.0",
+    "boto3>=1.38.0",
+    "requests>=2.28.0"
+  ]
+}

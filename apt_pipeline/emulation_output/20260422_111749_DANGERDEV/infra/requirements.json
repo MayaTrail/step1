@@ -1,0 +1,87 @@
+{
+  "campaign": "DangerDev",
+  "csp": "aws",
+  "providers": {
+    "aws": {
+      "required": true,
+      "credentials": [
+        {
+          "env_var": "AWS_ACCESS_KEY_ID",
+          "description": "AWS access key ID — must have permissions to create EC2, VPC, IAM, CloudTrail, GuardDuty, S3, and Secrets Manager resources"
+        },
+        {
+          "env_var": "AWS_SECRET_ACCESS_KEY",
+          "description": "AWS secret access key"
+        },
+        {
+          "env_var": "AWS_DEFAULT_REGION",
+          "description": "AWS region to deploy into",
+          "default": "us-east-1"
+        }
+      ],
+      "min_permissions": [
+        "ec2:*",
+        "iam:*",
+        "s3:*",
+        "cloudtrail:*",
+        "guardduty:*",
+        "secretsmanager:*",
+        "sts:GetCallerIdentity",
+        "logs:*"
+      ]
+    }
+  },
+  "pulumi_config": [
+    {
+      "key": "dangerdev-emulation-lab:adversaryAccountId",
+      "required": true,
+      "description": "AWS account ID of the adversary (attacker-controlled) account that DangerDev pivots into during the credential abuse chain",
+      "secret": false,
+      "how_to_get": "Run: aws sts get-caller-identity --query Account --output text (in the adversary account)"
+    }
+  ],
+  "attack_env_vars": [
+    {
+      "env_var": "PULUMI_CONFIG_PASSPHRASE",
+      "required": true,
+      "description": "Passphrase for Pulumi stack encryption — must match the value used during pulumi up",
+      "how_to_get": "Set any secure passphrase before running pulumi up; reuse the same value here"
+    },
+    {
+      "env_var": "LAB_OPERATOR_KEY_ID",
+      "required": true,
+      "description": "AWS access key ID for the lab operator IAM user (victim credentials provisioned by pulumi up)",
+      "how_to_get": "Run: pulumi stack output lab_operator_key_id"
+    },
+    {
+      "env_var": "LAB_OPERATOR_SECRET_KEY",
+      "required": true,
+      "description": "AWS secret access key for the lab operator IAM user",
+      "how_to_get": "Run: pulumi stack output --show-secrets lab_operator_secret_key"
+    },
+    {
+      "env_var": "LEAKED_KEY_ID",
+      "required": false,
+      "description": "Access key ID of the leaked IAM key embedded in the terraform.tfstate bait file — resolved automatically from stack outputs",
+      "how_to_get": "Run: pulumi stack output leaked_key_id"
+    },
+    {
+      "env_var": "LEAKED_SECRET_KEY",
+      "required": false,
+      "description": "Secret access key of the leaked IAM key — resolved automatically from stack outputs",
+      "how_to_get": "Run: pulumi stack output --show-secrets leaked_secret_key"
+    },
+    {
+      "env_var": "ACCOUNT_ID",
+      "required": false,
+      "description": "AWS account ID — resolved automatically via sts:GetCallerIdentity if not set",
+      "how_to_get": "Run: aws sts get-caller-identity --query Account --output text"
+    }
+  ],
+  "python_packages": [
+    "pulumi>=3.0.0",
+    "pulumi-aws>=6.0.0",
+    "pulumi-tls>=5.0.0",
+    "boto3>=1.38.0"
+  ]
+}

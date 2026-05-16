@@ -1,0 +1,40 @@
+title: LUCR-3 Backdoor IAM User Creation with Console Access by Federated Principal
+id: d9e3c7a5-2b8f-4d1c-e6b0-3a5c9e1f4b7d
+status: experimental
+description: >
+  Detects the CreateUser + CreateLoginProfile sequence from a federated (AssumedRole)
+  principal. LUCR-3 creates durable IAM backdoor users with console login immediately
+  after pivoting into AWS via SAML, establishing persistence that survives IDP session
+  expiry or victim password resets.
+references:
+    - https://attack.mitre.org/techniques/T1136/003/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.persistence
+    - attack.t1136.003
+    - lucr3
+    - scattered_spider
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_create_user:
+        eventName: 'CreateUser'
+        eventSource: 'iam.amazonaws.com'
+        userIdentity.type: 'AssumedRole'
+    selection_create_login:
+        eventName: 'CreateLoginProfile'
+        eventSource: 'iam.amazonaws.com'
+        userIdentity.type: 'AssumedRole'
+    filter_known_provisioning:
+        userIdentity.arn|contains:
+            - ':role/HRProvisioning'
+            - ':role/IdentitySync'
+            - ':role/SCIMProvider'
+    timeframe: 10m
+    condition: (selection_create_user or selection_create_login) and not filter_known_provisioning
+falsepositives:
+    - Legitimate user provisioning via IaC pipelines that assume a federated deployment role
+    - SCIM provisioning integrations creating IAM users for service accounts
+level: high

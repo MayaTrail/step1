@@ -1,0 +1,16 @@
+{
+  "campaign": "Codefinger",
+  "csp": "aws",
+  "resources": {},
+  "pulumi_export_keys": {
+    "bait_bucket_name":        "bait_bucket_name",
+    "target_bucket_name":      "target_bucket_name",
+    "cloudtrail_bucket_name":  "cloudtrail_bucket_name",
+    "victim_user_name":        "victim_user_name",
+    "trail_name":              "trail_name",
+    "aws_region":              "aws_region",
+    "victim_access_key_id":    "victim_access_key_id",
+    "victim_secret_access_key": "victim_secret_access_key",
+    "exposed_credentials_key": "exposed_credentials_key"
+  }
+}

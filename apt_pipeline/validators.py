@@ -620,26 +620,95 @@ def validate_module_loads(path: Path, timeout: int = 30) -> dict:
     return {"valid": False, "errors": [err[-1000:] if err else f"Exit {result.returncode} with no output"]}
 
 
-def cross_validate_phase5(infra_content: str, attack_content: str) -> dict:
+def cross_validate_phase5(
+    infra_content: str,
+    attack_content: str,
+    resource_names: Optional[dict] = None,
+) -> dict:
     """Cross-check __main__.py vs attack.py for name/path/env-var consistency.
 
-    Catches the class of bugs where the infra generates resource X but attack.py
-    hardcodes a different name Y that was never provisioned.
+    Primary check (check 0): Both files load resource_names.json and all boto3/SDK
+    calls use names from _r() / _p() rather than hardcoded Pulumi logical names.
 
-    Supports two coding styles:
-      - Legacy:    name="aws-name"     (string literal in resource constructor)
-      - Constants: CLUSTER_NAME = "aws-name" ... name=CLUSTER_NAME + pulumi.export("cluster_name", CLUSTER_NAME)
+    Legacy checks (1-9): Retained for backward compatibility with infra that
+    predates resource_names.json; they fire only when resource_names.json is absent.
 
-    For the constants pattern the check verifies the full export-key chain:
-      constant defined → pulumi.export("key", CONST) → attack.py infra.get("key")
+    Args:
+        infra_content:   Text of infra/__main__.py
+        attack_content:  Text of emulation_scripts/attack.py
+        resource_names:  Parsed resource_names.json dict (if available); when
+                         supplied the legacy name-extraction checks are skipped.
 
     Returns {"valid": bool, "errors": list[str], "warnings": list[str]}
     """
     errors: list = []
     warnings: list = []
 
-    # ── 0. Extract module-level constants (UPPER_CASE = "string") ────────────
-    # Covers the Resource Name Constants pattern added in infra_prompt constraint 9.
+    # ── 0. resource_names.json — single source of truth ─────────────────────
+    # New campaigns: __main__.py loads resource_names.json and uses _R["key"].
+    # attack.py loads resource_names.json and uses _r() / _p() helpers.
+    # When resource_names is supplied we validate both files reference it, then
+    # cross-check that attack.py never uses Pulumi logical names as boto3 args.
+
+    has_rn_json = resource_names is not None
+    rn_resources = (resource_names or {}).get("resources", {})
+    rn_pks       = (resource_names or {}).get("pulumi_export_keys", {})
+
+    # 0a. __main__.py must load resource_names.json (only enforced when there are static
+    #     resource names to protect — if resources dict is empty, all names are dynamic
+    #     and resolved via Pulumi exports, so the old infra.get() pattern is still correct).
+    _has_static_resources = bool(rn_resources)
+    if has_rn_json and _has_static_resources:
+        if 'resource_names.json' not in infra_content:
+            errors.append(
+                "__main__.py does not load resource_names.json — resource names will be defined "
+                "as inline constants that attack.py cannot share; hardcoded names will diverge."
+            )
+        # 0b. attack.py must load resource_names.json (same gate — only when static names exist)
+        if 'resource_names.json' not in attack_content:
+            errors.append(
+                "attack.py does not load resource_names.json — it will hardcode or guess resource "
+                "names that may differ from what __main__.py provisions at deploy time."
+            )
+        # 0c. Every key in resource_names["resources"] should be referenced in attack.py
+        #     via _r("key") — warn on unused keys (coverage check).
+        unused_keys = []
+        for key in rn_resources:
+            if f'_r("{key}"' not in attack_content and f"_r('{key}'" not in attack_content:
+                unused_keys.append(key)
+        if unused_keys and len(unused_keys) < len(rn_resources):
+            # Only warn if some keys are used (avoids noise on fully-legacy scripts)
+            warnings.append(
+                f"resource_names.json keys not referenced in attack.py via _r(): {unused_keys} — "
+                f"verify these resources are not needed by the attack chain."
+            )
+        # 0d. Cross-check: attack.py must not use a Pulumi logical name that differs
+        #     from the corresponding AWS name in resource_names["resources"].
+        #     Pulumi logical names appear as the first arg to resource constructors in infra.
+        logical_names: set = set(re.findall(
+            r'aws\.\w+\.\w+\s*\(\s*["\']([^"\']+)["\']', infra_content
+        ))
+        aws_names: set = set(rn_resources.values())
+        pulumi_only = logical_names - aws_names  # names that exist as logical but not as AWS names
+        for name in pulumi_only:
+            if f'"{name}"' in attack_content or f"'{name}'" in attack_content:
+                errors.append(
+                    f"attack.py uses Pulumi logical name '{name}' in a string literal — "
+                    f"this is NOT an AWS resource name and will cause ResourceNotFoundException. "
+                    f"Use _r('<key>') from resource_names.json instead."
+                )
+        # When resource_names.json is present the legacy checks below are largely
+        # redundant — skip the noisy ones but keep the structural checks (3, 4, 5, 11).
+        _skip_legacy_name_checks = True
+    else:
+        warnings.append(
+            "resource_names.json not supplied to cross_validate_phase5 — running legacy name "
+            "checks. New campaigns should write resource_names.json from the infra implementor."
+        )
+        _skip_legacy_name_checks = False
+
+    # ── Extract module-level constants (UPPER_CASE = "string") ───────────────
+    # Used by legacy checks 1-9 when resource_names.json is absent.
     constants: dict = {}
     for m in re.finditer(r'^([A-Z][A-Z0-9_]+)\s*=\s*["\']([^"\']+)["\']', infra_content, re.MULTILINE):
         constants[m.group(1)] = m.group(2)
@@ -685,55 +754,55 @@ def cross_validate_phase5(infra_content: str, attack_content: str) -> dict:
             or f"infra['{key}']" in attack_content
         )
 
-    # ── 1. ECS cluster name ──────────────────────────────────────────────────
-    const_name, cluster_name = _extract_arg(infra_content, "aws.ecs.Cluster(", "name")
-    if cluster_name:
-        if const_name:
-            # Constants pattern: verify the export-key chain
-            export_key = _find_export_key(const_name)
-            if not export_key:
-                errors.append(
-                    f"ECS cluster constant {const_name}='{cluster_name}' is not exported via "
-                    f"pulumi.export() — attack.py cannot resolve cluster name from stack outputs"
-                )
-            elif not _attack_reads_key(export_key):
-                errors.append(
-                    f"attack.py doesn't read export key '{export_key}' (ECS cluster name) — "
-                    f"RunTask / DescribeTasks will receive an empty cluster name"
-                )
+    # ── 1. ECS cluster name (legacy check — skipped when resource_names.json present) ──
+    if not _skip_legacy_name_checks:
+        const_name, cluster_name = _extract_arg(infra_content, "aws.ecs.Cluster(", "name")
+        if cluster_name:
+            if const_name:
+                export_key = _find_export_key(const_name)
+                if not export_key:
+                    errors.append(
+                        f"ECS cluster constant {const_name}='{cluster_name}' is not exported via "
+                        f"pulumi.export() — attack.py cannot resolve cluster name from stack outputs"
+                    )
+                elif not _attack_reads_key(export_key):
+                    errors.append(
+                        f"attack.py doesn't read export key '{export_key}' (ECS cluster name) — "
+                        f"RunTask / DescribeTasks will receive an empty cluster name"
+                    )
+            else:
+                if f'"{cluster_name}"' not in attack_content and f"'{cluster_name}'" not in attack_content:
+                    errors.append(
+                        f"ECS cluster name '{cluster_name}' (from __main__.py) not found in "
+                        f"attack.py — RunTask / DescribeTasks will fail with ClusterNotFoundException"
+                    )
         else:
-            # Legacy pattern: string literal must appear in attack.py
-            if f'"{cluster_name}"' not in attack_content and f"'{cluster_name}'" not in attack_content:
-                errors.append(
-                    f"ECS cluster name '{cluster_name}' (from __main__.py) not found in "
-                    f"attack.py — RunTask / DescribeTasks will fail with ClusterNotFoundException"
-                )
-    else:
-        warnings.append("Could not extract ECS cluster name from __main__.py")
+            warnings.append("Could not extract ECS cluster name from __main__.py")
 
-    # ── 2. Task definition family ────────────────────────────────────────────
-    const_name, family_name = _extract_arg(infra_content, "aws.ecs.TaskDefinition(", "family")
-    if family_name:
-        if const_name:
-            export_key = _find_export_key(const_name)
-            if not export_key:
-                errors.append(
-                    f"Task definition constant {const_name}='{family_name}' is not exported via "
-                    f"pulumi.export() — attack.py cannot resolve task family from stack outputs"
-                )
-            elif not _attack_reads_key(export_key):
-                errors.append(
-                    f"attack.py doesn't read export key '{export_key}' (task definition family) — "
-                    f"RunTask will receive an empty taskDefinition"
-                )
+    # ── 2. Task definition family (legacy check) ─────────────────────────────
+    if not _skip_legacy_name_checks:
+        const_name, family_name = _extract_arg(infra_content, "aws.ecs.TaskDefinition(", "family")
+        if family_name:
+            if const_name:
+                export_key = _find_export_key(const_name)
+                if not export_key:
+                    errors.append(
+                        f"Task definition constant {const_name}='{family_name}' is not exported via "
+                        f"pulumi.export() — attack.py cannot resolve task family from stack outputs"
+                    )
+                elif not _attack_reads_key(export_key):
+                    errors.append(
+                        f"attack.py doesn't read export key '{export_key}' (task definition family) — "
+                        f"RunTask will receive an empty taskDefinition"
+                    )
+            else:
+                if f'"{family_name}"' not in attack_content and f"'{family_name}'" not in attack_content:
+                    errors.append(
+                        f"Task definition family '{family_name}' (from __main__.py) not found in "
+                        f"attack.py — RunTask will fail with InvalidParameterException"
+                    )
         else:
-            if f'"{family_name}"' not in attack_content and f"'{family_name}'" not in attack_content:
-                errors.append(
-                    f"Task definition family '{family_name}' (from __main__.py) not found in "
-                    f"attack.py — RunTask will fail with InvalidParameterException"
-                )
-    else:
-        warnings.append("Could not extract task definition family from __main__.py")
+            warnings.append("Could not extract task definition family from __main__.py")
 
     # ── 3. --show-secrets in get_pulumi_outputs ──────────────────────────────
     if "get_pulumi_outputs" in attack_content:
@@ -772,24 +841,58 @@ def cross_validate_phase5(infra_content: str, attack_content: str) -> dict:
                 f"auto-trigger will pass empty string to RunTask"
             )
 
-    # ── 6. Pulumi export key ↔ infra dict key alignment ─────────────────────
+    # ── 6. Pulumi export key ↔ _p() key alignment (new pattern) ─────────────
+    # New pattern: attack.py uses _p(infra, "semantic_key") where semantic_key maps
+    # to a pulumi export via pulumi_export_keys in resource_names.json.
+    # Legacy pattern: attack.py uses infra.get("export_key") directly.
+    # Check both: dynamic reads must resolve to an exported key.
     exported_keys: set = set(re.findall(r'pulumi\.export\s*\(\s*["\']([^"\']+)["\']', infra_content))
-    infra_reads: set  = set(re.findall(r'infra(?:\.get\s*\(\s*|\[)["\']([^"\']+)["\']', attack_content))
-    unresolvable = infra_reads - exported_keys
-    if unresolvable:
-        errors.append(
-            f"attack.py reads infra keys {sorted(unresolvable)} that __main__.py does not export — "
-            f"these will always be empty/None at runtime. "
-            f"Exported keys: {sorted(exported_keys)}"
-        )
 
-    # ── 7. Victim IAM policy must allow sts:AssumeRole ───────────────────────
-    if "UserPolicy" in infra_content or "user_policy" in infra_content or '"iam:CreateRole"' in infra_content:
-        if "sts:AssumeRole" not in infra_content:
+    # New pattern reads: _p(infra, "semantic_key") → resolves via _PKS
+    new_pattern_reads: set = set(re.findall(r'_p\s*\(\s*\w+\s*,\s*["\']([^"\']+)["\']', attack_content))
+    if has_rn_json and new_pattern_reads:
+        # Each semantic_key must appear in pulumi_export_keys and its mapped export key must be exported
+        for sem_key in new_pattern_reads:
+            mapped_export = rn_pks.get(sem_key)
+            if mapped_export and mapped_export not in exported_keys:
+                errors.append(
+                    f"attack.py calls _p(infra, '{sem_key}') → maps to pulumi export key "
+                    f"'{mapped_export}' via resource_names.json, but __main__.py does not export "
+                    f"that key via pulumi.export() — value will be empty at runtime."
+                )
+            elif not mapped_export:
+                warnings.append(
+                    f"attack.py calls _p(infra, '{sem_key}') but '{sem_key}' is not in "
+                    f"resource_names.json pulumi_export_keys — falling back to direct key lookup."
+                )
+
+    # Legacy pattern reads: infra.get("export_key") or infra["export_key"]
+    legacy_reads: set = set(re.findall(r'infra(?:\.get\s*\(\s*|\[)["\']([^"\']+)["\']', attack_content))
+    if not has_rn_json:
+        # Only run legacy check when resource_names.json is absent
+        unresolvable = legacy_reads - exported_keys
+        if unresolvable:
             errors.append(
-                "Victim IAM policy appears to be defined but lacks 'sts:AssumeRole' — "
-                "the victim cannot assume attacker-created roles at runtime (Phase 4 will fail)"
+                f"attack.py reads infra keys {sorted(unresolvable)} that __main__.py does not export — "
+                f"these will always be empty/None at runtime. "
+                f"Exported keys: {sorted(exported_keys)}"
             )
+
+    # ── 7. Victim IAM policy must allow sts:AssumeRole (only when attack uses role assumption) ──
+    # Only fire when attack.py actually calls assume_role / AssumeRole — campaigns like
+    # ransomware (Codefinger) provision a victim user policy without needing role assumption.
+    _attack_uses_assume_role = (
+        "assume_role" in attack_content
+        or "AssumeRole" in attack_content
+        or "sts:AssumeRole" in attack_content
+    )
+    if _attack_uses_assume_role:
+        if "UserPolicy" in infra_content or "user_policy" in infra_content or '"iam:CreateRole"' in infra_content:
+            if "sts:AssumeRole" not in infra_content:
+                errors.append(
+                    "Victim IAM policy appears to be defined but lacks 'sts:AssumeRole' — "
+                    "the victim cannot assume attacker-created roles at runtime (Phase 4 will fail)"
+                )
 
     # ── 8. Removed AWS managed policy blocklist ──────────────────────────────
     _removed_policies = ["AmplifyFullAccess"]
@@ -800,43 +903,38 @@ def cross_validate_phase5(infra_content: str, attack_content: str) -> dict:
                 f"AttachRolePolicy/attach_role_policy will return NoSuchEntity at runtime"
             )
 
-    # ── 9. Pulumi logical name vs AWS resource name in attack.py ─────────────
-    # Build a map logical_name → aws_name for resources where they differ.
-    # Handles both: name="literal" and name=CONST_NAME (resolved via constants dict).
-    logical_name_map = {}
-    for m in re.finditer(
-        r'aws\.\w+\.\w+\s*\(\s*\n?\s*["\']([^"\']+)["\']'        # logical name (group 1)
-        r'[\s\S]{0,400}?\bname\s*=\s*'                             # name= kwarg
-        r'(?:["\']([^"\']+)["\']|([A-Z][A-Z0-9_]+))',             # literal (group 2) or const (group 3)
-        infra_content,
-    ):
-        logical = m.group(1)
-        aws_name = m.group(2) or constants.get(m.group(3) or "", "")
-        if aws_name and logical != aws_name:
-            logical_name_map[logical] = aws_name
+    # ── 9. Pulumi logical name vs AWS resource name (legacy check) ───────────
+    # Replaced by check 0d when resource_names.json is present.
+    if not _skip_legacy_name_checks:
+        logical_name_map = {}
+        for m in re.finditer(
+            r'aws\.\w+\.\w+\s*\(\s*\n?\s*["\']([^"\']+)["\']'
+            r'[\s\S]{0,400}?\bname\s*=\s*'
+            r'(?:["\']([^"\']+)["\']|([A-Z][A-Z0-9_]+))',
+            infra_content,
+        ):
+            logical = m.group(1)
+            aws_name = m.group(2) or constants.get(m.group(3) or "", "")
+            if aws_name and logical != aws_name:
+                logical_name_map[logical] = aws_name
 
-    for logical, aws_name in logical_name_map.items():
-        if f'"{logical}"' in attack_content or f"'{logical}'" in attack_content:
+        for logical, aws_name in logical_name_map.items():
+            if f'"{logical}"' in attack_content or f"'{logical}'" in attack_content:
+                errors.append(
+                    f"attack.py references Pulumi logical name '{logical}' but AWS resource name is '{aws_name}' — "
+                    f"boto3 calls using '{logical}' will fail with ResourceNotFoundException"
+                )
+
+    # ── 10. Dynamic reads must map to exported keys ───────────────────────────
+    # (Covers both _p() and legacy infra.get() patterns for campaigns without resource_names.json)
+    if not has_rn_json and legacy_reads:
+        missing = legacy_reads - exported_keys
+        if missing:
             errors.append(
-                f"attack.py references Pulumi logical name '{logical}' but AWS resource name is '{aws_name}' — "
-                f"boto3 calls using '{logical}' will fail with ResourceNotFoundException"
+                f"attack.py reads infra keys {sorted(missing)} via infra.get() / infra[] "
+                f"that __main__.py does not export — these will be empty/None at runtime. "
+                f"Exported keys: {sorted(exported_keys)}"
             )
-
-    # ── 10. Required export keys must be present ─────────────────────────────
-    # These keys are read unconditionally by attack.py — their absence means
-    # victim creds or networking config will be missing at runtime.
-    _required_exports = {
-        "victim_access_key_id",
-        "victim_secret_access_key",
-        "subnet_id",
-        "task_sg_id",
-    }
-    missing_required = _required_exports - exported_keys
-    if missing_required:
-        errors.append(
-            f"Required Pulumi export keys are missing from __main__.py: {sorted(missing_required)} — "
-            f"attack.py reads these unconditionally; their absence causes runtime abort or empty values"
-        )
 
     # ── 11. PULUMI_CONFIG_PASSPHRASE must be forwarded to Pulumi subprocess ───
     if "get_pulumi_outputs" in attack_content:

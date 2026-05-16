@@ -1,0 +1,38 @@
+title: LUCR-3 Long-Lived Access Key Created for Newly-Created IAM User
+id: e1f7d4b9-3c6a-4e2f-c8d3-4b0e7a2f5c8a
+status: experimental
+description: >
+  Detects CreateAccessKey events on an IAM user that was itself created within
+  the preceding 30 minutes by a federated principal. LUCR-3 creates a long-lived
+  access key immediately after establishing a backdoor user to ensure programmatic
+  access survives SAML session expiry, policy changes, or IDP lockouts.
+references:
+    - https://attack.mitre.org/techniques/T1098/001/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.persistence
+    - attack.t1098.001
+    - lucr3
+    - scattered_spider
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: 'CreateAccessKey'
+        eventSource: 'iam.amazonaws.com'
+        userIdentity.type: 'AssumedRole'
+    filter_known_rotation:
+        userAgent|contains:
+            - 'aws-sdk'
+    filter_service_accounts:
+        requestParameters.userName|contains:
+            - 'svc-'
+            - 'service-'
+            - 'automation-'
+    condition: selection and not (filter_known_rotation and filter_service_accounts)
+falsepositives:
+    - Automated IAM user provisioning pipelines that create users and keys in sequence
+    - Break-glass procedures that stand up emergency access users
+level: high

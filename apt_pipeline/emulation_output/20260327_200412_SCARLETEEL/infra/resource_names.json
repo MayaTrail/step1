@@ -1,0 +1,12 @@
+{
+  "campaign": "SCARLETEEL",
+  "csp": "aws",
+  "resources": {},
+  "pulumi_export_keys": {
+    "vuln_instance_ip": "vuln_instance_ip",
+    "vuln_instance_id": "vuln_instance_id",
+    "bait_user":        "bait_user",
+    "trail_name":       "trail_name",
+    "tf_state_bucket":  "tf_state_bucket"
+  }
+}

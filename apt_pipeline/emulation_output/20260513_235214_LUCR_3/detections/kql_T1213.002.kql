@@ -1,0 +1,27 @@
+// T1213.002 - Data from Information Repositories: SharePoint
+// Detects bulk SharePoint file access via federated identity - LUCR-3 M365 collection
+// Log source: OfficeActivity (M365 Unified Audit Log via Microsoft Sentinel connector)
+OfficeActivity
+| where Operation == "FileAccessed"
+| where OfficeWorkload == "SharePoint"
+| where not(ClientAppId has_any ("OneDriveMpc", "Microsoft SkyDriveSync", "ManagedFolderAssistant"))
+| summarize
+    FileCount       = count(),
+    UniqueFiles     = dcount(OfficeObjectId),
+    UniqueSites     = dcount(SiteUrl),
+    FirstAccess     = min(TimeGenerated),
+    LastAccess      = max(TimeGenerated)
+    by bin(TimeGenerated, 10m), UserId, ClientIP
+| where FileCount > 50
+| extend AccessWindowMinutes = datetime_diff("minute", LastAccess, FirstAccess)
+| project
+    TimeGenerated,
+    UserId,
+    ClientIP,
+    FileCount,
+    UniqueFiles,
+    UniqueSites,
+    AccessWindowMinutes,
+    FirstAccess,
+    LastAccess
+| sort by FileCount desc

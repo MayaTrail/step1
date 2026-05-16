@@ -1,0 +1,547 @@
+{
+  "status": "PHASE_1_COMPLETE",
+  "platform": "multi_cloud",
+  "sandbox_vpc": {
+    "cidr": "10.99.0.0/16",
+    "subnets": [
+      {
+        "cidr": "10.99.1.0/24",
+        "az": "us-east-1a",
+        "type": "public"
+      }
+    ],
+    "isolation_rules": "No peering, no transit gateway. NAT gateway for outbound only. All inbound blocked except SSH from operator CIDR.",
+    "flow_logs": true
+  },
+  "resources": [
+    {
+      "name": "lucr3-okta-victim-user",
+      "pulumi_type": "okta.user.User",
+      "resource_category": "attack_surface",
+      "purpose": "Pre-seeded Okta user with known credentials simulating a credential purchased from a deepweb marketplace or obtained via smishing. Serves as the initial foothold for T1078.004.",
+      "techniques_served": [
+        "T1078.004",
+        "T1621"
+      ],
+      "configuration_notes": "Username: victim.employee@lab.internal. Password pre-set to a known value stored in lab runbook (not in Pulumi state). MFA enrolled with SMS only (no hardware key, no Okta Verify push). Profile includes realistic job title (e.g., 'Cloud Infrastructure Engineer') to match LUCR-3 targeting of high-value IT personas. DO NOT use real production credentials.",
+      "depends_on": [
+        "lucr3-okta-mfa-sms-policy"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "lucr3-okta-mfa-sms-policy",
+      "pulumi_type": "okta.policy.MfaDefault",
+      "resource_category": "attack_surface",
+      "purpose": "MFA enrollment policy permitting SMS/email OTP as valid factors with no phishing-resistant requirement. Enables MFA fatigue (T1621) and simulated OTP interception (T1111 documented-only) by making the enrolled factor susceptible to social engineering the helpdesk.",
+      "techniques_served": [
+        "T1621",
+        "T1111"
+      ],
+      "configuration_notes": "Set okta_password, okta_otp (SMS), and okta_email as allowed factors. Disable Okta FastPass and WebAuthn/FIDO2. Set okta_verify push notifications to 'OPTIONAL' so the emulator can demonstrate MFA fatigue flooding. Policy priority set to 1 to override org defaults. T1111 (SIM swap) is simulated via a mock TOTP server \u2014 do not configure real SMS relay.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "lucr3-okta-attacker-device",
+      "pulumi_type": "okta.TrustedOrigin",
+      "resource_category": "attack_surface",
+      "purpose": "Represents attacker-registered device after MFA bypass, simulating T1098.005 persistent enrollment. In emulation, operator pre-registers a lab device as a trusted Okta Verify enrollment to model the persistence mechanism without performing live SIM swap.",
+      "techniques_served": [
+        "T1098.005"
+      ],
+      "configuration_notes": "Register lab operator's device via Okta Admin API (POST /api/v1/users/{userId}/factors) using TOTP software token as the enrolled factor. This simulates the attacker adding their own device after initial MFA bypass. pulumi_type is approximate \u2014 actual enrollment is via Okta API call in the attack script, not a declarative Pulumi resource. Document the API call in the emulation runbook.",
+      "depends_on": [
+        "lucr3-okta-victim-user"
+      ],
+      "cleanup_method": "DELETE /api/v1/users/{userId}/factors/{factorId} via Okta API",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "lucr3-azuread-saml-app",
+      "pulumi_type": "azuread.Application",
+      "resource_category": "attack_surface",
+      "purpose": "Azure AD (Entra ID) application registration configured as SAML Service Provider federated from Okta. After IDP session takeover, attacker uses federated trust to pivot from Okta into Azure AD-backed resources (SharePoint, OneDrive, M365) \u2014 serving T1213.002 and T1070.008.",
+      "techniques_served": [
+        "T1098.005",
+        "T1213.002",
+        "T1070.008"
+      ],
+      "configuration_notes": "App registration type: SAML. Configure Okta as SAML IdP pointing to this Azure AD SP. Assign victim user to application. Set required_resource_access to include 'Sites.Read.All', 'Mail.ReadWrite', 'Files.ReadWrite.All' (Microsoft Graph) to simulate over-permissioned OAuth app. Legacy authentication protocols (Basic Auth / IMAP) left enabled on the M365 tenant to model real-world LUCR-3 target environments.",
+      "depends_on": [
+        "lucr3-okta-victim-user"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "lucr3-aws-saml-idp",
+      "pulumi_type": "aws.iam.SamlProvider",
+      "resource_category": "attack_surface",
+      "purpose": "AWS IAM SAML identity provider federating the Okta org into AWS. After attacker establishes an Okta session (phases 1-3), they use AssumeRoleWithSAML to obtain temporary AWS credentials through this trust relationship \u2014 the bridge between identity compromise and cloud access.",
+      "techniques_served": [
+        "T1078.004",
+        "T1580"
+      ],
+      "configuration_notes": "Upload Okta SAML metadata XML as the saml_metadata_document. Name: 'lucr3-okta-saml-idp'. The SAML assertion must include the 'https://aws.amazon.com/SAML/Attributes/Role' attribute mapping to lucr3-privileged-federated-role. Obtain Okta SAML metadata from: Admin Console > Security > Identity Providers > Download metadata.",
+      "depends_on": [
+        "lucr3-okta-mfa-sms-policy"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "lucr3-privileged-federated-role",
+      "pulumi_type": "aws.iam.Role",
+      "resource_category": "attack_surface",
+      "purpose": "Over-privileged IAM role assumable via SAML federation from Okta. Intentionally granted broad permissions across IAM, S3, EC2, GuardDuty, CloudTrail, SecretsManager, and DynamoDB to model the blast radius LUCR-3 achieves post-federation. Enables all api_attack-context techniques.",
+      "techniques_served": [
+        "T1580",
+        "T1619",
+        "T1082",
+        "T1098",
+        "T1136.003",
+        "T1098.001",
+        "T1555.006",
+        "T1578.002",
+        "T1562.001",
+        "T1562.008",
+        "T1530"
+      ],
+      "configuration_notes": "Trust policy: Principal = {Federated: lucr3-aws-saml-idp ARN}, Action = sts:AssumeRoleWithSAML, Condition = SAML:aud = 'https://signin.aws.amazon.com/saml'. Attach lucr3-attacker-broad-policy. Over-permissioned intentionally: LUCR-3 abuses Okta-to-AWS federation to land with near-admin rights. Max session duration: 43200 seconds (12 hours) to model long-lived sessions.",
+      "depends_on": [
+        "lucr3-aws-saml-idp"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "lucr3-attacker-iam-user",
+      "pulumi_type": "aws.iam.User",
+      "resource_category": "attack_surface",
+      "purpose": "IAM user created by the attacker during persistence phase (T1136.003). Serves as a backdoor identity independent of the federated role. T1098.001 is demonstrated by generating an access key for this user.",
+      "techniques_served": [
+        "T1136.003",
+        "T1098.001",
+        "T1098"
+      ],
+      "configuration_notes": "Username: 'svc-automation-lucr3'. No console password \u2014 access key only (generated during attack.py phase 8 via iam:CreateAccessKey). This user is created by the attack script itself using the federated role's permissions; the Pulumi resource here pre-provisions the user to ensure idempotency. Attach lucr3-attacker-broad-policy.",
+      "depends_on": [
+        "lucr3-privileged-federated-role"
+      ],
+      "cleanup_method": "pulumi destroy + revoke access keys",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "lucr3-cloudtrail",
+      "pulumi_type": "aws.cloudtrail.Trail",
+      "resource_category": "attack_surface",
+      "purpose": "CloudTrail trail covering the sandbox account. Exists to be disabled by the attacker (T1562.008) using cloudtrail:StopLogging, modelling LUCR-3's observed pattern of impairing logging before bulk exfiltration.",
+      "techniques_served": [
+        "T1562.008"
+      ],
+      "configuration_notes": "Multi-region trail, management events enabled, S3 bucket = lucr3-log-bucket. enable_log_file_validation = true (attacker's disable action is more impactful and observable in detection use cases). The attack script calls aws cloudtrail stop-logging --name lucr3-cloudtrail to emulate T1562.008.",
+      "depends_on": [
+        "lucr3-log-bucket"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.001
+    },
+    {
+      "name": "lucr3-guardduty-detector",
+      "pulumi_type": "aws.guardduty.Detector",
+      "resource_category": "attack_surface",
+      "purpose": "GuardDuty detector that the attacker disables (T1562.001) to suppress threat detection before bulk S3 exfiltration. Models LUCR-3's observed pattern of disabling security tooling prior to data theft.",
+      "techniques_served": [
+        "T1562.001"
+      ],
+      "configuration_notes": "enable = true. S3 protection and Malware protection enabled. The attack script calls aws guardduty delete-detector or update-detector with enable=false to emulate T1562.001. Finding types to watch for before disable: UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration, Recon:IAMUser/MaliciousIPCaller.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.004
+    },
+    {
+      "name": "lucr3-s3-corporate-data",
+      "pulumi_type": "aws.s3.Bucket",
+      "resource_category": "target",
+      "purpose": "Simulates a corporate data lake containing sensitive IP. LUCR-3 exfiltrates objects via S3 Browser 10.9.9 or AWS CloudShell (T1530) after discovery via ListBuckets/ListObjects (T1619).",
+      "techniques_served": [
+        "T1530",
+        "T1619"
+      ],
+      "configuration_notes": "Bucket name: 'lucr3-corporate-data-{account_id}'. ACL: private. Versioning enabled. Populate with synthetic files: financial_projections_2025.xlsx, customer_pii_export.csv, merger_acquisition_docs.pdf (all containing fake data). Block public access: all true. No bucket policy granting external access. Server-side encryption: AES256.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy (empty bucket first)",
+      "estimated_cost_usd_hr": 0.0003
+    },
+    {
+      "name": "lucr3-s3-engineering-artifacts",
+      "pulumi_type": "aws.s3.Bucket",
+      "resource_category": "target",
+      "purpose": "Engineering artifact store simulating internal tooling, deployment packages, and build artifacts. LUCR-3 targets engineering S3 buckets to find embedded secrets, IaC state files, and source code.",
+      "techniques_served": [
+        "T1530",
+        "T1619",
+        "T1555.006"
+      ],
+      "configuration_notes": "Bucket name: 'lucr3-engineering-artifacts-{account_id}'. Populate with: deploy-scripts/setup.sh (containing fake DB_PASSWORD), build-artifacts/app-v2.3.1.zip, .env.production (fake STRIPE_SECRET_KEY, SENDGRID_API_KEY). Block public access: all true. This bucket also receives the bait terraform.tfstate object.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy (empty bucket first)",
+      "estimated_cost_usd_hr": 0.0003
+    },
+    {
+      "name": "lucr3-secrets-prod-db",
+      "pulumi_type": "aws.secretsmanager.Secret",
+      "resource_category": "target",
+      "purpose": "SecretsManager secret containing synthetic database credentials. LUCR-3 uses CloudShell and AWS CLI to scrape SecretsManager (T1555.006) after landing in the account. Populated with synthetic values only.",
+      "techniques_served": [
+        "T1555.006"
+      ],
+      "configuration_notes": "Secret name: 'prod/database/master_credentials'. Value (JSON): {\"username\": \"dbadmin\", \"password\": \"Synth3tic!Pass#2025\", \"host\": \"prod-rds.lab.internal\", \"port\": 5432}. DO NOT use real credentials. KMS key: aws/secretsmanager (default). No resource policy restricting access \u2014 intentionally accessible to lucr3-privileged-federated-role to simulate over-permissioned environment.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.00056
+    },
+    {
+      "name": "lucr3-secrets-stripe-api",
+      "pulumi_type": "aws.secretsmanager.Secret",
+      "resource_category": "target",
+      "purpose": "Synthetic payment processor API key in SecretsManager. Models LUCR-3's observed behavior of scraping third-party API keys and partner credentials (T1555.006) to enable downstream extortion or account takeover.",
+      "techniques_served": [
+        "T1555.006"
+      ],
+      "configuration_notes": "Secret name: 'prod/payments/stripe_secret_key'. Value: {\"key\": \"sk_live_SYNTHETIC_FAKE_KEY_FOR_EMULATION_ONLY_DO_NOT_USE\"}. This is a clearly fake synthetic value \u2014 confirm no real Stripe test keys are used. Secret is accessible to lucr3-privileged-federated-role.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.00056
+    },
+    {
+      "name": "lucr3-dynamodb-customer-records",
+      "pulumi_type": "aws.dynamodb.Table",
+      "resource_category": "target",
+      "purpose": "DynamoDB table containing synthetic customer PII, modelling high-value data stores LUCR-3 targets for extortion leverage (T1530). Attacker discovers via CloudShell and exfiltrates via Scan/Query.",
+      "techniques_served": [
+        "T1530",
+        "T1580"
+      ],
+      "configuration_notes": "Table name: 'lucr3-CustomerRecords'. Billing mode: PAY_PER_REQUEST. Hash key: 'customerId' (S). Attributes: customerId, email, ssn_last4, creditCardBin, accountBalance. Populate with 100 synthetic rows using Faker. IAM permissions on lucr3-privileged-federated-role include dynamodb:Scan, dynamodb:Query, dynamodb:GetItem.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0001
+    },
+    {
+      "name": "lucr3-ec2-target",
+      "pulumi_type": "aws.ec2.Instance",
+      "resource_category": "target",
+      "purpose": "EC2 instance serving as lateral movement target for T1021.004 (SSH) via AWS SSM Session Manager or direct SSH. Also models T1578.002 by demonstrating EC2 instance creation from the compromised federated role.",
+      "techniques_served": [
+        "T1021.004",
+        "T1578.002",
+        "T1082"
+      ],
+      "configuration_notes": "AMI: latest Amazon Linux 2023 (us-east-1). Instance type: t3.micro. Subnet: lucr3-subnet-pub. Security group: lucr3-sg-ec2. IAM instance profile: lucr3-instance-profile. metadata_options: {http_tokens: 'optional', http_endpoint: 'enabled'} \u2014 IMDSv1 left enabled to model realistic misconfiguration (LUCR-3 uses IMDS for credential harvesting on EC2). Key pair: lucr3-lab-keypair (generate and store securely in lab runbook). SSM agent pre-installed (AL2023 default).",
+      "depends_on": [
+        "lucr3-vpc",
+        "lucr3-subnet-pub",
+        "lucr3-sg-ec2",
+        "lucr3-instance-profile"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0104
+    },
+    {
+      "name": "lucr3-github-target-repo",
+      "pulumi_type": "github.Repository",
+      "resource_category": "target",
+      "purpose": "Private GitHub repository containing synthetic application source code. LUCR-3 exfiltrates code repositories (T1213.003) after obtaining GitHub PATs from SecretsManager or generating new ones via the SaaS UI.",
+      "techniques_served": [
+        "T1213.003",
+        "T1550.001"
+      ],
+      "configuration_notes": "Repository name: 'lucr3-core-platform'. Visibility: private. Populate with: Python/Node application code, Dockerfile, .github/workflows/deploy.yml (with fake secrets in env vars), terraform/ directory. Add a synthetic GITHUB_TOKEN and AWS_SECRET_ACCESS_KEY in repo secrets (fake values). Org-level PAT policy: allow fine-grained tokens with no expiry to simulate T1550.001. Requires GitHub provider configured with lab org token.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "lucr3-m365-sharepoint-site",
+      "pulumi_type": "manual_setup",
+      "resource_category": "target",
+      "purpose": "SharePoint Online site containing sensitive corporate documents for T1213.002 collection and OneDrive files for T1530. M365 mailbox enables T1070.008 (mailbox data clearing) post-exfiltration.",
+      "techniques_served": [
+        "T1213.002",
+        "T1070.008",
+        "T1530"
+      ],
+      "configuration_notes": "MANUAL SETUP REQUIRED (no stable Pulumi provider for M365 consumer features). Steps: (1) Create M365 E3 trial tenant. (2) Assign victim user license. (3) Create SharePoint site 'Corporate-Internal' with document libraries: HR/, Finance/, Engineering/. (4) Upload synthetic docs: Q4_Board_Deck.pptx, Employee_Salary_Bands.xlsx, Acquisition_Target_Analysis.pdf. (5) Enable legacy authentication (IMAP/SMTP AUTH) in Exchange Admin Center. (6) Configure Conditional Access in Azure AD with no MFA requirement for legacy auth protocols. T1070.008 emulated via: Connect-ExchangeOnline; Remove-MailboxMessage.",
+      "depends_on": [
+        "lucr3-azuread-saml-app"
+      ],
+      "cleanup_method": "Delete M365 trial tenant after exercise",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "lucr3-bait-terraform-state",
+      "pulumi_type": "aws.s3.BucketObject",
+      "resource_category": "bait",
+      "purpose": "Fake terraform.tfstate file embedded in the engineering S3 bucket containing hardcoded synthetic credentials. LUCR-3 actively searches for IaC state files as a lateral movement and credential harvesting technique. Triggers canary alert if accessed.",
+      "techniques_served": [
+        "T1555.006",
+        "T1619"
+      ],
+      "configuration_notes": "Key: 'terraform/prod/terraform.tfstate'. Content: valid terraform.tfstate JSON containing: fake aws_access_key_id (AKIA + 16 synthetic chars), fake aws_secret_access_key, fake database_password, fake github_token. Embed a CloudWatch canary: configure S3 object access notification \u2192 EventBridge rule \u2192 SNS alert when this specific object key is GetObject'd. This is a high-fidelity bait \u2014 the canary fires before the attacker realizes they found bait.",
+      "depends_on": [
+        "lucr3-s3-engineering-artifacts"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "lucr3-bait-honey-iam-user",
+      "pulumi_type": "aws.iam.User",
+      "resource_category": "bait",
+      "purpose": "Canary IAM user designed to look like a high-value service account. Any API call made with this user's credentials triggers an immediate detection alert. Realistic naming makes it an attractive target for LUCR-3's IAM enumeration phase.",
+      "techniques_served": [
+        "T1098",
+        "T1136.003"
+      ],
+      "configuration_notes": "Username: 'svc-terraform-automation'. Tags: {Description: 'Terraform automation service account', Team: 'Platform Engineering'}. Generate a canary access key (store in lucr3-bait-honey-credentials secret). Configure CloudWatch Events rule: any CloudTrail API call with this user's ARN \u2192 SNS alert 'CANARY TRIGGERED: honey IAM user accessed'. User has NO real permissions (attach an explicit deny-all policy) but the access key itself is valid for detection purposes.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "lucr3-bait-honey-credentials",
+      "pulumi_type": "aws.secretsmanager.Secret",
+      "resource_category": "bait",
+      "purpose": "SecretsManager secret containing the canary access key for the honey IAM user. Named to look like a high-value production secret LUCR-3 would prioritize. GetSecretValue call triggers detection.",
+      "techniques_served": [
+        "T1555.006"
+      ],
+      "configuration_notes": "Secret name: 'prod/infrastructure/terraform-automation-key'. Value: {\"access_key_id\": \"<canary-key-id>\", \"secret_access_key\": \"<canary-secret>\"}. Configure EventBridge rule: cloudtrail:GetSecretValue on this secret ARN \u2192 SNS 'CANARY TRIGGERED: honey credentials secret accessed'. This fires before the attacker can use the credential, giving defenders early warning of SecretsManager scraping.",
+      "depends_on": [
+        "lucr3-bait-honey-iam-user"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.00056
+    },
+    {
+      "name": "lucr3-bait-github-pat-secret",
+      "pulumi_type": "aws.secretsmanager.Secret",
+      "resource_category": "bait",
+      "purpose": "Fake GitHub PAT stored in SecretsManager with a realistic name. LUCR-3 searches for CI/CD tokens (T1550.001) to pivot into code repositories. This bait token is revoked/invalid but triggers detection on access.",
+      "techniques_served": [
+        "T1550.001",
+        "T1555.006"
+      ],
+      "configuration_notes": "Secret name: 'prod/cicd/github-actions-token'. Value: {\"token\": \"ghp_SYNTHETIC_BAIT_TOKEN_REVOKED_DO_NOT_USE\", \"org\": \"acme-corp\", \"created\": \"2025-01-15\"}. EventBridge canary rule on GetSecretValue. The value format matches a real GitHub PAT pattern (ghp_ prefix) to be convincing, but is syntactically invalid. Do not use a real GitHub token.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.00056
+    },
+    {
+      "name": "lucr3-vpc",
+      "pulumi_type": "aws.ec2.Vpc",
+      "resource_category": "support",
+      "purpose": "Isolated VPC for EC2 lateral movement target. No peering or transit gateway to prevent pivot outside lab boundary.",
+      "techniques_served": [],
+      "configuration_notes": "CIDR: 10.99.0.0/16. enable_dns_hostnames: true. enable_dns_support: true. Tags: {Name: 'lucr3-sandbox-vpc'}.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "lucr3-subnet-pub",
+      "pulumi_type": "aws.ec2.Subnet",
+      "resource_category": "support",
+      "purpose": "Public subnet hosting the EC2 lateral movement target.",
+      "techniques_served": [],
+      "configuration_notes": "CIDR: 10.99.1.0/24. AZ: us-east-1a. map_public_ip_on_launch: true.",
+      "depends_on": [
+        "lucr3-vpc"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "lucr3-sg-ec2",
+      "pulumi_type": "aws.ec2.SecurityGroup",
+      "resource_category": "support",
+      "purpose": "Security group for EC2 target. SSH inbound restricted to operator CIDR only.",
+      "techniques_served": [],
+      "configuration_notes": "Ingress: port 22 from operator_cidr/32 only. Egress: all (needed for SSM agent, yum updates). Do not open 22 to 0.0.0.0/0.",
+      "depends_on": [
+        "lucr3-vpc"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "lucr3-log-bucket",
+      "pulumi_type": "aws.s3.Bucket",
+      "resource_category": "support",
+      "purpose": "S3 bucket receiving CloudTrail logs and VPC flow logs. Exists so CloudTrail can be created; also provides evidence store for post-exercise forensic review.",
+      "techniques_served": [],
+      "configuration_notes": "Bucket name: 'lucr3-logs-{account_id}'. Block public access: all true. Bucket policy: allow cloudtrail.amazonaws.com PutObject with ArnLike condition for CloudTrail ARN. lifecycle: expire logs after 30 days.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy (empty bucket first)",
+      "estimated_cost_usd_hr": 0.0001
+    },
+    {
+      "name": "lucr3-instance-profile",
+      "pulumi_type": "aws.iam.InstanceProfile",
+      "resource_category": "support",
+      "purpose": "IAM instance profile for EC2 target granting SSM Session Manager access. Intentionally minimal \u2014 attacker discovers the instance and pivots via SSH, not via the profile.",
+      "techniques_served": [],
+      "configuration_notes": "Attach AWS managed policy: AmazonSSMManagedInstanceCore. No other permissions. Role name: lucr3-ec2-ssm-role. Trust policy: ec2.amazonaws.com.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    }
+  ],
+  "userdata_actions": [],
+  "vulnerable_app": null,
+  "iam_policies": [
+    {
+      "name": "lucr3-attacker-broad-policy",
+      "attached_to": [
+        "lucr3-privileged-federated-role",
+        "lucr3-attacker-iam-user"
+      ],
+      "intentional_overpermission_reason": "LUCR-3 lands with near-admin access via Okta SAML federation; this policy replicates the observed blast radius across IAM, S3, EC2, CloudTrail, GuardDuty, SecretsManager, and DynamoDB that enables all emulated techniques T1580 through T1530",
+      "policy_document": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "IAMManipulation",
+            "Effect": "Allow",
+            "Action": [
+              "iam:CreateUser",
+              "iam:CreateAccessKey",
+              "iam:AttachUserPolicy",
+              "iam:PutUserPolicy",
+              "iam:ListUsers",
+              "iam:ListRoles",
+              "iam:GetUser",
+              "iam:ListAccessKeys",
+              "iam:ListAttachedRolePolicies"
+            ],
+            "Resource": "*"
+          },
+          {
+            "Sid": "S3Exfil",
+            "Effect": "Allow",
+            "Action": [
+              "s3:ListAllMyBuckets",
+              "s3:ListBucket",
+              "s3:GetObject",
+              "s3:GetObjectVersion",
+              "s3:GetBucketLocation",
+              "s3:GetBucketPolicy"
+            ],
+            "Resource": "*"
+          },
+          {
+            "Sid": "SecretsManagerScrape",
+            "Effect": "Allow",
+            "Action": [
+              "secretsmanager:ListSecrets",
+              "secretsmanager:GetSecretValue",
+              "secretsmanager:DescribeSecret"
+            ],
+            "Resource": "*"
+          },
+          {
+            "Sid": "EC2Discovery",
+            "Effect": "Allow",
+            "Action": [
+              "ec2:DescribeInstances",
+              "ec2:DescribeImages",
+              "ec2:DescribeSecurityGroups",
+              "ec2:DescribeVpcs",
+              "ec2:RunInstances",
+              "ec2:CreateKeyPair"
+            ],
+            "Resource": "*"
+          },
+          {
+            "Sid": "DefenseImpairment",
+            "Effect": "Allow",
+            "Action": [
+              "cloudtrail:StopLogging",
+              "cloudtrail:DeleteTrail",
+              "cloudtrail:UpdateTrail",
+              "guardduty:DeleteDetector",
+              "guardduty:UpdateDetector",
+              "guardduty:ListDetectors"
+            ],
+            "Resource": "*"
+          },
+          {
+            "Sid": "DynamoDBExfil",
+            "Effect": "Allow",
+            "Action": [
+              "dynamodb:Scan",
+              "dynamodb:Query",
+              "dynamodb:GetItem",
+              "dynamodb:ListTables",
+              "dynamodb:DescribeTable"
+            ],
+            "Resource": "*"
+          },
+          {
+            "Sid": "CloudShellAccess",
+            "Effect": "Allow",
+            "Action": [
+              "cloudshell:CreateEnvironment",
+              "cloudshell:StartEnvironment",
+              "cloudshell:PutFiles",
+              "cloudshell:GetFiles"
+            ],
+            "Resource": "*"
+          }
+        ]
+      }
+    }
+  ],
+  "permission_boundaries": [],
+  "resource_dependency_order": [
+    "lucr3-log-bucket",
+    "lucr3-vpc",
+    "lucr3-subnet-pub",
+    "lucr3-sg-ec2",
+    "lucr3-okta-mfa-sms-policy",
+    "lucr3-okta-victim-user",
+    "lucr3-azuread-saml-app",
+    "lucr3-aws-saml-idp",
+    "lucr3-instance-profile",
+    "lucr3-privileged-federated-role",
+    "lucr3-attacker-iam-user",
+    "lucr3-bait-honey-iam-user",
+    "lucr3-cloudtrail",
+    "lucr3-guardduty-detector",
+    "lucr3-s3-corporate-data",
+    "lucr3-s3-engineering-artifacts",
+    "lucr3-secrets-prod-db",
+    "lucr3-secrets-stripe-api",
+    "lucr3-dynamodb-customer-records",
+    "lucr3-ec2-target",
+    "lucr3-github-target-repo",
+    "lucr3-m365-sharepoint-site",
+    "lucr3-bait-terraform-state",
+    "lucr3-bait-honey-credentials",
+    "lucr3-bait-github-pat-secret",
+    "lucr3-okta-attacker-device"
+  ],
+  "naming_convention": "lucr3-{resource_name}",
+  "estimated_total_cost_usd_hr": 0.023,
+  "tags": {
+    "MayaTrail": "true",
+    "Purpose": "adversary-emulation",
+    "ThreatActor": "LUCR-3",
+    "Environment": "lab-isolated",
+    "DataClassification": "synthetic-only"
+  }
+}

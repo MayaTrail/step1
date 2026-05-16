@@ -1,0 +1,14 @@
+{
+  "verdict": "APPROVED",
+  "operator_notes": [
+    "Step 20 (T1070.008) implementation says 'using the Graph access_token obtained in Step 6' \u2014 Microsoft Graph tokens expire in ~1 hour. By phase 9 this token is dead. Implementation must re-derive a Graph token from phase3_okta_session (re-authenticate via enrolled TOTP device if Okta session also expired). credential_source is correct, implementation details need updating.",
+    "Step 21 marks audit_visible: true but CloudTrail is stopped (Step 17). GetObject/ListObjects won't appear in CloudTrail. Visibility at this point is S3 server access logs only \u2014 update audit_visible to false with a note that S3 server access logs provide independent detection.",
+    "Step 15 expected_audit_events lists personal_access_token.create but the step USES a token, it doesn't create one. Matches TI extract verbatim so fidelity is preserved, but operator should expect no GitHub audit event from a revoked token auth failure (401).",
+    "Credential ID 'phase8_attacker_iam_key' is created in plan phase 6 \u2014 name references TI phase numbering, not plan phase numbering. Confusing but functionally correct. Consider renaming to 'phase6_attacker_iam_key' to match plan phases.",
+    "Step 14 creates lucr3-attack-instance-profile with no IAM role attached \u2014 EC2 instance lucr3-attack-host has no instance-level permissions. Plan doesn't show how attacker stages data on this host. Acceptable for technique demonstration but operator should be aware the instance is inert.",
+    "Phase 6 creates IAM user with hardcoded password 'Emulat10n!Backdoor#2026' \u2014 ensure this doesn't leak into logs or version control. Consider generating at runtime.",
+    "Inter-phase delays compressed from TI's 1-24 hours to 15-300 seconds for lab emulation \u2014 standard practice but document the compression for report fidelity section."
+  ],
+  "fidelity_score": 0.9,
+  "risk_assessment": "LOW \u2014 all actions scoped to sandbox VPC with no peering, all secrets synthetic, bait GitHub PAT is pre-revoked, cleanup order correctly re-enables logging before any other cleanup"
+}

@@ -1,0 +1,250 @@
+{
+  "status": "PHASE_1_COMPLETE",
+  "platform": "aws",
+  "sandbox_vpc": null,
+  "resources": [
+    {
+      "name": "codefinger-victim-iam-user",
+      "pulumi_type": "aws.iam.User",
+      "resource_category": "attack_surface",
+      "purpose": "Victim IAM user representing a developer/service account whose long-term access keys were publicly exposed. Sole entry point for T1078.004.",
+      "techniques_served": [
+        "T1078.004"
+      ],
+      "configuration_notes": "No console access \u2014 Codefinger is programmatic-only. Tags only at creation; access key is a separate resource. path='/' default.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "codefinger-victim-iam-access-key",
+      "pulumi_type": "aws.iam.AccessKey",
+      "resource_category": "attack_surface",
+      "purpose": "Long-term programmatic access key for the victim user. Key ID and secret are written into the bait credential object at deploy time, simulating the T1552.001 public exposure that Codefinger exploits.",
+      "techniques_served": [
+        "T1078.004",
+        "T1552.001"
+      ],
+      "configuration_notes": "aws.iam.AccessKey with user = codefinger-victim-iam-user.name. Export id and secret as encrypted Pulumi stack outputs so the attack script and bait object can reference them. No rotation \u2014 mimics the real scenario where long-term keys are never cycled.",
+      "depends_on": [
+        "codefinger-victim-iam-user"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "codefinger-victim-iam-policy",
+      "pulumi_type": "aws.iam.UserPolicy",
+      "resource_category": "attack_surface",
+      "purpose": "Inline policy granting the victim user over-permissioned S3 access scoped only to the target bucket. Intentionally includes PutLifecycleConfiguration (T1490) and PutObject (T1486 SSE-C re-upload).",
+      "techniques_served": [
+        "T1530",
+        "T1486",
+        "T1485",
+        "T1490"
+      ],
+      "configuration_notes": "Inline UserPolicy (not managed) keeps blast radius narrow. Actions: s3:GetObject, s3:PutObject, s3:DeleteObject, s3:ListBucket, s3:GetBucketLocation, s3:PutLifecycleConfiguration, s3:GetLifecycleConfiguration. Resource: arn:aws:s3:::codefinger-target-bucket and arn:aws:s3:::codefinger-target-bucket/*. PutObject alone is sufficient for SSE-C \u2014 no bucket-level encryption override needed.",
+      "depends_on": [
+        "codefinger-victim-iam-user",
+        "codefinger-target-s3-bucket"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "codefinger-target-s3-bucket",
+      "pulumi_type": "aws.s3.BucketV2",
+      "resource_category": "target",
+      "purpose": "Isolated S3 bucket containing synthetic data objects. The attack script enumerates objects (T1530), re-uploads each with SSE-C and an attacker-held AES-256 key (T1486 simulation), sets a 7-day lifecycle deletion rule (T1490 simulation), then deletes originals (T1485 simulation).",
+      "techniques_served": [
+        "T1530",
+        "T1486",
+        "T1485",
+        "T1490"
+      ],
+      "configuration_notes": "Block all public access. Do NOT set default SSE-KMS or a bucket key \u2014 SSE-C conflicts with mandatory SSE-KMS. Versioning DISABLED intentionally: Codefinger specifically targets unversioned buckets so lifecycle deletion is irrecoverable. forceDestroy=true for teardown.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy (forceDestroy=true)",
+      "estimated_cost_usd_hr": 0.001
+    },
+    {
+      "name": "codefinger-synthetic-data-finance",
+      "pulumi_type": "aws.s3.BucketObject",
+      "resource_category": "target",
+      "purpose": "Synthetic CSV files in a finance/ prefix simulating sensitive financial records. These are the pre-encryption originals the attack replaces with SSE-C ciphertext copies.",
+      "techniques_served": [
+        "T1530",
+        "T1486",
+        "T1485"
+      ],
+      "configuration_notes": "Upload 3 objects: finance/Q4_2025_revenue.csv, finance/payroll_export_2025.csv, finance/accounts_receivable.csv. Content: fabricated tabular data only (e.g., random names, fake dollar amounts). No real PII. Standard AES256 at rest before the attack.",
+      "depends_on": [
+        "codefinger-target-s3-bucket"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "codefinger-synthetic-data-hr",
+      "pulumi_type": "aws.s3.BucketObject",
+      "resource_category": "target",
+      "purpose": "Synthetic HR records in an hr/ prefix. Separate prefix validates the attack loop correctly iterates across multiple S3 key namespaces.",
+      "techniques_served": [
+        "T1530",
+        "T1486",
+        "T1485"
+      ],
+      "configuration_notes": "Upload 2 objects: hr/employee_roster_2025.csv, hr/compensation_bands.csv. Entirely fabricated content. Standard AES256 at rest before the attack.",
+      "depends_on": [
+        "codefinger-target-s3-bucket"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "codefinger-bait-public-bucket",
+      "pulumi_type": "aws.s3.BucketV2",
+      "resource_category": "bait",
+      "purpose": "Public-readable S3 bucket acting as the 'accidentally exposed' source where the victim's credentials are discoverable. Simulates a misconfigured bucket that Codefinger-style actors scan to harvest IAM keys (T1552.001 discovery vector).",
+      "techniques_served": [
+        "T1552.001"
+      ],
+      "configuration_notes": "Disable all BlockPublicAcls/BlockPublicPolicy settings. Add a bucket policy granting s3:GetObject to Principal: '*' scoped only to the bait credential object key. This is the ONLY intentionally public resource in the lab. forceDestroy=true.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "codefinger-bait-public-bucket-policy",
+      "pulumi_type": "aws.s3.BucketPolicy",
+      "resource_category": "bait",
+      "purpose": "Grants public s3:GetObject on the bait credential file only, making it discoverable without exposing the full bucket listing.",
+      "techniques_served": [
+        "T1552.001"
+      ],
+      "configuration_notes": "Resource ARN scoped to arn:aws:s3:::codefinger-bait-public-bucket/terraform.tfvars only. Principal: '*'. Effect: Allow. Action: s3:GetObject.",
+      "depends_on": [
+        "codefinger-bait-public-bucket"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "codefinger-exposed-credentials-object",
+      "pulumi_type": "aws.s3.BucketObject",
+      "resource_category": "bait",
+      "purpose": "A terraform.tfvars file containing the victim IAM access key and secret, simulating an accidentally committed credential file discoverable on a public bucket \u2014 the exact initial access vector Codefinger uses (T1552.001).",
+      "techniques_served": [
+        "T1552.001",
+        "T1078.004"
+      ],
+      "configuration_notes": "Key: terraform.tfvars. Content rendered at deploy time via Pulumi interpolation of codefinger-victim-iam-access-key outputs: 'aws_access_key_id = \"<id>\"\\naws_secret_access_key = \"<secret>\"\\nregion = \"us-east-1\"'. acl must remain public-read to match the bucket policy. The attack script sources credentials from this object or a local AWS profile populated from it.",
+      "depends_on": [
+        "codefinger-bait-public-bucket",
+        "codefinger-bait-public-bucket-policy",
+        "codefinger-victim-iam-access-key"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "codefinger-cloudtrail-log-bucket",
+      "pulumi_type": "aws.s3.BucketV2",
+      "resource_category": "support",
+      "purpose": "Receives CloudTrail events for the emulation. Key detection signals: SSE-C PutObject entries (HMAC only, no key logged), PutLifecycleConfiguration calls, and DeleteObject volume spikes.",
+      "techniques_served": [],
+      "configuration_notes": "Private, forceDestroy=true. Bucket policy must allow cloudtrail.amazonaws.com s3:PutObject and s3:GetBucketAcl. Retrieve account ID via aws.getCallerIdentity() \u2014 never hardcode in the resource ARN or the deployment will fail.",
+      "depends_on": [],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.001
+    },
+    {
+      "name": "codefinger-cloudtrail-log-bucket-policy",
+      "pulumi_type": "aws.s3.BucketPolicy",
+      "resource_category": "support",
+      "purpose": "Grants CloudTrail service principal write access to the log bucket.",
+      "techniques_served": [],
+      "configuration_notes": "Two statements: (1) s3:GetBucketAcl for cloudtrail.amazonaws.com; (2) s3:PutObject for cloudtrail.amazonaws.com with Condition StringEquals s3:x-amz-acl=bucket-owner-full-control. Use pulumi.interpolate for account ID from aws.getCallerIdentity output.",
+      "depends_on": [
+        "codefinger-cloudtrail-log-bucket"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.0
+    },
+    {
+      "name": "codefinger-cloudtrail",
+      "pulumi_type": "aws.cloudtrail.Trail",
+      "resource_category": "support",
+      "purpose": "Captures management events and S3 data-plane events for the target bucket. Provides the detection artifact set for GuardDuty/SIEM validation after the emulation run.",
+      "techniques_served": [
+        "T1530",
+        "T1486",
+        "T1485",
+        "T1490"
+      ],
+      "configuration_notes": "enableLogFileValidation=true. isMultiRegionTrail=false (cost control). eventSelectors: [{readWriteType: 'All', includeManagementEvents: true, dataResources: [{type: 'AWS::S3::Object', values: ['arn:aws:s3:::codefinger-target-bucket/']}]}]. s3BucketName = codefinger-cloudtrail-log-bucket. Must deploy after bucket policy or CloudTrail validation will fail.",
+      "depends_on": [
+        "codefinger-cloudtrail-log-bucket",
+        "codefinger-cloudtrail-log-bucket-policy"
+      ],
+      "cleanup_method": "pulumi destroy",
+      "estimated_cost_usd_hr": 0.02
+    }
+  ],
+  "userdata_actions": [],
+  "vulnerable_app": null,
+  "iam_policies": [
+    {
+      "name": "codefinger-victim-inline-policy",
+      "attached_to": "codefinger-victim-iam-user",
+      "policy_type": "inline",
+      "intentionally_overpermissioned": true,
+      "reason": "Codefinger exploits broadly-scoped S3 policies found on compromised service accounts. PutLifecycleConfiguration is the critical over-permission enabling irrecoverable T1490 deletion scheduling; PutObject enables SSE-C re-encryption (T1486). Real-world victims had these permissions because the account was used for backup or ETL automation.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "CodefingervictimS3Access",
+            "Effect": "Allow",
+            "Action": [
+              "s3:GetObject",
+              "s3:PutObject",
+              "s3:DeleteObject",
+              "s3:ListBucket",
+              "s3:GetBucketLocation",
+              "s3:PutLifecycleConfiguration",
+              "s3:GetLifecycleConfiguration"
+            ],
+            "Resource": [
+              "arn:aws:s3:::codefinger-target-bucket",
+              "arn:aws:s3:::codefinger-target-bucket/*"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "permission_boundaries": [],
+  "resource_dependency_order": [
+    "codefinger-bait-public-bucket",
+    "codefinger-target-s3-bucket",
+    "codefinger-cloudtrail-log-bucket",
+    "codefinger-cloudtrail-log-bucket-policy",
+    "codefinger-cloudtrail",
+    "codefinger-victim-iam-user",
+    "codefinger-victim-iam-access-key",
+    "codefinger-victim-iam-policy",
+    "codefinger-synthetic-data-finance",
+    "codefinger-synthetic-data-hr",
+    "codefinger-bait-public-bucket-policy",
+    "codefinger-exposed-credentials-object"
+  ],
+  "naming_convention": "codefinger-{resource_name}",
+  "estimated_total_cost_usd_hr": 0.022,
+  "tags": {
+    "MayaTrail": "true",
+    "Purpose": "adversary-emulation",
+    "ThreatActor": "Codefinger",
+    "Environment": "isolated-lab"
+  }
+}

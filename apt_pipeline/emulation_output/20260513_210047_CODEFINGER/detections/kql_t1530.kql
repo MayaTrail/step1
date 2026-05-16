@@ -1,0 +1,120 @@
+// FILE: kql_t1530.kql
+// T1530 Data from Cloud Storage - Codefinger Pre-Encryption S3 Enumeration
+// Detects high-volume ListObjects + HeadObject recon sweep preceding encryption
+// Platform: AWS CloudTrail -> Microsoft Sentinel AWSCloudTrail table
+
+// --- Query 1: Anomalous ListObjects volume by IAM user in 15-minute window ---
+AWSCloudTrail
+| where EventName in ("ListObjects", "ListObjectsV2")
+| where EventSource == "s3.amazonaws.com"
+| where UserIdentityType == "IAMUser"
+| where UserAgent !contains "aws-backup"
+| where UserAgent !contains "S3BatchOperations"
+| summarize
+    ListCount = count(),
+    DistinctBuckets = dcount(RequestParameters),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated)
+    by bin(TimeGenerated, 15m), UserIdentityUserName, SourceIpAddress
+// Flag principals with >20 list calls in a 15-min window (tune to org baseline)
+| where ListCount > 20
+| extend WindowDurationMinutes = datetime_diff("minute", LastSeen, FirstSeen)
+| project
+    WindowStart = TimeGenerated,
+    UserIdentityUserName,
+    SourceIpAddress,
+    ListCount,
+    DistinctBuckets,
+    WindowDurationMinutes,
+    FirstSeen,
+    LastSeen
+| sort by ListCount desc
+
+
+// --- Query 2: HeadObject burst - metadata harvest pattern ---
+AWSCloudTrail
+| where EventName == "HeadObject"
+| where EventSource == "s3.amazonaws.com"
+| where UserIdentityType == "IAMUser"
+| summarize
+    HeadCount = count(),
+    DistinctKeys = dcount(RequestParameters),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated)
+    by bin(TimeGenerated, 10m), UserIdentityUserName, UserIdentityArn, SourceIpAddress
+| where HeadCount > 10
+| project
+    WindowStart = TimeGenerated,
+    UserIdentityUserName,
+    UserIdentityArn,
+    SourceIpAddress,
+    HeadCount,
+    DistinctKeys,
+    FirstSeen,
+    LastSeen
+| sort by HeadCount desc
+
+
+// --- Query 3: Multi-prefix GetObject sweep - confirms read access before encryption ---
+AWSCloudTrail
+| where EventName == "GetObject"
+| where EventSource == "s3.amazonaws.com"
+| where UserIdentityType == "IAMUser"
+// Extract prefix from key (everything up to last '/')
+| extend ObjectKey = tostring(parse_json(RequestParameters).key)
+| extend Prefix = tostring(split(ObjectKey, "/")[0])
+| summarize
+    GetCount = count(),
+    DistinctPrefixes = dcount(Prefix),
+    PrefixList = make_set(Prefix, 20),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated)
+    by bin(TimeGenerated, 15m), UserIdentityUserName, UserIdentityArn, SourceIpAddress
+// Suspicious: accessing >2 top-level prefixes rapidly (e.g., finance/ AND hr/)
+| where DistinctPrefixes >= 2
+| project
+    WindowStart = TimeGenerated,
+    UserIdentityUserName,
+    UserIdentityArn,
+    SourceIpAddress,
+    GetCount,
+    DistinctPrefixes,
+    PrefixList,
+    FirstSeen,
+    LastSeen
+| sort by DistinctPrefixes desc, GetCount desc
+
+
+// --- Query 4: Full recon sequence - List + Head + Get same principal within 30 min ---
+let ListOps = AWSCloudTrail
+    | where EventName in ("ListObjects", "ListObjectsV2")
+    | where EventSource == "s3.amazonaws.com"
+    | where UserIdentityType == "IAMUser"
+    | project ListTime = TimeGenerated, Principal = UserIdentityArn, IPAddress = SourceIpAddress;
+let HeadOps = AWSCloudTrail
+    | where EventName == "HeadObject"
+    | where EventSource == "s3.amazonaws.com"
+    | project HeadTime = TimeGenerated, Principal = UserIdentityArn;
+let GetOps = AWSCloudTrail
+    | where EventName == "GetObject"
+    | where EventSource == "s3.amazonaws.com"
+    | project GetTime = TimeGenerated, Principal = UserIdentityArn;
+ListOps
+| join kind=inner HeadOps on Principal
+| join kind=inner GetOps on Principal
+| where HeadTime > ListTime and HeadTime < ListTime + 30m
+| where GetTime > ListTime and GetTime < ListTime + 30m
+| summarize
+    ListTime = min(ListTime),
+    HeadTime = min(HeadTime),
+    GetTime = min(GetTime)
+    by Principal, IPAddress
+| extend TotalWindowMinutes = datetime_diff("minute", GetTime, ListTime)
+| project
+    Principal,
+    IPAddress,
+    ListTime,
+    HeadTime,
+    GetTime,
+    TotalWindowMinutes
+| sort by ListTime desc

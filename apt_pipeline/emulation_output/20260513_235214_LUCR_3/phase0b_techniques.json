@@ -1,0 +1,1125 @@
+{
+  "techniques": [
+    {
+      "mitre_id": "T1078.004",
+      "name": "Valid Accounts: Cloud Accounts",
+      "tactic": "Initial Access",
+      "platform": "identity_provider",
+      "execution_plane": "control_plane",
+      "execution_context": "idp_attack",
+      "emulation_category": "simulated",
+      "description": "Use purchased or phished IDP credentials to authenticate to Okta/AAD.",
+      "api_calls": [
+        "GET /api/v1/users/me",
+        "POST /oauth2/v1/token"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "user.session.start",
+          "eventSource": "Okta System Log"
+        },
+        {
+          "eventName": "Sign-in activity",
+          "eventSource": "Azure AD Logs"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "Okta System Log",
+        "Azure AD Logs",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "Okta ThreatInsight alert",
+        "Microsoft Entra ID Protection risky sign-in"
+      ],
+      "phase_in_chain": 1,
+      "dependencies": [],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "Okta tenant",
+          "Azure AD tenant"
+        ],
+        "target": [
+          "IDP user account"
+        ],
+        "bait": [
+          "pre-seeded test credentials"
+        ]
+      },
+      "cleanup_actions": [
+        "Invalidate test session tokens"
+      ],
+      "opsec_notes": "Use residential proxy to blend with legitimate user geography."
+    },
+    {
+      "mitre_id": "T1621",
+      "name": "Multi-Factor Authentication Request Generation",
+      "tactic": "Credential Access",
+      "platform": "identity_provider",
+      "execution_plane": "control_plane",
+      "execution_context": "idp_attack",
+      "emulation_category": "simulated",
+      "description": "Flood target with MFA push notifications until user approves (MFA fatigue).",
+      "api_calls": [
+        "POST /api/v1/authn/factors/{factorId}/verify"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "user.authentication.auth_via_mfa",
+          "eventSource": "Okta System Log"
+        },
+        {
+          "eventName": "Sign-in activity",
+          "eventSource": "Azure AD Logs"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "Okta System Log",
+        "Azure AD Logs",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "Okta MFA fatigue detection",
+        "Entra ID MFA spam alert"
+      ],
+      "phase_in_chain": 2,
+      "dependencies": [
+        "T1078.004"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "IDP push MFA enrollment"
+        ],
+        "target": [
+          "IDP user account with push MFA"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [],
+      "opsec_notes": "Space requests 20-60s apart to avoid automated lockout."
+    },
+    {
+      "mitre_id": "T1111",
+      "name": "Multi-Factor Authentication Interception",
+      "tactic": "Credential Access",
+      "platform": "identity_provider",
+      "execution_plane": "data_plane",
+      "execution_context": "idp_attack",
+      "emulation_category": "documented",
+      "description": "SIM swap victim phone number to intercept SMS OTP codes.",
+      "api_calls": [],
+      "data_plane_actions": [
+        "SIM swap via social engineering mobile carrier",
+        "Intercept SMS OTP on attacker-controlled SIM"
+      ],
+      "host_commands": [],
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": [
+        "Okta System Log",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "Okta new device sign-in alert"
+      ],
+      "phase_in_chain": 3,
+      "dependencies": [
+        "T1078.004"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "Victim mobile number with SMS MFA"
+        ],
+        "target": [
+          "Carrier account"
+        ],
+        "bait": [
+          "Victim personal info for carrier social engineering"
+        ]
+      },
+      "cleanup_actions": [],
+      "opsec_notes": "Cannot safely emulate \u2014 illegal telecom fraud."
+    },
+    {
+      "mitre_id": "T1098.005",
+      "name": "Account Manipulation: Device Registration",
+      "tactic": "Persistence",
+      "platform": "identity_provider",
+      "execution_plane": "control_plane",
+      "execution_context": "idp_attack",
+      "emulation_category": "emulated",
+      "description": "Enroll attacker-controlled device as trusted MFA factor in victim IDP account.",
+      "api_calls": [
+        "POST /api/v1/users/{userId}/factors",
+        "PUT /api/v1/users/{userId}/factors/{factorId}/lifecycle/activate"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "user.mfa.factor.activate",
+          "eventSource": "Okta System Log"
+        },
+        {
+          "eventName": "Update device",
+          "eventSource": "Azure AD Logs"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "Okta System Log",
+        "Azure AD Logs",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "Okta new authenticator enrolled",
+        "Entra new MFA method registered"
+      ],
+      "phase_in_chain": 4,
+      "dependencies": [
+        "T1621",
+        "T1111"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "IDP account with self-service MFA enrollment"
+        ],
+        "target": [
+          "IDP user"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Remove attacker device enrollment",
+        "Revoke session tokens"
+      ],
+      "opsec_notes": "Enroll after business hours to avoid immediate user notification response."
+    },
+    {
+      "mitre_id": "T1213.002",
+      "name": "Data from Information Repositories: Sharepoint",
+      "tactic": "Collection",
+      "platform": "saas",
+      "execution_plane": "control_plane",
+      "execution_context": "saas_attack",
+      "emulation_category": "emulated",
+      "description": "Browse SharePoint/OneDrive for org charts, network diagrams, runbooks, and credentials.",
+      "api_calls": [
+        "GET /v1.0/sites",
+        "GET /v1.0/drives/{driveId}/root/children",
+        "GET /v1.0/sites/{siteId}/lists"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "FileAccessed",
+          "eventSource": "M365 Audit Log"
+        },
+        {
+          "eventName": "SearchQueryPerformed",
+          "eventSource": "M365 Audit Log"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "M365 Audit Log",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "Microsoft Defender mass download alert",
+        "Purview DLP policy match"
+      ],
+      "phase_in_chain": 5,
+      "dependencies": [
+        "T1098.005"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "M365 SharePoint tenant"
+        ],
+        "target": [
+          "SharePoint sites with sensitive docs"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [],
+      "opsec_notes": "Download individually to avoid bulk-download detection triggers."
+    },
+    {
+      "mitre_id": "T1580",
+      "name": "Cloud Infrastructure Discovery",
+      "tactic": "Discovery",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Enumerate AWS accounts, regions, services, and resource inventory via API.",
+      "api_calls": [
+        "sts:GetCallerIdentity",
+        "ec2:DescribeInstances",
+        "ec2:DescribeRegions",
+        "iam:ListUsers",
+        "iam:ListRoles",
+        "organizations:ListAccounts"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "GetCallerIdentity",
+          "eventSource": "sts.amazonaws.com"
+        },
+        {
+          "eventName": "DescribeInstances",
+          "eventSource": "ec2.amazonaws.com"
+        },
+        {
+          "eventName": "ListUsers",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM",
+        "GuardDuty"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty:Recon/IAMUser.MaliciousIPCaller",
+        "GuardDuty:Discovery/IAMUser.AnomalousBehavior"
+      ],
+      "phase_in_chain": 6,
+      "dependencies": [
+        "T1098.005"
+      ],
+      "severity": "medium",
+      "resources_needed": {
+        "attack_surface": [
+          "AWS account accessible via IDP federation"
+        ],
+        "target": [
+          "IAM identity with read permissions"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [],
+      "opsec_notes": "Run via CloudShell to use AWS-owned IPs, reducing geo-anomaly detection."
+    },
+    {
+      "mitre_id": "T1619",
+      "name": "Cloud Storage Object Discovery",
+      "tactic": "Discovery",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "List all S3 buckets and objects to identify sensitive data stores.",
+      "api_calls": [
+        "s3:ListAllMyBuckets",
+        "s3:ListBucket",
+        "s3:GetBucketLocation",
+        "s3:GetBucketTagging"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "ListBuckets",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "ListObjects",
+          "eventSource": "s3.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM",
+        "GuardDuty"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty:Discovery/S3.MaliciousIPCaller",
+        "GuardDuty:Discovery/S3.AnomalousBehavior"
+      ],
+      "phase_in_chain": 7,
+      "dependencies": [
+        "T1580"
+      ],
+      "severity": "medium",
+      "resources_needed": {
+        "attack_surface": [
+          "AWS S3"
+        ],
+        "target": [
+          "S3 buckets in target account"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [],
+      "opsec_notes": "Use S3 Browser 10.9.9 GUI or CLI; both logged in CloudTrail."
+    },
+    {
+      "mitre_id": "T1082",
+      "name": "System Information Discovery",
+      "tactic": "Discovery",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Enumerate EC2 metadata, VPCs, subnets, and security groups for lateral movement planning.",
+      "api_calls": [
+        "ec2:DescribeVpcs",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeInstanceAttribute",
+        "ssm:DescribeInstanceInformation"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "DescribeVpcs",
+          "eventSource": "ec2.amazonaws.com"
+        },
+        {
+          "eventName": "DescribeInstanceInformation",
+          "eventSource": "ssm.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty:Discovery/IAMUser.AnomalousBehavior"
+      ],
+      "phase_in_chain": 8,
+      "dependencies": [
+        "T1580"
+      ],
+      "severity": "low",
+      "resources_needed": {
+        "attack_surface": [
+          "AWS EC2",
+          "AWS SSM"
+        ],
+        "target": [
+          "EC2 instances in target VPC"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [],
+      "opsec_notes": "Combine with T1619 enumeration in same session to appear as single recon pass."
+    },
+    {
+      "mitre_id": "T1098",
+      "name": "Account Manipulation",
+      "tactic": "Persistence",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Attach overly permissive IAM policies to existing user for privilege escalation.",
+      "api_calls": [
+        "iam:AttachUserPolicy",
+        "iam:PutUserPolicy",
+        "iam:AddUserToGroup",
+        "iam:AttachRolePolicy"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "AttachUserPolicy",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "PutUserPolicy",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM",
+        "GuardDuty"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty:Persistence/IAMUser.AnomalousBehavior",
+        "AWS Security Hub: IAM policy change"
+      ],
+      "phase_in_chain": 9,
+      "dependencies": [
+        "T1580"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "AWS IAM"
+        ],
+        "target": [
+          "Existing IAM user or role"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Detach attached policies",
+        "Remove added group memberships"
+      ],
+      "opsec_notes": "Prefer attaching managed policies to avoid custom policy creation alerts."
+    },
+    {
+      "mitre_id": "T1136.003",
+      "name": "Create Account: Cloud Account",
+      "tactic": "Persistence",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Create backdoor IAM user with console access for persistent entry.",
+      "api_calls": [
+        "iam:CreateUser",
+        "iam:CreateLoginProfile",
+        "iam:AttachUserPolicy"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "CreateUser",
+          "eventSource": "iam.amazonaws.com"
+        },
+        {
+          "eventName": "CreateLoginProfile",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM",
+        "GuardDuty"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty:Persistence/IAMUser.AnomalousBehavior",
+        "AWS Security Hub: New IAM user created"
+      ],
+      "phase_in_chain": 10,
+      "dependencies": [
+        "T1098"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "AWS IAM"
+        ],
+        "target": [
+          "AWS account with iam:CreateUser permission"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Delete created IAM user",
+        "Remove login profile"
+      ],
+      "opsec_notes": "Name user to blend with existing naming convention (e.g., svc-monitor)."
+    },
+    {
+      "mitre_id": "T1098.001",
+      "name": "Account Manipulation: Additional Cloud Credentials",
+      "tactic": "Persistence",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Generate long-lived AWS access keys for backdoor IAM user or existing account.",
+      "api_calls": [
+        "iam:CreateAccessKey"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "CreateAccessKey",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM",
+        "GuardDuty"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty:Persistence/IAMUser.AnomalousBehavior"
+      ],
+      "phase_in_chain": 11,
+      "dependencies": [
+        "T1136.003"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "AWS IAM"
+        ],
+        "target": [
+          "IAM user account"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Delete created access keys via iam:DeleteAccessKey"
+      ],
+      "opsec_notes": "Keys are non-expiring; exfiltrate immediately to off-environment storage."
+    },
+    {
+      "mitre_id": "T1555.006",
+      "name": "Credentials from Password Stores: Cloud Secrets Management Stores",
+      "tactic": "Credential Access",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "simulated",
+      "description": "Dump all secrets from SecretsManager and Terraform Vault via CloudShell.",
+      "api_calls": [
+        "secretsmanager:ListSecrets",
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [
+        "aws secretsmanager list-secrets --region us-east-1",
+        "aws secretsmanager get-secret-value --secret-id <id>"
+      ],
+      "expected_audit_events": [
+        {
+          "eventName": "ListSecrets",
+          "eventSource": "secretsmanager.amazonaws.com"
+        },
+        {
+          "eventName": "GetSecretValue",
+          "eventSource": "secretsmanager.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM",
+        "GuardDuty"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty:CredentialAccess/SecretsManager.MaliciousIPCaller",
+        "GuardDuty:CredentialAccess/SecretsManager.AnomalousBehavior"
+      ],
+      "phase_in_chain": 12,
+      "dependencies": [
+        "T1098.001"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "AWS SecretsManager",
+          "Terraform Vault"
+        ],
+        "target": [
+          "Secrets with API keys, partner creds, client secrets"
+        ],
+        "bait": [
+          "Sandbox secrets populated with synthetic values"
+        ]
+      },
+      "cleanup_actions": [],
+      "opsec_notes": "Run from CloudShell; AWS-native IPs reduce geo-anomaly score."
+    },
+    {
+      "mitre_id": "T1578.002",
+      "name": "Modify Cloud Compute Infrastructure: Create Cloud Instance",
+      "tactic": "Defense Evasion",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Launch EC2 instance with IAM instance profile for persistent compute and pivoting.",
+      "api_calls": [
+        "ec2:RunInstances",
+        "iam:CreateInstanceProfile",
+        "iam:AddRoleToInstanceProfile",
+        "ec2:AssociateIamInstanceProfile"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "RunInstances",
+          "eventSource": "ec2.amazonaws.com"
+        },
+        {
+          "eventName": "CreateInstanceProfile",
+          "eventSource": "iam.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM",
+        "GuardDuty"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty:Persistence/IAMUser.AnomalousBehavior",
+        "AWS Security Hub: EC2 instance launched"
+      ],
+      "phase_in_chain": 13,
+      "dependencies": [
+        "T1098.001"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "AWS EC2",
+          "AWS IAM"
+        ],
+        "target": [
+          "VPC subnet with internet access"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Terminate EC2 instance",
+        "Delete instance profile",
+        "Remove role from profile"
+      ],
+      "opsec_notes": "Attach permissive role to instance to avoid key usage from known bad IPs."
+    },
+    {
+      "mitre_id": "T1550.001",
+      "name": "Use Alternate Authentication Material: Application Access Token",
+      "tactic": "Defense Evasion",
+      "platform": "saas",
+      "execution_plane": "control_plane",
+      "execution_context": "saas_attack",
+      "emulation_category": "emulated",
+      "description": "Generate GitHub/GitLab personal access tokens to access code repos without password.",
+      "api_calls": [
+        "POST /user/keys",
+        "POST /projects/{id}/access_tokens",
+        "POST /users/{id}/personal_access_tokens"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "personal_access_token.create",
+          "eventSource": "GitHub Audit Log"
+        },
+        {
+          "eventName": "personal_access_token_created",
+          "eventSource": "GitLab Audit Log"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "GitHub Audit Log",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GitHub anomalous PAT creation alert"
+      ],
+      "phase_in_chain": 14,
+      "dependencies": [
+        "T1555.006"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "GitHub",
+          "GitLab"
+        ],
+        "target": [
+          "Org with code repos"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Revoke created PATs"
+      ],
+      "opsec_notes": "Set no-expiry on tokens; store outside target environment immediately."
+    },
+    {
+      "mitre_id": "T1562.001",
+      "name": "Impair Defenses: Disable or Modify Tools",
+      "tactic": "Defense Evasion",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Disable GuardDuty detectors in all regions to blind threat detection.",
+      "api_calls": [
+        "guardduty:ListDetectors",
+        "guardduty:UpdateDetector",
+        "guardduty:DeleteDetector"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "UpdateDetector",
+          "eventSource": "guardduty.amazonaws.com"
+        },
+        {
+          "eventName": "DeleteDetector",
+          "eventSource": "guardduty.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "AWS Security Hub: GuardDuty disabled",
+        "CloudTrail: DeleteDetector event alert"
+      ],
+      "phase_in_chain": 15,
+      "dependencies": [
+        "T1098.001"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "AWS GuardDuty"
+        ],
+        "target": [
+          "All AWS regions with active detectors"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Re-enable GuardDuty detectors",
+        "Restore original detector configuration"
+      ],
+      "opsec_notes": "Disable across all regions; regional blindspots are commonly exploited."
+    },
+    {
+      "mitre_id": "T1562.008",
+      "name": "Impair Defenses: Disable or Modify Cloud Logs",
+      "tactic": "Defense Evasion",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Stop CloudTrail logging to prevent API action recording.",
+      "api_calls": [
+        "cloudtrail:StopLogging",
+        "cloudtrail:UpdateTrail",
+        "cloudtrail:DeleteTrail"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "StopLogging",
+          "eventSource": "cloudtrail.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM",
+        "AWS Config"
+      ],
+      "expected_alert_findings": [
+        "AWS Security Hub: CloudTrail disabled",
+        "CIS AWS Benchmark: 3.5 alert"
+      ],
+      "phase_in_chain": 16,
+      "dependencies": [
+        "T1562.001"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "AWS CloudTrail"
+        ],
+        "target": [
+          "Management trail in all regions"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Re-enable CloudTrail logging",
+        "Verify trail is active and delivering logs"
+      ],
+      "opsec_notes": "The StopLogging API call itself is logged before logging stops \u2014 unavoidable."
+    },
+    {
+      "mitre_id": "T1021.004",
+      "name": "Remote Services: SSH",
+      "tactic": "Lateral Movement",
+      "platform": "aws",
+      "execution_plane": "data_plane",
+      "execution_context": "lateral_movement",
+      "emulation_category": "emulated",
+      "description": "SSH into EC2 instances via SSM Session Manager or direct key-based access.",
+      "api_calls": [],
+      "data_plane_actions": [
+        "ssm:StartSession to EC2 target",
+        "SSH key-based login to EC2 instance",
+        "Pivot between EC2 instances in VPC"
+      ],
+      "host_commands": [
+        "ssh -i key.pem ec2-user@<ip>",
+        "aws ssm start-session --target <instance-id>"
+      ],
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": [
+        "VPC Flow Logs",
+        "EDR",
+        "Container Runtime",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty:UnauthorizedAccess/EC2.SSHBruteForce",
+        "EDR lateral movement alert"
+      ],
+      "phase_in_chain": 17,
+      "dependencies": [
+        "T1578.002"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "AWS EC2 with SSH or SSM enabled"
+        ],
+        "target": [
+          "EC2 instances in target VPC"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Terminate SSM sessions"
+      ],
+      "opsec_notes": "SSM Session Manager leaves SSM API logs but no VPC flow entry for 443 tunnel."
+    },
+    {
+      "mitre_id": "T1072",
+      "name": "Software Deployment Tools",
+      "tactic": "Lateral Movement",
+      "platform": "on_premises",
+      "execution_plane": "host_plane",
+      "execution_context": "lateral_movement",
+      "emulation_category": "documented",
+      "description": "Abuse SCCM to deploy payloads or run commands on managed endpoints.",
+      "api_calls": [],
+      "data_plane_actions": [],
+      "host_commands": [
+        "Get-WmiObject -Namespace root/SMS -Class SMS_R_System",
+        "Invoke-CMScript -ScriptName backdoor -CollectionName 'All Systems'"
+      ],
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": [
+        "EDR",
+        "SIEM",
+        "IDS"
+      ],
+      "expected_alert_findings": [
+        "Defender for Endpoint: suspicious SCCM script execution"
+      ],
+      "phase_in_chain": 18,
+      "dependencies": [
+        "T1021.004"
+      ],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [
+          "SCCM server with domain-joined endpoints"
+        ],
+        "target": [
+          "SCCM admin console access"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [
+        "Remove deployed scripts/packages from SCCM"
+      ],
+      "opsec_notes": "Cannot safely emulate in production \u2014 requires isolated lab domain."
+    },
+    {
+      "mitre_id": "T1070.008",
+      "name": "Indicator Removal: Clear Mailbox Data",
+      "tactic": "Defense Evasion",
+      "platform": "saas",
+      "execution_plane": "control_plane",
+      "execution_context": "saas_attack",
+      "emulation_category": "emulated",
+      "description": "Delete sent phishing emails and alerts from victim mailbox to remove evidence.",
+      "api_calls": [
+        "POST /v1.0/users/{id}/messages/{msgId}/permanentDelete",
+        "DELETE /v1.0/users/{id}/mailFolders/sentItems/messages/{msgId}"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {
+          "eventName": "HardDelete",
+          "eventSource": "M365 Audit Log"
+        },
+        {
+          "eventName": "SoftDelete",
+          "eventSource": "M365 Audit Log"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "M365 Audit Log",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "Microsoft Defender: Suspicious mailbox deletion activity"
+      ],
+      "phase_in_chain": 19,
+      "dependencies": [
+        "T1213.002"
+      ],
+      "severity": "medium",
+      "resources_needed": {
+        "attack_surface": [
+          "M365 Exchange Online"
+        ],
+        "target": [
+          "Victim user mailbox"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [],
+      "opsec_notes": "Purge from Deleted Items and Recoverable Items folders to hinder forensics."
+    },
+    {
+      "mitre_id": "T1530",
+      "name": "Data from Cloud Storage",
+      "tactic": "Collection",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Download IP, code signing certs, and customer data from S3 buckets.",
+      "api_calls": [
+        "s3:GetObject",
+        "s3:ListBucket"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [
+        "aws s3 sync s3://<bucket> ./exfil/",
+        "S3 Browser 10.9.9 bulk download"
+      ],
+      "expected_audit_events": [
+        {
+          "eventName": "GetObject",
+          "eventSource": "s3.amazonaws.com"
+        },
+        {
+          "eventName": "ListObjects",
+          "eventSource": "s3.amazonaws.com"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "CloudTrail",
+        "SIEM",
+        "GuardDuty"
+      ],
+      "expected_alert_findings": [
+        "GuardDuty:Exfiltration/S3.ObjectRead.Unusual",
+        "GuardDuty:Discovery/S3.AnomalousBehavior"
+      ],
+      "phase_in_chain": 20,
+      "dependencies": [
+        "T1619",
+        "T1562.008"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "AWS S3"
+        ],
+        "target": [
+          "Buckets with IP, certs, customer data"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [],
+      "opsec_notes": "S3 Browser user-agent (10.9.9) is a known LUCR-3 IOC \u2014 swap UA for stealth."
+    },
+    {
+      "mitre_id": "T1213.003",
+      "name": "Data from Information Repositories: Code Repositories",
+      "tactic": "Collection",
+      "platform": "saas",
+      "execution_plane": "control_plane",
+      "execution_context": "saas_attack",
+      "emulation_category": "emulated",
+      "description": "Clone GitHub/GitLab repos to steal source code, secrets, and signing certs.",
+      "api_calls": [
+        "GET /orgs/{org}/repos",
+        "GET /repos/{owner}/{repo}",
+        "GET /projects/{id}/repository/files/{path}"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [
+        "git clone https://github.com/org/repo.git",
+        "gh repo list org --limit 1000"
+      ],
+      "expected_audit_events": [
+        {
+          "eventName": "git.clone",
+          "eventSource": "GitHub Audit Log"
+        },
+        {
+          "eventName": "repository.download",
+          "eventSource": "GitHub Audit Log"
+        }
+      ],
+      "audit_visible": true,
+      "detection_sources": [
+        "GitHub Audit Log",
+        "SIEM"
+      ],
+      "expected_alert_findings": [
+        "GitHub anomalous clone volume alert",
+        "SIEM: bulk repo clone from new IP"
+      ],
+      "phase_in_chain": 21,
+      "dependencies": [
+        "T1550.001"
+      ],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [
+          "GitHub",
+          "GitLab org"
+        ],
+        "target": [
+          "Repos with proprietary code, secrets, CI pipelines"
+        ],
+        "bait": []
+      },
+      "cleanup_actions": [],
+      "opsec_notes": "Clone over HTTPS with PAT; avoid SSH keys that create additional audit entries."
+    }
+  ]
+}

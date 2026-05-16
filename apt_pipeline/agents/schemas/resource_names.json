@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "resource_names",
+  "description": "Single source of truth for all resource names used in an emulation run. Written by __main__.py (infra), read by both __main__.py and attack.py. Eliminates logical-vs-AWS-name mismatches permanently. Also consumed by the UI for attack path visualization.",
+  "type": "object",
+  "required": ["campaign", "csp", "resources", "pulumi_export_keys"],
+  "properties": {
+    "campaign": {
+      "type": "string",
+      "description": "Threat actor / campaign name (e.g. 'LUCR-3', 'CODEFINGER')"
+    },
+    "csp": {
+      "type": "string",
+      "enum": ["aws", "azure", "gcp", "multi"],
+      "description": "Primary cloud service provider"
+    },
+    "resources": {
+      "type": "object",
+      "description": "Static AWS/Azure/GCP resource names — fully resolved strings usable directly in SDK calls (boto3, azure-sdk, google-cloud). NO Pulumi logical names. NO account-ID templates. Keys are semantic identifiers; values are the exact name argument passed to the cloud SDK.",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      },
+      "examples": [
+        {
+          "trail_name": "lucr3-cloudtrail",
+          "attacker_iam_user": "svc-automation-lucr3",
+          "secret_prod_db": "prod/database/master_credentials",
+          "dynamodb_table": "lucr3-CustomerRecords",
+          "github_repo": "lucr3-core-platform"
+        }
+      ]
+    },
+    "pulumi_export_keys": {
+      "type": "object",
+      "description": "Map of semantic key -> Pulumi export key for values that are only known after 'pulumi up' (ARNs, bucket names embedding account-ID, instance IDs, etc.). attack.py reads these via infra.get(value).",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      },
+      "examples": [
+        {
+          "corporate_bucket_name": "corporate_bucket_name",
+          "engineering_bucket_name": "engineering_bucket_name",
+          "federated_role_arn": "federated_role_arn",
+          "ec2_instance_id": "ec2_instance_id",
+          "subnet_id": "subnet_id",
+          "guardduty_detector_id": "guardduty_detector_id"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

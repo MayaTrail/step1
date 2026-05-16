@@ -1,0 +1,207 @@
+{
+  "run_id": "20260513_235214",
+  "start_time": "2026-05-13T18:22:14.335910+00:00",
+  "phases": {
+    "pipeline": {
+      "status": "complete",
+      "timestamp": "2026-05-16T07:55:43.038174+00:00",
+      "mode": "full-apt",
+      "input": "https://permiso.io/blog/lucr-3-scattered-spider-getting-saas-y-in-the-cloud",
+      "tool_versions": {
+        "tiktoken": "0.12.0",
+        "trafilatura": "2.0.0",
+        "claude": "2.1.114 (Claude Code)",
+        "pulumi": "v3.224.0",
+        "python": "Python 3.9.13",
+        "aws_arn": "arn:aws:iam::940482414561:user/admin"
+      },
+      "error": "Phase 3: attack plan failed critical schema validation. Critical errors: [\"Missing critical top-level field: 'attack_chain'\"]. Steps: 0. Malformed plan saved to attack_plan.json.",
+      "end_time": "2026-05-16T07:55:43.037713+00:00",
+      "tokens": {
+        "total_input_tokens": 27898,
+        "total_output_tokens": 19576,
+        "total_tokens": 47474,
+        "estimated_cost_usd": 0.38,
+        "calls": 3,
+        "per_model": {
+          "claude-sonnet-4-6": {
+            "calls": 3,
+            "input_tokens": 27898,
+            "output_tokens": 19576,
+            "cost_usd": 0.3774
+          }
+        },
+        "breakdown": [
+          {
+            "label": "PHASE-6B",
+            "timestamp": "2026-05-16T07:50:00.495289+00:00",
+            "input_tokens": 9146,
+            "output_tokens": 9439,
+            "model": "claude-sonnet-4-6",
+            "elapsed_s": 188.3,
+            "source": "tiktoken"
+          },
+          {
+            "label": "PHASE-6A",
+            "timestamp": "2026-05-16T07:52:31.594315+00:00",
+            "input_tokens": 9628,
+            "output_tokens": 678,
+            "model": "claude-sonnet-4-6",
+            "elapsed_s": 151.1,
+            "source": "tiktoken"
+          },
+          {
+            "label": "PHASE-6C",
+            "timestamp": "2026-05-16T07:55:42.872323+00:00",
+            "input_tokens": 9124,
+            "output_tokens": 9459,
+            "model": "claude-sonnet-4-6",
+            "elapsed_s": 191.3,
+            "source": "tiktoken"
+          }
+        ]
+      },
+      "fallback_count": 0,
+      "fallback_phases": []
+    },
+    "phase_0b_meta": {
+      "status": "complete",
+      "timestamp": "2026-05-13T18:23:36.229802+00:00",
+      "tokens": {
+        "input_tokens": 67760,
+        "output_tokens": 5143,
+        "model": "claude-sonnet-4-6",
+        "elapsed_s": 79.8,
+        "cost_usd": 0.22349850000000002,
+        "stop_reason": "end_turn",
+        "source": "envelope"
+      }
+    },
+    "phase_0b_tech": {
+      "status": "complete",
+      "timestamp": "2026-05-13T18:26:26.698974+00:00",
+      "tokens": {
+        "input_tokens": 66191,
+        "output_tokens": 7675,
+        "model": "claude-sonnet-4-6",
+        "elapsed_s": 170.5,
+        "cost_usd": 0.27219615,
+        "stop_reason": "end_turn",
+        "source": "envelope"
+      }
+    },
+    "phase_0b": {
+      "status": "complete",
+      "timestamp": "2026-05-13T18:26:26.730963+00:00",
+      "techniques": 21,
+      "threat_actor": "LUCR-3",
+      "execution_planes": {
+        "control_plane": 18,
+        "data_plane": 2,
+        "host_plane": 1
+      },
+      "tokens": {
+        "input_tokens": 133951,
+        "output_tokens": 12818,
+        "model": "claude-sonnet-4-6",
+        "elapsed_s": 250.3,
+        "cost_usd": 0.49569465
+      }
+    },
+    "phase_1": {
+      "status": "complete",
+      "timestamp": "2026-05-13T18:30:19.403817+00:00",
+      "resources": 26,
+      "categories": {
+        "attack_surface": 9,
+        "target": 8,
+        "bait": 4,
+        "support": 5
+      },
+      "tokens": {
+        "input_tokens": 3420,
+        "output_tokens": 7391,
+        "model": "claude-sonnet-4-6",
+        "elapsed_s": 225.1,
+        "source": "tiktoken"
+      },
+      "recovered_from_disk": true
+    },
+    "phase_cost": {
+      "status": "complete",
+      "timestamp": "2026-05-16T07:46:52.053056+00:00",
+      "hourly": 0.05873,
+      "daily": 1.4095,
+      "monthly": 42.29,
+      "per_run_usd": 0.0
+    },
+    "PHASE-2_iter_1": {
+      "status": "approved",
+      "timestamp": "2026-05-14T05:09:05.466917+00:00"
+    },
+    "phase_2": {
+      "status": "complete",
+      "timestamp": "2026-05-14T05:09:05.479633+00:00",
+      "verdict": "APPROVED",
+      "fallback": false
+    },
+    "phase_3": {
+      "status": "complete",
+      "timestamp": "2026-05-14T05:38:20.808922+00:00",
+      "steps": 22,
+      "credential_pivots": 5,
+      "tokens": {
+        "input_tokens": 6459,
+        "output_tokens": 357,
+        "model": "claude-sonnet-4-6",
+        "elapsed_s": 603.9,
+        "source": "tiktoken"
+      }
+    },
+    "PHASE-4_iter_1": {
+      "status": "approved",
+      "timestamp": "2026-05-14T05:40:34.973481+00:00"
+    },
+    "phase_4": {
+      "status": "complete",
+      "timestamp": "2026-05-14T05:40:34.985352+00:00",
+      "verdict": "APPROVED",
+      "fidelity_score": 0.9,
+      "fallback": false
+    },
+    "phase_5": {
+      "status": "complete",
+      "timestamp": "2026-05-14T06:06:35.068911+00:00",
+      "infra_files": 3,
+      "attack_files": 1,
+      "validation_errors": 7,
+      "technique_coverage_pct": 100.0
+    },
+    "phase_6": {
+      "status": "complete",
+      "timestamp": "2026-05-16T07:55:43.027611+00:00",
+      "sigma": 19,
+      "kql": 19,
+      "detection_notes": 3,
+      "playbooks": 1,
+      "guardrails": 18
+    },
+    "phase_0a": {
+      "status": "complete",
+      "timestamp": "2026-05-16T07:46:47.384306+00:00",
+      "services": {
+        "CloudTrail": {
+          "enabled": false,
+          "trails": 0
+        },
+        "GuardDuty": {
+          "enabled": false
+        },
+        "SecurityHub": {
+          "enabled": false
+        }
+      }
+    }
+  },
+  "last_updated": "2026-05-16T07:55:43.038185+00:00"
+}

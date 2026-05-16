@@ -1,0 +1,99 @@
+{
+  "region": "us-east-1",
+  "platform": "aws",
+  "standing_cost": {
+    "hourly_usd": 0.0014,
+    "daily_usd": 0.0336,
+    "monthly_usd": 1.01,
+    "breakdown": [
+      {
+        "resource": "codefinger-victim-iam-user",
+        "type": "aws.iam.User",
+        "detail": "aws.iam.User",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "codefinger-victim-iam-access-key",
+        "type": "aws.iam.AccessKey",
+        "detail": "aws.iam.AccessKey",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "codefinger-victim-iam-policy",
+        "type": "aws.iam.UserPolicy",
+        "detail": "aws.iam.UserPolicy (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "codefinger-target-s3-bucket",
+        "type": "aws.s3.BucketV2",
+        "detail": "aws.s3.BucketV2 (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "codefinger-synthetic-data-finance",
+        "type": "aws.s3.BucketObject",
+        "detail": "aws.s3.BucketObject (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "codefinger-synthetic-data-hr",
+        "type": "aws.s3.BucketObject",
+        "detail": "aws.s3.BucketObject (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "codefinger-bait-public-bucket",
+        "type": "aws.s3.BucketV2",
+        "detail": "aws.s3.BucketV2 (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "codefinger-bait-public-access-block",
+        "type": "aws.s3.BucketPublicAccessBlock",
+        "detail": "aws.s3.BucketPublicAccessBlock (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "codefinger-bait-public-bucket-policy",
+        "type": "aws.s3.BucketPolicy",
+        "detail": "aws.s3.BucketPolicy (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "codefinger-exposed-credentials-object",
+        "type": "aws.s3.BucketObject",
+        "detail": "aws.s3.BucketObject (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "codefinger-cloudtrail-log-bucket",
+        "type": "aws.s3.BucketV2",
+        "detail": "aws.s3.BucketV2 (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "codefinger-cloudtrail-log-bucket-policy",
+        "type": "aws.s3.BucketPolicy",
+        "detail": "aws.s3.BucketPolicy (unrecognised \u2014 no price data)",
+        "hourly_usd": 0.0
+      },
+      {
+        "resource": "codefinger-cloudtrail",
+        "type": "aws.cloudtrail.Trail",
+        "detail": "CloudTrail trail",
+        "hourly_usd": 0.0014
+      }
+    ]
+  },
+  "per_run_cost": {
+    "estimated_usd": 0.0,
+    "detail": "No transient resources defined in attack plan",
+    "breakdown": []
+  },
+  "cost_drivers": [
+    "CloudTrail trail ($0.0014/hr)"
+  ],
+  "warnings": [],
+  "summary_table": "+---------------------------------------------------------------------+\n|               COST ESTIMATE -- Codefinger (us-east-1)               |\n+------------------------------------------+---------+---------+---------+\n| Resource                                 |    $/hr |   $/day |    $/mo |\n+------------------------------------------+---------+---------+---------+\n| aws.iam.User                             | 0.000000 |  0.0000 |    0.00 |\n| aws.iam.AccessKey                        | 0.000000 |  0.0000 |    0.00 |\n| aws.iam.UserPolicy (unrecognised \u2014 no pr | 0.000000 |  0.0000 |    0.00 |\n| aws.s3.BucketV2 (unrecognised \u2014 no price | 0.000000 |  0.0000 |    0.00 |\n| aws.s3.BucketObject (unrecognised \u2014 no p | 0.000000 |  0.0000 |    0.00 |\n| aws.s3.BucketObject (unrecognised \u2014 no p | 0.000000 |  0.0000 |    0.00 |\n| aws.s3.BucketV2 (unrecognised \u2014 no price | 0.000000 |  0.0000 |    0.00 |\n| aws.s3.BucketPublicAccessBlock (unrecogn | 0.000000 |  0.0000 |    0.00 |\n| aws.s3.BucketPolicy (unrecognised \u2014 no p | 0.000000 |  0.0000 |    0.00 |\n| aws.s3.BucketObject (unrecognised \u2014 no p | 0.000000 |  0.0000 |    0.00 |\n| aws.s3.BucketV2 (unrecognised \u2014 no price | 0.000000 |  0.0000 |    0.00 |\n| aws.s3.BucketPolicy (unrecognised \u2014 no p | 0.000000 |  0.0000 |    0.00 |\n| CloudTrail trail                         |  0.0014 |   0.034 |    1.01 |\n+------------------------------------------+---------+---------+---------+\n| TOTAL (standing infra)                   |  0.0014 |   0.034 |    1.01 |\n+------------------------------------------+---------+---------+---------+\n| Per attack run (no transient resources defined)                     |\n+---------------------------------------------------------------------+"
+}

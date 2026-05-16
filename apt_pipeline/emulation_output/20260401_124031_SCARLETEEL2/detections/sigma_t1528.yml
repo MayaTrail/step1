@@ -1,0 +1,44 @@
+title: Secrets Manager Harvest from EC2 Compute Role (SCARLETEEL 2.0 Phase 6)
+id: scarleteel2-t1528-secretsmanager-harvest
+status: stable
+description: |
+  Detects ListSecrets + GetSecretValue API calls made by an EC2 instance role
+  (principal containing 'i-') from an external IP address. SCARLETEEL 2.0 added
+  Secrets Manager credential harvest as a secondary pivot in Phase 6, targeting
+  production database credentials stored as secrets.
+  EC2 compute roles should rarely if ever call GetSecretValue — and almost never
+  from an external source IP.
+references:
+  - https://sysdig.com/blog/scarleteel-2-0/
+  - https://attack.mitre.org/techniques/T1528/
+author: APT Pipeline (SCARLETEEL 2.0 emulation)
+date: 2026-04-01
+tags:
+  - attack.credential_access
+  - attack.t1528
+  - scarleteel
+  - scarleteel2
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: secretsmanager.amazonaws.com
+    eventName:
+      - ListSecrets
+      - GetSecretValue
+  ec2_principal:
+    userIdentity.principalId|contains: ':i-'
+  filter_aws_internal:
+    sourceIPAddress|endswith: '.amazonaws.com'
+  condition: selection and ec2_principal and not filter_aws_internal
+falsepositives:
+  - Legitimate applications running on EC2 that fetch secrets at startup (document expected secret names and IAM roles)
+level: high
+fields:
+  - eventTime
+  - userIdentity.arn
+  - userIdentity.principalId
+  - sourceIPAddress
+  - eventName
+  - requestParameters.secretId

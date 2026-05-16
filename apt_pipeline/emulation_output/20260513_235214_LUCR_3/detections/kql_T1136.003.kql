@@ -1,0 +1,31 @@
+// T1136.003 - Create Account: Cloud Account (IAM backdoor user)
+// Detects CreateUser + CreateLoginProfile sequence from federated principal
+// Log source: AWSCloudTrail table in Microsoft Sentinel
+let TimeWindow = 30m;
+let CreateUserEvents = AWSCloudTrail
+    | where EventName == "CreateUser"
+    | where EventSource == "iam.amazonaws.com"
+    | where UserIdentityType == "AssumedRole"
+    | where not(UserIdentityArn has_any (":role/HRProvisioning", ":role/IdentitySync", ":role/SCIMProvider"))
+    | project
+        CreateTime  = TimeGenerated,
+        Actor       = UserIdentityArn,
+        NewUser     = tostring(parse_json(RequestParameters).userName),
+        SourceIP    = SourceIpAddress;
+let LoginProfileEvents = AWSCloudTrail
+    | where EventName == "CreateLoginProfile"
+    | where EventSource == "iam.amazonaws.com"
+    | project
+        LoginTime   = TimeGenerated,
+        TargetUser  = tostring(parse_json(RequestParameters).userName);
+CreateUserEvents
+| join kind=leftouter (LoginProfileEvents) on $left.NewUser == $right.TargetUser
+| where LoginTime between (CreateTime .. (CreateTime + TimeWindow)) or isempty(LoginTime)
+| project
+    CreateTime,
+    Actor,
+    NewUser,
+    SourceIP,
+    LoginProfileAdded = isnotempty(LoginTime),
+    LoginTime
+| sort by CreateTime desc

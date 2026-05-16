@@ -1,0 +1,47 @@
+title: EC2 Instance Role Credentials Used from External IP (SCARLETEEL IMDS Theft)
+id: scarleteel-t1552-005-credential-exfil
+status: stable
+description: |
+  Detects AWS API calls made with EC2 instance role credentials (principal containing 'i-')
+  from a source IP address that does not match the instance's known IP range.
+  This is the primary post-exploitation signal for SCARLETEEL IMDSv1 credential theft.
+  The stolen credentials will appear in CloudTrail with the instance's role ARN but
+  originating from the attacker's external IP.
+references:
+  - https://sysdig.com/blog/cloud-breach-scarleteel/
+  - https://attack.mitre.org/techniques/T1552/005/
+author: APT Pipeline (SCARLETEEL emulation)
+date: 2026-03-27
+tags:
+  - attack.credential_access
+  - attack.t1552.005
+  - attack.initial_access
+  - scarleteel
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    userIdentity.type: AssumedRole
+    userIdentity.sessionContext.sessionIssuer.type: Role
+  filter_aws_internal:
+    sourceIPAddress|contains:
+      - '.amazonaws.com'
+      - '.compute.internal'
+      - '10.'
+      - '172.16.'
+      - '192.168.'
+  ec2_principal:
+    userIdentity.principalId|contains: ':i-'
+  condition: selection and ec2_principal and not filter_aws_internal
+falsepositives:
+  - NAT Gateway or proxy in front of EC2 instances (document known egress IPs)
+  - Hybrid connectivity scenarios with non-RFC1918 internal IPs
+level: high
+fields:
+  - eventTime
+  - userIdentity.arn
+  - userIdentity.principalId
+  - sourceIPAddress
+  - eventName
+  - eventSource

@@ -1,0 +1,35 @@
+title: LUCR-3 GuardDuty Detector Disabled Before Bulk Exfiltration
+id: c5f3a7e1-8b2d-4c9f-b6e0-8d2f5a3c7e1b
+status: experimental
+description: >
+  Detects UpdateDetector or DeleteDetector calls that disable GuardDuty threat
+  detection. LUCR-3 consistently disables GuardDuty before bulk S3 data theft
+  to suppress Exfiltration findings. The UpdateDetector (enable=false) method is
+  preferred by the actor as it is less conspicuous than DeleteDetector.
+  AWS Security Hub continues to function after GuardDuty is disabled.
+references:
+    - https://attack.mitre.org/techniques/T1562/001/
+    - https://www.cisa.gov/sites/default/files/2023-11/aa23-320a_scattered_spider.pdf
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1562.001
+    - lucr3
+    - scattered_spider
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_update:
+        eventName: 'UpdateDetector'
+        eventSource: 'guardduty.amazonaws.com'
+        requestParameters.enable: 'false'
+    selection_delete:
+        eventName: 'DeleteDetector'
+        eventSource: 'guardduty.amazonaws.com'
+    condition: selection_update or selection_delete
+falsepositives:
+    - Planned GuardDuty region consolidation or account migration with change-control approval
+    - Automated infrastructure teardown in sandbox or development accounts
+level: critical

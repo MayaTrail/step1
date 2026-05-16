@@ -1,0 +1,27 @@
+// T1098.001 - Account Manipulation: Additional Cloud Credentials
+// Detects CreateAccessKey on IAM user created within the last 30 minutes
+// Log source: AWSCloudTrail table in Microsoft Sentinel
+let TimeWindow = 30m;
+let RecentUsers = AWSCloudTrail
+    | where EventName == "CreateUser"
+    | where EventSource == "iam.amazonaws.com"
+    | project
+        UserCreatedAt   = TimeGenerated,
+        NewUserName     = tostring(parse_json(RequestParameters).userName),
+        CreatorArn      = UserIdentityArn;
+AWSCloudTrail
+| where EventName == "CreateAccessKey"
+| where EventSource == "iam.amazonaws.com"
+| extend TargetUser = tostring(parse_json(RequestParameters).userName)
+| join kind=inner (RecentUsers) on $left.TargetUser == $right.NewUserName
+| where TimeGenerated between (UserCreatedAt .. (UserCreatedAt + TimeWindow))
+| extend MinutesSinceUserCreation = datetime_diff("minute", TimeGenerated, UserCreatedAt)
+| project
+    TimeGenerated,
+    TargetUser,
+    CreatorArn,
+    UserCreatedAt,
+    MinutesSinceUserCreation,
+    SourceIpAddress,
+    UserAgent
+| sort by TimeGenerated desc

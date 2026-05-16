@@ -1,0 +1,49 @@
+{
+  "campaign": "SCARLETEEL2",
+  "csp": "aws",
+  "providers": {
+    "aws": {
+      "required": true,
+      "credentials": [
+        {
+          "env_var": "AWS_ACCESS_KEY_ID",
+          "description": "AWS access key ID — must have permissions to create EC2, IAM, CloudTrail, Secrets Manager, and S3 resources"
+        },
+        {
+          "env_var": "AWS_SECRET_ACCESS_KEY",
+          "description": "AWS secret access key"
+        },
+        {
+          "env_var": "AWS_DEFAULT_REGION",
+          "description": "AWS region to deploy into",
+          "default": "us-east-1"
+        }
+      ],
+      "min_permissions": [
+        "ec2:*",
+        "iam:*",
+        "s3:*",
+        "cloudtrail:*",
+        "secretsmanager:*",
+        "sts:*",
+        "logs:*"
+      ]
+    }
+  },
+  "pulumi_config": [],
+  "attack_env_vars": [
+    {
+      "env_var": "PULUMI_CONFIG_PASSPHRASE",
+      "required": true,
+      "description": "Passphrase for Pulumi stack encryption — must match the value used during pulumi up",
+      "how_to_get": "Set any secure passphrase before running pulumi up; reuse the same value here"
+    }
+  ],
+  "python_packages": [
+    "pulumi>=3.0.0,<4.0.0",
+    "pulumi-aws>=6.0.0,<8.0.0",
+    "pulumi-tls>=5.0.0",
+    "boto3>=1.28.0",
+    "requests>=2.28.0"
+  ]
+}

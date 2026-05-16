@@ -1,0 +1,29 @@
+// T1580 - Cloud Infrastructure Discovery
+// Detects multi-service AWS enumeration burst from federated credential - LUCR-3 recon
+// Log source: AWSCloudTrail table in Microsoft Sentinel
+let DiscoveryEvents = dynamic([
+    "GetCallerIdentity", "ListUsers", "ListRoles",
+    "DescribeInstances", "ListTables"
+]);
+AWSCloudTrail
+| where EventName in (DiscoveryEvents)
+| where UserIdentityType == "AssumedRole"
+| where not(UserIdentityArn has_any (":role/aws-service-role/", ":role/AWSServiceRole"))
+| where not(UserAgent has_any ("Terraform", "aws-cdk", "aws-config"))
+| summarize
+    EventCount      = count(),
+    EventTypes      = make_set(EventName),
+    SourceIPs       = make_set(SourceIpAddress),
+    Services        = make_set(EventSource)
+    by bin(TimeGenerated, 5m), UserIdentityArn
+| where EventCount >= 4
+| extend UniqueServices = array_length(Services)
+| project
+    TimeGenerated,
+    UserIdentityArn,
+    EventCount,
+    UniqueServices,
+    EventTypes,
+    Services,
+    SourceIPs
+| sort by EventCount desc

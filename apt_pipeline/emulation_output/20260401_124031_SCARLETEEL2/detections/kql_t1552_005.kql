@@ -1,0 +1,30 @@
+// T1552.005 — EC2 Instance Credential Exfiltration (SCARLETEEL)
+// Detects EC2 instance role (principal containing ':i-') making API calls from
+// a non-AWS, non-internal source IP. This is the primary SCARLETEEL detection signal.
+//
+// Source: https://sysdig.com/blog/cloud-breach-scarleteel/
+// GuardDuty finding: UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS
+// MITRE: https://attack.mitre.org/techniques/T1552/005/
+
+AWSCloudTrail
+| where UserIdentityType == "AssumedRole"
+| where UserIdentityPrincipalid contains ":i-"
+// Exclude AWS-internal service calls and RFC1918 addresses
+| where SourceIpAddress !endswith ".amazonaws.com"
+| where SourceIpAddress !endswith ".compute.internal"
+| where not (SourceIpAddress startswith "10.")
+| where not (SourceIpAddress startswith "172.16.")
+| where not (SourceIpAddress startswith "172.17.")
+| where not (SourceIpAddress startswith "172.18.")
+| where not (SourceIpAddress startswith "172.19.")
+| where not (SourceIpAddress startswith "172.2")
+| where not (SourceIpAddress startswith "172.3")
+| where not (SourceIpAddress startswith "192.168.")
+| summarize
+    EventCount = count(),
+    Events = make_set(EventName, 50),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated)
+    by SourceIpAddress, UserIdentityArn, UserIdentityPrincipalid
+| where EventCount >= 1
+| order by EventCount desc

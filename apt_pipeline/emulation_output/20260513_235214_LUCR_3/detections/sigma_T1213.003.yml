@@ -1,0 +1,37 @@
+title: LUCR-3 GitHub Repository Clone from Anomalous IP Using Harvested PAT
+id: a4c8f2e6-7b1d-4a9c-e5f3-2c6b0e4a8f1d
+status: experimental
+description: >
+  Detects git.clone or repository.download GitHub audit events from IP addresses
+  not matching known CI/CD runner ranges. LUCR-3 uses GitHub PATs harvested from
+  SecretsManager to clone source code repositories for embedded secret extraction
+  and proprietary IP theft. Clone outside normal CI/CD pipeline timing is suspicious.
+references:
+    - https://attack.mitre.org/techniques/T1213/003/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.collection
+    - attack.t1213.003
+    - lucr3
+    - scattered_spider
+logsource:
+    product: github
+    service: audit
+detection:
+    selection:
+        action:
+            - 'git.clone'
+            - 'repository.download'
+    filter_cicd:
+        actor|contains:
+            - 'github-actions[bot]'
+            - 'dependabot[bot]'
+            - 'renovate[bot]'
+    filter_known_ip:
+        actor_location.country_code: 'US'
+    condition: selection and not filter_cicd
+falsepositives:
+    - Developer cloning from a new laptop or cloud workspace from an unrecognized IP
+    - Legitimate external contributor access via PAT
+level: medium

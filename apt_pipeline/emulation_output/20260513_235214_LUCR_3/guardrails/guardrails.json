@@ -1,0 +1,890 @@
+{
+  "guardrails": [
+    {
+      "technique_id": "T1078.004",
+      "platform": "okta",
+      "type": "Sign-On Policy",
+      "name": "Restrict Okta Authentication to Corporate Network and Managed Devices",
+      "description": "Deny authentication from non-corporate IP ranges and require device trust for all users. LUCR-3 authenticates from residential/VPN IPs with unmanaged devices.",
+      "policy_json": {
+        "name": "Corporate Network and Device Trust Policy",
+        "type": "OKTA_SIGN_ON",
+        "conditions": {
+          "network": {
+            "connection": "ANYWHERE"
+          }
+        },
+        "rules": [
+          {
+            "name": "Deny Non-Corporate IPs Without Device Trust",
+            "priority": 1,
+            "conditions": {
+              "network": {
+                "connection": "NOT_IN_ZONE",
+                "include": [
+                  "CorporateZone"
+                ]
+              },
+              "device": {
+                "registered": false
+              }
+            },
+            "actions": {
+              "signon": {
+                "access": "DENY"
+              }
+            }
+          },
+          {
+            "name": "Require Phishing-Resistant MFA from Outside Corporate Network",
+            "priority": 2,
+            "conditions": {
+              "network": {
+                "connection": "NOT_IN_ZONE",
+                "include": [
+                  "CorporateZone"
+                ]
+              }
+            },
+            "actions": {
+              "signon": {
+                "access": "ALLOW",
+                "factorLifetime": 0,
+                "requireFactor": true,
+                "factorPromptMode": "ALWAYS",
+                "session": {
+                  "maxSessionIdleMinutes": 15,
+                  "maxSessionLifetimeMinutes": 480,
+                  "usePersistentCookie": false
+                }
+              }
+            }
+          }
+        ]
+      },
+      "applies_to": "All users; tighten to FIDO2/WebAuthn authenticators only for admin group",
+      "effectiveness": "Blocks LUCR-3's initial authentication from non-corporate IPs with unmanaged devices. Forces step-up auth for anomalous locations.",
+      "side_effects": "Blocks legitimate remote workers not on VPN. Requires corporate VPN enrollment or device trust (Okta Device Trust / Jamf / InTune) to be fully deployed.",
+      "testing_guidance": "Authenticate from a non-corporate IP with an unmanaged browser. Should receive DENY. Authenticate from the same IP with a managed enrolled device \u2014 should reach MFA step."
+    },
+    {
+      "technique_id": "T1621",
+      "platform": "okta",
+      "type": "MFA Enrollment and Authentication Policy",
+      "name": "Limit MFA Push Attempts and Enforce Number Matching",
+      "description": "Cap Okta Verify push notifications per session and require number matching to defeat MFA fatigue. LUCR-3 sends repeated push requests hoping the victim taps Accept.",
+      "policy_json": {
+        "name": "Anti-MFA-Fatigue Policy",
+        "type": "OKTA_SIGN_ON",
+        "rules": [
+          {
+            "name": "Enforce Number Matching and Low Push Retry Limit",
+            "priority": 1,
+            "actions": {
+              "signon": {
+                "access": "ALLOW",
+                "requireFactor": true,
+                "factorPromptMode": "ALWAYS"
+              }
+            }
+          }
+        ],
+        "authenticatorSettings": {
+          "oktaVerify": {
+            "userVerification": "REQUIRED",
+            "numberChallenge": "REQUIRED",
+            "pushChallengeRetryLimit": 3,
+            "lockoutAfterConsecutiveFailures": 3,
+            "lockoutDurationMinutes": 30
+          }
+        },
+        "additionalControls": {
+          "disableSMSOTP": true,
+          "disableVoiceOTP": true,
+          "allowedFactors": [
+            "okta_verify_push_with_number_challenge",
+            "FIDO2_WEBAUTHN"
+          ]
+        }
+      },
+      "applies_to": "All users; prioritize enforcing number matching for privileged/admin groups immediately",
+      "effectiveness": "Number matching forces the victim to actively match a displayed number, making passive tap-to-approve fatigue attacks non-functional. Push retry cap limits noise.",
+      "side_effects": "Users relying on SMS OTP lose that fallback. Requires Okta Verify app update on enrolled devices.",
+      "testing_guidance": "Trigger an Okta Verify push from a test account. Verify the number challenge appears on the mobile app. Send 4 consecutive push requests \u2014 the 4th should be blocked/locked."
+    },
+    {
+      "technique_id": "T1098.005",
+      "platform": "okta",
+      "type": "Authenticator Enrollment Policy",
+      "name": "Restrict Factor Enrollment to Corporate Network and Require Manager Approval",
+      "description": "Prevent enrollment of new MFA factors from non-corporate IPs. LUCR-3 enrolls an attacker TOTP device after gaining a session to maintain persistence after victim password reset.",
+      "policy_json": {
+        "name": "Restrict Factor Enrollment Policy",
+        "type": "MFA_ENROLL",
+        "conditions": {
+          "people": {
+            "users": {
+              "exclude": []
+            },
+            "groups": {
+              "include": [
+                "Everyone"
+              ]
+            }
+          }
+        },
+        "rules": [
+          {
+            "name": "Block Factor Enrollment Outside Corporate Network",
+            "priority": 1,
+            "conditions": {
+              "network": {
+                "connection": "NOT_IN_ZONE",
+                "include": [
+                  "CorporateZone"
+                ]
+              }
+            },
+            "actions": {
+              "enroll": {
+                "self": "NOT_ALLOWED"
+              }
+            }
+          },
+          {
+            "name": "Allow Enrollment Only on Corporate Network",
+            "priority": 2,
+            "conditions": {
+              "network": {
+                "connection": "IN_ZONE",
+                "include": [
+                  "CorporateZone"
+                ]
+              }
+            },
+            "actions": {
+              "enroll": {
+                "self": "CHALLENGE"
+              }
+            }
+          }
+        ],
+        "helpDeskSettings": {
+          "requireHelpDeskApprovalForNewEnrollment": true,
+          "adminNotificationOnNewFactor": true
+        }
+      },
+      "applies_to": "All users; admins should have a stricter policy requiring in-person/managed-device verification",
+      "effectiveness": "Directly blocks Step 4 of the LUCR-3 chain \u2014 attacker cannot enroll a TOTP device from a residential/VPN IP.",
+      "side_effects": "Employees who lose their device and work remotely cannot self-service re-enroll. Requires helpdesk workflow for remote re-enrollment.",
+      "testing_guidance": "From a non-corporate IP, log in and attempt to enroll a new TOTP factor. Should receive NOT_ALLOWED. From corporate IP, enrollment should succeed with existing factor challenge."
+    },
+    {
+      "technique_id": "T1136.003",
+      "platform": "aws",
+      "type": "SCP",
+      "name": "Deny IAM User Creation Outside Automation Pipeline",
+      "description": "Block iam:CreateUser and iam:CreateLoginProfile from all principals except the designated IAM automation role. Prevents LUCR-3's Step 10 backdoor user creation.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "DenyCreateIAMUser",
+            "Effect": "Deny",
+            "Action": [
+              "iam:CreateUser",
+              "iam:CreateLoginProfile",
+              "iam:UpdateLoginProfile"
+            ],
+            "Resource": "*",
+            "Condition": {
+              "StringNotLike": {
+                "aws:PrincipalArn": [
+                  "arn:aws:iam::*:role/IdentityAutomationRole",
+                  "arn:aws:iam::*:role/BreakGlassAdmin"
+                ]
+              },
+              "BoolIfExists": {
+                "aws:PrincipalIsAWSService": "false"
+              }
+            }
+          }
+        ]
+      },
+      "applies_to": "All OUs except the Identity Automation OU where the provisioning pipeline runs",
+      "effectiveness": "Completely prevents Step 10 (CreateUser) and Step 10 (CreateLoginProfile) unless the attacker has already compromised the automation role \u2014 which is a separate control boundary.",
+      "side_effects": "All IAM user provisioning must go through the automation pipeline. Manual user creation via console or ad-hoc CLI is blocked for all engineers, including admins.",
+      "testing_guidance": "From a non-automation role, run `aws iam create-user --user-name test-deny`. Should receive AccessDenied. From IdentityAutomationRole, same command should succeed."
+    },
+    {
+      "technique_id": "T1098",
+      "platform": "aws",
+      "type": "SCP",
+      "name": "Deny Attachment of AdministratorAccess and Broad Managed Policies",
+      "description": "Block AttachUserPolicy and AttachRolePolicy for AWS managed policies that grant admin or broad permissions. Prevents Step 11 where LUCR-3 attaches AdministratorAccess to the backdoor user.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "DenyBroadPolicyAttachment",
+            "Effect": "Deny",
+            "Action": [
+              "iam:AttachUserPolicy",
+              "iam:AttachRolePolicy",
+              "iam:AttachGroupPolicy",
+              "iam:PutUserPolicy",
+              "iam:PutRolePolicy"
+            ],
+            "Resource": "*",
+            "Condition": {
+              "ArnLike": {
+                "iam:PolicyARN": [
+                  "arn:aws:iam::aws:policy/AdministratorAccess",
+                  "arn:aws:iam::aws:policy/PowerUserAccess",
+                  "arn:aws:iam::aws:policy/IAMFullAccess",
+                  "arn:aws:iam::aws:policy/SecurityAudit"
+                ]
+              },
+              "StringNotLike": {
+                "aws:PrincipalArn": [
+                  "arn:aws:iam::*:role/BreakGlassAdmin",
+                  "arn:aws:iam::*:role/IdentityAutomationRole"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "applies_to": "All OUs; BreakGlass role should require MFA and be audited separately",
+      "effectiveness": "Blocks Step 11 \u2014 even if the attacker creates the backdoor user, they cannot grant it AdministratorAccess. The AttachUserPolicy call will receive AccessDenied.",
+      "side_effects": "Legitimate IAM admin workflows that attach managed policies must be routed through the automation pipeline or the BreakGlass role.",
+      "testing_guidance": "From a non-exempt role, run `aws iam attach-user-policy --policy-arn arn:aws:iam::aws:policy/AdministratorAccess --user-name any-user`. Should receive AccessDenied."
+    },
+    {
+      "technique_id": "T1098.001",
+      "platform": "aws",
+      "type": "SCP",
+      "name": "Restrict IAM Access Key Creation to Service Automation Roles",
+      "description": "Deny iam:CreateAccessKey except from designated automation and break-glass roles. Blocks Step 12 where LUCR-3 creates a long-lived access key on the backdoor IAM user.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "DenyCreateAccessKeyForHumans",
+            "Effect": "Deny",
+            "Action": "iam:CreateAccessKey",
+            "Resource": "*",
+            "Condition": {
+              "StringNotLike": {
+                "aws:PrincipalArn": [
+                  "arn:aws:iam::*:role/IdentityAutomationRole",
+                  "arn:aws:iam::*:role/BreakGlassAdmin",
+                  "arn:aws:iam::*:role/ServiceAccountProvisioner"
+                ]
+              }
+            }
+          },
+          {
+            "Sid": "DenyCreateAccessKeyForFederatedPrincipals",
+            "Effect": "Deny",
+            "Action": "iam:CreateAccessKey",
+            "Resource": "*",
+            "Condition": {
+              "StringLike": {
+                "aws:PrincipalArn": "arn:aws:sts::*:assumed-role/*"
+              },
+              "StringNotLike": {
+                "aws:PrincipalArn": [
+                  "arn:aws:sts::*:assumed-role/IdentityAutomationRole/*",
+                  "arn:aws:sts::*:assumed-role/BreakGlassAdmin/*"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "applies_to": "All OUs; federated SAML sessions (Step 5) are explicitly blocked from creating keys",
+      "effectiveness": "Directly targets the LUCR-3 pattern of creating long-lived keys from a SAML-derived session. Even if Steps 10-11 succeed, Step 12 fails.",
+      "side_effects": "Engineers cannot create their own programmatic access keys via console. All key issuance must be automated. This is best practice (short-lived credentials via STS are preferred).",
+      "testing_guidance": "From a SAML-federated session (AssumeRoleWithSAML), attempt `aws iam create-access-key --user-name any-user`. Should receive AccessDenied."
+    },
+    {
+      "technique_id": "T1555.006",
+      "platform": "aws",
+      "type": "SCP",
+      "name": "Restrict SecretsManager GetSecretValue to Approved Workload Roles",
+      "description": "Deny secretsmanager:GetSecretValue to principals not in an approved workload role allowlist. Blocks Step 13 bulk secrets harvesting.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "DenyBulkSecretsAccess",
+            "Effect": "Deny",
+            "Action": [
+              "secretsmanager:GetSecretValue",
+              "secretsmanager:BatchGetSecretValue",
+              "secretsmanager:ListSecrets"
+            ],
+            "Resource": "*",
+            "Condition": {
+              "StringNotLike": {
+                "aws:PrincipalArn": [
+                  "arn:aws:iam::*:role/AppWorkloadRole-*",
+                  "arn:aws:iam::*:role/LambdaExecutionRole-*",
+                  "arn:aws:iam::*:role/BreakGlassAdmin",
+                  "arn:aws:iam::*:role/SecretsRotationRole"
+                ]
+              },
+              "BoolIfExists": {
+                "aws:PrincipalIsAWSService": "false"
+              }
+            }
+          }
+        ]
+      },
+      "applies_to": "All production OUs; dev/sandbox OUs may relax ListSecrets for developer experience",
+      "effectiveness": "Blocks the attacker IAM user created in Step 12 from accessing any secrets. Also blocks the federated SAML session from Step 5 if it is not an approved workload role.",
+      "side_effects": "Developers cannot query secrets directly via CLI for debugging. Secrets access must go through approved Lambda/ECS task roles. Requires secrets to be mounted via role at runtime.",
+      "testing_guidance": "From an IAM user (not a workload role), run `aws secretsmanager list-secrets`. Should receive AccessDenied. From AppWorkloadRole, same command should succeed."
+    },
+    {
+      "technique_id": "T1555.006",
+      "platform": "aws",
+      "type": "SecretsManager Resource Policy",
+      "name": "Secret-Level Resource Policy: Allowlist Consuming Roles",
+      "description": "Attach a resource-based policy to each secret that explicitly denies GetSecretValue to any principal not in the consuming role list. Defense-in-depth layer beneath the SCP.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "AllowOnlyApprovedConsumers",
+            "Effect": "Deny",
+            "Principal": "*",
+            "Action": [
+              "secretsmanager:GetSecretValue",
+              "secretsmanager:DescribeSecret"
+            ],
+            "Resource": "*",
+            "Condition": {
+              "StringNotLike": {
+                "aws:PrincipalArn": [
+                  "arn:aws:iam::ACCOUNT_ID:role/AppWorkloadRole-ProdDB",
+                  "arn:aws:iam::ACCOUNT_ID:role/BreakGlassAdmin",
+                  "arn:aws:iam::ACCOUNT_ID:role/SecretsRotationRole"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "applies_to": "Applied per-secret to high-value secrets (DB credentials, payment keys, PATs)",
+      "effectiveness": "Even if the SCP is bypassed (e.g., in a management account), the resource policy still denies access. The attacker IAM user from Step 12 will always receive AccessDenied.",
+      "side_effects": "Every application role must be explicitly enumerated in each secret's resource policy. Automation is required to maintain these as roles change.",
+      "testing_guidance": "Use AWS IAM Policy Simulator with the attacker IAM user against the secret ARN. Should show Deny from resource policy. Test with AppWorkloadRole \u2014 should show Allow."
+    },
+    {
+      "technique_id": "T1578.002",
+      "platform": "aws",
+      "type": "SCP",
+      "name": "Restrict EC2 RunInstances to Approved AMIs, VPCs, and Instance Profiles",
+      "description": "Deny ec2:RunInstances unless the launch uses an approved AMI from a golden AMI list, an approved VPC, and attaches an IAM instance profile. Blocks Step 14 attacker-launched EC2.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "DenyRunInstancesWithoutApprovedAMI",
+            "Effect": "Deny",
+            "Action": "ec2:RunInstances",
+            "Resource": "arn:aws:ec2:*:*:instance/*",
+            "Condition": {
+              "StringNotLike": {
+                "aws:PrincipalArn": [
+                  "arn:aws:iam::*:role/DeploymentAutomationRole",
+                  "arn:aws:iam::*:role/BreakGlassAdmin"
+                ]
+              }
+            }
+          },
+          {
+            "Sid": "RequireInstanceProfileOnLaunch",
+            "Effect": "Deny",
+            "Action": "ec2:RunInstances",
+            "Resource": "arn:aws:ec2:*:*:instance/*",
+            "Condition": {
+              "Null": {
+                "ec2:InstanceProfile": "true"
+              },
+              "StringNotLike": {
+                "aws:PrincipalArn": "arn:aws:iam::*:role/BreakGlassAdmin"
+              }
+            }
+          },
+          {
+            "Sid": "DenyRunInstancesOutsideApprovedVPC",
+            "Effect": "Deny",
+            "Action": "ec2:RunInstances",
+            "Resource": "arn:aws:ec2:*:*:subnet/*",
+            "Condition": {
+              "StringNotEquals": {
+                "ec2:Vpc": [
+                  "arn:aws:ec2:*:*:vpc/vpc-APPROVED1",
+                  "arn:aws:ec2:*:*:vpc/vpc-APPROVED2"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "applies_to": "All production OUs; dev OUs may expand the AMI allowlist",
+      "effectiveness": "Attacker cannot launch an arbitrary EC2 instance for staging. Must use golden AMIs which have agents installed and logging enforced.",
+      "side_effects": "Any new AMI requires going through the golden AMI pipeline (Packer/EC2 Image Builder). Ad-hoc instance launches from the console are blocked.",
+      "testing_guidance": "Run `aws ec2 run-instances --image-id ami-RANDOM --instance-type t3.micro` as a non-approved role. Should receive AccessDenied. Replace with golden AMI ID from approved role \u2014 should succeed."
+    },
+    {
+      "technique_id": "T1562.001",
+      "platform": "aws",
+      "type": "SCP",
+      "name": "Deny GuardDuty Detector Modification or Deletion",
+      "description": "Deny guardduty:UpdateDetector (disable action), guardduty:DeleteDetector, and guardduty:DisassociateFromMasterAccount from all non-security principals. Blocks Step 16.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "DenyGuardDutyDisable",
+            "Effect": "Deny",
+            "Action": [
+              "guardduty:UpdateDetector",
+              "guardduty:DeleteDetector",
+              "guardduty:DisassociateFromAdministratorAccount",
+              "guardduty:DisassociateFromMasterAccount",
+              "guardduty:StopMonitoringMembers",
+              "guardduty:DeleteMembers"
+            ],
+            "Resource": "*",
+            "Condition": {
+              "StringNotLike": {
+                "aws:PrincipalArn": [
+                  "arn:aws:iam::*:role/SecurityOperationsRole",
+                  "arn:aws:iam::*:role/BreakGlassAdmin"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "applies_to": "All OUs in the AWS Organization, including member accounts managed by GuardDuty delegated admin",
+      "effectiveness": "Directly blocks Step 16. The attacker IAM user from Step 12 will receive AccessDenied on UpdateDetector. GuardDuty remains active through the exfiltration window.",
+      "side_effects": "GuardDuty suppression rules and findings archiving also require the SecurityOperationsRole. False positive suppression workflows must be updated.",
+      "testing_guidance": "From the attacker IAM user, run `aws guardduty update-detector --detector-id <id> --no-enable`. Should receive AccessDenied. From SecurityOperationsRole, same command should succeed."
+    },
+    {
+      "technique_id": "T1562.008",
+      "platform": "aws",
+      "type": "SCP",
+      "name": "Deny CloudTrail StopLogging and Deletion",
+      "description": "Deny cloudtrail:StopLogging, cloudtrail:DeleteTrail, and cloudtrail:UpdateTrail from all non-security principals. Blocks Step 17 \u2014 the last CloudTrail event before the forensic gap.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "DenyCloudTrailImpairment",
+            "Effect": "Deny",
+            "Action": [
+              "cloudtrail:StopLogging",
+              "cloudtrail:DeleteTrail",
+              "cloudtrail:UpdateTrail",
+              "cloudtrail:PutEventSelectors",
+              "cloudtrail:RemoveTags"
+            ],
+            "Resource": "*",
+            "Condition": {
+              "StringNotLike": {
+                "aws:PrincipalArn": [
+                  "arn:aws:iam::*:role/SecurityOperationsRole",
+                  "arn:aws:iam::*:role/BreakGlassAdmin",
+                  "arn:aws:iam::*:role/CloudTrailAutomationRole"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "applies_to": "All OUs; also recommended as an Organizations-level CloudTrail (delegated admin cannot stop org trail)",
+      "effectiveness": "Directly blocks Step 17. The attacker has AdministratorAccess on the backdoor user but cannot stop CloudTrail. All Steps 18-22 API calls remain logged.",
+      "side_effects": "Legitimate trail updates (e.g., expanding data events) require routing through CloudTrailAutomationRole. Trail management via console is blocked for all non-security engineers.",
+      "testing_guidance": "From the backdoor IAM user (AdministratorAccess attached), run `aws cloudtrail stop-logging --name <trail-arn>`. Should receive AccessDenied despite AdministratorAccess because SCP takes precedence."
+    },
+    {
+      "technique_id": "T1530",
+      "platform": "aws",
+      "type": "S3 Bucket Policy + SCP",
+      "name": "Enforce S3 Perimeter: Deny GetObject Outside Approved VPC Endpoints and Roles",
+      "description": "Combine an S3 RCP (Resource Control Policy) and per-bucket policy to deny s3:GetObject unless the request originates from an approved VPC endpoint or approved workload role. Blocks Step 21 bulk exfiltration.",
+      "policy_json": {
+        "RCP": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "EnforceS3VPCEOrApprovedRole",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion",
+                "s3:ListBucket"
+              ],
+              "Resource": "*",
+              "Condition": {
+                "StringNotEquals": {
+                  "aws:SourceVpce": [
+                    "vpce-APPROVED1",
+                    "vpce-APPROVED2"
+                  ]
+                },
+                "StringNotLike": {
+                  "aws:PrincipalArn": [
+                    "arn:aws:iam::*:role/AppWorkloadRole-*",
+                    "arn:aws:iam::*:role/DataPipelineRole",
+                    "arn:aws:iam::*:role/BreakGlassAdmin"
+                  ]
+                },
+                "BoolIfExists": {
+                  "aws:PrincipalIsAWSService": "false"
+                }
+              }
+            }
+          ]
+        },
+        "BucketPolicy_HighValue": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyNonVPCEAccess",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject"
+              ],
+              "Resource": [
+                "arn:aws:s3:::lucr3-s3-corporate-data/*",
+                "arn:aws:s3:::lucr3-s3-engineering-artifacts/*"
+              ],
+              "Condition": {
+                "StringNotEquals": {
+                  "aws:SourceVpce": "vpce-APPROVED1"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "applies_to": "RCP applied at Organization root; bucket policies applied to all production data buckets",
+      "effectiveness": "Even with the attacker IAM key from Step 12 (AdministratorAccess), GetObject requests from the attacker's external IP are denied by the bucket policy. S3 server access logs capture the denied attempts.",
+      "side_effects": "All S3 access from developer workstations must be routed through the VPC endpoint or an approved proxy. Direct `aws s3 cp` from laptops without VPN/VPCE is blocked.",
+      "testing_guidance": "From the attacker IAM key (external IP), run `aws s3 cp s3://lucr3-s3-corporate-data/sensitive.txt .`. Should receive AccessDenied. From an EC2 instance in the approved VPC using VPCE, same command should succeed."
+    },
+    {
+      "technique_id": "T1580",
+      "platform": "aws",
+      "type": "IAM Permission Boundary",
+      "name": "Federated Role Permission Boundary: Block Sensitive Discovery Actions",
+      "description": "Apply a permission boundary to the SAML-federated role that denies broad IAM and infrastructure enumeration. The federated role only needs what the legitimate app requires, not IAM ListUsers/ListRoles.",
+      "policy_json": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Sid": "AllowAppWorkloadActions",
+            "Effect": "Allow",
+            "Action": [
+              "s3:GetObject",
+              "s3:PutObject",
+              "dynamodb:Query",
+              "dynamodb:PutItem",
+              "secretsmanager:GetSecretValue"
+            ],
+            "Resource": [
+              "arn:aws:s3:::lucr3-s3-corporate-data/*",
+              "arn:aws:dynamodb:*:*:table/lucr3-dynamodb-customer-records"
+            ]
+          },
+          {
+            "Sid": "DenyIAMEnumeration",
+            "Effect": "Deny",
+            "Action": [
+              "iam:ListUsers",
+              "iam:ListRoles",
+              "iam:ListPolicies",
+              "iam:GetUser",
+              "iam:GetRole",
+              "iam:SimulatePrincipalPolicy",
+              "iam:CreateUser",
+              "iam:CreateAccessKey",
+              "iam:AttachUserPolicy"
+            ],
+            "Resource": "*"
+          },
+          {
+            "Sid": "DenyBroadEC2Discovery",
+            "Effect": "Deny",
+            "Action": [
+              "ec2:DescribeInstances",
+              "ec2:DescribeVpcs",
+              "ec2:DescribeSubnets",
+              "ec2:DescribeKeyPairs",
+              "ec2:DescribeSecurityGroups",
+              "ssm:DescribeInstanceInformation",
+              "ssm:StartSession"
+            ],
+            "Resource": "*"
+          }
+        ]
+      },
+      "applies_to": "Applied as permission boundary on lucr3-privileged-federated-role and all SAML-derived roles",
+      "effectiveness": "Even if LUCR-3 successfully federates into AWS (Step 5), Steps 7-9 discovery calls (ListUsers, DescribeInstances, DescribeVpcs, SSM) fail. Limits blast radius of identity compromise.",
+      "side_effects": "Legitimate application roles that need AWS introspection (e.g., auto-scaling apps) must request specific exceptions. Engineering access to EC2 should use dedicated IAM roles, not federated app roles.",
+      "testing_guidance": "Assume the federated role, then run `aws iam list-users`. Should receive AccessDenied due to boundary. Run `aws s3 ls s3://lucr3-s3-corporate-data/` \u2014 should succeed (within boundary + identity policy)."
+    },
+    {
+      "technique_id": "T1213.002",
+      "platform": "azure",
+      "type": "Conditional Access Policy",
+      "name": "Require Compliant Device and Known Network for SharePoint Access",
+      "description": "Block Microsoft Graph and SharePoint Online access unless the session originates from a compliant Intune-managed device or a named corporate location. Defeats Step 6 federated Graph token from anomalous IP.",
+      "policy_json": {
+        "displayName": "Require Compliant Device for SharePoint and OneDrive",
+        "state": "enabled",
+        "conditions": {
+          "applications": {
+            "includeApplications": [
+              "00000003-0000-0000-c000-000000000000",
+              "00000003-0000-0ff1-ce00-000000000000"
+            ]
+          },
+          "users": {
+            "includeGroups": [
+              "All Users Group Object ID"
+            ]
+          },
+          "locations": {
+            "includeLocations": [
+              "All"
+            ]
+          }
+        },
+        "grantControls": {
+          "operator": "OR",
+          "builtInControls": [
+            "compliantDevice",
+            "domainJoinedDevice"
+          ]
+        },
+        "sessionControls": {
+          "applicationEnforcedRestrictions": {
+            "isEnabled": true
+          },
+          "signInFrequency": {
+            "value": 1,
+            "type": "hours",
+            "isEnabled": true
+          }
+        }
+      },
+      "applies_to": "All users accessing SharePoint Online and Microsoft Graph; guest users should have a stricter separate policy",
+      "effectiveness": "LUCR-3's federated Okta session on an unmanaged device will not satisfy compliantDevice grant control. Graph token request fails at Conditional Access evaluation.",
+      "side_effects": "BYOD users without Intune enrollment lose SharePoint access. Requires Intune MAM/MDM enrollment to be complete across the user population.",
+      "testing_guidance": "From an Intune-enrolled device on a named location, access SharePoint \u2014 should succeed. From an unmanaged browser/device on an external IP, access SharePoint \u2014 should receive 'You cannot access this right now' block page."
+    },
+    {
+      "technique_id": "T1070.008",
+      "platform": "azure",
+      "type": "Azure AD Role / M365 RBAC",
+      "name": "Restrict Mail.ReadWrite and HardDelete Permissions",
+      "description": "Remove Mail.ReadWrite and Mailbox.ReadWrite.All application permissions from all non-essential service principals. Restrict the PurgeItems role to dedicated compliance accounts only. Blocks Step 20 email deletion.",
+      "policy_json": {
+        "oAuth2PermissionRestrictions": {
+          "blockedPermissions": [
+            {
+              "permissionId": "Mail.ReadWrite",
+              "type": "Application",
+              "rationale": "Allows mass mailbox manipulation \u2014 LUCR-3 uses this to delete security alert emails"
+            },
+            {
+              "permissionId": "MailboxSettings.ReadWrite",
+              "type": "Application"
+            }
+          ],
+          "adminConsentRequired": [
+            "Mail.Read",
+            "Mail.ReadWrite",
+            "Mailbox.ReadWrite.All"
+          ]
+        },
+        "complianceRoleRestriction": {
+          "purgeRoleMembers": [
+            "compliance-officer@company.com"
+          ],
+          "eDiscoveryRoleMembers": [
+            "ediscovery-admin@company.com"
+          ],
+          "blockSelfService": true
+        },
+        "mailboxAuditSettings": {
+          "auditEnabled": true,
+          "auditLogAgeLimit": 90,
+          "auditActions": [
+            "HardDelete",
+            "SoftDelete",
+            "MoveToDeletedItems",
+            "SendAs",
+            "SendOnBehalf"
+          ]
+        }
+      },
+      "applies_to": "All Azure AD service principals and user mailboxes; enforced via Microsoft Purview audit policy",
+      "effectiveness": "Removing Mail.ReadWrite application consent prevents the Graph token from having permission to delete emails. Even if the attacker obtains a delegated token, HardDelete is restricted to the Purge role.",
+      "side_effects": "Any existing app integrations using Mail.ReadWrite (e.g., email-to-ticket bots, calendar sync apps) must re-consent with a lesser scope. Review all app registrations during rollout.",
+      "testing_guidance": "With a Graph token lacking Mail.ReadWrite, call DELETE on a mail message via Graph API. Should receive 403 Forbidden. With the compliance-officer account, same call should succeed."
+    },
+    {
+      "technique_id": "T1550.001",
+      "platform": "github",
+      "type": "GitHub Organization Policy",
+      "name": "Restrict PAT Scope, Lifetime, and IP Access for GitHub Organization",
+      "description": "Enforce fine-grained PAT-only policy, cap token lifetime at 30 days, require SSO authorization, and restrict API access to corporate IP ranges. Blocks Step 15 use of stolen long-lived PAT.",
+      "policy_json": {
+        "organization_policy": {
+          "personal_access_tokens": {
+            "allowed_token_types": "fine-grained-only",
+            "maximum_expiration_days": 30,
+            "require_sso_authorization": true,
+            "require_approval_for_pat_access": true,
+            "approvers": [
+              "security-team"
+            ]
+          },
+          "ip_allow_list": {
+            "enabled": true,
+            "entries": [
+              {
+                "cidr": "203.0.113.0/24",
+                "description": "Corporate HQ egress"
+              },
+              {
+                "cidr": "198.51.100.0/24",
+                "description": "Corporate VPN exit nodes"
+              }
+            ],
+            "applies_to": [
+              "web",
+              "api",
+              "git_ssh",
+              "git_https"
+            ]
+          },
+          "token_audit": {
+            "log_all_token_usage": true,
+            "alert_on_token_use_from_new_ip": true,
+            "revoke_on_sso_session_expiry": true
+          }
+        }
+      },
+      "applies_to": "All GitHub organization members and API access; enforced at the GitHub Enterprise organization level",
+      "effectiveness": "A stolen PAT from SecretsManager (Step 13) used from an external IP is blocked by the IP allowlist. Fine-grained-only policy means classic PATs (which are broader) cannot be created. 30-day max expiry limits the window of exposure.",
+      "side_effects": "CI/CD pipelines using classic PATs or long-lived tokens must migrate to GitHub Apps or fine-grained PATs with explicit IP allowlist entries for runner IPs. Some third-party integrations may break.",
+      "testing_guidance": "Use a valid PAT from outside the IP allowlist to call `GET https://api.github.com/orgs/{org}/repos`. Should receive 403. From an allowed IP, same call with a fine-grained PAT with repo scope should succeed."
+    },
+    {
+      "technique_id": "T1213.003",
+      "platform": "github",
+      "type": "GitHub Repository Policy",
+      "name": "Require SSO Re-Authentication for Repository Clone and Archive Download",
+      "description": "Enable SAML SSO enforcement so all Git operations require an active SSO session. Revoked or stolen PATs without a live SSO session cannot clone repositories. Blocks Step 22.",
+      "policy_json": {
+        "saml_sso_enforcement": {
+          "enabled": true,
+          "require_sso_for_git_operations": true,
+          "token_must_be_sso_authorized": true,
+          "pat_without_sso_allowed": false
+        },
+        "repository_access_controls": {
+          "disable_archive_download_for_non_org_members": true,
+          "require_two_factor_authentication": true,
+          "outside_collaborators_require_approval": true
+        },
+        "secret_scanning": {
+          "enabled": true,
+          "push_protection": true,
+          "alert_on_clone_with_detected_secret": true
+        },
+        "audit_log_streaming": {
+          "enabled": true,
+          "events": [
+            "git.clone",
+            "repository.download",
+            "personal_access_token.create",
+            "org.oauth_app_access_approved"
+          ]
+        }
+      },
+      "applies_to": "All repositories in the GitHub organization; enforced at the Enterprise level",
+      "effectiveness": "If the Okta account is locked or the PAT is revoked (bait canary scenario), SSO enforcement means the PAT cannot be SSO-authorized, blocking the clone in Step 22 regardless of the token's validity state.",
+      "side_effects": "All contributors must authenticate git operations through SSO. Offline git workflows and non-SSO-authorized PATs break. CI/CD runners need SSO-authorized GitHub App installations.",
+      "testing_guidance": "Create a PAT that has not been SSO-authorized. Attempt `git clone https://github.com/org/repo` using that token. Should receive 403 with a message indicating SSO authorization is required. Authorize via SSO and retry \u2014 should succeed."
+    },
+    {
+      "technique_id": "T1021.004",
+      "platform": "aws",
+      "type": "SCP + SSM Session Manager Policy",
+      "name": "Restrict SSM StartSession to Approved Roles and Require Session Logging",
+      "description": "Deny ssm:StartSession to all principals except the EC2 operations role. Require all SSM sessions to log to CloudWatch Logs and S3. Blocks Step 18 attacker lateral movement via SSM.",
+      "policy_json": {
+        "SCP": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenySSMStartSessionNonApproved",
+              "Effect": "Deny",
+              "Action": [
+                "ssm:StartSession",
+                "ssm:ResumeSession",
+                "ssm:TerminateSession"
+              ],
+              "Resource": "*",
+              "Condition": {
+                "StringNotLike": {
+                  "aws:PrincipalArn": [
+                    "arn:aws:iam::*:role/EC2OperationsRole",
+                    "arn:aws:iam::*:role/BreakGlassAdmin",
+                    "arn:aws:iam::*:role/IncidentResponderRole"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "SSMDocumentPolicy": {
+          "schemaVersion": "1.0",
+          "description": "Session Manager preferences \u2014 enforce session logging",
+          "sessionType": "Standard_Stream",
+          "inputs": {
+            "s3BucketName": "lucr3-ssm-session-logs",
+            "s3EncryptionEnabled": true,
+            "cloudWatchLogGroupName": "/ssm/session-logs",
+            "cloudWatchEncryptionEnabled": true,
+            "idleSessionTimeout": "20",
+            "maxSessionDuration": "60",
+            "shellProfile": {
+              "linux": "exec bash\nexport PROMPT_COMMAND='history -a'\nreadonly HISTFILE\nreadonly PROMPT_COMMAND"
+            }
+          }
+        }
+      },
+      "applies_to": "All EC2 instances enrolled in SSM Fleet Manager; SSM Document policy enforced via the org-level SSM preference document",
+      "effectiveness": "The attacker IAM user (Step 12) is not an approved SSM principal. StartSession is denied. Even if bypass were found, all session content is logged to S3 and CloudWatch.",
+      "side_effects": "All engineers needing EC2 access must use the EC2OperationsRole via AWS IAM Identity Center, rather than direct console/CLI access with personal IAM credentials.",
+      "testing_guidance": "From the attacker IAM user, run `aws ssm start-session --target <instance-id>`. Should receive AccessDenied. From EC2OperationsRole, same command should succeed and you should see session events in CloudWatch."
+    }
+  ]
+}

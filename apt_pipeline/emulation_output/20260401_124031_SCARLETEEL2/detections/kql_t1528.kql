@@ -1,0 +1,25 @@
+// T1528 — Steal Application Access Token: Secrets Manager Harvest (SCARLETEEL 2.0 Phase 6)
+// Detects GetSecretValue called by an EC2 instance role from an external IP.
+// SCARLETEEL 2.0 harvests all Secrets Manager secrets after disabling CloudTrail,
+// stealing production database credentials stored as SecretString JSON.
+//
+// Source: https://sysdig.com/blog/scarleteel-2-0/
+// MITRE: https://attack.mitre.org/techniques/T1528/
+
+AWSCloudTrail
+| where EventSource == "secretsmanager.amazonaws.com"
+| where EventName in ("ListSecrets", "GetSecretValue")
+// EC2 instance role principals contain ':i-'
+| where UserIdentityPrincipalid contains ":i-"
+// Exclude legitimate AWS-internal calls
+| where SourceIpAddress !endswith ".amazonaws.com"
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityPrincipalid,
+    SourceIpAddress,
+    SecretId = tostring(parse_json(RequestParameters).secretId),
+    ErrorCode,
+    ErrorMessage
+| order by TimeGenerated asc

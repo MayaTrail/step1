@@ -1,0 +1,59 @@
+{
+  "campaign": "AMBERSQUID",
+  "csp": "aws",
+  "providers": {
+    "aws": {
+      "required": true,
+      "credentials": [
+        {
+          "env_var": "AWS_ACCESS_KEY_ID",
+          "description": "AWS access key ID — must have permissions to create ECS, ECR, IAM, CloudTrail, and S3 resources"
+        },
+        {
+          "env_var": "AWS_SECRET_ACCESS_KEY",
+          "description": "AWS secret access key"
+        },
+        {
+          "env_var": "AWS_DEFAULT_REGION",
+          "description": "AWS region to deploy into",
+          "default": "us-east-1"
+        }
+      ],
+      "min_permissions": [
+        "ecs:*",
+        "ecr:*",
+        "iam:*",
+        "s3:*",
+        "cloudtrail:*",
+        "sts:GetCallerIdentity",
+        "logs:*"
+      ]
+    }
+  },
+  "pulumi_config": [],
+  "attack_env_vars": [
+    {
+      "env_var": "PULUMI_CONFIG_PASSPHRASE",
+      "required": true,
+      "description": "Passphrase for Pulumi stack encryption — must match the value used during pulumi up",
+      "how_to_get": "Set any secure passphrase before running pulumi up; reuse the same value here"
+    },
+    {
+      "env_var": "AWS_VICTIM_ACCESS_KEY_ID",
+      "required": false,
+      "description": "Victim IAM access key ID — normally resolved automatically from pulumi stack output; set as fallback if stack outputs are unavailable",
+      "how_to_get": "Run: pulumi stack output victim_access_key_id"
+    },
+    {
+      "env_var": "AWS_VICTIM_SECRET_ACCESS_KEY",
+      "required": false,
+      "description": "Victim IAM secret access key — normally resolved automatically from pulumi stack output; set as fallback if stack outputs are unavailable",
+      "how_to_get": "Run: pulumi stack output --show-secrets victim_secret_access_key"
+    }
+  ],
+  "python_packages": [
+    "pulumi>=3.0.0,<4.0.0",
+    "pulumi-aws>=7.0.0,<8.0.0",
+    "boto3>=1.38.0"
+  ]
+}

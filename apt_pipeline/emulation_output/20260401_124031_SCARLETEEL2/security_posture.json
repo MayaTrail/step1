@@ -1,0 +1,12 @@
+{
+  "CloudTrail": {
+    "enabled": false,
+    "trails": 0
+  },
+  "GuardDuty": {
+    "enabled": false
+  },
+  "SecurityHub": {
+    "enabled": false
+  }
+}

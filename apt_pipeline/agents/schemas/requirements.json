@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "requirements",
+  "title": "Emulation Prerequisites",
+  "description": "Machine-readable prerequisites for an adversary emulation package. Read by the MayaTrail platform before execution to validate that all required credentials and config are present.",
+  "type": "object",
+  "required": ["campaign", "csp", "providers", "pulumi_config", "attack_env_vars", "python_packages"],
+  "properties": {
+
+    "campaign": {
+      "type": "string",
+      "description": "Threat actor / campaign name, e.g. LUCR-3"
+    },
+
+    "csp": {
+      "type": "string",
+      "enum": ["aws", "azure", "gcp", "multi"],
+      "description": "Primary cloud provider or multi for multi-cloud"
+    },
+
+    "providers": {
+      "type": "object",
+      "description": "One entry per Pulumi provider used. Key is the provider short-name (aws, okta, azuread, github, gcp, azure).",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["required", "credentials"],
+        "properties": {
+          "required": {
+            "type": "boolean",
+            "description": "If true, pulumi up will fail without these credentials"
+          },
+          "credentials": {
+            "type": "array",
+            "description": "Ordered list of env vars the provider reads at startup",
+            "items": {
+              "type": "object",
+              "required": ["env_var", "description"],
+              "properties": {
+                "env_var":     { "type": "string", "description": "Environment variable name" },
+                "description": { "type": "string", "description": "Human-readable explanation" },
+                "default":     { "type": "string", "description": "Default value (only for optional vars)" }
+              }
+            }
+          },
+          "min_permissions": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "IAM/RBAC actions the credentials must be allowed to perform"
+          }
+        }
+      }
+    },
+
+    "pulumi_config": {
+      "type": "array",
+      "description": "Values set via `pulumi config set` before `pulumi up`. NOT env vars — stored in Pulumi.dev.yaml.",
+      "items": {
+        "type": "object",
+        "required": ["key", "required", "description"],
+        "properties": {
+          "key":         { "type": "string",  "description": "Pulumi config key name" },
+          "required":    { "type": "boolean", "description": "If true, pulumi up will fail or behave incorrectly without it" },
+          "description": { "type": "string",  "description": "What this value is and where to get it" },
+          "default":     { "type": "string",  "description": "Value used if not explicitly set" },
+          "secret":      { "type": "boolean", "description": "If true, use `pulumi config set --secret`", "default": false },
+          "how_to_get":  { "type": "string",  "description": "Step-by-step instructions for obtaining the value" }
+        }
+      }
+    },
+
+    "attack_env_vars": {
+      "type": "array",
+      "description": "Env vars needed when attack.py runs (after pulumi up). These are NOT Pulumi provider credentials and NOT Pulumi config — they are passed to the attack script directly.",
+      "items": {
+        "type": "object",
+        "required": ["env_var", "required", "description"],
+        "properties": {
+          "env_var":     { "type": "string",  "description": "Environment variable name" },
+          "required":    { "type": "boolean", "description": "If true, attack.py will abort without it" },
+          "description": { "type": "string",  "description": "What this value is" },
+          "how_to_get":  { "type": "string",  "description": "Where / how to obtain this value" },
+          "default":     { "type": "string",  "description": "Default value (only for optional vars)" }
+        }
+      }
+    },
+
+    "python_packages": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Contents of requirements.txt as an array. Included here so the platform can check package availability before attempting pulumi up."
+    }
+  }
+}

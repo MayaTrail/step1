@@ -1,0 +1,12 @@
+# FILE: Pulumi.yaml
+name: lucr3-emulation
+runtime: python
+description: LUCR-3 adversary emulation infrastructure - multi-cloud identity attack lab
+config:
+  pulumi:tags:
+    value:
+      MayaTrail: "true"
+      Purpose: adversary-emulation
+      ThreatActor: LUCR-3
+      Environment: lab-isolated
+      DataClassification: synthetic-only

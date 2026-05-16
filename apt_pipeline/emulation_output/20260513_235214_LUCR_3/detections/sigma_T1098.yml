@@ -1,0 +1,36 @@
+title: LUCR-3 AdministratorAccess Policy Attached to IAM User by Federated Principal
+id: c6f2b8e4-9a3d-4c7f-b1e5-2c4a6f8b0d3e
+status: experimental
+description: >
+  Detects AttachUserPolicy events where the attached policy is AdministratorAccess
+  and the actor is a federated (AssumedRole) principal. LUCR-3 consistently grants
+  AdministratorAccess to newly created backdoor IAM users immediately after creation,
+  maximising blast radius from the initial foothold.
+references:
+    - https://attack.mitre.org/techniques/T1098/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.persistence
+    - attack.privilege_escalation
+    - attack.t1098
+    - lucr3
+    - scattered_spider
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: 'AttachUserPolicy'
+        eventSource: 'iam.amazonaws.com'
+        requestParameters.policyArn: 'arn:aws:iam::aws:policy/AdministratorAccess'
+    filter_break_glass:
+        userIdentity.arn|contains:
+            - 'BreakGlass'
+            - 'break-glass'
+            - 'emergency'
+    condition: selection and not filter_break_glass
+falsepositives:
+    - Emergency break-glass procedures granting temporary admin access
+    - Initial IAM bootstrap by root or trusted administrator accounts
+level: critical

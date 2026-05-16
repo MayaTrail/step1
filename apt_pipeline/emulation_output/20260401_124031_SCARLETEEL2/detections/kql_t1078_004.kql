@@ -1,0 +1,29 @@
+// T1078.004 — IAM Write from EC2 Instance Role (SCARLETEEL Phase 2)
+// Detects IAM privilege escalation attempts (CreateUser, CreateAccessKey, AttachUserPolicy)
+// made by an EC2 instance role. After SCARLETEEL steals credentials via IMDSv1, it
+// immediately attempts iam:CreateUser (ScarleteelBackdoor) and iam:CreateAccessKey (AdminJoe).
+// Even AccessDenied results are high-signal — they confirm post-exploitation activity.
+//
+// Source: https://sysdig.com/blog/cloud-breach-scarleteel/
+// MITRE: https://attack.mitre.org/techniques/T1078/004/
+
+let IamWriteApis = dynamic([
+    "CreateUser", "CreateAccessKey", "AttachUserPolicy", "AttachRolePolicy",
+    "PutUserPolicy", "PutRolePolicy", "CreateLoginProfile"
+]);
+AWSCloudTrail
+| where EventSource == "iam.amazonaws.com"
+| where EventName in (IamWriteApis)
+// EC2 instance role principals contain ':i-'
+| where UserIdentityPrincipalid contains ":i-"
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityPrincipalid,
+    SourceIpAddress,
+    TargetUser = tostring(parse_json(RequestParameters).userName),
+    ErrorCode,
+    ErrorMessage
+// Include denied attempts — they are equally high-signal
+| order by TimeGenerated asc
