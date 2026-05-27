@@ -1,0 +1,28 @@
+title: SCARLETEEL Phase 4 — CloudTrail Logging Stopped
+id: d4e5f6a7-4444-4ddd-b444-444444444444
+status: stable
+description: |
+  Detects cloudtrail:StopLogging, which SCARLETEEL uses to blind CloudTrail-based
+  detections before performing lateral movement via STS AssumeRole.  This is a
+  high-fidelity signal — there are very few legitimate reasons to stop an active
+  CloudTrail trail in a production account.
+references:
+  - https://sysdig.com/blog/cloud-breach-terraform-data-theft/
+  - https://attack.mitre.org/techniques/T1562/008/
+author: MayaTrail Security Research
+date: 2024/01/01
+tags:
+  - attack.defense_evasion
+  - attack.t1562.008
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: cloudtrail.amazonaws.com
+    eventName: StopLogging
+  condition: selection
+falsepositives:
+  - Planned maintenance windows where CloudTrail is explicitly paused and resumed
+  - Automated rotation scripts that temporarily stop and restart trails
+level: high

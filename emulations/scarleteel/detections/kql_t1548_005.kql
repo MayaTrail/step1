@@ -1,0 +1,33 @@
+// SCARLETEEL Phase 5 — T1548.005 / T1550.001: AssumeRole Lateral Movement
+// Detects AssumeRole calls from EC2 instance roles targeting a role in a
+// different AWS account, which is the mechanism SCARLETEEL uses to reach the
+// Terraform state bucket after disabling CloudTrail.
+//
+// References:
+//   https://attack.mitre.org/techniques/T1548/005/
+//   https://attack.mitre.org/techniques/T1550/001/
+
+AWSCloudTrail
+| where TimeGenerated > ago(1h)
+| where EventSource == "sts.amazonaws.com"
+| where EventName == "AssumeRole"
+| where UserIdentityType == "AssumedRole"
+// Extract the caller account ID from the ARN (arn:aws:sts::ACCOUNT:...)
+| extend CallerAccountId = extract(@"arn:aws:sts::(\d+):", 1, UserIdentityArn)
+// Extract the target role account ID from requestParameters
+| extend TargetRoleArn = tostring(parse_json(RequestParameters).roleArn)
+| extend TargetAccountId = extract(@"arn:aws:iam::(\d+):", 1, TargetRoleArn)
+// Flag when caller and target accounts differ (cross-account assume)
+| where CallerAccountId != TargetAccountId and isnotempty(CallerAccountId)
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    CallerAccountId,
+    TargetRoleArn,
+    TargetAccountId,
+    SourceIpAddress,
+    AWSRegion,
+    RequestParameters
+| extend AlertTitle = "Cross-account STS AssumeRole from EC2 instance role"
+| order by TimeGenerated desc

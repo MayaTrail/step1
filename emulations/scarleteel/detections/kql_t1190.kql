@@ -1,0 +1,28 @@
+// SCARLETEEL Phase 1 — T1190: Exploit Public-Facing Application
+// Detects GetCallerIdentity from an EC2 instance role arriving from a non-RFC-1918
+// source IP, which indicates IMDSv1 credentials were stolen and used externally.
+//
+// Reference: https://attack.mitre.org/techniques/T1190/
+
+AWSCloudTrail
+| where TimeGenerated > ago(1h)
+| where EventSource == "sts.amazonaws.com"
+| where EventName == "GetCallerIdentity"
+| where UserIdentityType == "AssumedRole"
+| where UserIdentityArn contains ":assumed-role/"
+// Exclude calls originating from inside AWS private ranges
+| where SourceIpAddress !startswith "10."
+    and SourceIpAddress !startswith "172.16."
+    and SourceIpAddress !startswith "192.168."
+    and SourceIpAddress !startswith "169.254."
+// Exclude AWS service-to-service calls
+| where SourceIpAddress !endswith ".amazonaws.com"
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityPrincipalId,
+    SourceIpAddress,
+    AWSRegion,
+    RequestParameters
+| order by TimeGenerated desc

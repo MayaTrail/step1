@@ -1,0 +1,25 @@
+// SCARLETEEL Phase 4 — T1562.008: Disable Cloud Logs (StopLogging)
+// High-fidelity detection: cloudtrail:StopLogging is rarely legitimate and is
+// a strong indicator of an attacker attempting to evade detection before
+// performing lateral movement.
+//
+// Reference: https://attack.mitre.org/techniques/T1562/008/
+
+AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "cloudtrail.amazonaws.com"
+| where EventName == "StopLogging"
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityType,
+    UserIdentityArn,
+    UserIdentityPrincipalId,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RequestParameters,
+    ResponseElements
+| extend AlertTitle = "CloudTrail StopLogging — active trail disabled"
+| extend Severity = "HIGH"
+| order by TimeGenerated desc
