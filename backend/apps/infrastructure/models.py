@@ -2,7 +2,9 @@
 Models for the infrastructure app.
 
 Stack — represents a single Pulumi stack (a set of AWS resources).
-        Lifecycle: pending -> deploying -> ready, or -> failed.
+        Lifecycle: pending -> deploying -> ready (demo), or
+        pending -> deploying -> ec2_booting -> ready_for_attack -> attacking
+        -> attack_complete -> destroying -> destroyed (enterprise).
         The outputs JSONField stores Pulumi stack outputs once deployed.
 """
 
@@ -19,10 +21,25 @@ class Stack(models.Model):
     Each stack is owned by a user and tracks its deployment lifecycle.
     The `outputs` field is populated by the deploy_stack Celery task once
     `pulumi up` completes successfully.
+
+    Two new fields distinguish enterprise emulation stacks from demo stacks:
+      - emulation_type: the emulation package name (e.g. "scarleteel").
+        Empty string means a demo/generic stack.
+      - expires_at: auto-destroy deadline set at deploy time for enterprise
+        stacks.  Celery Beat destroys the stack when this is exceeded.
+
+    The `tier` property is derived from the owner's account type and is
+    never stored — the User record remains the source of truth.
     """
 
     class Status(models.TextChoices):
-        """Lifecycle statuses for a Pulumi stack."""
+        """
+        Lifecycle statuses for a Pulumi stack.
+
+        Demo stacks use: pending -> deploying -> ready -> destroying -> destroyed.
+        Enterprise stacks use the full state machine including ec2_booting,
+        ready_for_attack, attacking, and attack_complete.
+        """
 
         PENDING = "pending", "Pending"
         DEPLOYING = "deploying", "Deploying"
@@ -30,6 +47,13 @@ class Stack(models.Model):
         DESTROYING = "destroying", "Destroying"
         REFRESHING = "refreshing", "Refreshing"
         FAILED = "failed", "Failed"
+
+        # Enterprise-only statuses
+        EC2_BOOTING = "ec2_booting", "EC2 Booting"
+        READY_FOR_ATTACK = "ready_for_attack", "Ready for Attack"
+        ATTACKING = "attacking", "Attacking"
+        ATTACK_COMPLETE = "attack_complete", "Attack Complete"
+        DESTROYED = "destroyed", "Destroyed"
 
     id = models.UUIDField(
         primary_key=True,
@@ -43,11 +67,11 @@ class Stack(models.Model):
     )
     region = models.CharField(
         max_length=32,
-        default="us-east-1",
+        default="ap-south-1",
         help_text="AWS region for this stack.",
     )
     status = models.CharField(
-        max_length=16,
+        max_length=20,
         choices=Status.choices,
         default=Status.PENDING,
         db_index=True,
@@ -63,6 +87,36 @@ class Stack(models.Model):
         related_name="stacks",
         help_text="User who created this stack.",
     )
+
+    # Enterprise emulation fields
+    emulation_type = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text=(
+            "Identifies the emulation package for enterprise stacks "
+            "(e.g. 'scarleteel', 'apt29'). Empty for demo/generic stacks."
+        ),
+    )
+    task_id = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text=(
+            "Celery task ID of the most recent deploy operation. "
+            "Used by the progress endpoint to read live deployment state from Redis."
+        ),
+    )
+    expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=(
+            "Auto-destroy deadline for enterprise stacks. "
+            "Celery Beat destroys the stack when this timestamp is exceeded. "
+            "Set at deploy time from the emulation MANIFEST's default_ttl_hours."
+        ),
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -75,3 +129,19 @@ class Stack(models.Model):
     def __str__(self) -> str:
         """Return stack name and status as the string representation."""
         return f"{self.name} [{self.status}]"
+
+    @property
+    def tier(self) -> str:
+        """
+        Return the tier of this stack based on the owner's account type.
+
+        Derived from the owner, not stored separately — the User record
+        is always the source of truth for tier classification.
+
+        Returns:
+            "demo"       if the owner is a demo user.
+            "enterprise" if the owner has a verified AWS IAM role.
+        """
+        if self.owner.is_demo:
+            return "demo"
+        return "enterprise"

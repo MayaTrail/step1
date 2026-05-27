@@ -43,13 +43,14 @@ THIRD_PARTY_APPS = [
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
+    "django_celery_beat",
 ]
 
 LOCAL_APPS = [
     "apps.users",
     "apps.connectors",
     "apps.infrastructure",
-    "apps.simulations",
+    "apps.emulations",
     "apps.logs",
 ]
 
@@ -173,6 +174,31 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "UTC"
+# Route all tasks that don't specify a queue explicitly to "default".
+# Without this, Celery uses its built-in "celery" queue name, which none
+# of the worker services consume.
+CELERY_TASK_DEFAULT_QUEUE = "default"
+
+# Celery Beat schedule — runs every 15 minutes to destroy expired stacks.
+from celery.schedules import crontab  # noqa: E402
+
+CELERY_BEAT_SCHEDULE = {
+    "auto-destroy-expired-stacks": {
+        "task": "emulations.auto_destroy_expired_stacks",
+        "schedule": crontab(minute="*/15"),
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Emulations
+# ---------------------------------------------------------------------------
+# Base directory under which emulation packages are mounted.
+# Each emulation's Pulumi program lives at {EMULATIONS_BASE_DIR}/{type}/infra/.
+# In docker-compose, ./emulations is mounted at /opt/emulations.
+# The parent of this directory (/opt) is inserted into sys.path by the
+# registry and tasks so that `import emulations.*` resolves correctly.
+
+EMULATIONS_BASE_DIR = config("EMULATIONS_BASE_DIR", default="")
 
 # ---------------------------------------------------------------------------
 # Registration gate

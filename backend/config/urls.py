@@ -13,6 +13,6 @@ urlpatterns = [
     path("api/auth/", include("apps.users.urls")),
     path("api/connectors/", include("apps.connectors.urls")),
     path("api/stacks/", include("apps.infrastructure.urls")),
-    path("api/simulations/", include("apps.simulations.urls")),
+    path("api/emulations/", include("apps.emulations.urls")),
     path("api/logs/", include("apps.logs.urls")),
 ]
