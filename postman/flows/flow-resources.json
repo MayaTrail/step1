@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "flows": {
+    "b58bc298-eec2-4382-ad17-4a2ffbeec628": {
+      "path": "postman/flows/Emulations Enterprise flow.flow",
+      "dependencies": [
+        {
+          "local": {
+            "collectionId": "3A093AA6DD2ff38EC51DEEe7",
+            "requestId": "0cE01Ec9c6df6dafe4A0AA29",
+            "filePath": "postman/collections/MayaTrail API/Auth/Login.request.yaml"
+          },
+          "cloud": {
+            "collectionId": null,
+            "requestId": null
+          }
+        },
+        {
+          "local": {
+            "collectionId": "3A093AA6DD2ff38EC51DEEe7",
+            "requestId": "1bbBEfB5da8Fa9AB81417be7",
+            "filePath": "postman/collections/MayaTrail API/Emulations (Enterprise)/List Emulations.request.yaml"
+          },
+          "cloud": {
+            "collectionId": null,
+            "requestId": null
+          }
+        }
+      ]
+    }
+  }
+}

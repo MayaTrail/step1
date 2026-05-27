@@ -1,0 +1,1072 @@
+{
+  "info": {
+    "name": "MayaTrail API",
+    "description": "Complete API collection for the MayaTrail cloud-security simulation platform.\n\n**Setup:**\n1. Set the `base_url` collection variable to your server (default: http://localhost:8000).\n2. Run \"Auth / Login\" \u2014 the `token` variable is set automatically via the test script.\n3. All subsequent requests use `{{token}}` in the Authorization header.\n\n**Enterprise endpoints** (Emulations folder) require the authenticated user to have `aws_role_arn` set on their account.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "mayatrail"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string",
+      "description": "Base URL of the MayaTrail backend. Change to http://localhost:80 when using docker-compose with nginx."
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string",
+      "description": "JWT access token. Set automatically by the Login request test script."
+    },
+    {
+      "key": "refresh_token",
+      "value": "",
+      "type": "string",
+      "description": "JWT refresh token. Set automatically by the Login request test script."
+    },
+    {
+      "key": "stack_id",
+      "value": "",
+      "type": "string",
+      "description": "UUID of a Stack record. Set manually after creating or deploying a stack."
+    },
+    {
+      "key": "run_id",
+      "value": "",
+      "type": "string",
+      "description": "UUID of an EmulationRun record. Set automatically by the Deploy + Attack requests."
+    },
+    {
+      "key": "emulation_type",
+      "value": "scarleteel",
+      "type": "string",
+      "description": "Emulation package name to use for emulation-specific requests."
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "description": "Authentication endpoints. Run Login first \u2014 the token is captured automatically.",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"testuser\",\n  \"email\": \"testuser@example.com\",\n  \"password\": \"SuperSecret123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/register/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register",
+                ""
+              ]
+            },
+            "description": "Register a new user account. Open registration unless REGISTRATION_INVITE_CODE is set in .env."
+          },
+          "response": []
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    pm.collectionVariables.set('token', body.access);",
+                  "    pm.collectionVariables.set('refresh_token', body.refresh);",
+                  "    pm.test('Token captured', () => pm.expect(body.access).to.be.a('string'));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"testuser@example.com\",\n  \"password\": \"SuperSecret123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login",
+                ""
+              ]
+            },
+            "description": "Obtain JWT access + refresh token pair. The test script automatically stores the access token in the `token` collection variable."
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    pm.collectionVariables.set('token', body.access);",
+                  "    pm.test('New access token captured', () => pm.expect(body.access).to.be.a('string'));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"{{refresh_token}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/refresh/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "refresh",
+                ""
+              ]
+            },
+            "description": "Exchange the refresh token for a new access token. Updates the `token` variable automatically."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Profile (Me)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/auth/me/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me",
+                ""
+              ]
+            },
+            "description": "Return the authenticated user's profile. Also shows is_demo, is_enterprise, aws_role_arn \u2014 useful for debugging permission issues."
+          },
+          "response": []
+        },
+        {
+          "name": "Forgot Password",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"testuser@example.com\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/forgot-password/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "forgot-password",
+                ""
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Stacks",
+      "description": "Stack management \u2014 create, deploy (pulumi up), destroy, refresh, preview, and poll deployment progress.",
+      "item": [
+        {
+          "name": "List Stacks",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/stacks/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "stacks",
+                ""
+              ]
+            },
+            "description": "List all stacks owned by the authenticated user."
+          },
+          "response": []
+        },
+        {
+          "name": "Create Stack",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    pm.collectionVariables.set('stack_id', body.id);",
+                  "    pm.test('stack_id captured', () => pm.expect(body.id).to.be.a('string'));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"dev-testuser\",\n  \"region\": \"us-east-1\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/stacks/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "stacks",
+                ""
+              ]
+            },
+            "description": "Create a stack record (starts in 'pending' status). Stores the returned UUID in `stack_id`."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Stack",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/stacks/{{stack_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "stacks",
+                "{{stack_id}}",
+                ""
+              ]
+            },
+            "description": "Retrieve a specific stack by UUID. Use this to poll deployment status."
+          },
+          "response": []
+        },
+        {
+          "name": "Deploy Stack",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/stacks/{{stack_id}}/deploy/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "stacks",
+                "{{stack_id}}",
+                "deploy",
+                ""
+              ]
+            },
+            "description": "Enqueues `pulumi up` for the stack. Poll GET /api/stacks/{{stack_id}}/ to track status transitions: deploying \u2192 ready."
+          },
+          "response": []
+        },
+        {
+          "name": "Destroy Stack",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/stacks/{{stack_id}}/destroy/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "stacks",
+                "{{stack_id}}",
+                "destroy",
+                ""
+              ]
+            },
+            "description": "Enqueues `pulumi destroy` for the stack."
+          },
+          "response": []
+        },
+        {
+          "name": "Force Destroy Stack",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Accepted or already destroying', () => {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([202, 409]);",
+                  "});",
+                  "if (pm.response.code === 202) {",
+                  "    const body = pm.response.json();",
+                  "    pm.test('task_id present', () => pm.expect(body.task_id).to.be.a('string'));",
+                  "    console.log('Force destroy queued. Poll GET /api/stacks/{{stack_id}}/ until status == destroyed or record is deleted (404).');",
+                  "} else {",
+                  "    console.log('Stack is already being destroyed (409). No action needed.');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/stacks/{{stack_id}}/force-destroy/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "stacks",
+                "{{stack_id}}",
+                "force-destroy",
+                ""
+              ]
+            },
+            "description": "Force-destroy a stack regardless of its current status.\n\nUnlike the standard destroy endpoint, this is NOT blocked by busy statuses such as 'deploying' or 'refreshing'. Use this to recover stacks stuck in a non-terminal state because the Celery task was never picked up or the Pulumi run hung.\n\nOnly blocked if the stack is already 'destroying' (returns 409).\n\nFor enterprise emulation stacks use POST /api/emulations/{{stack_id}}/destroy/ instead — that endpoint uses STS credentials to run pulumi destroy in the user's account."
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh Stack",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/stacks/{{stack_id}}/refresh/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "stacks",
+                "{{stack_id}}",
+                "refresh",
+                ""
+              ]
+            },
+            "description": "Sync Pulumi state with actual AWS resources without modifying infrastructure."
+          },
+          "response": []
+        },
+        {
+          "name": "Preview Stack",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/stacks/{{stack_id}}/preview/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "stacks",
+                "{{stack_id}}",
+                "preview",
+                ""
+              ]
+            },
+            "description": "Dry-run `pulumi preview` \u2014 shows planned changes without applying them."
+          },
+          "response": []
+        },
+        {
+          "name": "Stack Deployment Progress",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Has required fields', () => {",
+                  "    pm.expect(body).to.have.all.keys('stack_id', 'status', 'resources_created', 'total_resources', 'percentage', 'recent_logs');",
+                  "});",
+                  "pm.test('Percentage is 0-100', () => {",
+                  "    pm.expect(body.percentage).to.be.within(0, 100);",
+                  "});",
+                  "console.log(`Deployment progress: ${body.resources_created}/${body.total_resources} resources (${body.percentage}%) \u2014 status: ${body.status}`);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/stacks/{{stack_id}}/progress/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "stacks",
+                "{{stack_id}}",
+                "progress",
+                ""
+              ]
+            },
+            "description": "Poll live deployment progress for a stack currently being deployed.\n\nReads Celery task state from the Redis result backend and returns how many AWS resources have been created so far.\n\n**Response fields:**\n- `resources_created` \u2014 number of Pulumi resources successfully created\n- `total_resources` \u2014 expected total (19 for SCARLETEEL)\n- `percentage` \u2014 0\u201399 while deploying, 100 once the stack reaches a terminal state\n- `recent_logs` \u2014 last 10 Pulumi output lines\n- `status` \u2014 current Stack status\n\n**Recommended polling interval:** every 3\u20135 seconds while `status == deploying`.\nStop polling when `percentage == 100` or `status` is no longer `deploying`."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Stack Record",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{base_url}}/api/stacks/{{stack_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "stacks",
+                "{{stack_id}}",
+                ""
+              ]
+            },
+            "description": "Delete the stack database record only (does not run pulumi destroy)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Emulations (Enterprise)",
+      "description": "Enterprise APT emulation lifecycle.\n\n**All endpoints require IsEnterpriseUser** \u2014 the authenticated user must have `aws_role_arn` set.\n\nRecommended test sequence:\n1. List Emulations \u2014 verify SCARLETEEL is returned\n2. Get Estimate \u2014 review cost before deploying\n3. Get Techniques \u2014 verify MITRE data\n4. Get Detections \u2014 verify SIGMA + KQL rules (12 total for SCARLETEEL)\n5. Get Playbook \u2014 verify IR playbook content\n6. Deploy Stack \u2014 starts the emulation infrastructure\n7. Poll Deployment Progress (Stacks folder) \u2014 watch resources_created count up to 19 (percentage 0\u219299)\n8. Poll Stack Status \u2014 watch stack reach ready_for_attack (deploying \u2192 ec2_booting \u2192 ready_for_attack)\n9. Trigger Attack \u2014 starts the attack phase\n9. Poll Run Status \u2014 watch EmulationRun reach completed\n10. Destroy Emulation Stack \u2014 tear down after testing\n\n**Stuck stack recovery:** If the stack gets stuck in 'deploying', 'ec2_booting', 'attacking', or 'failed', use Destroy Emulation Stack directly \u2014 the busy-status check is relaxed and it will accept requests in any state except 'destroying'.",
+      "item": [
+        {
+          "name": "List Emulations",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Returns array', () => pm.expect(pm.response.json()).to.be.an('array'));",
+                  "pm.test('SCARLETEEL present', () => {",
+                  "    const emulations = pm.response.json();",
+                  "    const scarleteel = emulations.find(e => e.id === 'scarleteel');",
+                  "    pm.expect(scarleteel).to.exist;",
+                  "    pm.expect(scarleteel.severity).to.equal('CRITICAL');",
+                  "    pm.expect(scarleteel.techniqueCount).to.equal(8);",
+                  "    pm.expect(scarleteel.schemaVersion).to.equal(1);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/emulations/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "emulations",
+                ""
+              ]
+            },
+            "description": "List all registered emulation packages. Returns camelCase fields matching the frontend Emulation TypeScript type.\n\nExpected for SCARLETEEL:\n- id: \"scarleteel\"\n- name: \"SCARLETEEL 2.0\"\n- severity: \"CRITICAL\"\n- techniqueCount: 8\n- schemaVersion: 1\n- attackPath: 6 phases\n- mitreMappings: 8 entries"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Estimate \u2014 SCARLETEEL",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Has cost fields', () => {",
+                  "    pm.expect(body.estimatedTotalUsd).to.be.a('number');",
+                  "    pm.expect(body.defaultTtlHours).to.equal(4);",
+                  "    pm.expect(body.resources).to.be.an('array').with.length.above(0);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/emulations/{{emulation_type}}/estimate/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "emulations",
+                "{{emulation_type}}",
+                "estimate",
+                ""
+              ]
+            },
+            "description": "Return cost breakdown for the emulation type before deployment.\n\nExpected: estimatedTotalUsd ~0.2, defaultTtlHours 4, 5 resource line items (EC2, Secrets Manager, Lambda, S3 x4, CloudTrail)."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Techniques \u2014 SCARLETEEL",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Attack path has 6 phases', () => {",
+                  "    pm.expect(body.attackPath).to.be.an('array').with.lengthOf(6);",
+                  "});",
+                  "pm.test('MITRE mappings has 8 entries', () => {",
+                  "    pm.expect(body.mitreMappings).to.be.an('array').with.lengthOf(8);",
+                  "});",
+                  "pm.test('T1562.008 present', () => {",
+                  "    const ids = body.mitreMappings.map(m => m.id);",
+                  "    pm.expect(ids).to.include('T1562.008');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/emulations/{{emulation_type}}/techniques/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "emulations",
+                "{{emulation_type}}",
+                "techniques",
+                ""
+              ]
+            },
+            "description": "Return MITRE ATT&CK kill-chain phases and full technique mappings.\n\nExpected for SCARLETEEL:\n- attackPath: 6 phases (Initial Access \u2192 Persistence)\n- mitreMappings: 8 entries including T1190, T1552.005, T1087.004, T1580, T1562.008, T1548.005, T1550.001, T1098\n- techniqueCount: 8"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Detections \u2014 SCARLETEEL",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('6 SIGMA rules', () => pm.expect(body.sigma).to.be.an('array').with.lengthOf(6));",
+                  "pm.test('6 KQL rules', () => pm.expect(body.kql).to.be.an('array').with.lengthOf(6));",
+                  "pm.test('totalCount is 12', () => pm.expect(body.totalCount).to.equal(12));",
+                  "pm.test('Each rule has title and code', () => {",
+                  "    [...body.sigma, ...body.kql].forEach(rule => {",
+                  "        pm.expect(rule.title).to.be.a('string').and.not.empty;",
+                  "        pm.expect(rule.code).to.be.a('string').and.not.empty;",
+                  "    });",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/emulations/{{emulation_type}}/detections/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "emulations",
+                "{{emulation_type}}",
+                "detections",
+                ""
+              ]
+            },
+            "description": "Return SIGMA and KQL detection rules for the emulation.\n\nExpected for SCARLETEEL:\n- sigma: 6 rules (one per MITRE phase: T1190, T1552.005, T1087.004, T1562.008, T1548.005, T1098)\n- kql: 6 rules (same techniques)\n- totalCount: 12\n- formats: \"SIGMA (6) \u00b7 KQL (6)\""
+          },
+          "response": []
+        },
+        {
+          "name": "Get Playbook \u2014 SCARLETEEL",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Content is non-empty markdown', () => {",
+                  "    pm.expect(body.content).to.be.a('string').with.length.above(500);",
+                  "    pm.expect(body.content).to.include('SCARLETEEL');",
+                  "});",
+                  "pm.test('Display name correct', () => pm.expect(body.displayName).to.equal('SCARLETEEL 2.0'));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/emulations/{{emulation_type}}/playbook/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "emulations",
+                "{{emulation_type}}",
+                "playbook",
+                ""
+              ]
+            },
+            "description": "Return the raw PLAYBOOK.md content for the emulation.\n\nExpected: content field with the full markdown IR playbook. The frontend parses this into steps using the ## H2-section parser in platform.service.ts."
+          },
+          "response": []
+        },
+        {
+          "name": "Deploy Emulation Stack",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 202) {",
+                  "    const body = pm.response.json();",
+                  "    pm.collectionVariables.set('stack_id', body.stackId);",
+                  "    pm.test('stackId captured', () => pm.expect(body.stackId).to.be.a('string'));",
+                  "    console.log('Stack ID:', body.stackId);",
+                  "    console.log('Poll GET /api/emulations/' + body.stackId + '/ to track status');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"emulation_type\": \"scarleteel\",\n  \"stack_name\": \"scarleteel-testuser\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/emulations/deploy/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "emulations",
+                "deploy",
+                ""
+              ]
+            },
+            "description": "Deploy an enterprise emulation stack. Enqueues `pulumi up` in the enterprise Celery queue.\n\nReturns 202 with stackId. Stores stackId in the collection variable automatically.\n\nPoll GET /api/stacks/{{stack_id}}/ until status == 'ready_for_attack' before triggering the attack.\n\nReturns 409 if the user already has an active emulation stack."
+          },
+          "response": []
+        },
+        {
+          "name": "Poll Stack Status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Stack has status field', () => pm.expect(body.status).to.be.a('string'));",
+                  "console.log('Current stack status:', body.status);",
+                  "if (body.status === 'ready_for_attack') {",
+                  "    console.log('Stack is ready \u2014 proceed to Trigger Attack');",
+                  "} else if (body.status === 'failed') {",
+                  "    console.log('Stack deployment FAILED \u2014 check Celery worker logs');",
+                  "} else {",
+                  "    console.log('Still waiting... re-run this request in a few seconds');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/stacks/{{stack_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "stacks",
+                "{{stack_id}}",
+                ""
+              ]
+            },
+            "description": "Poll the enterprise stack status after deployment.\n\nStatus lifecycle: deploying \u2192 ec2_booting \u2192 ready_for_attack\n\nRe-run until status is 'ready_for_attack' before calling Trigger Attack. The test script logs a hint about next steps."
+          },
+          "response": []
+        },
+        {
+          "name": "Trigger Attack",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 202) {",
+                  "    const body = pm.response.json();",
+                  "    pm.collectionVariables.set('run_id', body.runId);",
+                  "    pm.test('runId captured', () => pm.expect(body.runId).to.be.a('string'));",
+                  "    console.log('Run ID:', body.runId);",
+                  "    console.log('Poll GET /api/emulations/' + body.runId + '/ for attack progress');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/emulations/{{stack_id}}/attack/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "emulations",
+                "{{stack_id}}",
+                "attack",
+                ""
+              ]
+            },
+            "description": "Trigger the attack phase against a ready_for_attack emulation stack.\n\nReturns 202 with runId. Stores runId in the collection variable automatically.\n\nReturns 409 if the stack is not in ready_for_attack status."
+          },
+          "response": []
+        },
+        {
+          "name": "Poll Run Status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "console.log('Run status:', body.status, '| Phase:', body.phase_current + '/' + body.phase_total);",
+                  "if (body.stdout) console.log('stdout:', body.stdout.slice(-200));",
+                  "if (body.status === 'completed') console.log('Attack complete \u2014 check stdout for results');",
+                  "if (body.status === 'failed') console.log('Attack FAILED \u2014 check stderr:', body.stderr);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/emulations/{{run_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "emulations",
+                "{{run_id}}",
+                ""
+              ]
+            },
+            "description": "Poll the EmulationRun status after triggering the attack.\n\nRun lifecycle: pending \u2192 running \u2192 completed (or failed)\n\nThe test script logs the current phase progress and stdout tail. Re-run until status is 'completed' or 'failed'."
+          },
+          "response": []
+        },
+        {
+          "name": "Destroy Emulation Stack",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Accepted or already destroying', () => {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([202, 409]);",
+                  "});",
+                  "if (pm.response.code === 202) {",
+                  "    console.log('Destroy queued. Stack will transition: destroying -> (record deleted on success).');",
+                  "    console.log('Poll GET /api/stacks/{{stack_id}}/ until you receive a 404 (stack deleted) or status == failed.');",
+                  "} else {",
+                  "    console.log('Stack is already being destroyed (409).');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/emulations/{{stack_id}}/destroy/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "emulations",
+                "{{stack_id}}",
+                "destroy",
+                ""
+              ]
+            },
+            "description": "Destroy an enterprise emulation stack via STS AssumeRole + pulumi destroy.\n\nThis endpoint is NOT blocked by busy statuses — it can destroy stacks in any state including 'deploying' (stuck), 'ec2_booting', 'ready_for_attack', 'attacking', 'attack_complete', and 'failed'. This makes it useful for recovering stuck emulation stacks.\n\nOnly blocked if the stack is already 'destroying' (returns 409).\n\nOn success the Stack DB record is deleted. Polling GET /api/stacks/{{stack_id}}/ will return 404 once the destroy completes."
+          },
+          "response": []
+        },
+        {
+          "name": "403 Gate \u2014 Non-Enterprise User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Returns 403 for non-enterprise user', () => {",
+                  "    pm.expect(pm.response.code).to.equal(403);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "PASTE_DEMO_USER_TOKEN_HERE",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/emulations/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "emulations",
+                ""
+              ]
+            },
+            "description": "Verify that non-enterprise users receive 403. Replace PASTE_DEMO_USER_TOKEN_HERE with a token from a demo/non-enterprise account.\n\nExpected: HTTP 403 Forbidden."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Connectors",
+      "description": "AWS connector validation and demo mode activation.",
+      "item": [
+        {
+          "name": "Validate AWS Connector",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"aws_access_key_id\": \"AKIAIOSFODNN7EXAMPLE\",\n  \"aws_secret_access_key\": \"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\",\n  \"aws_role_arn\": \"arn:aws:iam::123456789012:role/MayaTrailEnterpriseRole\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/connectors/aws/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "aws",
+                ""
+              ]
+            },
+            "description": "Validate AWS credentials via STS GetCallerIdentity and store the role ARN on the user profile. Sets is_enterprise=True on success."
+          },
+          "response": []
+        },
+        {
+          "name": "Activate Demo Mode",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/connectors/demo/activate/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "connectors",
+                "demo",
+                "activate",
+                ""
+              ]
+            },
+            "description": "Activate demo mode for the current user. Sets is_demo=True and records demo_activated_at on the user profile."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Logs",
+      "description": "Audit log entries for stacks and simulation runs.",
+      "item": [
+        {
+          "name": "List Log Entries",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/logs/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "logs",
+                ""
+              ]
+            },
+            "description": "Return audit log entries for the authenticated user's stacks and runs."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Log Entry",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/logs/{{run_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "logs",
+                "{{run_id}}",
+                ""
+              ]
+            },
+            "description": "Retrieve a single log entry by UUID."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

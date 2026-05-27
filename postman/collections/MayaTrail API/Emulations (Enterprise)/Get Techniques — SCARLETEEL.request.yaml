@@ -1,0 +1,27 @@
+$kind: http-request
+description: |-
+  Return MITRE ATT&CK kill-chain phases and full technique mappings.
+
+  Expected for SCARLETEEL:
+  - attackPath: 6 phases (Initial Access → Persistence)
+  - mitreMappings: 8 entries including T1190, T1552.005, T1087.004, T1580, T1562.008, T1548.005, T1550.001, T1098
+  - techniqueCount: 8
+url: "{{base_url}}/api/emulations/{{emulation_type}}/techniques/"
+method: GET
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Status 200', () => pm.response.to.have.status(200));
+      const body = pm.response.json();
+      pm.test('Attack path has 6 phases', () => {
+          pm.expect(body.attackPath).to.be.an('array').with.lengthOf(6);
+      });
+      pm.test('MITRE mappings has 8 entries', () => {
+          pm.expect(body.mitreMappings).to.be.an('array').with.lengthOf(8);
+      });
+      pm.test('T1562.008 present', () => {
+          const ids = body.mitreMappings.map(m => m.id);
+          pm.expect(ids).to.include('T1562.008');
+      });
+    language: text/javascript
+order: 3000

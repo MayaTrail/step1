@@ -1,0 +1,25 @@
+$kind: http-request
+description: |-
+  Destroy an enterprise emulation stack via STS AssumeRole + pulumi destroy.
+
+  This endpoint is NOT blocked by busy statuses — it can destroy stacks in any state including 'deploying' (stuck), 'ec2_booting', 'ready_for_attack', 'attacking', 'attack_complete', and 'failed'. This makes it useful for recovering stuck emulation stacks.
+
+  Only blocked if the stack is already 'destroying' (returns 409).
+
+  On success the Stack DB record is deleted. Polling GET /api/stacks/{{stack_id}}/ will return 404 once the destroy completes.
+url: "{{base_url}}/api/emulations/{{stack_id}}/destroy/"
+method: POST
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Accepted or already destroying', () => {
+          pm.expect(pm.response.code).to.be.oneOf([202, 409]);
+      });
+      if (pm.response.code === 202) {
+          console.log('Destroy queued. Stack will transition: destroying -> (record deleted on success).');
+          console.log('Poll GET /api/stacks/{{stack_id}}/ until you receive a 404 (stack deleted) or status == failed.');
+      } else {
+          console.log('Stack is already being destroyed (409).');
+      }
+    language: text/javascript
+order: 10000

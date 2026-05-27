@@ -1,0 +1,21 @@
+$kind: collection
+description: |-
+  Enterprise APT emulation lifecycle.
+
+  **All endpoints require IsEnterpriseUser** — the authenticated user must have `aws_role_arn` set.
+
+  Recommended test sequence:
+  1. List Emulations — verify SCARLETEEL is returned
+  2. Get Estimate — review cost before deploying
+  3. Get Techniques — verify MITRE data
+  4. Get Detections — verify SIGMA + KQL rules (12 total for SCARLETEEL)
+  5. Get Playbook — verify IR playbook content
+  6. Deploy Stack — starts the emulation infrastructure
+  7. Poll Deployment Progress (Stacks folder) — watch resources_created count up to 19 (percentage 0→99)
+  8. Poll Stack Status — watch stack reach ready_for_attack (deploying → ec2_booting → ready_for_attack)
+  9. Trigger Attack — starts the attack phase
+  9. Poll Run Status — watch EmulationRun reach completed
+  10. Destroy Emulation Stack — tear down after testing
+
+  **Stuck stack recovery:** If the stack gets stuck in 'deploying', 'ec2_booting', 'attacking', or 'failed', use Destroy Emulation Stack directly — the busy-status check is relaxed and it will accept requests in any state except 'destroying'.
+order: 3000

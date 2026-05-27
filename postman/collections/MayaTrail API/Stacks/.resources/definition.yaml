@@ -1,0 +1,3 @@
+$kind: collection
+description: Stack management — create, deploy (pulumi up), destroy, refresh, preview, and poll deployment progress.
+order: 2000

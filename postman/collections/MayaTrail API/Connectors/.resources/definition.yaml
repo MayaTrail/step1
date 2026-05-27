@@ -1,0 +1,3 @@
+$kind: collection
+description: AWS connector validation and demo mode activation.
+order: 4000

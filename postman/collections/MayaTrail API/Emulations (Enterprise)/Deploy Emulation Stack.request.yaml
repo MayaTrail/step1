@@ -1,0 +1,32 @@
+$kind: http-request
+description: |-
+  Deploy an enterprise emulation stack. Enqueues `pulumi up` in the enterprise Celery queue.
+
+  Returns 202 with stackId. Stores stackId in the collection variable automatically.
+
+  Poll GET /api/stacks/{{stack_id}}/ until status == 'ready_for_attack' before triggering the attack.
+
+  Returns 409 if the user already has an active emulation stack.
+url: "{{base_url}}/api/emulations/deploy/"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "emulation_type": "scarleteel",
+      "stack_name": "scarleteel-testuser"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      if (pm.response.code === 202) {
+          const body = pm.response.json();
+          pm.collectionVariables.set('stack_id', body.stackId);
+          pm.test('stackId captured', () => pm.expect(body.stackId).to.be.a('string'));
+          console.log('Stack ID:', body.stackId);
+          console.log('Poll GET /api/emulations/' + body.stackId + '/ to track status');
+      }
+    language: text/javascript
+order: 6000

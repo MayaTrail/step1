@@ -1,0 +1,23 @@
+$kind: collection
+description: |-
+  Complete API collection for the MayaTrail cloud-security simulation platform.
+
+  **Setup:**
+  1. Set the `base_url` collection variable to your server (default: http://localhost:8000).
+  2. Run "Auth / Login" — the `token` variable is set automatically via the test script.
+  3. All subsequent requests use `{{token}}` in the Authorization header.
+
+  **Enterprise endpoints** (Emulations folder) require the authenticated user to have `aws_role_arn` set on their account.
+variables:
+  base_url: http://localhost:8000
+  token: ""
+  refresh_token: ""
+  stack_id: ""
+  run_id: ""
+  emulation_type: scarleteel
+auth:
+  - id: d80816d4-c924-4fbc-aab5-b76b12430043
+    type: bearer
+    name: bearer auth
+    credentials:
+      token: "{{token}}"

@@ -1,0 +1,17 @@
+$kind: http-request
+description: Register a new user account. Open registration unless REGISTRATION_INVITE_CODE is set in .env.
+url: "{{base_url}}/api/auth/register/"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "username": "testuser",
+      "email": "testuser@example.com",
+      "password": "SuperSecret123"
+    }
+auth:
+  type: noauth
+order: 1000

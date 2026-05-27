@@ -1,0 +1,27 @@
+$kind: http-request
+description: |-
+  Return SIGMA and KQL detection rules for the emulation.
+
+  Expected for SCARLETEEL:
+  - sigma: 6 rules (one per MITRE phase: T1190, T1552.005, T1087.004, T1562.008, T1548.005, T1098)
+  - kql: 6 rules (same techniques)
+  - totalCount: 12
+  - formats: "SIGMA (6) · KQL (6)"
+url: "{{base_url}}/api/emulations/{{emulation_type}}/detections/"
+method: GET
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Status 200', () => pm.response.to.have.status(200));
+      const body = pm.response.json();
+      pm.test('6 SIGMA rules', () => pm.expect(body.sigma).to.be.an('array').with.lengthOf(6));
+      pm.test('6 KQL rules', () => pm.expect(body.kql).to.be.an('array').with.lengthOf(6));
+      pm.test('totalCount is 12', () => pm.expect(body.totalCount).to.equal(12));
+      pm.test('Each rule has title and code', () => {
+          [...body.sigma, ...body.kql].forEach(rule => {
+              pm.expect(rule.title).to.be.a('string').and.not.empty;
+              pm.expect(rule.code).to.be.a('string').and.not.empty;
+          });
+      });
+    language: text/javascript
+order: 4000

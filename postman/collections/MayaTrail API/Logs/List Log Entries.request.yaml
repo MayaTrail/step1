@@ -1,0 +1,5 @@
+$kind: http-request
+description: Return audit log entries for the authenticated user's stacks and runs.
+url: "{{base_url}}/api/logs/"
+method: GET
+order: 1000

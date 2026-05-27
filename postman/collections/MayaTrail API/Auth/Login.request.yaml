@@ -1,0 +1,26 @@
+$kind: http-request
+description: Obtain JWT access + refresh token pair. The test script automatically stores the access token in the `token` collection variable.
+url: "{{base_url}}/api/auth/login/"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "email": "testuser@example.com",
+      "password": "SuperSecret123"
+    }
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    code: |-
+      if (pm.response.code === 200) {
+          const body = pm.response.json();
+          pm.collectionVariables.set('token', body.access);
+          pm.collectionVariables.set('refresh_token', body.refresh);
+          pm.test('Token captured', () => pm.expect(body.access).to.be.a('string'));
+      }
+    language: text/javascript
+order: 2000

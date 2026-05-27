@@ -224,3 +224,8 @@ step1-plans/
 # Documentations
 DESIGN.md
 CLAUDE.md
+# Local Postman app state (collections live in postman/ and backend/*.postman_collection.json)
+.postman/
+
+# Local scratch/experimental work (not part of the test suite)
+tests/

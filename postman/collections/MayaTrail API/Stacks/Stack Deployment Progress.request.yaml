@@ -1,0 +1,31 @@
+$kind: http-request
+description: |-
+  Poll live deployment progress for a stack currently being deployed.
+
+  Reads Celery task state from the Redis result backend and returns how many AWS resources have been created so far.
+
+  **Response fields:**
+  - `resources_created` — number of Pulumi resources successfully created
+  - `total_resources` — expected total (19 for SCARLETEEL)
+  - `percentage` — 0–99 while deploying, 100 once the stack reaches a terminal state
+  - `recent_logs` — last 10 Pulumi output lines
+  - `status` — current Stack status
+
+  **Recommended polling interval:** every 3–5 seconds while `status == deploying`.
+  Stop polling when `percentage == 100` or `status` is no longer `deploying`.
+url: "{{base_url}}/api/stacks/{{stack_id}}/progress/"
+method: GET
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Status 200', () => pm.response.to.have.status(200));
+      const body = pm.response.json();
+      pm.test('Has required fields', () => {
+          pm.expect(body).to.have.all.keys('stack_id', 'status', 'resources_created', 'total_resources', 'percentage', 'recent_logs');
+      });
+      pm.test('Percentage is 0-100', () => {
+          pm.expect(body.percentage).to.be.within(0, 100);
+      });
+      console.log(`Deployment progress: ${body.resources_created}/${body.total_resources} resources (${body.percentage}%) — status: ${body.status}`);
+    language: text/javascript
+order: 9000

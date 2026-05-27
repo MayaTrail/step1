@@ -1,0 +1,5 @@
+$kind: http-request
+description: Return the authenticated user's profile. Also shows is_demo, is_enterprise, aws_role_arn — useful for debugging permission issues.
+url: "{{base_url}}/api/auth/me/"
+method: GET
+order: 4000

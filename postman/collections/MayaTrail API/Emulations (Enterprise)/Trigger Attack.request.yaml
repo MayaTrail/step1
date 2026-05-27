@@ -1,0 +1,21 @@
+$kind: http-request
+description: |-
+  Trigger the attack phase against a ready_for_attack emulation stack.
+
+  Returns 202 with runId. Stores runId in the collection variable automatically.
+
+  Returns 409 if the stack is not in ready_for_attack status.
+url: "{{base_url}}/api/emulations/{{stack_id}}/attack/"
+method: POST
+scripts:
+  - type: afterResponse
+    code: |-
+      if (pm.response.code === 202) {
+          const body = pm.response.json();
+          pm.collectionVariables.set('run_id', body.runId);
+          pm.test('runId captured', () => pm.expect(body.runId).to.be.a('string'));
+          console.log('Run ID:', body.runId);
+          console.log('Poll GET /api/emulations/' + body.runId + '/ for attack progress');
+      }
+    language: text/javascript
+order: 8000
