@@ -70,7 +70,6 @@ class RegisterView(APIView):
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-
 class VerifyOTPView(APIView):
     """
     Public endpoint for OTP verification.
@@ -99,7 +98,6 @@ class VerifyOTPView(APIView):
                 status=status.HTTP_200_OK,
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 class ResendOTPView(APIView):
     """
@@ -131,7 +129,6 @@ class ResendOTPView(APIView):
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-
 class MeView(APIView):
     """
     Returns the profile of the currently authenticated user.
@@ -156,7 +153,6 @@ class MeView(APIView):
         """
         serializer = UserSerializer(request.user)
         return Response(serializer.data)
-
 
 class GoogleOAuthView(APIView):
     """
@@ -208,7 +204,6 @@ class GoogleOAuthView(APIView):
             status=status.HTTP_200_OK,
         )
 
-
 class LogoutView(APIView):
     """
     Blacklists the user's refresh token to invalidate their session.
@@ -253,7 +248,6 @@ class LogoutView(APIView):
 
         return Response(status=status.HTTP_205_RESET_CONTENT)
 
-
 class ForgotPasswordView(APIView):
     """
     Sends a password-reset OTP to the given email address.
@@ -273,7 +267,6 @@ class ForgotPasswordView(APIView):
             {"message": "If an account exists, a reset code has been sent."},
             status=status.HTTP_200_OK,
         )
-
 
 class ResetPasswordView(APIView):
     """

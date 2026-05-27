@@ -142,7 +142,18 @@ components:
           example: us-east-1
         status:
           type: string
-          enum: [pending, deploying, ready, destroying, refreshing, failed]
+          enum:
+            - pending
+            - deploying
+            - ready
+            - destroying
+            - refreshing
+            - failed
+            - ec2_booting
+            - ready_for_attack
+            - attacking
+            - attack_complete
+            - destroyed
           example: pending
         outputs:
           type: object
@@ -181,8 +192,262 @@ components:
           description: Celery task ID for tracking the async operation.
           example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
-    # ---- Simulations ----------------------------------------------------
-    SimulationRun:
+    # ---- Emulations (Enterprise) ----------------------------------------
+    Technique:
+      type: object
+      properties:
+        id:
+          type: string
+          example: T1562.008
+        name:
+          type: string
+          example: Disable Cloud Logs
+
+    AttackPhase:
+      type: object
+      properties:
+        phase:
+          type: integer
+          example: 4
+        name:
+          type: string
+          example: Defense Evasion
+        techniques:
+          type: array
+          items:
+            $ref: "#/components/schemas/Technique"
+
+    MitreMapping:
+      type: object
+      properties:
+        id:
+          type: string
+          example: T1562.008
+        name:
+          type: string
+          example: Disable Cloud Logs
+        tactic:
+          type: string
+          example: Defense Evasion
+        platform:
+          type: string
+          example: AWS CloudTrail
+        description:
+          type: string
+
+    Reference:
+      type: object
+      properties:
+        icon:
+          type: string
+          example: ">"
+        title:
+          type: string
+        source:
+          type: string
+        type:
+          type: string
+          example: REPORT
+        color:
+          type: string
+          example: cyan
+
+    EmulationPackage:
+      type: object
+      description: Enterprise emulation package. Fields are camelCase to match the frontend TypeScript type.
+      properties:
+        id:
+          type: string
+          description: Emulation package name — used as the URL identifier.
+          example: scarleteel
+        name:
+          type: string
+          description: Human-readable display name.
+          example: SCARLETEEL 2.0
+        description:
+          type: string
+        tier:
+          type: string
+          enum: [enterprise]
+        origin:
+          type: string
+          example: unknown
+        originLabel:
+          type: string
+          example: APT EMULATION
+        tags:
+          type: array
+          items:
+            type: string
+        techniqueCount:
+          type: integer
+          example: 8
+        severity:
+          type: string
+          enum: [CRITICAL, HIGH, MEDIUM, LOW]
+        aliases:
+          type: string
+        attribution:
+          type: string
+        activeSince:
+          type: string
+        targets:
+          type: string
+        incidents:
+          type: array
+          items:
+            type: string
+        attackPath:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttackPhase"
+        mitreMappings:
+          type: array
+          items:
+            $ref: "#/components/schemas/MitreMapping"
+        references:
+          type: array
+          items:
+            $ref: "#/components/schemas/Reference"
+        phaseCount:
+          type: integer
+          example: 6
+        schemaVersion:
+          type: integer
+          example: 1
+
+    EmulationEstimate:
+      type: object
+      properties:
+        emulationType:
+          type: string
+          example: scarleteel
+        displayName:
+          type: string
+          example: SCARLETEEL 2.0
+        resources:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              count:
+                type: integer
+              cost_per_hour_usd:
+                type: number
+        totalCostPerHourUsd:
+          type: number
+          example: 0.05
+        defaultTtlHours:
+          type: integer
+          example: 4
+        estimatedTotalUsd:
+          type: number
+          example: 0.2
+        note:
+          type: string
+
+    DetectionRule:
+      type: object
+      properties:
+        title:
+          type: string
+          description: Filename of the detection rule (e.g. sigma_t1562_008.yml).
+          example: sigma_t1562_008.yml
+        code:
+          type: string
+          description: Full rule content — SIGMA YAML or KQL query string.
+
+    EmulationDetections:
+      type: object
+      properties:
+        emulationType:
+          type: string
+          example: scarleteel
+        displayName:
+          type: string
+          example: SCARLETEEL 2.0
+        sigma:
+          type: array
+          items:
+            $ref: "#/components/schemas/DetectionRule"
+        kql:
+          type: array
+          items:
+            $ref: "#/components/schemas/DetectionRule"
+        totalCount:
+          type: integer
+          example: 12
+        formats:
+          type: string
+          example: "SIGMA (6) · KQL (6)"
+
+    EmulationPlaybook:
+      type: object
+      properties:
+        emulationType:
+          type: string
+          example: scarleteel
+        displayName:
+          type: string
+          example: SCARLETEEL 2.0
+        content:
+          type: string
+          description: Full PLAYBOOK.md markdown content.
+
+    EmulationTechniques:
+      type: object
+      properties:
+        emulationType:
+          type: string
+        displayName:
+          type: string
+        attackPath:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttackPhase"
+        mitreMappings:
+          type: array
+          items:
+            $ref: "#/components/schemas/MitreMapping"
+        techniqueCount:
+          type: integer
+
+    DeployEmulationRequest:
+      type: object
+      required: [emulation_type, stack_name]
+      properties:
+        emulation_type:
+          type: string
+          description: Emulation package name (must match a registered MANIFEST).
+          example: scarleteel
+        stack_name:
+          type: string
+          description: Pulumi stack name for this deployment.
+          example: scarleteel-himan10
+
+    DeployEmulationResponse:
+      type: object
+      properties:
+        stackId:
+          type: string
+          format: uuid
+        stackName:
+          type: string
+          example: scarleteel-himan10
+
+    TriggerAttackResponse:
+      type: object
+      properties:
+        runId:
+          type: string
+          format: uuid
+        stackId:
+          type: string
+          format: uuid
+
+    EmulationRun:
       type: object
       properties:
         id:
@@ -191,30 +456,22 @@ components:
         stack:
           type: string
           format: uuid
-          description: UUID of the Stack used for this run.
-        module:
+        emulation_type:
           type: string
-          enum:
-            - attach_role_policy
-            - enumeration
-            - eventual_consistency
-            - s3_initial_access
-            - s3_kms_encryption
-          example: enumeration
+          example: scarleteel
         status:
           type: string
           enum: [pending, running, completed, failed]
-          example: pending
+        phase_current:
+          type: integer
+        phase_total:
+          type: integer
         stdout:
           type: string
-          example: ""
         stderr:
           type: string
-          example: ""
         triggered_by:
           type: string
-          description: Username of the user who triggered the run.
-          example: himan10
         started_at:
           type: string
           format: date-time
@@ -226,46 +483,6 @@ components:
         created_at:
           type: string
           format: date-time
-
-    SimulationModule:
-      type: object
-      properties:
-        id:
-          type: integer
-          description: Numeric ID used to trigger this simulation.
-          example: 2
-        name:
-          type: string
-          description: Internal module name.
-          example: enumeration
-        description:
-          type: string
-          description: Human-readable description of the simulation.
-          example: IAM policy simulator / service enumeration
-
-    TriggerSimulationRequest:
-      type: object
-      required: [stack_id, module_id]
-      properties:
-        stack_id:
-          type: string
-          format: uuid
-          description: UUID of the target Stack (must be READY).
-          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
-        module_id:
-          type: integer
-          enum: [1, 2, 3, 4, 5]
-          description: Numeric ID of the simulation module (see GET /api/simulations/modules/).
-          example: 2
-
-    TriggerSimulationResponse:
-      type: object
-      properties:
-        run:
-          $ref: "#/components/schemas/SimulationRun"
-        task_id:
-          type: string
-          example: d4e5f6a7-b8c9-0123-4567-890abcdef123
 
     # ---- Logs -----------------------------------------------------------
     LogEntry:
@@ -283,9 +500,9 @@ components:
           enum:
             - stack.deployed
             - stack.destroyed
-            - simulation.started
-            - simulation.completed
-            - simulation.failed
+            - emulation.started
+            - emulation.completed
+            - emulation.failed
           example: stack.deployed
         message:
           type: string
@@ -296,10 +513,6 @@ components:
           description: Username of the user who caused this event.
           example: himan10
         stack:
-          type: string
-          format: uuid
-          nullable: true
-        run:
           type: string
           format: uuid
           nullable: true
@@ -648,125 +861,277 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
-  # ======================= Simulations ===================================
+  # ======================= Emulations (Enterprise) =======================
 
-  /api/simulations/:
+  /api/emulations/:
     get:
-      tags: [Simulations]
-      summary: List all simulation runs for the current user
-      operationId: simulationsList
-      responses:
-        "200":
-          description: Array of simulation runs.
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/SimulationRun"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/simulations/modules/:
-    get:
-      tags: [Simulations]
-      summary: List all available simulation modules
-      operationId: simulationsModules
+      tags: [Emulations]
+      summary: List available emulation packages
+      operationId: emulationsList
       description: >
-        Returns the catalogue of simulation modules with their numeric IDs,
-        internal names, and human-readable descriptions. Use the `id` from
-        this response as the `module_id` when triggering a simulation run.
+        Returns all registered emulation packages from the registry.
+        Fields are camelCase to match the frontend Emulation TypeScript type.
+        Requires IsEnterpriseUser — returns 403 for demo and unauthenticated users.
       responses:
         "200":
-          description: Array of available simulation modules.
+          description: Array of emulation packages.
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: "#/components/schemas/SimulationModule"
-              example:
-                - id: 1
-                  name: attach_role_policy
-                  description: Privilege escalation via AttachRolePolicy
-                - id: 2
-                  name: enumeration
-                  description: IAM policy simulator / service enumeration
-                - id: 3
-                  name: eventual_consistency
-                  description: Eventual consistency attack
-                - id: 4
-                  name: s3_initial_access
-                  description: S3 basic access & data exfiltration
-                - id: 5
-                  name: s3_kms_encryption
-                  description: S3 KMS ransomware simulation
+                  $ref: "#/components/schemas/EmulationPackage"
+        "403":
+          description: Not an enterprise user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailError"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
-  /api/simulations/{id}/:
+  /api/emulations/deploy/:
+    post:
+      tags: [Emulations]
+      summary: Deploy an enterprise emulation stack
+      operationId: emulationsDeploy
+      description: >
+        Creates a Stack record and enqueues `pulumi up` via the enterprise Celery queue.
+        Returns 409 if the user already has an active emulation stack.
+        Poll GET /api/stacks/{id}/ to track status: deploying → ec2_booting → ready_for_attack.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeployEmulationRequest"
+      responses:
+        "202":
+          description: Deploy task enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeployEmulationResponse"
+        "400":
+          description: Validation error (unknown emulation_type, missing fields).
+        "409":
+          description: User already has an active emulation stack.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailError"
+        "403":
+          description: Not an enterprise user.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/emulations/{emulation_type}/estimate/:
     parameters:
-      - name: id
+      - name: emulation_type
+        in: path
+        required: true
+        schema:
+          type: string
+          example: scarleteel
+    get:
+      tags: [Emulations]
+      summary: Cost estimate for an emulation type
+      operationId: emulationsEstimate
+      description: >
+        Returns the pre-deployment cost breakdown read from the emulation MANIFEST.
+        No AWS API calls are made. The frontend shows this before POST /deploy/.
+      responses:
+        "200":
+          description: Cost breakdown.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmulationEstimate"
+        "404":
+          description: Unknown emulation type.
+        "403":
+          description: Not an enterprise user.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/emulations/{emulation_type}/techniques/:
+    parameters:
+      - name: emulation_type
+        in: path
+        required: true
+        schema:
+          type: string
+          example: scarleteel
+    get:
+      tags: [Emulations]
+      summary: MITRE ATT&CK techniques for an emulation
+      operationId: emulationsTechniques
+      description: >
+        Returns the kill-chain attack path and full MITRE ATT&CK technique mappings
+        directly from the emulation MANIFEST. Served from the in-memory registry cache.
+      responses:
+        "200":
+          description: Technique data.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmulationTechniques"
+        "404":
+          description: Unknown emulation type.
+        "403":
+          description: Not an enterprise user.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/emulations/{emulation_type}/detections/:
+    parameters:
+      - name: emulation_type
+        in: path
+        required: true
+        schema:
+          type: string
+          example: scarleteel
+    get:
+      tags: [Emulations]
+      summary: SIGMA and KQL detection rules for an emulation
+      operationId: emulationsDetections
+      description: >
+        Reads .yml (SIGMA) and .kql (KQL) files from the emulation's detections/
+        subdirectory and returns their content verbatim. For SCARLETEEL: 6 SIGMA
+        rules + 6 KQL queries = 12 total, one pair per MITRE technique.
+      responses:
+        "200":
+          description: Detection rules.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmulationDetections"
+        "404":
+          description: Unknown emulation type.
+        "403":
+          description: Not an enterprise user.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/emulations/{emulation_type}/playbook/:
+    parameters:
+      - name: emulation_type
+        in: path
+        required: true
+        schema:
+          type: string
+          example: scarleteel
+    get:
+      tags: [Emulations]
+      summary: IR playbook for an emulation
+      operationId: emulationsPlaybook
+      description: >
+        Reads PLAYBOOK.md from the emulation package directory and returns the
+        raw markdown content. The frontend parses H2 sections (## Title) into
+        structured steps for display in PlaybookPage.
+      responses:
+        "200":
+          description: Playbook content.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmulationPlaybook"
+        "404":
+          description: Unknown emulation type or PLAYBOOK.md not found.
+        "403":
+          description: Not an enterprise user.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/emulations/{run_id}/:
+    parameters:
+      - name: run_id
         in: path
         required: true
         schema:
           type: string
           format: uuid
     get:
-      tags: [Simulations]
-      summary: Retrieve a simulation run (poll for status)
-      operationId: simulationsRetrieve
+      tags: [Emulations]
+      summary: Poll an EmulationRun status
+      operationId: emulationsRunDetail
+      description: >
+        Returns the EmulationRun record with current status, phase progress,
+        and captured stdout/stderr. Poll until status is 'completed' or 'failed'.
       responses:
         "200":
-          description: Simulation run details including stdout/stderr.
+          description: EmulationRun details.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SimulationRun"
+                $ref: "#/components/schemas/EmulationRun"
         "404":
-          description: Run not found.
+          description: Run not found or not owned by the caller.
+        "403":
+          description: Not an enterprise user.
         "401":
           $ref: "#/components/responses/Unauthorized"
 
-  /api/simulations/run/:
-    post:
-      tags: [Simulations]
-      summary: Trigger a new simulation run
-      operationId: simulationsRun
-      description: >
-        Creates a SimulationRun record and enqueues a Celery task.
-        The referenced stack must belong to the user and be in READY status.
-      requestBody:
+  /api/emulations/{stack_id}/attack/:
+    parameters:
+      - name: stack_id
+        in: path
         required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/TriggerSimulationRequest"
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Emulations]
+      summary: Trigger the attack phase
+      operationId: emulationsAttack
+      description: >
+        Creates an EmulationRun and enqueues run_emulation_attack in the enterprise
+        Celery queue. The stack must be in ready_for_attack status.
+        Returns 409 if the stack is not ready.
       responses:
-        "201":
-          description: Run created and task enqueued.
+        "202":
+          description: Attack task enqueued.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TriggerSimulationResponse"
-        "400":
-          description: Validation error.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ValidationError"
+                $ref: "#/components/schemas/TriggerAttackResponse"
         "404":
-          description: Stack not found or doesn't belong to user.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DetailError"
+          description: Stack not found.
         "409":
-          description: Stack is not in READY state.
+          description: Stack is not in ready_for_attack status.
+        "403":
+          description: Not an enterprise user.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/emulations/{stack_id}/destroy/:
+    parameters:
+      - name: stack_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [Emulations]
+      summary: Destroy an emulation stack
+      operationId: emulationsDestroy
+      description: >
+        Enqueues `pulumi destroy` for an enterprise emulation stack.
+        Returns 409 if the stack is currently deploying, destroying, or attacking.
+      responses:
+        "202":
+          description: Destroy task enqueued.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/DetailError"
+        "404":
+          description: Stack not found.
+        "409":
+          description: Stack is busy.
+        "403":
+          description: Not an enterprise user.
         "401":
           $ref: "#/components/responses/Unauthorized"
 

@@ -1,12 +1,11 @@
 version: "3.9"
 
-# MayaTrail step1 — local development stack
-# Services: PostgreSQL, Redis, Django backend, Celery worker,
-#           Pulumi runner (build-only), React UI, Edge nginx proxy.
+# MayaTrail step1 — enterprise stack
+# Services: PostgreSQL, Redis, Django backend, Celery enterprise worker,
+#           Celery Beat scheduler, React UI, Edge nginx proxy.
 #
 # Usage:
 #   cp backend/.env.example backend/.env   # fill in SECRET_KEY & AWS creds
-#   docker-compose build pulumi            # build the Pulumi image first
 #   docker-compose up --build
 
 services:
@@ -54,12 +53,12 @@ services:
       POSTGRES_USER: mayatrail
       POSTGRES_PASSWORD: mayatrail
       REDIS_URL: redis://redis:6379/0
-      SIMULATIONS_PATH: /opt
+      EMULATIONS_BASE_DIR: /opt/emulations
     ports:
       - "8000:8000"
     volumes:
-      # Mount simulations package for the /api/simulations/modules/ endpoint.
-      - ./simulations:/opt/simulations:ro
+      # Mount emulations package so the API registry can discover packages.
+      - ./emulations:/opt/emulations:ro
     depends_on: # waits for db and redis to be healthy before starting backend.
       db:
         condition: service_healthy
@@ -72,22 +71,44 @@ services:
       retries: 15
       start_period: 30s
     command: >
-      sh -c "python manage.py makemigrations users infrastructure simulations logs && python manage.py migrate --noinput &&
+      sh -c "python manage.py makemigrations users infrastructure emulations logs && python manage.py migrate --noinput &&
              gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120"
 
-  # Pulumi runner — build-only image, not a long-running service.
-  # The "tools" profile means it won't start with `docker-compose up`.
-  # The worker spawns ephemeral containers from this image on demand.
-  # Build it first: docker-compose build pulumi
-  pulumi:
+  # Enterprise worker — handles emulation deploy/attack/destroy tasks.
+  # Runs against the user's own AWS account via STS AssumeRole.
+  # No Docker socket required — Pulumi Automation API runs in-process.
+  worker_enterprise:
     build:
-      context: ./src
-      dockerfile: Dockerfile
-    image: step1-pulumi
-    profiles:
-      - tools
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: mayatrail
+      POSTGRES_USER: mayatrail
+      POSTGRES_PASSWORD: mayatrail
+      REDIS_URL: redis://redis:6379/0
+      STATE_BUCKET: mayatrail-state-bucket
+      STATE_BUCKET_REGION: ap-south-1
+      # Base directory where emulation packages are mounted.
+      # Infra programs are resolved as {EMULATIONS_BASE_DIR}/{type}/infra/
+      EMULATIONS_BASE_DIR: /opt/emulations
+    volumes:
+      # Emulation packages: attack scripts and per-emulation infra/ programs.
+      - ./emulations:/opt/emulations:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A config worker --queues=enterprise --concurrency=4 --loglevel=info
 
-  worker:
+  # Celery Beat scheduler — runs auto_destroy_expired_stacks every 15 minutes.
+  beat:
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -102,20 +123,16 @@ services:
       POSTGRES_USER: mayatrail
       POSTGRES_PASSWORD: mayatrail
       REDIS_URL: redis://redis:6379/0
-      PULUMI_IMAGE: step1-pulumi
-      STATE_BUCKET: mayatrail-pulumi-state
-      SIMULATIONS_PATH: /opt
-    volumes:
-      # Mount Docker socket so the worker can spawn Pulumi containers.
-      - /var/run/docker.sock:/var/run/docker.sock
-      # Mount simulations package (imported in-process by simulations tasks).
-      - ./simulations:/simulations:ro
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: celery -A config worker --loglevel=info --concurrency=2
+      backend:
+        condition: service_healthy
+    command: >
+      celery -A config beat --loglevel=info
+      --scheduler django_celery_beat.schedulers:DatabaseScheduler
 
   # UI (React SPA on nginx)
   ui:

@@ -1,0 +1,37 @@
+FROM python:3.12-slim
+
+LABEL maintainer="MayaTrail"
+LABEL description="MayaTrail Celery worker — Django + Celery + Pulumi CLI"
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Install system dependencies.
+# curl and ca-certificates are needed to download the Pulumi CLI installer.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev \
+    gcc \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Pulumi CLI — pinned to match pulumi/pulumi-python:3.207.0 used by the
+# src/Dockerfile so both images use the same state format and plugin versions.
+ARG PULUMI_VERSION=3.207.0
+RUN curl -fsSL https://get.pulumi.com | sh -s -- --version ${PULUMI_VERSION} \
+    && /root/.pulumi/bin/pulumi version
+
+ENV PATH="/root/.pulumi/bin:${PATH}"
+ENV PULUMI_HOME="/root/.pulumi"
+
+# Install Python dependencies.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application source.
+COPY . .
+
+# Default command — overridden per worker service in docker-compose.yml.
+CMD ["celery", "-A", "config", "worker", "--loglevel=info"]

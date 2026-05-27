@@ -22,7 +22,6 @@ class LogEntryViewSet(viewsets.ReadOnlyModelViewSet):
     Returns entries relevant to the authenticated user:
     - entries where the actor is the current user
     - entries for stacks owned by the current user
-    - entries for simulation runs triggered by the current user
     """
 
     serializer_class = LogEntrySerializer
@@ -39,5 +38,4 @@ class LogEntryViewSet(viewsets.ReadOnlyModelViewSet):
         return LogEntry.objects.filter(
             Q(actor=user)
             | Q(stack__owner=user)
-            | Q(run__triggered_by=user)
-        ).select_related("actor", "stack", "run").distinct()
+        ).select_related("actor", "stack").distinct()

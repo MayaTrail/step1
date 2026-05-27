@@ -14,10 +14,10 @@ class LogEntryAdmin(admin.ModelAdmin):
     through the admin.  All fields are read-only.
     """
 
-    list_display = ["event", "level", "actor", "stack", "run", "timestamp"]
+    list_display = ["event", "level", "actor", "stack", "timestamp"]
     list_filter = ["level", "event"]
     search_fields = ["message", "actor__username", "stack__name"]
-    readonly_fields = ["id", "level", "event", "message", "actor", "stack", "run", "timestamp"]
+    readonly_fields = ["id", "level", "event", "message", "actor", "stack", "timestamp"]
     ordering = ["-timestamp"]
 
     def has_add_permission(self, request) -> bool:
