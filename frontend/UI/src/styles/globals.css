@@ -199,3 +199,71 @@ pre code {
   @apply font-mono text-xs leading-relaxed;
   letter-spacing: 0.2px;
 }
+
+/*
+ * Chrome autofill override.
+ *
+ * When Chrome autofills an input it injects its own background-color via the
+ * :-webkit-autofill pseudo-class which overrides any inline `background-color`
+ * set on the element. The standard workaround is a large inset box-shadow in
+ * the desired background color — Chrome cannot override box-shadow with autofill.
+ * `caret-color` and `-webkit-text-fill-color` keep the text and cursor readable.
+ */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #1b1c1e inset !important;
+  box-shadow: 0 0 0px 1000px #1b1c1e inset !important;
+  -webkit-text-fill-color: rgb(249, 249, 249) !important;
+  caret-color: rgb(249, 249, 249) !important;
+}
+
+/*
+ * Auth-form input solid surface — defeats any override.
+ *
+ * Layered defense to guarantee the field renders solid #1b1c1e regardless of:
+ *   1. Tailwind preflight or any other stylesheet rule
+ *   2. Browser extensions (Dark Reader, Stylus)
+ *   3. Chrome autofill background injection
+ *   4. Any `:where()` low-specificity rule
+ * Each declaration uses `!important` so inline styles are NOT required to win,
+ * and the inset box-shadow paints the content box behind text — beats anything
+ * that resets background-color.
+ */
+.auth-input-solid,
+.auth-input-solid:hover,
+.auth-input-solid:focus,
+.auth-input-solid:active,
+.auth-input-solid:-webkit-autofill {
+  background-color: #1b1c1e !important;
+  background-image: none !important;
+  -webkit-box-shadow: 0 0 0 1000px #1b1c1e inset !important;
+  box-shadow: 0 0 0 1000px #1b1c1e inset !important;
+  -webkit-text-fill-color: rgb(249, 249, 249) !important;
+  color: rgb(249, 249, 249) !important;
+  caret-color: rgb(249, 249, 249) !important;
+}
+
+/* Focus ring is appended after the surface inset so the surface still paints. */
+.auth-input-solid:focus {
+  border-color: rgba(85, 179, 255, 0.5) !important;
+  -webkit-box-shadow:
+    0 0 0 1000px #1b1c1e inset,
+    hsla(202, 100%, 67%, 0.18) 0px 0px 0px 3px !important;
+  box-shadow:
+    0 0 0 1000px #1b1c1e inset,
+    hsla(202, 100%, 67%, 0.18) 0px 0px 0px 3px !important;
+}
+
+/* Error variant — red ring layered above the same surface. */
+.auth-input-solid.auth-input-error,
+.auth-input-solid.auth-input-error:focus {
+  border-color: rgba(255, 99, 99, 0.6) !important;
+  -webkit-box-shadow:
+    0 0 0 1000px #1b1c1e inset,
+    rgba(255, 99, 99, 0.18) 0px 0px 0px 3px !important;
+  box-shadow:
+    0 0 0 1000px #1b1c1e inset,
+    rgba(255, 99, 99, 0.18) 0px 0px 0px 3px !important;
+}

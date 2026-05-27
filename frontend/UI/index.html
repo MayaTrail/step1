@@ -8,12 +8,33 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <!-- Inter: primary font for all UI text -->
   <!-- Geist Mono: monospace font for code and technical content -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <!-- display=fallback: 100ms swap window — avoids late FOUT reflows on cached fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600&family=Geist+Mono:wght@400;500&display=fallback" rel="stylesheet" />
+  <style>
+    /*
+     * Inline baseline styles applied before the JS bundle loads.
+     * Prevents the white → dark background flash (FOUC) while Vite
+     * injects the compiled CSS bundle in dev mode, and before the
+     * bundled stylesheet link resolves in production.
+     */
+    html, body {
+      margin: 0;
+      padding: 0;
+      background-color: #07080a;
+      color: #f9f9f9;
+      min-height: 100vh;
+    }
+  </style>
   <script>
     // Apply saved theme before paint to prevent flash
     (function () {
       var t = localStorage.getItem('mayatrail_theme') || 'dark';
       document.documentElement.setAttribute('data-theme', t);
+      // Light theme override for inline baseline above
+      if (t === 'light') {
+        document.documentElement.style.backgroundColor = '#f5f7fa';
+        document.documentElement.style.color = '#1a2332';
+      }
     })();
   </script>
   <!-- Google Identity Services — required for "Continue with Google" auth -->

@@ -393,10 +393,10 @@ export async function verifyConnector(req: ConnectorRequest): Promise<ConnectorR
     const { data } = await api.post<ConnectorResponse>('/connectors/aws/verify/', req)
     return data
   } catch (err: any) {
-    if (err.response?.data) {
-      return err.response.data as ConnectorResponse
+    if (err.response) {
+      throw new Error(extractApiError(err))
     }
-    return { status: 'verified', account_id: '123456789012' }
+    throw new Error('Unable to reach the server. Please check your connection.')
   }
 }
 

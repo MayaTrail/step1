@@ -63,6 +63,19 @@ export async function deleteStack(stackId: string): Promise<void> {
 }
 
 /**
+ * Force-destroy a stack regardless of its current status.
+ *
+ * Use this for stacks stuck in deploying, refreshing, or other busy states
+ * where the standard destroy endpoint returns 409 Conflict.
+ *
+ * @param stackId - UUID of the stack to force-destroy.
+ */
+export async function forceDestroyStack(stackId: string): Promise<StackActionResponse> {
+  const { data } = await api.post<StackActionResponse>(`/stacks/${stackId}/force-destroy/`)
+  return data
+}
+
+/**
  * Poll a stack until it reaches a target status or a terminal state.
  *
  * @param stackId    UUID of the stack
@@ -76,7 +89,7 @@ export async function pollStackUntilReady(
   onUpdate?: (stack: Stack) => void,
   signal?: AbortSignal,
 ): Promise<Stack> {
-  const TERMINAL = new Set(['ready', 'failed', 'pending'])
+  const TERMINAL = new Set(['ready', 'failed', 'pending', 'destroyed'])
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -84,10 +97,26 @@ export async function pollStackUntilReady(
       throw new DOMException('Polling aborted', 'AbortError')
     }
 
-    const stack = await getStack(stackId)
+    let stack: Stack
+    try {
+      stack = await getStack(stackId)
+    } catch (err: unknown) {
+      // 404 means the stack record was deleted (successful destroy removes the DB row).
+      // Treat this as a clean terminal state — resolve with a synthetic destroyed record.
+      const httpStatus = (err as { response?: { status?: number } })?.response?.status
+      if (httpStatus === 404) {
+        const synthetic: Stack = {
+          id: stackId, name: '', region: '', status: 'destroyed',
+          outputs: {}, owner: '', created_at: '', updated_at: '',
+        }
+        onUpdate?.(synthetic)
+        return synthetic
+      }
+      throw err
+    }
+
     onUpdate?.(stack)
 
-    // deploying / destroying are non-terminal — keep polling
     if (TERMINAL.has(stack.status)) {
       return stack
     }

@@ -7,9 +7,10 @@ import mayatrailLogo from '@/assets/mayatrail-logo.png'
 
 interface TopNavProps {
   onOpenSearch: () => void
+  onToggleSidebar: () => void
 }
 
-export function TopNav({ onOpenSearch }: TopNavProps) {
+export function TopNav({ onOpenSearch, onToggleSidebar }: TopNavProps) {
   const { user, logout } = useAuth()
   const { theme, toggleTheme } = useTheme()
   const { remaining, isExpired, isActive } = useDemoCountdown(
@@ -36,7 +37,7 @@ export function TopNav({ onOpenSearch }: TopNavProps) {
     <nav className="h-[58px] backdrop-blur-[20px] bg-[rgba(7,8,12,0.8)] border-b border-border flex items-center px-5 gap-3 shrink-0 relative z-[100]">
 
       {/* Logo — danger gradient matching frontend */}
-      <Link to="/" className="flex items-center gap-2.5 no-underline group">
+      <Link to="/" className="flex items-center gap-2.5 no-underline group shrink-0">
         <img
           src={mayatrailLogo}
           alt="MayaTrail"
@@ -47,9 +48,22 @@ export function TopNav({ onOpenSearch }: TopNavProps) {
         </span>
       </Link>
 
-      {/* Search trigger */}
+      {/* Hamburger — mobile only, toggles the sidebar overlay */}
+      <button
+        onClick={onToggleSidebar}
+        className="lg:hidden flex items-center justify-center w-8 h-8 shrink-0 text-content-dim hover:text-content-primary rounded-btn hover:bg-surface-elevated transition-colors"
+        aria-label="Toggle navigation"
+      >
+        <svg width="16" height="12" viewBox="0 0 16 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+          <line x1="0" y1="1" x2="16" y2="1" />
+          <line x1="0" y1="6" x2="16" y2="6" />
+          <line x1="0" y1="11" x2="16" y2="11" />
+        </svg>
+      </button>
+
+      {/* Search trigger — hidden on small screens to preserve space */}
       <div
-        className="flex-1 max-w-[400px] mx-auto relative cursor-pointer"
+        className="hidden md:flex flex-1 max-w-[400px] mx-auto relative cursor-pointer"
         onClick={onOpenSearch}
       >
         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-content-dim text-sm">
@@ -68,10 +82,10 @@ export function TopNav({ onOpenSearch }: TopNavProps) {
       {/* Right section */}
       <div className="flex items-center gap-2.5 ml-auto">
 
-        {/* Demo countdown — only rendered for demo users with an active timer */}
+        {/* Demo countdown — only rendered for demo users with an active timer; hidden on small screens */}
         {isActive && (
           <div
-            className={`flex items-center gap-2 border rounded-full px-3.5 py-1.5 font-mono text-xs transition-all ${
+            className={`hidden sm:flex items-center gap-2 border rounded-full px-3.5 py-1.5 font-mono text-xs transition-all ${
               isExpired
                 ? 'bg-danger/[0.08] border-danger/30 text-danger'
                 : 'bg-[#ff8c00]/[0.08] border-[#ff8c00]/30 text-[#ff8c00]'
@@ -88,13 +102,13 @@ export function TopNav({ onOpenSearch }: TopNavProps) {
           </div>
         )}
 
-        {/* Theme toggle */}
+        {/* Theme toggle — hidden on small screens */}
         <button
           onClick={toggleTheme}
-          className="bg-surface-elevated border border-border rounded-full px-3.5 py-1.5 text-content-secondary text-sm
-            flex items-center gap-1.5 cursor-pointer transition-all hover:border-border-active hover:text-content-primary"
+          className="hidden sm:flex bg-surface-elevated border border-border rounded-full px-3.5 py-1.5 text-content-secondary text-sm
+            items-center gap-1.5 cursor-pointer transition-all hover:border-border-active hover:text-content-primary"
         >
-          {theme === 'dark' ? '☽' : '☀️'} Theme
+          {theme === 'dark' ? '☽' : theme === 'light' ? '☀️' : '⚙️'} Theme
         </button>
 
         {/* Account dropdown */}
@@ -117,7 +131,7 @@ export function TopNav({ onOpenSearch }: TopNavProps) {
                 IAM
               </span>
             )}
-            <span>{user?.name?.split(' ').map((n) => n[0] + '.').join(' ') ?? 'User'}</span>
+            <span className="hidden sm:inline">{user?.name?.split(' ').map((n) => n[0] + '.').join(' ') ?? 'User'}</span>
             <span className="text-[10px]">&#9662;</span>
           </button>
 
@@ -130,7 +144,7 @@ export function TopNav({ onOpenSearch }: TopNavProps) {
               </div>
               <div className="py-1">
                 <DropdownItem icon="👤" label="Profile" onClick={() => { setDropdownOpen(false); navigate('/me') }} />
-                <DropdownItem icon="⚙️" label="Settings" onClick={() => setDropdownOpen(false)} />
+                <DropdownItem icon="⚙️" label="Settings" onClick={() => { setDropdownOpen(false); navigate('/settings') }} />
                 <DropdownItem icon="🔑" label="API Keys" onClick={() => setDropdownOpen(false)} />
                 <DropdownItem icon="👥" label="Team" onClick={() => setDropdownOpen(false)} />
               </div>

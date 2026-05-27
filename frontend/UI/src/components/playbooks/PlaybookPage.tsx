@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { useEmulations, usePlaybooks } from '@/hooks/usePlatformData'
+import { usePlaybook } from '@/hooks/usePlatformData'
 import { getPlatformMeta } from '@/data'
 import type { PlatformId } from '@/types'
 import { Breadcrumb } from '@/components/ui/Breadcrumb'
@@ -9,29 +9,19 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { RunEmulationModal } from '@/components/modals/RunEmulationModal'
 
 export function PlaybookPage() {
-  const { platformId, playbookId } = useParams<{ platformId: string; playbookId: string }>()
+  const { platformId, emulationId } = useParams<{ platformId: string; emulationId: string }>()
   const pid = platformId as PlatformId
   const meta = getPlatformMeta(pid)
-  const { data: emulations } = useEmulations(pid)
-  const { data: playbooks, loading } = usePlaybooks(pid)
+  const { data: playbook, loading } = usePlaybook(emulationId)
+  const [showRunModal, setShowRunModal] = useState(false)
 
   const platformLabel = meta?.label ?? platformId?.toUpperCase() ?? ''
-
-  // Resolve playbook: playbookId can be a numeric index or an emulation ID
-  let playbookIndex = Number(playbookId)
-  if (isNaN(playbookIndex) && emulations && playbookId) {
-    playbookIndex = emulations.findIndex((em) => em.id === playbookId)
-  }
-
-  const playbook = playbooks?.[playbookIndex]
-  const emulation = emulations?.[playbookIndex]
-  const emName = emulation?.name ?? ''
-  const [showRunModal, setShowRunModal] = useState(false)
+  const emulationLabel = emulationId?.toUpperCase() ?? ''
 
   if (loading) {
     return <div className="text-center py-16 text-content-dim font-mono text-sm">Loading playbook...</div>
   }
-  if (!playbook) {
+  if (!playbook || playbook.steps.length === 0) {
     return <EmptyState icon="&#128203;" title="Playbook not found" body="This playbook does not exist yet." />
   }
 
@@ -39,8 +29,8 @@ export function PlaybookPage() {
     <div>
       <Breadcrumb items={[
         { label: 'Home', to: '/' },
-        { label: `${platformLabel} \u00B7 APT Emulations`, to: `/${pid}/emulations` },
-        ...(emulation ? [{ label: emName, to: `/${pid}/emulations/${emulation.id}` }] : []),
+        { label: `${platformLabel} · APT Emulations`, to: `/${pid}/emulations` },
+        ...(emulationId ? [{ label: emulationLabel, to: `/${pid}/emulations/${emulationId}` }] : []),
         { label: 'Playbook' },
       ]} />
 
@@ -51,18 +41,20 @@ export function PlaybookPage() {
             Incident Response
           </div>
           <div className="font-display text-[1.6rem] font-[800] text-content-primary leading-tight tracking-[-0.5px]">
-            &#128203; IR Playbook
+            IR Playbook
           </div>
           <div className="text-[0.85rem] text-content-secondary mt-1.5">
-            {emName} &middot; {platformLabel} Cloud Environment &middot; Last updated Feb 2025
+            {emulationLabel} &middot; {platformLabel} Cloud Environment
           </div>
         </div>
         <div className="flex gap-3 shrink-0">
-          {emulation && (
-            <Link to={`/${pid}/emulations/${emulation.id}`}
+          {emulationId && (
+            <Link
+              to={`/${pid}/emulations/${emulationId}`}
               className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn font-body text-[0.9rem] font-medium cursor-pointer no-underline
                 bg-transparent border border-[rgba(255,255,255,0.15)] text-content-primary transition-all
-                hover:bg-[rgba(255,255,255,0.05)] hover:border-border-active">
+                hover:bg-[rgba(255,255,255,0.05)] hover:border-border-active"
+            >
               &#8592; Back
             </Link>
           )}
@@ -81,10 +73,10 @@ export function PlaybookPage() {
       </div>
 
       {/* Run Emulation Modal */}
-      {showRunModal && emulation && (
+      {showRunModal && emulationId && (
         <RunEmulationModal
-          emulationId={emulation.id}
-          emulationName={emulation.name}
+          emulationId={emulationId}
+          emulationName={emulationLabel}
           onClose={() => setShowRunModal(false)}
         />
       )}

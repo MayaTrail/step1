@@ -12,6 +12,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import type { Stack, StackStatus, CreateStackRequest } from '@/types'
+import { InfraGraphView } from './InfraGraphView'
 import {
     listStacks,
     getStack,
@@ -21,22 +22,40 @@ import {
     refreshStack,
     previewStack,
     deleteStack,
+    forceDestroyStack,
     pollStackUntilReady,
 } from '@/services/stack.service'
+import { destroyEmulationStack } from '@/services/emulation.service'
 import { Breadcrumb } from '@/components/ui/Breadcrumb'
 import { EmptyState } from '@/components/ui/EmptyState'
 
 /* ── Status styling ── */
 const STATUS_CONFIG: Record<StackStatus, { label: string; color: string; bg: string; dot?: string }> = {
-    pending: { label: 'Pending', color: 'text-yellow-400', bg: 'bg-yellow-400/[0.08]', dot: 'bg-yellow-400' },
-    deploying: { label: 'Deploying', color: 'text-accent-blue', bg: 'bg-accent-blue/[0.08]', dot: 'bg-accent-blue' },
-    ready: { label: 'Ready', color: 'text-safe', bg: 'bg-safe/[0.08]', dot: 'bg-safe' },
-    destroying: { label: 'Destroying', color: 'text-orange', bg: 'bg-orange/[0.08]', dot: 'bg-orange' },
-    refreshing: { label: 'Refreshing', color: 'text-purple', bg: 'bg-purple/[0.08]', dot: 'bg-purple' },
-    failed: { label: 'Failed', color: 'text-danger', bg: 'bg-danger/[0.08]', dot: 'bg-danger' },
+    pending:          { label: 'Pending',           color: 'text-yellow-400',  bg: 'bg-yellow-400/[0.08]',  dot: 'bg-yellow-400' },
+    deploying:        { label: 'Deploying',         color: 'text-accent-blue', bg: 'bg-accent-blue/[0.08]', dot: 'bg-accent-blue' },
+    ready:            { label: 'Ready',             color: 'text-safe',        bg: 'bg-safe/[0.08]',        dot: 'bg-safe' },
+    destroying:       { label: 'Destroying',        color: 'text-orange-400',  bg: 'bg-orange-400/[0.08]',  dot: 'bg-orange-400' },
+    refreshing:       { label: 'Refreshing',        color: 'text-purple-400',  bg: 'bg-purple-400/[0.08]',  dot: 'bg-purple-400' },
+    failed:           { label: 'Failed',            color: 'text-danger',      bg: 'bg-danger/[0.08]',      dot: 'bg-danger' },
+    ec2_booting:      { label: 'EC2 Booting',       color: 'text-accent-blue', bg: 'bg-accent-blue/[0.08]', dot: 'bg-accent-blue' },
+    ready_for_attack: { label: 'Ready for Attack',  color: 'text-safe',        bg: 'bg-safe/[0.08]',        dot: 'bg-safe' },
+    attacking:        { label: 'Attacking',         color: 'text-danger',      bg: 'bg-danger/[0.08]',      dot: 'bg-danger' },
+    attack_complete:  { label: 'Attack Complete',   color: 'text-safe',        bg: 'bg-safe/[0.08]',        dot: 'bg-safe' },
+    destroyed:        { label: 'Destroyed',         color: 'text-content-dim', bg: 'bg-content-dim/[0.08]', dot: 'bg-content-dim' },
 }
 
 const BUSY_STATUSES = new Set<StackStatus>(['deploying', 'destroying', 'refreshing'])
+
+// Statuses where an emulation stack has live AWS resources (or may have them)
+// and can be force-destroyed by the user via the emulation destroy endpoint.
+const EMULATION_DESTROYABLE = new Set<StackStatus>([
+    'deploying',
+    'ec2_booting',
+    'ready_for_attack',
+    'attacking',
+    'attack_complete',
+    'failed',
+])
 
 const REGIONS = [
     { value: 'ap-south-1', label: 'ap-south-1 (Mumbai)' },
@@ -52,6 +71,11 @@ export function StacksPage() {
 
     // Expanded detail row
     const [expandedId, setExpandedId] = useState<string | null>(null)
+    // Which tab is active inside the expanded detail panel
+    const [detailView, setDetailView] = useState<'details' | 'graph'>('details')
+
+    // Reset to Details tab whenever the user opens a different stack row
+    useEffect(() => { setDetailView('details') }, [expandedId])
 
     // Create new stack
     const [showCreate, setShowCreate] = useState(false)
@@ -66,6 +90,9 @@ export function StacksPage() {
 
     // Confirm delete
     const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+
+    // Confirm force-destroy
+    const [confirmForceDestroyId, setConfirmForceDestroyId] = useState<string | null>(null)
 
     // ── Load stacks ──
     const loadStacks = useCallback(async () => {
@@ -184,6 +211,54 @@ export function StacksPage() {
         }
     }, [])
 
+    // ── Force-destroy a stuck or completed emulation stack ──
+    const handleForceDestroy = useCallback(async (stack: Stack) => {
+        setConfirmForceDestroyId(null)
+        setPolling((prev) => new Set(prev).add(stack.id))
+        setActionMsg((prev) => ({ ...prev, [stack.id]: 'Destroy queued...' }))
+        setError(null)
+
+        try {
+            // Enterprise emulation stacks must use the STS-aware emulation destroy
+            // endpoint so Pulumi runs in the user's account, not the platform account.
+            if (stack.emulation_type) {
+                await destroyEmulationStack(stack.id)
+            } else {
+                await forceDestroyStack(stack.id)
+            }
+
+            setStacks((prev) => prev.map((s) => s.id === stack.id ? { ...s, status: 'destroying' as StackStatus } : s))
+            setActionMsg((prev) => ({ ...prev, [stack.id]: 'Destroying infrastructure... This may take a few minutes.' }))
+
+            const controller = new AbortController()
+            abortRefs.current.set(stack.id, controller)
+
+            const final = await pollStackUntilReady(
+                stack.id,
+                3000,
+                (updated) => {
+                    setStacks((prev) => prev.map((s) => s.id === updated.id ? updated : s))
+                },
+                controller.signal,
+            )
+
+            setStacks((prev) => prev.map((s) => s.id === final.id ? final : s))
+            setActionMsg((prev) => ({
+                ...prev,
+                [stack.id]: final.status === 'failed'
+                    ? 'Destroy failed. Check worker logs.'
+                    : 'Stack destroyed successfully.',
+            }))
+        } catch (err: unknown) {
+            if (err instanceof DOMException && err.name === 'AbortError') return
+            const apiDetail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+            setActionMsg((prev) => ({ ...prev, [stack.id]: `Error: ${apiDetail ?? (err instanceof Error ? err.message : 'Force destroy failed.')}` }))
+        } finally {
+            setPolling((prev) => { const next = new Set(prev); next.delete(stack.id); return next })
+            abortRefs.current.delete(stack.id)
+        }
+    }, [])
+
     // ── Refresh single stack details ──
     const handleRetrieve = useCallback(async (stackId: string) => {
         try {
@@ -207,7 +282,7 @@ export function StacksPage() {
     }
 
     return (
-        <div className="max-w-5xl mx-auto animate-fadeIn">
+        <div className="animate-fadeIn">
             <Breadcrumb items={[
                 { label: 'Home', to: '/' },
                 { label: 'Infrastructure Stacks' },
@@ -360,25 +435,64 @@ export function StacksPage() {
                                     {/* Action buttons */}
                                     <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
                                         <ActionBtn
-                                            label="Deploy" icon="🚀" variant="safe"
+                                            label="Deploy" icon="&#128640;" variant="safe"
                                             disabled={isBusy}
                                             onClick={() => handleAction(stack.id, 'deploy')}
                                         />
                                         <ActionBtn
-                                            label="Destroy" icon="🗑️" variant="orange"
+                                            label="Destroy" icon="&#128465;" variant="orange"
                                             disabled={isBusy}
                                             onClick={() => handleAction(stack.id, 'destroy')}
                                         />
                                         <ActionBtn
-                                            label="Refresh" icon="🔄" variant="blue"
+                                            label="Refresh" icon="&#8635;" variant="blue"
                                             disabled={isBusy}
                                             onClick={() => handleAction(stack.id, 'refresh')}
                                         />
                                         <ActionBtn
-                                            label="Preview" icon="👁️" variant="purple"
+                                            label="Preview" icon="&#128065;" variant="purple"
                                             disabled={isBusy}
                                             onClick={() => handleAction(stack.id, 'preview')}
                                         />
+
+                                        {/* Force Destroy — shown for emulation stacks in stuck/live-resource states */}
+                                        {stack.emulation_type && EMULATION_DESTROYABLE.has(stack.status) && (
+                                            <>
+                                                <div className="w-px h-6 bg-border mx-1" />
+                                                {confirmForceDestroyId === stack.id ? (
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="font-mono text-[9px] text-orange-400 mr-1">Destroy AWS resources?</span>
+                                                        <button
+                                                            onClick={() => handleForceDestroy(stack)}
+                                                            className="px-2.5 py-1.5 rounded-[6px] font-mono text-[10px] font-bold cursor-pointer border-none
+                                                                bg-orange-500 text-white transition-all hover:shadow-[0_0_15px_rgba(249,115,22,0.4)]"
+                                                        >
+                                                            Confirm
+                                                        </button>
+                                                        <button
+                                                            onClick={() => setConfirmForceDestroyId(null)}
+                                                            className="px-2 py-1.5 rounded-[6px] font-mono text-[10px] cursor-pointer
+                                                                bg-transparent border border-border text-content-dim hover:text-content-primary transition-colors"
+                                                        >
+                                                            &#10005;
+                                                        </button>
+                                                    </div>
+                                                ) : (
+                                                    <button
+                                                        onClick={() => setConfirmForceDestroyId(stack.id)}
+                                                        disabled={stack.status === 'destroying'}
+                                                        title="Force-destroy emulation stack and all AWS resources"
+                                                        className="px-3 py-1.5 rounded-[6px] font-mono text-[10px] font-medium cursor-pointer
+                                                            bg-transparent border border-orange-500/30 text-orange-400 transition-all
+                                                            hover:border-orange-500/60 hover:bg-orange-500/[0.08] hover:shadow-[0_0_12px_rgba(249,115,22,0.2)]
+                                                            disabled:opacity-30 disabled:cursor-not-allowed"
+                                                    >
+                                                        &#9889; Force Destroy
+                                                    </button>
+                                                )}
+                                            </>
+                                        )}
+
                                         <div className="w-px h-6 bg-border mx-1" />
                                         {confirmDeleteId === stack.id ? (
                                             <div className="flex items-center gap-1.5">
@@ -394,7 +508,7 @@ export function StacksPage() {
                                                     className="px-2 py-1.5 rounded-[6px] font-mono text-[10px] cursor-pointer
                             bg-transparent border border-border text-content-dim hover:text-content-primary transition-colors"
                                                 >
-                                                    ✕
+                                                    &#10005;
                                                 </button>
                                             </div>
                                         ) : (
@@ -407,7 +521,7 @@ export function StacksPage() {
                           hover:border-danger/30 hover:text-danger hover:bg-danger/[0.06]
                           disabled:opacity-30 disabled:cursor-not-allowed"
                                             >
-                                                ✕ Delete
+                                                &#10005; Delete
                                             </button>
                                         )}
                                     </div>
@@ -425,20 +539,39 @@ export function StacksPage() {
                                 {/* Expanded details */}
                                 {isExpanded && (
                                     <div className="bg-surface-base border border-border border-t-0 rounded-b-card px-6 py-4 -mt-1 animate-slideUp">
-                                        <div className="font-mono text-[10px] tracking-[1.5px] text-content-dim uppercase mb-3 flex items-center gap-2">
-                                            Stack Details
-                                            <div className="flex-1 h-px bg-border" />
+                                        {/* Tab bar */}
+                                        <div className="flex items-center gap-1 mb-4">
+                                            <DetailTab
+                                                label="Details"
+                                                active={detailView === 'details'}
+                                                onClick={() => setDetailView('details')}
+                                            />
+                                            <DetailTab
+                                                label="Resource Graph"
+                                                active={detailView === 'graph'}
+                                                onClick={() => setDetailView('graph')}
+                                            />
+                                            <div className="flex-1 h-px bg-border ml-2" />
                                         </div>
-                                        <div className="grid grid-cols-2 gap-x-8 gap-y-3">
-                                            <DetailRow label="Stack ID" value={stack.id} mono />
-                                            <DetailRow label="Name" value={stack.name} />
-                                            <DetailRow label="Region" value={stack.region} />
-                                            <DetailRow label="Status" value={stack.status.toUpperCase()} valueClass={cfg.color} />
-                                            <DetailRow label="Owner" value={stack.owner} />
-                                            <DetailRow label="Created" value={new Date(stack.created_at).toLocaleString()} />
-                                            <DetailRow label="Updated" value={new Date(stack.updated_at).toLocaleString()} />
-                                            <DetailRow label="Outputs" value={Object.keys(stack.outputs).length > 0 ? JSON.stringify(stack.outputs, null, 2) : '(none)'} mono />
-                                        </div>
+
+                                        {/* Details tab */}
+                                        {detailView === 'details' && (
+                                            <div className="grid grid-cols-2 gap-x-8 gap-y-3">
+                                                <DetailRow label="Stack ID" value={stack.id} mono />
+                                                <DetailRow label="Name" value={stack.name} />
+                                                <DetailRow label="Region" value={stack.region} />
+                                                <DetailRow label="Status" value={stack.status.toUpperCase()} valueClass={cfg.color} />
+                                                <DetailRow label="Owner" value={stack.owner} />
+                                                <DetailRow label="Created" value={new Date(stack.created_at).toLocaleString()} />
+                                                <DetailRow label="Updated" value={new Date(stack.updated_at).toLocaleString()} />
+                                                <DetailRow label="Outputs" value={Object.keys(stack.outputs).length > 0 ? JSON.stringify(stack.outputs, null, 2) : '(none)'} mono />
+                                            </div>
+                                        )}
+
+                                        {/* Resource Graph tab */}
+                                        {detailView === 'graph' && (
+                                            <InfraGraphView stack={stack} />
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -473,6 +606,22 @@ function ActionBtn({
         disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:border-border disabled:hover:bg-transparent disabled:hover:text-content-secondary`}
         >
             {icon} {label}
+        </button>
+    )
+}
+
+/* ── Detail Tab ── */
+function DetailTab({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+    return (
+        <button
+            onClick={onClick}
+            className={`px-3 py-1.5 rounded-[6px] font-mono text-[10px] font-medium cursor-pointer border transition-all
+        ${active
+                    ? 'bg-cyan/[0.1] border-cyan/30 text-cyan'
+                    : 'bg-transparent border-transparent text-content-dim hover:text-content-primary hover:border-border'
+                }`}
+        >
+            {label}
         </button>
     )
 }

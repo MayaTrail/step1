@@ -151,20 +151,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(true)
     setError(null)
     try {
-      const res = await authService.verifyConnector(req)
-      if (res.status === 'error') {
-        setError(res.message ?? 'Verification failed')
-        throw new Error(res.message ?? 'Verification failed')
-      }
+      await authService.verifyConnector(req)
       const refreshed = await authService.refreshUser()
       setUser(refreshed)
     } catch (err: any) {
-      if (!error) setError(err.message ?? 'Connector verification failed')
+      setError(err.message ?? 'Connector verification failed')
       throw err
     } finally {
       setLoading(false)
     }
-  }, [error])
+  }, [])
 
   const activateDemo = useCallback(async () => {
     setLoading(true)

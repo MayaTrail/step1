@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import mayatrailLogo from '@/assets/mayatrail-logo.png'
 import { forgotPassword, resetPassword } from '@/services/auth.service'
+// AuthBackground animations removed — SaaS layout uses clean static design
 
 /*
  * Google Identity Services type declaration.
@@ -36,16 +37,17 @@ declare global {
 
 type AuthTab = 'signin' | 'signup'
 
+/** Root login page — full-screen two-column split layout. */
 export function LoginPage() {
   const [activeTab, setActiveTab] = useState<AuthTab>('signin')
   const [signupSuccess, setSignupSuccess] = useState(false)
   const [formVisible, setFormVisible] = useState(true)
-  const { clearError, googleSSO } = useAuth()
+  const { clearError, googleSSO, error: authError } = useAuth()
   const navigate = useNavigate()
 
+  /** Fades out the form, swaps the active tab, then fades back in. */
   const switchTab = (tab: AuthTab) => {
     if (tab === activeTab) return
-    // Fade out → swap → fade in to avoid the abrupt height jump on tab switch
     setFormVisible(false)
     setTimeout(() => {
       clearError()
@@ -55,6 +57,7 @@ export function LoginPage() {
     }, 120)
   }
 
+  /** Called when sign-up OTP verification completes successfully. */
   const handleSignupComplete = () => {
     setSignupSuccess(true)
     setTimeout(() => {
@@ -64,10 +67,9 @@ export function LoginPage() {
   }
 
   /*
-   * googleSSO handler lives here (parent) so GoogleSignInButton is only ever
-   * mounted once — lifting it out of SignInForm/SignUpForm prevents GIS from
-   * tearing down and re-initialising its iframe on every tab switch, which
-   * was the source of the flicker.
+   * googleSSO handler lives in the parent so GoogleSignInButton is mounted
+   * once — lifting it out of SignInForm/SignUpForm prevents GIS from tearing
+   * down and re-initialising its iframe on every tab switch.
    */
   const handleGoogleCredential = useCallback(async (idToken: string) => {
     clearError()
@@ -85,143 +87,127 @@ export function LoginPage() {
 
   return (
     <div
-      className="min-h-screen flex items-center justify-center overflow-x-hidden relative"
-      style={{ backgroundColor: '#07080a', color: '#f9f9f9', fontFamily: 'Inter, system-ui, sans-serif' }}
+      className="min-h-screen flex items-center justify-center"
+      style={{ backgroundColor: '#07080a', fontFamily: 'Inter, system-ui, sans-serif' }}
     >
-      {/* Background — grid and ambient glows */}
-      <div className="fixed inset-0 pointer-events-none z-0">
-        <div
-          className="absolute inset-0"
-          style={{
-            backgroundImage:
-              'linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px)',
-            backgroundSize: '60px 60px',
-            maskImage: 'radial-gradient(ellipse at center, black 60%, transparent 90%)',
-            WebkitMaskImage: 'radial-gradient(ellipse at center, black 60%, transparent 90%)',
-          }}
-        />
-        {/* Raycast Red ambient glow — punctuation, not dominant */}
-        <div
-          className="absolute w-[700px] h-[700px] rounded-full -top-[200px] -right-[150px]"
-          style={{ background: 'radial-gradient(circle, rgba(255,99,99,0.06) 0%, transparent 70%)' }}
-        />
-        <div
-          className="absolute w-[600px] h-[600px] rounded-full -bottom-[150px] -left-[100px]"
-          style={{ background: 'radial-gradient(circle, rgba(85,179,255,0.04) 0%, transparent 70%)' }}
-        />
-      </div>
+      {/* Subtle grid — static, no animation */}
+      <div
+        className="fixed inset-0 pointer-events-none"
+        style={{
+          backgroundImage:
+            'linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)',
+          backgroundSize: '48px 48px',
+        }}
+      />
 
-      {/* Content — clamp-based widths so the layout scales from 14-inch to 24-inch */}
-      <div className="relative z-[1] flex gap-16 items-center p-8" style={{ width: 'min(1200px, 90vw)' }}>
-
-        {/* Login Card */}
+      {/* ── Two-column card ── */}
+      <div
+        className="relative z-10 flex w-full"
+        style={{
+          maxWidth: 'min(960px, 92vw)',
+          minHeight: '580px',
+          border: '1px solid rgba(255,255,255,0.07)',
+          borderRadius: '16px',
+          overflow: 'hidden',
+          boxShadow: 'rgb(7,8,10) 0px 0px 0px 1px inset, rgba(0,0,0,0.45) 0px 24px 48px',
+        }}
+      >
+        {/* ── Left: Brand panel ── */}
         <div
-          className="shrink-0 relative overflow-hidden"
+          className="flex flex-col justify-between"
           style={{
-            width: 'clamp(400px, 38vw, 520px)',
-            backgroundColor: '#101111',
-            border: '1px solid rgba(255,255,255,0.06)',
-            borderRadius: '16px',
-            boxShadow: 'rgb(27, 28, 30) 0px 0px 0px 1px, rgb(7, 8, 10) 0px 0px 0px 1px inset',
-            padding: '36px 32px 32px',
+            width: '42%',
+            minWidth: '280px',
+            background: '#101111',
+            borderRight: '1px solid rgba(255,255,255,0.06)',
+            padding: '48px 40px',
+            flexShrink: 0,
           }}
         >
-          {/* Top accent line — Raycast Red, hairline */}
-          <div
-            className="absolute top-0 left-0 right-0"
-            style={{ height: '1px', background: 'linear-gradient(90deg, transparent, #FF6363 40%, transparent)' }}
-          />
-
-          {/* Header */}
-          <div className="text-center mb-8">
-            <div className="flex items-center justify-center gap-2.5 mb-3">
-              <img
-                src={mayatrailLogo}
-                alt="MayaTrail"
-                className="w-8 h-8 rounded-lg object-cover"
-              />
-              <span style={{ fontSize: '20px', fontWeight: 600, letterSpacing: '-0.3px', color: '#f9f9f9' }}>
-                MayaTrail
-              </span>
+          {/* Logo + wordmark */}
+          <div>
+            <div className="flex items-center gap-2.5 mb-10">
+              <img src={mayatrailLogo} alt="MayaTrail" style={{ width: '28px', height: '28px', borderRadius: '6px', objectFit: 'cover' }} />
+              <span style={{ fontSize: '16px', fontWeight: 600, letterSpacing: '-0.2px', color: '#f9f9f9' }}>MayaTrail</span>
             </div>
-            <p style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: '#6a6b6c', letterSpacing: '1.5px', textTransform: 'uppercase' }}>
-              APT Emulation Platform
+
+            <h2 style={{ fontSize: '22px', fontWeight: 600, color: '#f9f9f9', lineHeight: 1.3, marginBottom: '10px', letterSpacing: '-0.2px' }}>
+              Adversary emulation,<br />built for security teams.
+            </h2>
+            <p style={{ fontSize: '13px', color: '#6a6b6c', lineHeight: 1.7, letterSpacing: '0.2px', marginBottom: '36px' }}>
+              Simulate real-world APT activity and validate your detection coverage — all in one platform.
             </p>
+
+            {/* Feature list */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {([
+                { icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z', text: 'Guided APT scenario playbooks' },
+                { icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z', text: 'SIEM telemetry & alert correlation' },
+                { icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2', text: 'Full audit trail & compliance logs' },
+              ] as const).map(({ icon, text }) => (
+                <div key={text} className="flex items-start gap-3">
+                  <svg style={{ width: '15px', height: '15px', color: '#FF6363', marginTop: '1px', flexShrink: 0 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d={icon} strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <span style={{ fontSize: '13px', color: '#9c9c9d', letterSpacing: '0.2px', lineHeight: 1.5 }}>{text}</span>
+                </div>
+              ))}
+            </div>
           </div>
 
-          {/* Success Banner */}
+          {/* Bottom disclaimer */}
+          <p style={{ fontSize: '10px', fontFamily: 'Geist Mono, monospace', color: '#434345', letterSpacing: '0.8px', marginTop: '40px' }}>
+            USE ONLY IN ISOLATED TEST ACCOUNTS
+          </p>
+        </div>
+
+        {/* ── Right: Form panel ── */}
+        <div
+          className="flex flex-col justify-center"
+          style={{ flex: 1, background: '#07080a', padding: '48px 44px' }}
+        >
+          {/* Heading */}
+          <h1 style={{ fontSize: '26px', fontWeight: 600, letterSpacing: '-0.3px', color: '#f9f9f9', marginBottom: '4px' }}>
+            {activeTab === 'signin' ? 'Sign in to your account' : 'Create your account'}
+          </h1>
+          <p style={{ fontSize: '13px', color: '#6a6b6c', letterSpacing: '0.2px', marginBottom: '28px' }}>
+            {activeTab === 'signin'
+              ? <>No account? <button type="button" onClick={() => switchTab('signup')} style={{ color: '#FF6363', background: 'none', border: 'none', cursor: 'pointer', fontSize: '13px', padding: 0, fontFamily: 'inherit' }}>Create one →</button></>
+              : <>Already have an account? <button type="button" onClick={() => switchTab('signin')} style={{ color: '#FF6363', background: 'none', border: 'none', cursor: 'pointer', fontSize: '13px', padding: 0, fontFamily: 'inherit' }}>Sign in →</button></>
+            }
+          </p>
+
+          {/* Account verified banner */}
           {signupSuccess && (
             <div
-              className="mb-6 flex items-start gap-3 animate-fadeSlideIn"
-              style={{
-                background: 'rgba(95, 201, 146, 0.08)',
-                border: '1px solid rgba(95, 201, 146, 0.2)',
-                borderRadius: '8px',
-                padding: '12px 14px',
-              }}
+              className="mb-5 flex items-start gap-3"
+              style={{ background: 'rgba(95,201,146,0.07)', border: '1px solid rgba(95,201,146,0.18)', borderRadius: '8px', padding: '11px 14px' }}
             >
-              <svg className="w-4 h-4 mt-0.5 shrink-0" style={{ color: '#5fc992' }} viewBox="0 0 20 20" fill="currentColor">
+              <svg style={{ width: '14px', height: '14px', color: '#5fc992', marginTop: '1px', flexShrink: 0 }} viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
               </svg>
               <div>
                 <p style={{ fontSize: '13px', fontWeight: 600, color: '#5fc992', marginBottom: '2px' }}>Account Verified</p>
-                <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.5 }}>
-                  Your email has been verified. You can now sign in.
-                </p>
+                <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.5 }}>Your email has been verified. Sign in below.</p>
               </div>
             </div>
           )}
 
-          {/* Auth Tabs */}
-          <div
-            className="flex mb-7"
-            style={{ border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px', overflow: 'hidden' }}
-          >
-            <TabButton active={activeTab === 'signin'} onClick={() => switchTab('signin')}>Sign In</TabButton>
-            <TabButton active={activeTab === 'signup'} onClick={() => switchTab('signup')}>Sign Up</TabButton>
-          </div>
-
-          {/* Form area — fade transition on tab switch */}
+          {/* Form area */}
           <div style={{ opacity: formVisible ? 1 : 0, transition: 'opacity 0.12s ease' }}>
             {activeTab === 'signin'
               ? <SignInForm />
               : <SignUpForm onComplete={handleSignupComplete} />
             }
-            {/*
-              GoogleSignInButton lives here, outside both forms, so GIS is
-              initialised once and its iframe never re-mounts on tab switch.
-            */}
+
+            {authError && (
+              <div className="mt-4 mb-2">
+                <ErrorBanner message={authError} />
+              </div>
+            )}
+
             <GoogleSignInButton onCredential={handleGoogleCredential} />
           </div>
-
-          {/* Footer */}
-          <div
-            className="text-center mt-7 pt-5"
-            style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}
-          >
-            <p style={{ fontSize: '10px', fontFamily: 'Geist Mono, monospace', color: '#434345', letterSpacing: '1px' }}>
-              MayaTrail — Use only in isolated test accounts
-            </p>
-          </div>
-        </div>
-
-        {/* Info Panel */}
-        <div className="flex flex-col gap-3 flex-1">
-          <InfoCard
-            title="Adversary Emulation"
-            body="Real-world APT techniques across AWS, GCP, Azure, AI and Kubernetes environments."
-            accent="#FF6363"
-          />
-          <InfoCard
-            title="IR Playbooks"
-            body="Step-by-step incident response guides mapped to each threat actor's behavior."
-            accent="#55b3ff"
-          />
-          <InfoCard
-            title="Detection Engineering"
-            body="SIGMA, KQL, and YARA rules auto-generated from every emulation run."
-            accent="#5fc992"
-          />
         </div>
       </div>
     </div>
@@ -229,15 +215,19 @@ export function LoginPage() {
 }
 
 /* ── Sign In Form ── */
+
+/** Sign-in form with error-state input styling and inline forgot-password flow. */
 function SignInForm() {
   const navigate = useNavigate()
   const { login, loading, error, clearError } = useAuth()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
 
-  // Forgot-password inline flow state
   const [forgotStep, setForgotStep] = useState<'none' | 'email' | 'otp' | 'done'>('none')
   const [resetEmail, setResetEmail] = useState('')
+
+  /** True when AuthContext holds a credential error from a failed login attempt. */
+  const hasError = Boolean(error)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -254,7 +244,6 @@ function SignInForm() {
     }
   }
 
-  // Forgot password → enter email
   if (forgotStep === 'email') {
     return (
       <ForgotPasswordForm
@@ -264,7 +253,6 @@ function SignInForm() {
     )
   }
 
-  // Forgot password → enter OTP + new password
   if (forgotStep === 'otp') {
     return (
       <ResetPasswordOTPForm
@@ -301,58 +289,81 @@ function SignInForm() {
         </div>
       )}
 
+      {/* Username / Email */}
       <FormField label="Username or Email">
-        <input
-          type="text"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          placeholder="you@company.com"
-          required
-          autoComplete="username"
-          style={inputStyle}
-          onFocus={(e) => applyFocusStyle(e.target)}
-          onBlur={(e) => removeFocusStyle(e.target)}
-        />
+        <div className="relative">
+          <input
+            type="text"
+            value={username}
+            onChange={(e) => { setUsername(e.target.value); if (hasError) clearError() }}
+            placeholder="you@company.com"
+            required
+            autoComplete="username"
+            className={`auth-input-solid${hasError ? ' auth-input-error' : ''}`}
+            style={hasError ? { ...inputStyle, paddingRight: '36px' } : inputStyle}
+          />
+          {hasError && <InputErrorIcon />}
+        </div>
       </FormField>
 
-      <FormField label="Password">
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="Enter your password"
-          required
-          autoComplete="current-password"
-          style={inputStyle}
-          onFocus={(e) => applyFocusStyle(e.target)}
-          onBlur={(e) => removeFocusStyle(e.target)}
-        />
-      </FormField>
+      {/* Password — label row includes "Forgot password?" link */}
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center justify-between">
+          <label style={{ fontSize: '11px', fontWeight: 500, color: '#9c9c9d', letterSpacing: '0.3px' }}>
+            Password
+          </label>
+          <button
+            type="button"
+            onClick={() => { clearError(); setForgotStep('email') }}
+            style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: '#FF6363', letterSpacing: '0.3px', background: 'none', border: 'none', cursor: 'pointer', padding: 0, transition: 'opacity 0.15s' }}
+            onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.6')}
+            onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+          >
+            Forgot password?
+          </button>
+        </div>
+        <div className="relative">
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => { setPassword(e.target.value); if (hasError) clearError() }}
+            placeholder="Enter your password"
+            required
+            autoComplete="current-password"
+            className={`auth-input-solid${hasError ? ' auth-input-error' : ''}`}
+            style={hasError ? { ...inputStyle, paddingRight: '36px' } : inputStyle}
+          />
+          {hasError && <InputErrorIcon />}
+        </div>
+      </div>
 
-      <div className="flex items-center justify-between">
+      {/* Remember me */}
+      <div className="flex items-center">
         <label className="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" style={{ accentColor: '#FF6363', width: '13px', height: '13px' }} />
           <span style={{ fontSize: '12px', color: '#9c9c9d' }}>Remember me</span>
         </label>
-        <button
-          type="button"
-          onClick={() => { clearError(); setForgotStep('email') }}
-          style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: '#FF6363', textDecoration: 'none', letterSpacing: '0.3px', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-          onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.6')}
-          onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
-        >
-          Forgot password?
-        </button>
       </div>
 
       {error && <ErrorBanner message={error} />}
 
-      <PrimaryButton type="submit" loading={loading}>Sign In</PrimaryButton>
+      <PrimaryButton type="submit" loading={loading}>
+        <span className="flex items-center gap-1">
+          Authenticate
+          {!loading && (
+            <svg style={{ width: '16px', height: '16px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M5 12h14M12 5l7 7-7 7" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
+        </span>
+      </PrimaryButton>
     </form>
   )
 }
 
 /* ── Forgot Password — Email Form ── */
+
+/** Step 1 of forgot-password: collect the user's email and send a reset code. */
 function ForgotPasswordForm({ onCodeSent, onBack }: {
   onCodeSent: (email: string) => void
   onBack: () => void
@@ -401,9 +412,8 @@ function ForgotPasswordForm({ onCodeSent, onBack }: {
           placeholder="you@company.com"
           required
           autoComplete="email"
+          className="auth-input-solid"
           style={inputStyle}
-          onFocus={(e) => applyFocusStyle(e.target)}
-          onBlur={(e) => removeFocusStyle(e.target)}
         />
       </FormField>
 
@@ -427,6 +437,8 @@ function ForgotPasswordForm({ onCodeSent, onBack }: {
 }
 
 /* ── Forgot Password — OTP + New Password Form ── */
+
+/** Step 2 of forgot-password: enter the OTP and choose a new password. */
 function ResetPasswordOTPForm({ email, onSuccess, onBack }: {
   email: string
   onSuccess: () => void
@@ -540,7 +552,7 @@ function ResetPasswordOTPForm({ email, onSuccess, onBack }: {
         </p>
       </div>
 
-      {/* OTP digits */}
+      {/* OTP digit inputs */}
       <div className="flex justify-center gap-2" onPaste={handlePaste}>
         {digits.map((digit, i) => (
           <input
@@ -572,7 +584,6 @@ function ResetPasswordOTPForm({ email, onSuccess, onBack }: {
         ))}
       </div>
 
-      {/* New password fields */}
       <FormField label="New Password">
         <input
           type="password"
@@ -582,9 +593,8 @@ function ResetPasswordOTPForm({ email, onSuccess, onBack }: {
           required
           minLength={8}
           autoComplete="new-password"
+          className="auth-input-solid"
           style={inputStyle}
-          onFocus={(e) => applyFocusStyle(e.target)}
-          onBlur={(e) => removeFocusStyle(e.target)}
         />
       </FormField>
 
@@ -596,9 +606,8 @@ function ResetPasswordOTPForm({ email, onSuccess, onBack }: {
           placeholder="Re-enter new password"
           required
           autoComplete="new-password"
+          className="auth-input-solid"
           style={inputStyle}
-          onFocus={(e) => applyFocusStyle(e.target)}
-          onBlur={(e) => removeFocusStyle(e.target)}
         />
       </FormField>
 
@@ -654,10 +663,11 @@ function ResetPasswordOTPForm({ email, onSuccess, onBack }: {
   )
 }
 
-
 /* ── Sign Up Form (multi-step: details → OTP → success) ── */
+
 type SignUpStep = 'details' | 'otp'
 
+/** Sign-up flow: collects invite code, name, email, password, then OTP verify. */
 function SignUpForm({ onComplete }: { onComplete: () => void }) {
   const { signup, verifyOTP, resendOTP, loading, error, clearError } = useAuth()
   const [step, setStep] = useState<SignUpStep>('details')
@@ -714,9 +724,8 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
           placeholder="Enter your invite code"
           required
           autoComplete="off"
+          className="auth-input-solid"
           style={inputStyle}
-          onFocus={(e) => applyFocusStyle(e.target)}
-          onBlur={(e) => removeFocusStyle(e.target)}
         />
       </FormField>
 
@@ -728,9 +737,8 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
           placeholder="Jane Doe"
           required
           autoComplete="name"
+          className="auth-input-solid"
           style={inputStyle}
-          onFocus={(e) => applyFocusStyle(e.target)}
-          onBlur={(e) => removeFocusStyle(e.target)}
         />
       </FormField>
 
@@ -742,9 +750,8 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
           placeholder="you@company.com"
           required
           autoComplete="email"
+          className="auth-input-solid"
           style={inputStyle}
-          onFocus={(e) => applyFocusStyle(e.target)}
-          onBlur={(e) => removeFocusStyle(e.target)}
         />
       </FormField>
 
@@ -757,9 +764,8 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
           required
           minLength={8}
           autoComplete="new-password"
+          className="auth-input-solid"
           style={inputStyle}
-          onFocus={(e) => applyFocusStyle(e.target)}
-          onBlur={(e) => removeFocusStyle(e.target)}
         />
       </FormField>
 
@@ -771,9 +777,8 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
           placeholder="Re-enter password"
           required
           autoComplete="new-password"
+          className="auth-input-solid"
           style={inputStyle}
-          onFocus={(e) => applyFocusStyle(e.target)}
-          onBlur={(e) => removeFocusStyle(e.target)}
         />
       </FormField>
 
@@ -785,6 +790,8 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
 }
 
 /* ── OTP Verification Form ── */
+
+/** Email OTP verification step used during sign-up. */
 function OTPVerificationForm({
   email, loading, error, clearError, verifyOTP, resendOTP, onVerified, onBack,
 }: {
@@ -971,40 +978,96 @@ function OTPVerificationForm({
  *
  * Renders a GIS button using renderButton() into a ref div.
  * Polls for the GIS script to load (up to 3 seconds) before initializing.
+ * Listens to window resize to re-render the button at the correct width when
+ * the card changes size — prevents the Google logo from being clipped on
+ * narrow screens. GIS accepts widths between 200px and 400px.
  * Returns null when VITE_GOOGLE_CLIENT_ID is not set.
  */
 function GoogleSignInButton({ onCredential }: { onCredential: (idToken: string) => void }) {
+  const wrapperRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const initializedRef = useRef(false)
+  const lastWidthRef = useRef<number>(0)
+  const onCredentialRef = useRef(onCredential)
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined
 
+  useEffect(() => { onCredentialRef.current = onCredential })
+
+  /*
+   * Re-render the GIS button only when the window width actually changes.
+   *
+   * ResizeObserver was the original approach, but it watches ANY dimension
+   * change on the wrapper — including the height change caused by GIS loading
+   * its iframe. That triggered a clear→re-render which changed the height
+   * again, creating an infinite loop (flicker). A plain window "resize"
+   * listener fires only when the user resizes the browser window.
+   */
+  const renderBtn = useCallback(() => {
+    if (!containerRef.current || !wrapperRef.current) return
+    if (!window.google?.accounts?.id) return
+    const width = Math.min(400, Math.max(200, wrapperRef.current.offsetWidth))
+    if (width === lastWidthRef.current) return
+    lastWidthRef.current = width
+    containerRef.current.innerHTML = ''
+    window.google.accounts.id.renderButton(containerRef.current, {
+      theme: 'filled_black',
+      size: 'large',
+      width,
+      text: 'continue_with',
+    })
+  }, [])
+
   useEffect(() => {
-    if (!clientId || !containerRef.current) return
+    if (!clientId || !wrapperRef.current) return
 
     let attempts = 0
     const MAX_ATTEMPTS = 30
+    let pollingDone = false
 
     const tryInit = () => {
-      if (!containerRef.current) return
+      if (!containerRef.current || !wrapperRef.current) return
       if (!window.google?.accounts?.id) {
-        attempts += 1
-        if (attempts < MAX_ATTEMPTS) setTimeout(tryInit, 100)
+        if (!pollingDone) {
+          attempts += 1
+          if (attempts < MAX_ATTEMPTS) setTimeout(tryInit, 100)
+          else pollingDone = true
+        }
         return
       }
-      window.google.accounts.id.initialize({
-        client_id: clientId,
-        callback: (response) => onCredential(response.credential),
-        auto_select: false,
-      })
-      window.google.accounts.id.renderButton(containerRef.current, {
-        theme: 'filled_black',
-        size: 'large',
-        width: 336,
-        text: 'continue_with',
-      })
+      pollingDone = true
+      if (!initializedRef.current) {
+        window.google.accounts.id.initialize({
+          client_id: clientId,
+          callback: (response) => onCredentialRef.current(response.credential),
+          auto_select: false,
+        })
+        initializedRef.current = true
+      }
+      lastWidthRef.current = 0
+      renderBtn()
     }
 
     tryInit()
-  }, [clientId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    const gisScript = document.querySelector<HTMLScriptElement>(
+      'script[src*="accounts.google.com/gsi/client"]',
+    )
+    const onScriptLoad = () => tryInit()
+    gisScript?.addEventListener('load', onScriptLoad)
+
+    let resizeTimer: ReturnType<typeof setTimeout>
+    const handleResize = () => {
+      clearTimeout(resizeTimer)
+      resizeTimer = setTimeout(renderBtn, 60)
+    }
+    window.addEventListener('resize', handleResize)
+
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      gisScript?.removeEventListener('load', onScriptLoad)
+      clearTimeout(resizeTimer)
+    }
+  }, [clientId, renderBtn])
 
   if (!clientId) return null
 
@@ -1015,41 +1078,16 @@ function GoogleSignInButton({ onCredential }: { onCredential: (idToken: string) 
         <span style={{ fontSize: '10px', fontFamily: 'Geist Mono, monospace', color: '#434345', letterSpacing: '1px', textTransform: 'uppercase' }}>or</span>
         <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.06)' }} />
       </div>
-      <div ref={containerRef} className="flex justify-center" />
+      <div ref={wrapperRef} style={{ width: '100%', minHeight: '44px' }}>
+        <div ref={containerRef} className="flex justify-center" />
+      </div>
     </div>
   )
 }
 
 /* ── Shared Components ── */
 
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        flex: 1,
-        padding: '9px 0',
-        border: 'none',
-        borderRight: active ? 'none' : '1px solid rgba(255,255,255,0.06)',
-        fontFamily: 'Geist Mono, monospace',
-        fontSize: '11px',
-        fontWeight: 600,
-        letterSpacing: '0.8px',
-        textTransform: 'uppercase',
-        cursor: 'pointer',
-        transition: 'opacity 0.15s',
-        background: active ? 'rgba(255,99,99,0.06)' : 'transparent',
-        color: active ? '#FF6363' : '#6a6b6c',
-      }}
-      onMouseEnter={(e) => { if (!active) e.currentTarget.style.opacity = '0.7' }}
-      onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
-    >
-      {children}
-    </button>
-  )
-}
-
+/** Label + child input wrapper used throughout all form sub-components. */
 function FormField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
@@ -1061,6 +1099,7 @@ function FormField({ label, children }: { label: string; children: React.ReactNo
   )
 }
 
+/** Primary CTA button — solid Raycast Red, rectangular (6px radius), SaaS-style. */
 function PrimaryButton({
   children, type = 'button', loading = false, disabled = false,
 }: {
@@ -1075,12 +1114,12 @@ function PrimaryButton({
       disabled={loading || disabled}
       style={{
         width: '100%',
-        padding: '11px 0',
-        background: 'hsla(0, 0%, 100%, 0.815)',
-        color: '#18191a',
+        padding: '10px 20px',
+        background: '#FF6363',
+        color: '#fff',
         border: 'none',
-        borderRadius: '86px',
-        fontSize: '14px',
+        borderRadius: '6px',
+        fontSize: '13px',
         fontWeight: 600,
         letterSpacing: '0.3px',
         cursor: loading || disabled ? 'not-allowed' : 'pointer',
@@ -1090,22 +1129,23 @@ function PrimaryButton({
         alignItems: 'center',
         justifyContent: 'center',
         gap: '8px',
-        boxShadow: 'rgba(255,255,255,0.05) 0px 1px 0px 0px inset, rgba(255,255,255,0.25) 0px 0px 0px 1px, rgba(0,0,0,0.2) 0px -1px 0px 0px inset',
+        boxShadow: 'rgba(255,99,99,0.25) 0px 1px 0px 0px inset, rgba(0,0,0,0.2) 0px -1px 0px 0px inset',
       }}
-      onMouseEnter={(e) => { if (!loading && !disabled) e.currentTarget.style.opacity = '0.6' }}
+      onMouseEnter={(e) => { if (!loading && !disabled) e.currentTarget.style.opacity = '0.8' }}
       onMouseLeave={(e) => { if (!loading && !disabled) e.currentTarget.style.opacity = '1' }}
     >
       <span>{children}</span>
       {loading && (
         <div
           className="animate-spin"
-          style={{ width: '14px', height: '14px', border: '2px solid rgba(24,25,26,0.3)', borderTopColor: '#18191a', borderRadius: '50%' }}
+          style={{ width: '13px', height: '13px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%' }}
         />
       )}
     </button>
   )
 }
 
+/** Error banner displayed below form fields on authentication failure. */
 function ErrorBanner({ message }: { message: string }) {
   return (
     <div
@@ -1125,55 +1165,45 @@ function ErrorBanner({ message }: { message: string }) {
   )
 }
 
-function InfoCard({ title, body, accent }: { title: string; body: string; accent: string }) {
+/** Small circular error icon positioned absolutely inside an input wrapper. */
+function InputErrorIcon() {
   return (
-    <div
-      className="relative overflow-hidden group"
-      style={{
-        backgroundColor: '#101111',
-        border: '1px solid rgba(255,255,255,0.06)',
-        borderRadius: '12px',
-        padding: '20px 22px',
-        boxShadow: 'rgb(27, 28, 30) 0px 0px 0px 1px, rgb(7, 8, 10) 0px 0px 0px 1px inset',
-        transition: 'border-color 0.3s',
-        cursor: 'default',
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = `${accent}22`
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)'
-      }}
-    >
-      {/* Hover accent hairline */}
-      <div
-        className="absolute top-0 left-0 right-0 opacity-0 group-hover:opacity-100"
-        style={{ height: '1px', background: `linear-gradient(90deg, transparent, ${accent}, transparent)`, transition: 'opacity 0.3s' }}
-      />
-      {/* Accent dot */}
-      <div
-        className="w-1.5 h-1.5 rounded-full mb-3"
-        style={{ background: accent, boxShadow: `0 0 8px ${accent}66` }}
-      />
-      <p style={{ fontSize: '13px', fontWeight: 600, color: '#f9f9f9', marginBottom: '6px', letterSpacing: '-0.1px' }}>
-        {title}
-      </p>
-      <p style={{ fontSize: '13px', fontWeight: 400, color: '#9c9c9d', lineHeight: 1.6, letterSpacing: '0.2px' }}>
-        {body}
-      </p>
+    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+      <svg
+        style={{ width: '16px', height: '16px', color: '#FF6363' }}
+        viewBox="0 0 24 24"
+        fill="currentColor"
+      >
+        <path
+          fillRule="evenodd"
+          d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zM12 8.25a.75.75 0 01.75.75v3.75a.75.75 0 01-1.5 0V9a.75.75 0 01.75-.75zm0 8.25a.75.75 0 100-1.5.75.75 0 000 1.5z"
+          clipRule="evenodd"
+        />
+      </svg>
     </div>
   )
 }
 
 /* ── Input style helpers ── */
 
+/*
+ * Solid surface is painted via a layered inset box-shadow (1000px inset of
+ * SURFACE) on top of the explicit backgroundColor. The shadow technique is
+ * the same one used to defeat Chrome's autofill background injection — it
+ * also defeats Dark Reader and any low-specificity stylesheet that tries to
+ * force the input transparent. SURFACE matches the design system's
+ * Surface 100 (#101111) so inputs read as elevated cards on the #07080a page.
+ */
+const SURFACE = '#1b1c1e'
+const SURFACE_SHADOW = `${SURFACE} 0px 0px 0px 1000px inset`
+
 const inputStyle: React.CSSProperties = {
   width: '100%',
-  background: '#07080a',
+  backgroundColor: SURFACE,
   border: '1px solid rgba(255,255,255,0.08)',
   borderRadius: '8px',
   padding: '10px 14px',
-  color: '#f9f9f9',
+  color: 'rgb(249, 249, 249)',
   fontSize: '13px',
   fontWeight: 500,
   fontFamily: 'Inter, system-ui, sans-serif',
@@ -1181,14 +1211,8 @@ const inputStyle: React.CSSProperties = {
   outline: 'none',
   transition: 'border-color 0.15s, box-shadow 0.15s',
   boxSizing: 'border-box',
+  boxShadow: SURFACE_SHADOW,
+  WebkitAppearance: 'none',
+  appearance: 'none',
 }
 
-function applyFocusStyle(el: HTMLInputElement) {
-  el.style.borderColor = 'rgba(85, 179, 255, 0.4)'
-  el.style.boxShadow = 'hsla(202, 100%, 67%, 0.12) 0px 0px 0px 3px'
-}
-
-function removeFocusStyle(el: HTMLInputElement) {
-  el.style.borderColor = 'rgba(255,255,255,0.08)'
-  el.style.boxShadow = 'none'
-}
