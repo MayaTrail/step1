@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MayaTrail - Scenarios</title>
+<link rel="stylesheet" href="mayatrail-base.css" />
+<style>
+  /* ============== FILTERS ============== */
+  .filters {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 14px 0 0;
+    margin-top: 28px;
+    border-top: 1px solid var(--rule);
+  }
+  .filters .lbl {
+    font-family: var(--mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.16em;
+    color: var(--ink-3);
+    margin-right: 10px;
+  }
+  .filters .chip {
+    font-family: var(--mono); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.12em;
+    padding: 5px 11px;
+    border: 1px solid var(--rule-2);
+    background: transparent;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .filters .chip:hover { color: var(--ink); border-color: var(--ink-3); }
+  .filters .chip.active { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+
+  /* ============== CATALOGUE ============== */
+  .catalogue {
+    border: 1px solid var(--rule-2);
+    background: var(--bg-1);
+    margin: 40px 0 80px;
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 180px 1fr 380px;
+    border-bottom: 1px solid var(--rule);
+    transition: background 0.15s;
+  }
+  .row:last-child { border-bottom: 0; }
+  .row:hover { background: var(--bg-2); }
+
+  .row .meta {
+    padding: 30px 28px;
+    border-right: 1px solid var(--rule);
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .row .meta .num {
+    font-family: var(--mono); font-size: 12px; font-weight: 600;
+    color: var(--ink); letter-spacing: 0.1em;
+  }
+  .row .meta .num .hash { color: var(--cool); margin-right: 6px; }
+  .row .meta .ttf {
+    margin-top: auto;
+    font-family: var(--sans); font-size: 13px;
+    color: var(--ink-3);
+  }
+  .row .meta .ttf b {
+    display: block;
+    font-family: var(--sans); font-size: 26px; font-weight: 600;
+    color: var(--ink); letter-spacing: -0.02em;
+    margin-bottom: 2px;
+  }
+
+  .row .center {
+    padding: 30px 32px;
+    border-right: 1px solid var(--rule);
+  }
+  .row .center .title {
+    font-family: var(--sans); font-size: 22px; font-weight: 600;
+    line-height: 1.2; letter-spacing: -0.015em;
+    color: var(--ink); margin: 0 0 10px;
+  }
+  .row .center .desc {
+    font-family: var(--sans); font-size: 14.5px; line-height: 1.6;
+    color: var(--ink-2); margin: 0 0 16px; max-width: 520px;
+  }
+  .row .center .mitre {
+    display: flex; gap: 6px; flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+  .row .center .cta {
+    display: flex; align-items: center; gap: 14px;
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+  }
+  .row .center .cta a {
+    color: var(--ink-2); text-decoration: none;
+    display: inline-flex; align-items: center; gap: 6px;
+    transition: color 0.15s;
+  }
+  .row .center .cta a:hover { color: var(--cool); }
+  .row .center .cta .run { color: var(--cool); }
+
+  /* mini chain diagram on the right */
+  .row .chain {
+    padding: 30px 28px;
+    background: var(--bg);
+    position: relative;
+  }
+  .chain-stage {
+    display: flex; flex-direction: column; gap: 0;
+    font-family: var(--mono); font-size: 10.5px;
+  }
+  .step {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0;
+  }
+  .step .ord {
+    width: 22px; height: 22px;
+    border: 1px solid var(--rule-2);
+    color: var(--ink-3);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 600;
+    flex-shrink: 0;
+  }
+  .step .b {
+    flex: 1;
+    border: 1px solid var(--rule-2);
+    background: var(--bg-1);
+    padding: 6px 10px;
+    color: var(--ink-2);
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .step .api {
+    font-family: var(--mono);
+    color: var(--ink); font-size: 10px;
+    text-transform: none; letter-spacing: 0;
+    display: block;
+    margin-top: 2px;
+    opacity: 0.7;
+  }
+  .step.hot .b { border-color: var(--hot); color: var(--hot); background: rgba(255,75,110,0.06); }
+  .step.hot .ord { border-color: var(--hot); color: var(--hot); }
+  .step.warm .b { border-color: var(--warm); color: var(--warm); background: rgba(245,180,84,0.06); }
+  .step.warm .ord { border-color: var(--warm); color: var(--warm); }
+  .step.cool .b { border-color: var(--cool); color: var(--cool); background: rgba(106,168,255,0.06); }
+  .step.cool .ord { border-color: var(--cool); color: var(--cool); }
+
+  .step-arrow {
+    height: 14px; width: 1px; margin-left: 11px;
+    background: linear-gradient(180deg, var(--rule-2), transparent);
+    position: relative;
+  }
+  .step-arrow::after {
+    content: ''; position: absolute;
+    bottom: 0; left: 50%; transform: translateX(-50%);
+    border-left: 3px solid transparent;
+    border-right: 3px solid transparent;
+    border-top: 4px solid var(--rule-2);
+  }
+
+  /* ============== FOOT CTA ============== */
+  .foot-cta {
+    border: 1px solid var(--rule-2);
+    padding: 36px 40px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 30px; align-items: center;
+    background:
+      radial-gradient(ellipse 600px 200px at 30% 50%, rgba(106,168,255,0.05), transparent 70%),
+      var(--bg-1);
+  }
+  .foot-cta h3 {
+    font-family: var(--sans); font-weight: 600;
+    font-size: 24px; letter-spacing: -0.02em;
+    margin: 0 0 6px;
+  }
+  .foot-cta p { font-family: var(--sans); font-size: 14.5px; color: var(--ink-2); margin: 0; }
+
+  @media (max-width: 1080px) {
+    .row { grid-template-columns: 140px 1fr; }
+    .row .chain { grid-column: 1 / -1; border-right: 0; border-top: 1px solid var(--rule); }
+    .row .center { border-right: 0; }
+  }
+  @media (max-width: 720px) {
+    .row { grid-template-columns: 1fr; }
+    .row .meta { border-right: 0; border-bottom: 1px solid var(--rule); flex-direction: row; align-items: baseline; gap: 16px; }
+    .row .meta .ttf { margin-top: 0; }
+    .row .meta .ttf b { font-size: 18px; }
+    .foot-cta { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<main>
+
+<!-- ============== NAV ============== -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="MayaTrail Landing.html"><span class="mark"></span> MAYATRAIL</a>
+    <div class="nav-links">
+      <a href="MayaTrail Scenarios.html" class="active">Scenarios</a>
+      <a href="MayaTrail Coverage.html">Coverage</a>
+      <a href="MayaTrail Research.html">Research</a>
+      <a>Docs</a>
+      <a>Pricing</a>
+    </div>
+    <div class="nav-readout">
+      <span class="stat">v0.4.1 · operational</span>
+    </div>
+    <a class="nav-cta">Request access</a>
+  </div>
+</nav>
+
+<!-- ============== CONSOLE + PAGE HEAD ============== -->
+<div class="console">
+  <div class="console-bar">
+    <span class="lbl">CATALOGUE</span><span class="sep">·</span>
+    <span>6 chains · 28 techniques</span><span class="sep">·</span>
+    <span>last commit · ab12fc · 2 days ago</span>
+    <div class="right">
+      <span class="pulse"></span>
+      <span>peer-reviewed · open source</span>
+    </div>
+  </div>
+
+  <section class="page-head">
+    <div class="eyebrow">Attack catalogue</div>
+    <h1 class="h-1">Six chains. <span class="em">Every step published, audited, reproducible.</span></h1>
+    <p class="lede">
+      Each scenario is a Pulumi stack, a peer-reviewed boto3 module, and a runnable chain.
+      We publish the technique map, the CloudTrail it produces, and the detection rule that
+      should catch it.
+    </p>
+
+    <div class="filters">
+      <span class="lbl">Filter</span>
+      <button class="chip active">All</button>
+      <button class="chip">Critical</button>
+      <button class="chip">High</button>
+      <button class="chip">Medium</button>
+      <span style="width:1px; height:18px; background:var(--rule-2); margin:0 6px;"></span>
+      <button class="chip">IAM</button>
+      <button class="chip">STS</button>
+      <button class="chip">S3</button>
+      <button class="chip">KMS</button>
+      <button class="chip">Lambda</button>
+      <span style="margin-left:auto; font-family:var(--mono); font-size:10px; letter-spacing:0.14em; text-transform:uppercase; color:var(--ink-3);">sort · severity ▾</span>
+    </div>
+  </section>
+
+  <!-- ============== CATALOGUE ============== -->
+  <div class="catalogue">
+
+    <!-- 01 -->
+    <div class="row">
+      <div class="meta">
+        <div class="num"><span class="hash">§</span>01</div>
+        <span class="sev crit">Critical</span>
+        <div class="ttf"><b>~12s</b>median run</div>
+      </div>
+      <div class="center">
+        <h3 class="title">AttachRolePolicy chain</h3>
+        <p class="desc">A leaked IAM user assumes a role that holds <code style="background:var(--bg-3); padding:1px 5px; color:var(--cool); font-family:var(--mono); font-size:13px;">iam:AttachRolePolicy</code> on itself, then attaches AdministratorAccess. One of the most-seen privilege paths in real breach forensics.</p>
+        <div class="mitre">
+          <span class="tag hot">T1548.005</span>
+          <span class="tag hot">T1098</span>
+          <span class="tag">T1078.004</span>
+          <span class="tag">T1550.001</span>
+        </div>
+        <div class="cta">
+          <a class="run">▶ Run scenario</a>
+          <a>View teardown ↗</a>
+          <a>Detection rule ↗</a>
+        </div>
+      </div>
+      <div class="chain">
+        <div class="chain-stage">
+          <div class="step"><span class="ord">1</span><span class="b">IAM USER <span class="api">u/maint-bot</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step hot"><span class="ord">2</span><span class="b">ROLE assumed <span class="api">sts:AssumeRole</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step hot"><span class="ord">3</span><span class="b">AdminAccess attached <span class="api">iam:AttachRolePolicy</span></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 02 -->
+    <div class="row">
+      <div class="meta">
+        <div class="num"><span class="hash">§</span>02</div>
+        <span class="sev crit">Critical</span>
+        <div class="ttf"><b>~1m04s</b>median run</div>
+      </div>
+      <div class="center">
+        <h3 class="title">KMS-imported ransomware</h3>
+        <p class="desc">Create a new KMS key with external key material, re-encrypt every object in a bucket with it, then drop the import. The data is technically intact and absolutely unreadable. CISA put out an alert in 2024.</p>
+        <div class="mitre">
+          <span class="tag hot">T1486</span>
+          <span class="tag hot">T1485</span>
+          <span class="tag">T1548.005</span>
+          <span class="tag">T1578</span>
+        </div>
+        <div class="cta">
+          <a class="run">▶ Run scenario</a>
+          <a>View teardown ↗</a>
+          <a>Detection rule ↗</a>
+        </div>
+      </div>
+      <div class="chain">
+        <div class="chain-stage">
+          <div class="step warm"><span class="ord">1</span><span class="b">Create external KMS key <span class="api">kms:CreateKey origin=EXTERNAL</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step hot"><span class="ord">2</span><span class="b">Re-encrypt S3 objects <span class="api">s3:CopyObject with new SSE-KMS</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step hot"><span class="ord">3</span><span class="b">Delete imported material <span class="api">kms:DeleteImportedKeyMaterial</span></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 03 -->
+    <div class="row">
+      <div class="meta">
+        <div class="num"><span class="hash">§</span>03</div>
+        <span class="sev high">High</span>
+        <div class="ttf"><b>~42s</b>median run</div>
+      </div>
+      <div class="center">
+        <h3 class="title">S3 enumeration &amp; exfiltration</h3>
+        <p class="desc">List every bucket, identify the readable ones, sweep <code style="background:var(--bg-3); padding:1px 5px; color:var(--cool); font-family:var(--mono); font-size:13px;">GetObject</code> with parallel sessions, exfiltrate to an attacker-controlled bucket in a different region. Matches the Capital One IR pattern.</p>
+        <div class="mitre">
+          <span class="tag hot">T1530</span>
+          <span class="tag hot">T1567.002</span>
+          <span class="tag">T1119</span>
+          <span class="tag">T1580</span>
+        </div>
+        <div class="cta">
+          <a class="run">▶ Run scenario</a>
+          <a>View teardown ↗</a>
+          <a>Detection rule ↗</a>
+        </div>
+      </div>
+      <div class="chain">
+        <div class="chain-stage">
+          <div class="step cool"><span class="ord">1</span><span class="b">List buckets &amp; policies <span class="api">s3:ListAllMyBuckets</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step warm"><span class="ord">2</span><span class="b">Parallel GetObject sweep <span class="api">12 sessions · 4.2 GB</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step hot"><span class="ord">3</span><span class="b">Exfil to attacker bucket <span class="api">s3:PutObject (cross-region)</span></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 04 -->
+    <div class="row">
+      <div class="meta">
+        <div class="num"><span class="hash">§</span>04</div>
+        <span class="sev high">High</span>
+        <div class="ttf"><b>~18s</b>median run</div>
+      </div>
+      <div class="center">
+        <h3 class="title">IAM eventual consistency window</h3>
+        <p class="desc">An access key is revoked, but IAM propagation takes seconds-to-minutes. We race the window - open a session before revocation lands, run a chain of mutations before the cached creds invalidate. Disclosed 2020, still works.</p>
+        <div class="mitre">
+          <span class="tag hot">T1078</span>
+          <span class="tag hot">T1098</span>
+          <span class="tag">T1531</span>
+          <span class="tag">T1528</span>
+        </div>
+        <div class="cta">
+          <a class="run">▶ Run scenario</a>
+          <a>View teardown ↗</a>
+          <a>Detection rule ↗</a>
+        </div>
+      </div>
+      <div class="chain">
+        <div class="chain-stage">
+          <div class="step cool"><span class="ord">1</span><span class="b">Cache valid session <span class="api">boto3.Session before revoke</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step warm"><span class="ord">2</span><span class="b">Trigger revocation <span class="api">iam:DeleteAccessKey</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step hot"><span class="ord">3</span><span class="b">Mutate during window <span class="api">iam:DetachRolePolicy · iam:DeleteRole</span></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 05 -->
+    <div class="row">
+      <div class="meta">
+        <div class="num"><span class="hash">§</span>05</div>
+        <span class="sev med">Medium</span>
+        <div class="ttf"><b>~31s</b>median run</div>
+      </div>
+      <div class="center">
+        <h3 class="title">Service permission mapping</h3>
+        <p class="desc">A precursor, not a payload. We sweep <code style="background:var(--bg-3); padding:1px 5px; color:var(--cool); font-family:var(--mono); font-size:13px;">iam:SimulatePrincipalPolicy</code> across IAM / EC2 / Lambda / RDS / KMS to enumerate exactly which actions a stolen identity can call. Cheap, quiet, hugely valuable to an attacker.</p>
+        <div class="mitre">
+          <span class="tag cool">T1087.004</span>
+          <span class="tag cool">T1580</span>
+          <span class="tag">T1526</span>
+          <span class="tag">T1069.003</span>
+        </div>
+        <div class="cta">
+          <a class="run">▶ Run scenario</a>
+          <a>View teardown ↗</a>
+          <a>Detection rule ↗</a>
+        </div>
+      </div>
+      <div class="chain">
+        <div class="chain-stage">
+          <div class="step cool"><span class="ord">1</span><span class="b">Enumerate principals <span class="api">iam:ListUsers · ListRoles</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step cool"><span class="ord">2</span><span class="b">Simulate per-service <span class="api">iam:SimulatePrincipalPolicy × 47</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step cool"><span class="ord">3</span><span class="b">Build action graph <span class="api">→ ./runs/05/graph.json</span></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 06 -->
+    <div class="row">
+      <div class="meta">
+        <div class="num"><span class="hash">§</span>06</div>
+        <span class="sev high">High</span>
+        <div class="ttf"><b>~27s</b>median run</div>
+      </div>
+      <div class="center">
+        <h3 class="title">CloudTrail blind-spot abuse</h3>
+        <p class="desc">Not every API call lands in CloudTrail. We chain a quiet read (e.g. <code style="background:var(--bg-3); padding:1px 5px; color:var(--cool); font-family:var(--mono); font-size:13px;">sts:GetCallerIdentity</code>) into a non-logged action, then resume normal traffic. The chain is invisible to log-only detections.</p>
+        <div class="mitre">
+          <span class="tag hot">T1556.005</span>
+          <span class="tag">T1078</span>
+          <span class="tag">T1027</span>
+        </div>
+        <div class="cta">
+          <a class="run">▶ Run scenario</a>
+          <a>View teardown ↗</a>
+          <a>Detection rule ↗</a>
+        </div>
+      </div>
+      <div class="chain">
+        <div class="chain-stage">
+          <div class="step cool"><span class="ord">1</span><span class="b">Quiet identity check <span class="api">sts:GetCallerIdentity</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step warm"><span class="ord">2</span><span class="b">Non-logged action <span class="api">(action redacted in catalogue)</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step hot"><span class="ord">3</span><span class="b">Resume normal traffic <span class="api">indistinguishable in trail</span></span></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ============== FOOT CTA ============== -->
+  <div class="foot-cta">
+    <div>
+      <h3>Have a chain we should ship next?</h3>
+      <p>The catalogue is community-driven. Open an RFC on GitHub or email <code style="font-family:var(--mono); color:var(--cool);"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="74061107111506171c3419150d150006151d185a0011171c">[email&#160;protected]</a></code>.</p>
+    </div>
+    <a class="btn">Open an RFC <span class="arrow">→</span></a>
+  </div>
+
+</div>
+
+<footer>
+  <span><b style="color:var(--ink-2)">© 2026 MAYATRAIL TECH</b> · v0.4.1</span>
+  <div class="links">
+    <a href="MayaTrail Landing.html">Landing</a>
+    <a href="MayaTrail Coverage.html">Coverage</a>
+    <a href="MayaTrail Research.html">Research</a>
+    <a>GitHub ↗</a>
+  </div>
+</footer>
+
+</main>
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script></body>
+</html>

@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MayaTrail - Coverage map</title>
+<link rel="stylesheet" href="mayatrail-base.css" />
+<style>
+  /* ============== STAT STRIP ============== */
+  .stat-strip {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border: 1px solid var(--rule-2);
+    background: var(--bg-1);
+    margin-top: 28px;
+  }
+  .stat-strip .col {
+    padding: 24px 24px;
+    border-right: 1px solid var(--rule);
+  }
+  .stat-strip .col:last-child { border-right: 0; }
+  .stat-strip .lbl {
+    font-family: var(--mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.16em;
+    color: var(--ink-3); margin-bottom: 10px;
+  }
+  .stat-strip .v {
+    font-family: var(--sans); font-weight: 600;
+    font-size: 36px; letter-spacing: -0.02em;
+    color: var(--ink);
+    line-height: 1;
+  }
+  .stat-strip .v.cool { color: var(--cool); }
+  .stat-strip .v.hot  { color: var(--hot); }
+  .stat-strip .sub {
+    font-family: var(--mono); font-size: 11px;
+    color: var(--ink-3); margin-top: 8px;
+  }
+
+  /* ============== TABS ============== */
+  .tabs {
+    display: flex; gap: 0;
+    border-bottom: 1px solid var(--rule);
+    margin-top: 30px;
+  }
+  .tabs button {
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    background: transparent; color: var(--ink-3);
+    border: 0; padding: 14px 22px;
+    cursor: pointer;
+    transition: color 0.15s;
+    position: relative;
+  }
+  .tabs button:hover { color: var(--ink); }
+  .tabs button.active {
+    color: var(--ink);
+  }
+  .tabs button.active::after {
+    content: ''; position: absolute;
+    bottom: -1px; left: 22px; right: 22px;
+    height: 2px; background: var(--cool);
+  }
+  .tabs .right {
+    margin-left: auto; padding: 14px 0;
+    font-family: var(--mono); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.12em;
+    color: var(--ink-3);
+  }
+
+  /* ============== MATRIX ============== */
+  .matrix {
+    border: 1px solid var(--rule-2);
+    margin: 32px 0;
+    background: var(--bg-1);
+  }
+  .matrix-head {
+    display: grid; grid-template-columns: 120px repeat(8, 1fr);
+    border-bottom: 1px solid var(--rule);
+    background: var(--bg-2);
+  }
+  .matrix-head .corner {
+    padding: 12px 14px;
+    font-family: var(--mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--ink-3); font-weight: 600;
+    border-right: 1px solid var(--rule);
+  }
+  .matrix-head .col {
+    padding: 12px 14px;
+    font-family: var(--mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.12em;
+    color: var(--ink-3); font-weight: 600;
+    border-right: 1px solid var(--rule);
+    text-align: left;
+  }
+  .matrix-head .col:last-child { border-right: 0; }
+  .matrix-row {
+    display: grid; grid-template-columns: 120px repeat(8, 1fr);
+    border-bottom: 1px solid var(--rule);
+  }
+  .matrix-row:last-child { border-bottom: 0; }
+  .matrix-row .label {
+    padding: 14px;
+    font-family: var(--mono); font-size: 12px;
+    text-transform: uppercase; letter-spacing: 0.12em;
+    color: var(--ink); font-weight: 600;
+    border-right: 1px solid var(--rule);
+    background: var(--bg-2);
+    display: flex; align-items: center;
+  }
+  .cell {
+    padding: 10px 12px;
+    border-right: 1px solid var(--rule);
+    height: 72px;
+    display: flex; flex-direction: column; justify-content: space-between;
+    font-family: var(--mono); font-size: 10px;
+    cursor: pointer;
+    transition: background 0.15s;
+    position: relative;
+  }
+  .cell:last-child { border-right: 0; }
+  .cell:hover { background: var(--bg-3); }
+  .cell .id {
+    color: var(--ink-3); font-size: 9.5px;
+    letter-spacing: 0.04em;
+  }
+  .cell .heat {
+    height: 6px; width: 100%;
+    background: var(--bg-3);
+    position: relative;
+  }
+  .cell .heat::after {
+    content: ''; position: absolute;
+    inset: 0; right: auto;
+    background: var(--rule-2);
+  }
+  .cell.s4 .id { color: var(--ink); font-weight: 600; }
+  .cell.s4 .heat::after { background: var(--hot); width: 100%; box-shadow: 0 0 10px var(--hot-dim); }
+  .cell.s3 .id { color: var(--ink); }
+  .cell.s3 .heat::after { background: var(--warm); width: 80%; }
+  .cell.s2 .id { color: var(--ink-2); }
+  .cell.s2 .heat::after { background: var(--cool); width: 55%; }
+  .cell.s1 .heat::after { background: var(--ink-3); width: 30%; }
+  .cell.s0 { background: rgba(0,0,0,0.2); }
+  .cell.s0 .id { color: var(--ink-4); opacity: 0.6; }
+  .cell.s0 .heat::after { display: none; }
+
+  .cell .ct {
+    position: absolute; top: 10px; right: 12px;
+    font-size: 9px; color: var(--ink-3);
+    letter-spacing: 0;
+  }
+
+  /* ============== LEGEND ============== */
+  .legend {
+    display: flex; align-items: center; gap: 28px;
+    flex-wrap: wrap;
+    padding: 18px 24px;
+    border: 1px solid var(--rule-2);
+    background: var(--bg-1);
+    margin-top: 18px;
+    font-family: var(--mono); font-size: 10.5px;
+    color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: 0.12em;
+  }
+  .legend .swatch {
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .legend .swatch::before {
+    content: ''; width: 22px; height: 6px;
+    background: var(--rule-2);
+  }
+  .legend .swatch.s4::before { background: var(--hot); box-shadow: 0 0 6px var(--hot-dim); }
+  .legend .swatch.s3::before { background: var(--warm); }
+  .legend .swatch.s2::before { background: var(--cool); }
+  .legend .swatch.s1::before { background: var(--ink-3); }
+  .legend .swatch.s0::before { background: transparent; border: 1px dashed var(--rule-3); }
+
+  /* ============== SERVICE BREAKDOWN ============== */
+  .breakdown {
+    display: grid; grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+    margin: 50px 0 30px;
+  }
+  .service {
+    border: 1px solid var(--rule-2);
+    background: var(--bg-1);
+    padding: 26px 28px;
+  }
+  .service .head {
+    display: flex; align-items: baseline; gap: 12px;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .service .head h3 {
+    font-family: var(--sans); font-weight: 600;
+    font-size: 22px; letter-spacing: -0.015em;
+    margin: 0;
+  }
+  .service .head .pct {
+    margin-left: auto;
+    font-family: var(--mono); font-size: 13px;
+    color: var(--cool); font-weight: 600;
+  }
+  .service .head .sub {
+    font-family: var(--mono); font-size: 10.5px;
+    color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: 0.12em;
+  }
+  .service .techs {
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .service .tech {
+    display: grid; grid-template-columns: 100px 1fr auto;
+    gap: 12px; align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px dashed var(--rule);
+  }
+  .service .tech:last-child { border-bottom: 0; }
+  .service .tech .tid {
+    font-family: var(--mono); font-size: 11px;
+    color: var(--ink-2);
+  }
+  .service .tech .tname {
+    font-family: var(--sans); font-size: 14px;
+    color: var(--ink-2);
+  }
+  .service .tech .tstat {
+    font-family: var(--mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.1em;
+  }
+  .service .tech.shipped .tid { color: var(--ink); }
+  .service .tech.shipped .tstat { color: var(--hot); }
+  .service .tech.partial .tstat { color: var(--warm); }
+  .service .tech.gap .tstat { color: var(--ink-4); }
+
+  /* ============== CTA ============== */
+  .gap-cta {
+    border: 1px solid var(--rule-2);
+    padding: 36px 40px;
+    margin: 30px 0 60px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 30px; align-items: center;
+    background:
+      radial-gradient(ellipse 600px 200px at 30% 50%, rgba(255,75,110,0.05), transparent 70%),
+      var(--bg-1);
+  }
+  .gap-cta h3 {
+    font-family: var(--sans); font-weight: 600;
+    font-size: 22px; letter-spacing: -0.02em;
+    margin: 0 0 6px;
+  }
+  .gap-cta p {
+    font-family: var(--sans); font-size: 14.5px;
+    color: var(--ink-2); margin: 0; max-width: 560px;
+  }
+
+  @media (max-width: 1080px) {
+    .stat-strip { grid-template-columns: 1fr 1fr; }
+    .stat-strip .col { border-right: 0; border-bottom: 1px solid var(--rule); }
+    .breakdown { grid-template-columns: 1fr; }
+    .matrix-head, .matrix-row { grid-template-columns: 90px repeat(8, 1fr); font-size: 9px; }
+    .cell { height: 60px; padding: 8px 8px; }
+  }
+  @media (max-width: 720px) {
+    .matrix { overflow-x: auto; }
+    .matrix-head, .matrix-row { min-width: 720px; }
+    .gap-cta { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<main>
+
+<!-- ============== NAV ============== -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="MayaTrail Landing.html"><span class="mark"></span> MAYATRAIL</a>
+    <div class="nav-links">
+      <a href="MayaTrail Scenarios.html">Scenarios</a>
+      <a href="MayaTrail Coverage.html" class="active">Coverage</a>
+      <a href="MayaTrail Research.html">Research</a>
+      <a>Docs</a>
+      <a>Pricing</a>
+    </div>
+    <div class="nav-readout">
+      <span class="stat">v0.4.1 · operational</span>
+    </div>
+    <a class="nav-cta">Request access</a>
+  </div>
+</nav>
+
+<!-- ============== CONSOLE + PAGE HEAD ============== -->
+<div class="console">
+  <div class="console-bar">
+    <span class="lbl">COVERAGE</span><span class="sep">·</span>
+    <span>MITRE ATT&amp;CK · cloud matrix v14.1</span><span class="sep">·</span>
+    <span>32 of 78 techniques shipped</span>
+    <div class="right">
+      <span class="pulse"></span>
+      <span>refresh weekly · last sync 2d ago</span>
+    </div>
+  </div>
+
+  <section class="page-head">
+    <div class="eyebrow">MITRE ATT&amp;CK · cloud matrix</div>
+    <h1 class="h-1">Coverage isn't a number on a slide. <span class="em">It's a grid we can prove.</span></h1>
+    <p class="lede">
+      The matrix below is the entire cloud-AWS ATT&amp;CK surface, scored against what
+      we can emulate today. Each cell links to its scenario, its CloudTrail signature,
+      and the detection rule that should catch it.
+    </p>
+
+    <div class="stat-strip">
+      <div class="col">
+        <div class="lbl">Techniques shipped</div>
+        <div class="v cool">32</div>
+        <div class="sub">of 78 in the AWS matrix</div>
+      </div>
+      <div class="col">
+        <div class="lbl">Full coverage</div>
+        <div class="v">41<span style="font-size:20px; color:var(--ink-3);">%</span></div>
+        <div class="sub">scored against real CloudTrail</div>
+      </div>
+      <div class="col">
+        <div class="lbl">In-flight</div>
+        <div class="v">14</div>
+        <div class="sub">on the roadmap this quarter</div>
+      </div>
+      <div class="col">
+        <div class="lbl">Critical gaps</div>
+        <div class="v hot">6</div>
+        <div class="sub">unshippped, high-impact</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== TABS ============== -->
+  <div class="tabs">
+    <button class="active">Overall</button>
+    <button>IAM</button>
+    <button>STS</button>
+    <button>S3</button>
+    <button>KMS</button>
+    <button>Lambda</button>
+    <div class="right">view · density ▾</div>
+  </div>
+
+  <!-- ============== MATRIX ============== -->
+  <div class="matrix">
+    <div class="matrix-head">
+      <div class="corner">SERVICE / TACTIC</div>
+      <div class="col">Initial Access</div>
+      <div class="col">Discovery</div>
+      <div class="col">Lateral Mov.</div>
+      <div class="col">Priv-Esc</div>
+      <div class="col">Persist</div>
+      <div class="col">Defense Evas.</div>
+      <div class="col">Collection</div>
+      <div class="col">Impact</div>
+    </div>
+
+    <!-- IAM -->
+    <div class="matrix-row">
+      <div class="label">IAM</div>
+      <div class="cell s3"><span class="id">T1078.004</span><span class="ct">×3</span><div class="heat"></div></div>
+      <div class="cell s4"><span class="id">T1087.004</span><span class="ct">×7</span><div class="heat"></div></div>
+      <div class="cell s3"><span class="id">T1550.001</span><span class="ct">×2</span><div class="heat"></div></div>
+      <div class="cell s4"><span class="id">T1548.005</span><span class="ct">×5</span><div class="heat"></div></div>
+      <div class="cell s4"><span class="id">T1098</span><span class="ct">×4</span><div class="heat"></div></div>
+      <div class="cell s2"><span class="id">T1556.005</span><span class="ct">×2</span><div class="heat"></div></div>
+      <div class="cell s1"><span class="id">T1213.003</span><span class="ct">×1</span><div class="heat"></div></div>
+      <div class="cell s3"><span class="id">T1531</span><span class="ct">×3</span><div class="heat"></div></div>
+    </div>
+
+    <!-- STS -->
+    <div class="matrix-row">
+      <div class="label">STS</div>
+      <div class="cell s2"><span class="id">T1199</span><span class="ct">×1</span><div class="heat"></div></div>
+      <div class="cell s3"><span class="id">T1580</span><span class="ct">×2</span><div class="heat"></div></div>
+      <div class="cell s3"><span class="id">T1078</span><span class="ct">×3</span><div class="heat"></div></div>
+      <div class="cell s2"><span class="id">T1098.001</span><span class="ct">×1</span><div class="heat"></div></div>
+      <div class="cell s3"><span class="id">T1098</span><span class="ct">×2</span><div class="heat"></div></div>
+      <div class="cell s1"><span class="id">T1622</span><span class="ct">×1</span><div class="heat"></div></div>
+      <div class="cell s1"><span class="id">T1119</span><span class="ct">×1</span><div class="heat"></div></div>
+      <div class="cell s2"><span class="id">T1531.001</span><span class="ct">×1</span><div class="heat"></div></div>
+    </div>
+
+    <!-- S3 -->
+    <div class="matrix-row">
+      <div class="label">S3</div>
+      <div class="cell s3"><span class="id">T1530</span><span class="ct">×2</span><div class="heat"></div></div>
+      <div class="cell s3"><span class="id">T1119</span><span class="ct">×2</span><div class="heat"></div></div>
+      <div class="cell s0"><span class="id">-</span><div class="heat"></div></div>
+      <div class="cell s2"><span class="id">T1078</span><span class="ct">×1</span><div class="heat"></div></div>
+      <div class="cell s1"><span class="id">T1136.003</span><span class="ct">×1</span><div class="heat"></div></div>
+      <div class="cell s1"><span class="id">T1027.001</span><span class="ct">×1</span><div class="heat"></div></div>
+      <div class="cell s4"><span class="id">T1567.002</span><span class="ct">×4</span><div class="heat"></div></div>
+      <div class="cell s4"><span class="id">T1485</span><span class="ct">×3</span><div class="heat"></div></div>
+    </div>
+
+    <!-- KMS -->
+    <div class="matrix-row">
+      <div class="label">KMS</div>
+      <div class="cell s0"><span class="id">-</span><div class="heat"></div></div>
+      <div class="cell s2"><span class="id">T1526</span><span class="ct">×1</span><div class="heat"></div></div>
+      <div class="cell s0"><span class="id">-</span><div class="heat"></div></div>
+      <div class="cell s2"><span class="id">T1578</span><span class="ct">×1</span><div class="heat"></div></div>
+      <div class="cell s2"><span class="id">T1098</span><span class="ct">×1</span><div class="heat"></div></div>
+      <div class="cell s1"><span class="id">T1027</span><span class="ct">×1</span><div class="heat"></div></div>
+      <div class="cell s0"><span class="id">-</span><div class="heat"></div></div>
+      <div class="cell s4"><span class="id">T1486</span><span class="ct">×3</span><div class="heat"></div></div>
+    </div>
+
+    <!-- Lambda -->
+    <div class="matrix-row">
+      <div class="label">Lambda</div>
+      <div class="cell s0"><span class="id">-</span><div class="heat"></div></div>
+      <div class="cell s2"><span class="id">T1526</span><span class="ct">×1</span><div class="heat"></div></div>
+      <div class="cell s1"><span class="id">T1525</span><span class="ct">×1</span><div class="heat"></div></div>
+      <div class="cell s2"><span class="id">T1611</span><span class="ct">×1</span><div class="heat"></div></div>
+      <div class="cell s1"><span class="id">T1554</span><span class="ct">×1</span><div class="heat"></div></div>
+      <div class="cell s0"><span class="id">-</span><div class="heat"></div></div>
+      <div class="cell s0"><span class="id">-</span><div class="heat"></div></div>
+      <div class="cell s1"><span class="id">T1499</span><span class="ct">×1</span><div class="heat"></div></div>
+    </div>
+  </div>
+
+  <!-- LEGEND -->
+  <div class="legend">
+    <span style="color:var(--ink-2);">Heat</span>
+    <span class="swatch s4">Shipped · multiple chains</span>
+    <span class="swatch s3">Shipped</span>
+    <span class="swatch s2">In flight</span>
+    <span class="swatch s1">Planned</span>
+    <span class="swatch s0">Out of scope</span>
+    <span style="margin-left:auto;">×N = chains using this technique</span>
+  </div>
+
+  <!-- ============== SERVICE BREAKDOWN ============== -->
+  <div class="breakdown">
+
+    <div class="service">
+      <div class="head">
+        <h3>IAM</h3>
+        <span class="sub">Identity &amp; Access</span>
+        <span class="pct">11 / 18</span>
+      </div>
+      <div class="techs">
+        <div class="tech shipped"><span class="tid">T1548.005</span><span class="tname">Abuse Elevation Control (AttachRolePolicy)</span><span class="tstat">SHIPPED</span></div>
+        <div class="tech shipped"><span class="tid">T1098</span><span class="tname">Account Manipulation</span><span class="tstat">SHIPPED</span></div>
+        <div class="tech shipped"><span class="tid">T1078.004</span><span class="tname">Valid Cloud Accounts</span><span class="tstat">SHIPPED</span></div>
+        <div class="tech shipped"><span class="tid">T1087.004</span><span class="tname">Cloud Account Discovery</span><span class="tstat">SHIPPED</span></div>
+        <div class="tech partial"><span class="tid">T1556.005</span><span class="tname">Modify Authentication Process</span><span class="tstat">IN FLIGHT</span></div>
+        <div class="tech gap"><span class="tid">T1213.003</span><span class="tname">Data from Cloud Repositories</span><span class="tstat">PLANNED</span></div>
+      </div>
+    </div>
+
+    <div class="service">
+      <div class="head">
+        <h3>S3</h3>
+        <span class="sub">Storage</span>
+        <span class="pct">8 / 14</span>
+      </div>
+      <div class="techs">
+        <div class="tech shipped"><span class="tid">T1530</span><span class="tname">Data from Cloud Storage</span><span class="tstat">SHIPPED</span></div>
+        <div class="tech shipped"><span class="tid">T1567.002</span><span class="tname">Exfiltration to Cloud Storage</span><span class="tstat">SHIPPED</span></div>
+        <div class="tech shipped"><span class="tid">T1485</span><span class="tname">Data Destruction</span><span class="tstat">SHIPPED</span></div>
+        <div class="tech shipped"><span class="tid">T1119</span><span class="tname">Automated Collection</span><span class="tstat">SHIPPED</span></div>
+        <div class="tech partial"><span class="tid">T1136.003</span><span class="tname">Create Cloud Account</span><span class="tstat">IN FLIGHT</span></div>
+      </div>
+    </div>
+
+    <div class="service">
+      <div class="head">
+        <h3>KMS</h3>
+        <span class="sub">Key Management</span>
+        <span class="pct">5 / 11</span>
+      </div>
+      <div class="techs">
+        <div class="tech shipped"><span class="tid">T1486</span><span class="tname">Data Encrypted for Impact</span><span class="tstat">SHIPPED</span></div>
+        <div class="tech partial"><span class="tid">T1578</span><span class="tname">Modify Cloud Compute Infrastructure</span><span class="tstat">IN FLIGHT</span></div>
+        <div class="tech partial"><span class="tid">T1098</span><span class="tname">Account Manipulation (KMS Policy)</span><span class="tstat">IN FLIGHT</span></div>
+        <div class="tech gap"><span class="tid">T1027</span><span class="tname">Obfuscated Files (KMS encryption)</span><span class="tstat">PLANNED</span></div>
+      </div>
+    </div>
+
+    <div class="service">
+      <div class="head">
+        <h3>STS</h3>
+        <span class="sub">Token Service</span>
+        <span class="pct">8 / 12</span>
+      </div>
+      <div class="techs">
+        <div class="tech shipped"><span class="tid">T1550.001</span><span class="tname">Application Access Token</span><span class="tstat">SHIPPED</span></div>
+        <div class="tech shipped"><span class="tid">T1078</span><span class="tname">Valid Accounts</span><span class="tstat">SHIPPED</span></div>
+        <div class="tech shipped"><span class="tid">T1580</span><span class="tname">Cloud Infrastructure Discovery</span><span class="tstat">SHIPPED</span></div>
+        <div class="tech partial"><span class="tid">T1199</span><span class="tname">Trusted Relationship</span><span class="tstat">IN FLIGHT</span></div>
+        <div class="tech gap"><span class="tid">T1622</span><span class="tname">Debugger Evasion</span><span class="tstat">PLANNED</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ============== GAP CTA ============== -->
+  <div class="gap-cta">
+    <div>
+      <h3>Map the matrix against <em style="font-family:var(--serif); color:var(--cool); font-weight:400;">your</em> AWS</h3>
+      <p>Bring your CloudTrail or detection ruleset. We'll run a 30-minute readout, flag the techniques your current rules miss, and hand you a per-cell to-do list.</p>
+    </div>
+    <a class="btn">Book a map readout <span class="arrow">→</span></a>
+  </div>
+
+</div>
+
+<footer>
+  <span><b style="color:var(--ink-2)">© 2026 MAYATRAIL TECH</b> · v0.4.1</span>
+  <div class="links">
+    <a href="MayaTrail Landing.html">Landing</a>
+    <a href="MayaTrail Scenarios.html">Scenarios</a>
+    <a href="MayaTrail Research.html">Research</a>
+    <a>GitHub ↗</a>
+  </div>
+</footer>
+
+</main>
+</body>
+</html>

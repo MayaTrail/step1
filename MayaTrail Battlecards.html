@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MayaTrail - Competitor battlecards</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap">
+<link rel="stylesheet" href="mayatrail-base.css">
+
+<style>
+  main { padding-top: 60px; max-width: 1320px; margin: 0 auto; padding-left: 32px; padding-right: 32px; }
+  .nav { position: fixed; top: 0; left: 0; right: 0; }
+
+  .doc-head {
+    padding: 60px 0 30px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 40px;
+  }
+  .doc-head .meta {
+    display: flex; gap: 26px; font-family: var(--mono); font-size: 11.5px;
+    text-transform: uppercase; letter-spacing: 0.16em;
+    color: var(--ink-3); margin-bottom: 22px;
+  }
+  .doc-head .meta b { color: var(--ink-2); }
+  .doc-head h1 {
+    font-family: var(--sans); font-weight: 600; font-size: 56px;
+    line-height: 1.05; letter-spacing: -0.028em; margin: 0;
+    max-width: 900px;
+  }
+  .doc-head h1 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+  .doc-head p {
+    font-family: var(--sans); font-size: 18px; line-height: 1.6;
+    color: var(--ink-2); margin: 22px 0 0; max-width: 800px;
+  }
+  .doc-head p b { color: var(--ink); }
+
+  /* NAV CHIPS */
+  .chip-nav {
+    display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 50px;
+  }
+  .chip-nav a {
+    font-family: var(--mono); font-size: 11.5px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    padding: 6px 12px; border: 1px solid var(--rule-2);
+    color: var(--ink-2); text-decoration: none;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .chip-nav a:hover, .chip-nav a.active { color: var(--cool); border-color: var(--cool); }
+  .chip-nav a .threat {
+    display: inline-block; width: 7px; height: 7px;
+    margin-right: 6px; vertical-align: 1px;
+    border-radius: 50%;
+  }
+  .chip-nav a .threat.h { background: var(--hot); box-shadow: 0 0 6px var(--hot); }
+  .chip-nav a .threat.m { background: var(--warm); }
+  .chip-nav a .threat.l { background: var(--ink-3); }
+
+  /* CARD */
+  .card {
+    border: 1px solid var(--rule-2);
+    background: var(--bg-1);
+    margin-bottom: 30px;
+    overflow: hidden;
+  }
+  .card.threat-h { border-color: var(--hot); }
+  .card.threat-h .card-head { background: linear-gradient(90deg, rgba(255,75,110,0.08), transparent 60%); }
+
+  .card-head {
+    padding: 28px 32px;
+    display: grid; grid-template-columns: 1fr auto;
+    gap: 20px; align-items: end;
+    border-bottom: 1px solid var(--rule);
+  }
+  .card-head .left .meta {
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--ink-3); margin-bottom: 8px;
+    display: flex; gap: 14px;
+  }
+  .card-head .left .meta b { color: var(--ink-2); font-weight: 500; }
+  .card-head .left h2 {
+    font-family: var(--sans); font-size: 40px; font-weight: 600;
+    color: var(--ink); margin: 0; letter-spacing: -0.025em; line-height: 1.05;
+  }
+  .card-head .left h2 .vendor {
+    color: var(--ink-3); font-family: var(--mono); font-size: 14px;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    margin-left: 18px; font-weight: 500;
+  }
+  .card-head .left .tagline {
+    font-family: var(--serif); font-style: italic; font-size: 17px;
+    color: var(--ink-2); margin: 10px 0 0;
+  }
+  .card-head .right {
+    text-align: right;
+    display: flex; flex-direction: column; gap: 4px;
+    font-family: var(--mono); font-size: 11px;
+    color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.16em;
+  }
+  .card-head .right .threat-label { font-weight: 600; }
+  .card-head .right .threat-label.h { color: var(--hot); }
+  .card-head .right .threat-label.m { color: var(--warm); }
+  .card-head .right .threat-label.l { color: var(--ink-3); }
+  .card-head .right .threat-bar {
+    width: 120px; height: 3px; background: var(--bg-3);
+    margin-top: 4px; margin-left: auto;
+  }
+  .card-head .right .threat-bar i {
+    display: block; height: 100%; background: var(--cool);
+  }
+  .card-head .right .threat-bar.h i { background: var(--hot); width: 90%; }
+  .card-head .right .threat-bar.m i { background: var(--warm); width: 55%; }
+  .card-head .right .threat-bar.l i { background: var(--ink-3); width: 20%; }
+
+  /* card body */
+  .card-body {
+    display: grid; grid-template-columns: 1fr 1fr;
+  }
+  .card-body > div { padding: 28px 32px; border-right: 1px solid var(--rule); }
+  .card-body > div:last-child { border-right: 0; }
+
+  .card-body .sec { margin-bottom: 28px; }
+  .card-body .sec:last-child { margin-bottom: 0; }
+  .card-body .sec .h {
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--cool); margin-bottom: 12px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .card-body .sec .h::before {
+    content: ''; width: 14px; height: 1px; background: var(--cool);
+  }
+  .card-body .sec .h.warn { color: var(--warm); }
+  .card-body .sec .h.warn::before { background: var(--warm); }
+  .card-body .sec .h.hot { color: var(--hot); }
+  .card-body .sec .h.hot::before { background: var(--hot); }
+
+  .card-body p {
+    font-family: var(--sans); font-size: 15px; line-height: 1.6;
+    color: var(--ink-2); margin: 0;
+  }
+  .card-body p + p { margin-top: 12px; }
+  .card-body p b { color: var(--ink); font-weight: 600; }
+
+  .card-body ul {
+    margin: 0; padding: 0; list-style: none;
+  }
+  .card-body ul li {
+    font-family: var(--sans); font-size: 14.5px; line-height: 1.55;
+    color: var(--ink-2);
+    padding: 8px 0 8px 22px;
+    border-bottom: 1px dashed var(--rule);
+    position: relative;
+  }
+  .card-body ul li:last-child { border-bottom: 0; }
+  .card-body ul li b { color: var(--ink); font-weight: 600; }
+  .card-body ul li::before {
+    content: '→'; position: absolute; left: 0; color: var(--cool);
+    font-family: var(--mono); font-size: 14px;
+  }
+  .card-body ul.cons li::before { content: '-'; color: var(--warm); }
+
+  /* TWO-COLUMN QUOTE BLOCK */
+  .lines {
+    background: var(--bg);
+    border-top: 1px solid var(--rule);
+    padding: 24px 32px;
+    display: grid; grid-template-columns: 200px 1fr;
+    gap: 24px; align-items: flex-start;
+  }
+  .lines + .lines { border-top: 1px dashed var(--rule); }
+  .lines .l {
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--ink-3);
+  }
+  .lines .r {
+    font-family: var(--serif); font-style: italic; font-size: 18px;
+    line-height: 1.5; color: var(--ink);
+  }
+  .lines .r b { color: var(--cool); font-style: normal; font-family: var(--sans); font-weight: 600; }
+
+  /* AT-A-GLANCE FOOTER */
+  .glance {
+    border-top: 1px solid var(--rule);
+    padding: 20px 32px;
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    background: var(--bg-2);
+  }
+  .glance > div { border-right: 1px solid var(--rule); padding-right: 18px; }
+  .glance > div:last-child { border-right: 0; }
+  .glance .k {
+    font-family: var(--mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--ink-3); margin-bottom: 6px;
+  }
+  .glance .v {
+    font-family: var(--mono); font-size: 13px;
+    color: var(--ink); letter-spacing: 0.04em;
+  }
+
+  footer.doc-foot {
+    margin-top: 60px;
+    padding: 40px 0 60px;
+    border-top: 1px solid var(--rule);
+    font-family: var(--mono); font-size: 11.5px;
+    color: var(--ink-3); letter-spacing: 0.14em; text-transform: uppercase;
+    display: flex; justify-content: space-between;
+  }
+  footer.doc-foot a { color: var(--cool); text-decoration: none; }
+
+  @media (max-width: 980px) {
+    .card-body { grid-template-columns: 1fr; }
+    .card-body > div { border-right: 0; border-bottom: 1px solid var(--rule); }
+    .card-body > div:last-child { border-bottom: 0; }
+    .glance { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<main>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a href="MayaTrail Landing.html" class="brand"><span class="mark"></span> MAYATRAIL</a>
+    <div class="nav-links">
+      <a href="MayaTrail Landing.html">Platform</a>
+      <a href="MayaTrail Run.html">Run</a>
+      <a href="MayaTrail Pitch.html">Pitch</a>
+      <a href="MayaTrail GTM.html">GTM</a>
+      <a href="MayaTrail Pricing.html">Pricing</a>
+      <a class="active">Battlecards</a>
+    </div>
+    <div class="nav-readout"><span class="stat">v0.4.1 · operational</span></div>
+    <a class="nav-cta" style="white-space:nowrap;" href="MayaTrail Run.html">Watch a run</a>
+  </div>
+</nav>
+
+<div class="doc-head">
+  <div class="meta">
+    <span><b>SALES BATTLECARDS</b></span>
+    <span>v1 · MAY 2026</span>
+    <span>INTERNAL · DO NOT DISTRIBUTE</span>
+  </div>
+  <h1>Five competitors. <span class="em">One per card.</span></h1>
+  <p>
+    For founder-led demos. Use the right card before the call. <b>Threat level</b> = how likely they are to take a deal from us, not how good their product is.
+    When in doubt, lead with what MayaTrail does, not with comparisons. We win when buyers understand the output difference.
+  </p>
+</div>
+
+<div class="chip-nav">
+  <a href="#mitigant"><span class="threat h"></span>Mitigant</a>
+  <a href="#stratus"><span class="threat m"></span>Stratus Red Team</a>
+  <a href="#cloudgoat"><span class="threat l"></span>CloudGoat</a>
+  <a href="#pacu"><span class="threat l"></span>Pacu</a>
+  <a href="#atomic"><span class="threat l"></span>Atomic Red Team</a>
+</div>
+
+<!-- =========== MITIGANT =========== -->
+<div class="card threat-h" id="mitigant">
+  <div class="card-head">
+    <div class="left">
+      <div class="meta">
+        <span><b>BERLIN, GERMANY</b></span>
+        <span>FOUNDED 2022</span>
+        <span>SERIES A · ~$5M RAISED</span>
+        <span>CLOSED SOURCE</span>
+      </div>
+      <h2>Mitigant <span class="vendor">closest direct competitor</span></h2>
+      <p class="tagline">"Cloud-native Adversarial Exposure Validation. Validate your detections continuously."</p>
+    </div>
+    <div class="right">
+      <span>THREAT LEVEL</span>
+      <span class="threat-label h">HIGH</span>
+      <div class="threat-bar h"><i></i></div>
+    </div>
+  </div>
+
+  <div class="card-body">
+    <div>
+      <div class="sec">
+        <div class="h">THEIR PITCH</div>
+        <p>
+          Continuous Adversarial Exposure Validation across AWS, Azure, and (planned) GCP. <b>BYOR</b> (bring-your-own-role) safety model, no long-lived keys. <b>Attack Builder</b> UI for composing custom chains. <b>AI-suggested next emulation</b> based on your last run's gaps. Microsoft Sentinel integration with detection content flowing into your SIEM.
+        </p>
+        <p>They sell <b>"validate continuously"</b> as the value frame.</p>
+      </div>
+
+      <div class="sec">
+        <div class="h">WHEN THEY WIN</div>
+        <ul>
+          <li><b>Multi-cloud buyer.</b> Heavy Azure or GCP presence, needs day-one parity.</li>
+          <li><b>SOC operations buyer.</b> Wants a dashboard and integration with their existing SIEM, not a CLI output.</li>
+          <li><b>Enterprise with vendor security questionnaire fatigue.</b> Mitigant is Series A; closed-source; predictable.</li>
+          <li><b>"Continuous validation" budget line.</b> Some companies have explicit CTEM/AEV budget categories Mitigant fits cleanly.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div>
+      <div class="sec">
+        <div class="h">WHEN WE WIN</div>
+        <ul>
+          <li><b>Detection-engineering buyer.</b> Wants to <em>own</em> the rules, not subscribe to them. We ship rules as commits.</li>
+          <li><b>AWS-first depth needed.</b> Buyer cares about AMBERSQUID-specific or Scattered-Spider-specific drills, not generic "lateral movement".</li>
+          <li><b>OSS sophistication.</b> Engineering-led teams that vet by reading source.</li>
+          <li><b>Portable evidence required.</b> Audit, compliance, or air-gap needs that a SaaS dashboard can't serve.</li>
+          <li><b>Price-conscious buyer.</b> Our Team tier is below Mitigant's enterprise floor.</li>
+        </ul>
+      </div>
+
+      <div class="sec">
+        <div class="h hot">DO NOT</div>
+        <ul class="cons">
+          <li>Trash-talk Mitigant in a call. Their product is good; the buyer can tell when you're punching down.</li>
+          <li>Pretend to compete on multi-cloud. We don't, and pretending hurts trust.</li>
+          <li>Out-feature them on dashboards. Different product. Don't drag the conversation into UI comparisons.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="lines">
+    <div class="l">OBJECTION</div>
+    <div class="r">"Mitigant is multi-cloud and we need Azure too."</div>
+  </div>
+  <div class="lines">
+    <div class="l">RESPONSE</div>
+    <div class="r">"<b>Be honest.</b> If you need Azure parity today, Mitigant is the right pick. We're AWS-first and we will not pretend otherwise. If you're &gt;50% AWS and want the deepest catalogue + portable rules, we're a better fit. Should I introduce you to a customer running both?"</div>
+  </div>
+  <div class="lines">
+    <div class="l">OBJECTION</div>
+    <div class="r">"Mitigant does continuous validation - yours is one-shot drills."</div>
+  </div>
+  <div class="lines">
+    <div class="l">RESPONSE</div>
+    <div class="r">"<b>Different by design.</b> Continuous validation is great for the dashboard-buyer. We're built for detection engineers who ship rules - the drill ends when the rule is in your repo. We integrate with your CI/CD, not your SIEM."</div>
+  </div>
+
+  <div class="glance">
+    <div><div class="k">PLATFORMS</div><div class="v">AWS · AZURE · GCP planned</div></div>
+    <div><div class="k">FOUNDED · HQ</div><div class="v">2022 · BERLIN</div></div>
+    <div><div class="k">FUNDING</div><div class="v">~$5M Series A · 2023</div></div>
+    <div><div class="k">SOURCE</div><div class="v">CLOSED · SAAS</div></div>
+  </div>
+</div>
+
+<!-- =========== STRATUS =========== -->
+<div class="card" id="stratus">
+  <div class="card-head">
+    <div class="left">
+      <div class="meta">
+        <span><b>DATADOG · OSS</b></span>
+        <span>FOUNDED 2022</span>
+        <span>APACHE 2.0</span>
+        <span>GO CLI</span>
+      </div>
+      <h2>Stratus Red Team <span class="vendor">datadog OSS · adjacent</span></h2>
+      <p class="tagline">"Granular, actionable adversary emulation for the cloud."</p>
+    </div>
+    <div class="right">
+      <span>THREAT LEVEL</span>
+      <span class="threat-label m">MEDIUM</span>
+      <div class="threat-bar m"><i></i></div>
+    </div>
+  </div>
+
+  <div class="card-body">
+    <div>
+      <div class="sec">
+        <div class="h">THEIR PITCH</div>
+        <p>
+          Open-source Go CLI by Christophe Tafani-Dereeper (DataDog). <b>Atomic technique testing</b> for AWS, Azure, GCP, Kubernetes. Tagged with MITRE ATT&amp;CK. <b>~50 techniques</b>, each runnable with one command, idempotent, with cleanup. Mature OSS, well-engineered, well-loved by detection engineers.
+        </p>
+      </div>
+
+      <div class="sec">
+        <div class="h">WHEN THEY WIN</div>
+        <ul>
+          <li><b>Unit-testing-style detection work.</b> "Did my rule fire on a single CreateAccessKey call?"</li>
+          <li><b>Buyer wants free, well-maintained OSS, no commercial conversation.</b></li>
+          <li><b>DataDog SIEM customer.</b> Tight integration loop with the rest of their stack.</li>
+          <li><b>Multi-cloud parity on day one</b> (they ship AWS + Azure + GCP).</li>
+        </ul>
+      </div>
+    </div>
+
+    <div>
+      <div class="sec">
+        <div class="h">WHEN WE WIN</div>
+        <ul>
+          <li><b>Buyer wants APT chains, not atomic tests.</b> Stratus runs one technique; we chain 8-15 across services.</li>
+          <li><b>Buyer wants detection content shipped with the run.</b> Stratus produces stdout/logs only; we ship Sigma rules as artifacts.</li>
+          <li><b>Audit/compliance evidence needed.</b> Stratus has no signer or evidence bundle.</li>
+          <li><b>Buyer wants hosted workspace + adapters.</b> Stratus is CLI-only.</li>
+          <li><b>Buyer wants APT-named editorial.</b> Stratus is technique-named; we are APT-named.</li>
+        </ul>
+      </div>
+
+      <div class="sec">
+        <div class="h warn">POSITIONING</div>
+        <p>
+          <b>Complementary, not competing.</b> A sophisticated buyer often uses both. Stratus for unit testing during rule authoring, MayaTrail for chain-level drills + evidence. We can credibly say: <em>"Use Stratus for atomic tests; use us when you need the chain."</em>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div class="lines">
+    <div class="l">OBJECTION</div>
+    <div class="r">"We already use Stratus Red Team. Why MayaTrail?"</div>
+  </div>
+  <div class="lines">
+    <div class="l">RESPONSE</div>
+    <div class="r">"<b>Great choice for atomic tests.</b> Stratus runs a single technique end-to-end. When your team needs to test whether a 13-step APT chain fires - AMBERSQUID, Scattered Spider - that's where we slot in. Some teams use both: Stratus for unit testing, MayaTrail for chain-level drills."</div>
+  </div>
+  <div class="lines">
+    <div class="l">OBJECTION</div>
+    <div class="r">"Why pay if Stratus is free and works?"</div>
+  </div>
+  <div class="lines">
+    <div class="l">RESPONSE</div>
+    <div class="r">"<b>Don't pay if it works.</b> Our OSS engine + 6 APT chains are free too. The hosted tier is for teams that need the signer, the SIEM adapters, custom chains, or a shared workspace. If Stratus is solving your problem, keep using it."</div>
+  </div>
+
+  <div class="glance">
+    <div><div class="k">PLATFORMS</div><div class="v">AWS · AZURE · GCP · K8s</div></div>
+    <div><div class="k">SOURCE</div><div class="v">APACHE 2.0 · OSS</div></div>
+    <div><div class="k">SCOPE</div><div class="v">~50 atomic techniques</div></div>
+    <div><div class="k">VENDOR</div><div class="v">DATADOG-SPONSORED</div></div>
+  </div>
+</div>
+
+<!-- =========== CLOUDGOAT =========== -->
+<div class="card" id="cloudgoat">
+  <div class="card-head">
+    <div class="left">
+      <div class="meta">
+        <span><b>RHINO SECURITY LABS</b></span>
+        <span>FOUNDED 2018</span>
+        <span>MIT</span>
+        <span>PYTHON</span>
+      </div>
+      <h2>CloudGoat <span class="vendor">vulnerable AWS lab</span></h2>
+      <p class="tagline">"Rhino Security Labs' 'Vulnerable by Design' AWS deployment tool."</p>
+    </div>
+    <div class="right">
+      <span>THREAT LEVEL</span>
+      <span class="threat-label l">LOW</span>
+      <div class="threat-bar l"><i></i></div>
+    </div>
+  </div>
+
+  <div class="card-body">
+    <div>
+      <div class="sec">
+        <div class="h">THEIR PITCH</div>
+        <p>
+          Spin up an intentionally vulnerable AWS environment for hands-on pentest training. <b>10+ scenarios</b> from IAM priv-esc to RCE-on-S3-via-Lambda. Deployed via terraform, designed to be broken into and torn down. <b>CTF flavor.</b>
+        </p>
+      </div>
+
+      <div class="sec">
+        <div class="h">WHEN THEY WIN</div>
+        <ul>
+          <li><b>Security training / education.</b> Bootcamps, university courses, individual learners.</li>
+          <li><b>Red team practice.</b> Internal red teams want a target to break into.</li>
+          <li><b>Free pentest lab need.</b> Buyer wants disposable, intentionally-broken infra.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div>
+      <div class="sec">
+        <div class="h">WHEN WE WIN</div>
+        <ul>
+          <li><b>Detection-engineering buyer.</b> CloudGoat exists to be hacked; MayaTrail exists to test detections. Different deliverable, different buyer.</li>
+          <li><b>Output matters.</b> CloudGoat gives you a CTF flag; we give you Sigma rules.</li>
+          <li><b>Scale.</b> CloudGoat is for one engineer to break; we run drills for full detection teams.</li>
+          <li><b>Audit/compliance evidence.</b> CloudGoat has none.</li>
+        </ul>
+      </div>
+
+      <div class="sec">
+        <div class="h warn">POSITIONING</div>
+        <p>
+          <b>Different category.</b> CloudGoat = vulnerable lab to attack. MayaTrail = attack chain run against a sandbox the tool provisions, with detection content as output. <em>"CloudGoat trains attackers; we equip defenders."</em>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div class="lines">
+    <div class="l">OBJECTION</div>
+    <div class="r">"Isn't this just CloudGoat with more steps?"</div>
+  </div>
+  <div class="lines">
+    <div class="l">RESPONSE</div>
+    <div class="r">"<b>Different goal.</b> CloudGoat is a target you break into - useful for training. We're a drill that grades your existing detection content. We ship the Sigma rules; CloudGoat ships flags. Both have a place; they don't compete."</div>
+  </div>
+
+  <div class="glance">
+    <div><div class="k">PLATFORMS</div><div class="v">AWS</div></div>
+    <div><div class="k">SOURCE</div><div class="v">MIT · OSS</div></div>
+    <div><div class="k">FOCUS</div><div class="v">VULN LAB / CTF</div></div>
+    <div><div class="k">MAINTAINER</div><div class="v">RHINO SECURITY LABS</div></div>
+  </div>
+</div>
+
+<!-- =========== PACU =========== -->
+<div class="card" id="pacu">
+  <div class="card-head">
+    <div class="left">
+      <div class="meta">
+        <span><b>RHINO SECURITY LABS</b></span>
+        <span>FOUNDED 2018</span>
+        <span>BSD</span>
+        <span>PYTHON FRAMEWORK</span>
+      </div>
+      <h2>Pacu <span class="vendor">aws pentest framework</span></h2>
+      <p class="tagline">"The first true open-source AWS exploitation framework."</p>
+    </div>
+    <div class="right">
+      <span>THREAT LEVEL</span>
+      <span class="threat-label l">LOW</span>
+      <div class="threat-bar l"><i></i></div>
+    </div>
+  </div>
+
+  <div class="card-body">
+    <div>
+      <div class="sec">
+        <div class="h">THEIR PITCH</div>
+        <p>
+          The Metasploit of AWS. <b>Operator-driven CLI framework</b> with 30+ "modules" - IAM enumeration, privilege escalation, evasion. Designed for offensive operators conducting cloud assessments. Mature, respected in the pentest community.
+        </p>
+      </div>
+
+      <div class="sec">
+        <div class="h">WHEN THEY WIN</div>
+        <ul>
+          <li><b>Pentest team / red team buyer.</b> Wants an offensive toolkit, not a defensive product.</li>
+          <li><b>Consulting engagements.</b> Pacu is the standard tool for AWS engagements.</li>
+          <li><b>Long-lived key scenario.</b> Some Pacu modules expect long-lived IAM credentials (where ours uses STS).</li>
+        </ul>
+      </div>
+    </div>
+
+    <div>
+      <div class="sec">
+        <div class="h">WHEN WE WIN</div>
+        <ul>
+          <li><b>Detection engineer buyer.</b> Pacu is operator-driven; we're scripted-and-replayable.</li>
+          <li><b>Reproducibility needed.</b> Pacu runs depend on the human; ours are byte-identical run-to-run.</li>
+          <li><b>Evidence package.</b> Pacu produces session logs; we produce hash-chained bundles.</li>
+          <li><b>Detection content output.</b> Pacu doesn't ship Sigma rules.</li>
+          <li><b>Safety transparency.</b> We're STS-scoped + Pulumi destroy; Pacu uses long-lived keys.</li>
+        </ul>
+      </div>
+
+      <div class="sec">
+        <div class="h warn">POSITIONING</div>
+        <p>
+          <b>Different buyer entirely.</b> Pacu sells to pentesters; we sell to detection engineers. <em>"Pacu is offensive; we're a drill for defenders."</em> Don't confuse them in conversation - they serve completely different workflows.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div class="lines">
+    <div class="l">OBJECTION</div>
+    <div class="r">"We have a red team using Pacu - why a second tool?"</div>
+  </div>
+  <div class="lines">
+    <div class="l">RESPONSE</div>
+    <div class="r">"<b>Your red team should keep Pacu.</b> They're solving a different problem - manual exploitation. We're for your detection engineers to run scripted, repeatable drills. Different teams, different workflows, complementary. Many shops run both."</div>
+  </div>
+
+  <div class="glance">
+    <div><div class="k">PLATFORMS</div><div class="v">AWS</div></div>
+    <div><div class="k">SOURCE</div><div class="v">BSD · OSS</div></div>
+    <div><div class="k">FOCUS</div><div class="v">PENTEST FRAMEWORK</div></div>
+    <div><div class="k">BUYER</div><div class="v">RED TEAM / OFFENSIVE</div></div>
+  </div>
+</div>
+
+<!-- =========== ATOMIC RED TEAM =========== -->
+<div class="card" id="atomic">
+  <div class="card-head">
+    <div class="left">
+      <div class="meta">
+        <span><b>RED CANARY</b></span>
+        <span>FOUNDED 2018</span>
+        <span>MIT</span>
+        <span>POWERSHELL / YAML</span>
+      </div>
+      <h2>Atomic Red Team <span class="vendor">red canary OSS · host-focused</span></h2>
+      <p class="tagline">"Library of simple, focused tests aligned with MITRE ATT&amp;CK."</p>
+    </div>
+    <div class="right">
+      <span>THREAT LEVEL</span>
+      <span class="threat-label l">LOW</span>
+      <div class="threat-bar l"><i></i></div>
+    </div>
+  </div>
+
+  <div class="card-body">
+    <div>
+      <div class="sec">
+        <div class="h">THEIR PITCH</div>
+        <p>
+          The biggest open library of <b>atomic technique tests</b>, organized by MITRE ATT&amp;CK. <b>~1,500 tests</b> across Windows, Linux, macOS, with some cloud coverage added later. Each test is a YAML file + script, easy to run, easy to extend. <b>The de-facto standard</b> for on-host atomic emulation.
+        </p>
+      </div>
+
+      <div class="sec">
+        <div class="h">WHEN THEY WIN</div>
+        <ul>
+          <li><b>Endpoint-detection buyer.</b> Their bread-and-butter is host-level technique testing.</li>
+          <li><b>Atomic-test workflow already in place.</b> Many SOCs have CI pipelines around Atomic.</li>
+          <li><b>Free, free, free.</b> Massive library, zero cost, no upgrade pressure.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div>
+      <div class="sec">
+        <div class="h">WHEN WE WIN</div>
+        <ul>
+          <li><b>Cloud-shaped attack.</b> Atomic is on-host; cloud APT chains live on the control plane.</li>
+          <li><b>APT-named chain requested.</b> Atomic is technique-named; we're APT-named.</li>
+          <li><b>Detection content as output.</b> Atomic doesn't ship Sigma rules with tests.</li>
+          <li><b>Signed evidence bundle.</b> Atomic is logs-only.</li>
+          <li><b>Cloud-native team that doesn't want host-shaped tooling.</b></li>
+        </ul>
+      </div>
+
+      <div class="sec">
+        <div class="h warn">POSITIONING</div>
+        <p>
+          <b>Different category - host vs cloud.</b> Atomic covers what runs on a VM; we cover what runs against the AWS API. <em>"Atomic Red Team for endpoints; MayaTrail for cloud control plane."</em> Don't pretend to replace Atomic; we complement it.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div class="lines">
+    <div class="l">OBJECTION</div>
+    <div class="r">"We use Atomic Red Team. Isn't this the same thing?"</div>
+  </div>
+  <div class="lines">
+    <div class="l">RESPONSE</div>
+    <div class="r">"<b>Different problem.</b> Atomic tests what happens on a host - processes, files, registry. We test what happens at the AWS API layer - CreateRole, AssumeRole, StopLogging. Cloud APTs don't show up on hosts; they show up in CloudTrail. We're the cloud equivalent."</div>
+  </div>
+
+  <div class="glance">
+    <div><div class="k">PLATFORMS</div><div class="v">WIN · MAC · LINUX · partial cloud</div></div>
+    <div><div class="k">SOURCE</div><div class="v">MIT · OSS</div></div>
+    <div><div class="k">SCOPE</div><div class="v">~1,500 atomic tests</div></div>
+    <div><div class="k">FOCUS</div><div class="v">HOST-LEVEL ATOMIC</div></div>
+  </div>
+</div>
+
+<!-- =========== UNIVERSAL OBJECTIONS =========== -->
+<div class="doc-head" style="margin-top: 60px; padding-top: 40px;">
+  <div class="meta">
+    <span><b>UNIVERSAL OBJECTIONS</b></span>
+    <span>USE WITH ANY COMPETITOR</span>
+  </div>
+  <h1 style="font-size: 40px;">Lines that <span class="em">work everywhere.</span></h1>
+</div>
+
+<div class="card">
+  <div class="lines">
+    <div class="l">"WE'LL JUST BUILD IT IN-HOUSE"</div>
+    <div class="r">"You can - many do. The math: a senior detection engineer takes <b>2-3 days per APT chain</b> to research, write, and validate. You'd be in-house six months before you have what we ship Tuesday. Want to see the AMBERSQUID chain?"</div>
+  </div>
+  <div class="lines">
+    <div class="l">"WE NEED MULTI-CLOUD"</div>
+    <div class="r">"<b>Honest answer:</b> we're AWS-first. Azure-light is on the 2027 roadmap. If you're &gt;50% AWS, we're a great fit today. If you need Azure parity now, we'll point you to Mitigant and stay in touch for when AWS depth matters."</div>
+  </div>
+  <div class="lines">
+    <div class="l">"IS THIS SAFE FOR PRODUCTION?"</div>
+    <div class="r">"It <b>never touches production.</b> Sandbox account, STS-only role, Pulumi sandbox spun up per run, one-command destroy with post-condition. We'll walk you through the safety model in 5 minutes."</div>
+  </div>
+  <div class="lines">
+    <div class="l">"WHAT'S YOUR DIFFERENTIATION VS [ANYTHING]?"</div>
+    <div class="r">"<b>Three things.</b> Named APTs not abstract scenarios. Detection rules shipped as evidence not as integration. Open core - the engine and every rule are free forever. Mitigant is the closest competitor and even they don't do all three."</div>
+  </div>
+  <div class="lines">
+    <div class="l">"WHY OPEN-CORE?"</div>
+    <div class="r">"<b>Detection engineers buy from peers, not vendors.</b> If they can read the engine, vet the chains, and run it without paying us a cent, they trust the product. The hosted tier is for teams that need workflow, signer, adapters - not features they could get free."</div>
+  </div>
+  <div class="lines">
+    <div class="l">"WE ALREADY HAVE SOAR (TINES / TORQ / SPLUNK SOAR)"</div>
+    <div class="r">"<b>Different layer.</b> SOAR executes the playbooks you've already written. We <em>author</em> the playbook from a real attack chain - 700+ lines per chain, with AWS CLI queries and containment steps. Drop our playbook into your SOAR and it has something to automate. Complementary, not competing."</div>
+  </div>
+</div>
+
+<footer class="doc-foot">
+  <span>MAYATRAIL · BATTLECARDS · v1 · MAY 2026</span>
+  <span>INTERNAL · <a href="MayaTrail GTM.html">GTM strategy</a> · <a href="MayaTrail Demo Script.html">Demo script</a></span>
+</footer>
+
+</main>
+
+<template id="__bundler_thumbnail" data-bg-color="#06070a">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect x="120" y="230" width="960" height="70" fill="none" stroke="#ff4b6e" stroke-width="3"/>
+    <rect x="120" y="320" width="960" height="70" fill="none" stroke="#f5b454" stroke-width="3"/>
+    <rect x="120" y="410" width="960" height="70" fill="none" stroke="#6c7385" stroke-width="3"/>
+    <text x="600" y="700" text-anchor="middle"
+          font-family="ui-monospace, monospace"
+          font-size="40" letter-spacing="14" font-weight="600"
+          fill="#e8eaf0">BATTLECARDS</text>
+  </svg>
+</template>
+
+</body>
+</html>

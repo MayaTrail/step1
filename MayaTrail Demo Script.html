@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MayaTrail - Demo Script · Founder-led</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap">
+<link rel="stylesheet" href="mayatrail-base.css">
+
+<style>
+  main { padding-top: 60px; max-width: 1080px; margin: 0 auto; padding-left: 32px; padding-right: 32px; }
+  .nav { position: fixed; top: 0; left: 0; right: 0; }
+
+  .doc-head {
+    padding: 60px 0 50px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 50px;
+  }
+  .doc-head .meta {
+    display: flex; gap: 26px; font-family: var(--mono); font-size: 11.5px;
+    text-transform: uppercase; letter-spacing: 0.16em;
+    color: var(--ink-3); margin-bottom: 22px;
+  }
+  .doc-head .meta b { color: var(--ink-2); }
+  .doc-head h1 {
+    font-family: var(--sans); font-weight: 600; font-size: 60px;
+    line-height: 1.05; letter-spacing: -0.028em; margin: 0;
+    max-width: 900px;
+  }
+  .doc-head h1 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+  .doc-head p.lede {
+    font-family: var(--sans); font-size: 19px; line-height: 1.6;
+    color: var(--ink-2); margin: 22px 0 0; max-width: 800px;
+  }
+  .doc-head p.lede b { color: var(--ink); }
+
+  /* TIME META */
+  .meta-row {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border: 1px solid var(--rule); margin-bottom: 50px;
+    background: var(--bg-1);
+  }
+  .meta-row > div { padding: 18px 22px; border-right: 1px solid var(--rule); }
+  .meta-row > div:last-child { border-right: 0; }
+  .meta-row .k {
+    font-family: var(--mono); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--ink-3); margin-bottom: 6px;
+  }
+  .meta-row .v {
+    font-family: var(--sans); font-size: 18px; font-weight: 600;
+    color: var(--ink); letter-spacing: -0.015em;
+  }
+  .meta-row .v .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+
+  /* BEAT BLOCK */
+  .beat {
+    display: grid; grid-template-columns: 140px 1fr;
+    gap: 0;
+    border: 1px solid var(--rule);
+    margin-bottom: 16px;
+    background: var(--bg-1);
+  }
+  .beat .left {
+    padding: 24px 22px;
+    background: var(--bg-2);
+    border-right: 1px solid var(--rule);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .beat .left .t {
+    font-family: var(--mono); font-size: 20px;
+    color: var(--cool); font-weight: 600; letter-spacing: -0.005em;
+  }
+  .beat .left .label {
+    font-family: var(--mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--ink-3);
+  }
+  .beat .left .duration {
+    font-family: var(--mono); font-size: 11px;
+    color: var(--ink-3); letter-spacing: 0.12em; text-transform: uppercase;
+    margin-top: auto;
+  }
+  .beat .body {
+    padding: 24px 28px;
+  }
+  .beat .body h3 {
+    font-family: var(--sans); font-size: 24px; font-weight: 600;
+    color: var(--ink); margin: 0 0 14px; letter-spacing: -0.018em; line-height: 1.2;
+  }
+  .beat .body h3 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+
+  .beat .body .h {
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--cool); margin: 14px 0 8px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .beat .body .h::before { content: ''; width: 14px; height: 1px; background: var(--cool); }
+  .beat .body .h.warn { color: var(--warm); }
+  .beat .body .h.warn::before { background: var(--warm); }
+  .beat .body .h.action { color: var(--ok); }
+  .beat .body .h.action::before { background: var(--ok); }
+
+  .beat .body p {
+    font-family: var(--sans); font-size: 16px; line-height: 1.62;
+    color: var(--ink-2); margin: 8px 0;
+  }
+  .beat .body p b { color: var(--ink); font-weight: 600; }
+  .beat .body .say {
+    font-family: var(--serif); font-style: italic;
+    font-size: 19px; line-height: 1.5; color: var(--ink);
+    border-left: 3px solid var(--cool); padding: 6px 0 6px 18px;
+    margin: 8px 0;
+  }
+  .beat .body .say b { color: var(--cool); font-style: normal; font-family: var(--sans); font-weight: 600; }
+  .beat .body .say + .say { margin-top: 14px; }
+
+  .beat .body ul {
+    margin: 8px 0 12px; padding-left: 0; list-style: none;
+  }
+  .beat .body ul li {
+    font-family: var(--sans); font-size: 15px; line-height: 1.55;
+    color: var(--ink-2);
+    padding: 6px 0 6px 22px;
+    border-bottom: 1px dashed var(--rule);
+    position: relative;
+  }
+  .beat .body ul li:last-child { border-bottom: 0; }
+  .beat .body ul li b { color: var(--ink); }
+  .beat .body ul li::before {
+    content: '•'; position: absolute; left: 6px;
+    color: var(--cool); font-family: var(--mono);
+  }
+
+  .beat .body kbd {
+    font-family: var(--mono); font-size: 13px;
+    background: var(--bg-3); padding: 2px 8px;
+    color: var(--cool); border: 1px solid var(--rule-2);
+  }
+
+  /* PREP / DON'T blocks */
+  .two-col {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+    margin: 50px 0;
+  }
+  .col-block {
+    border: 1px solid var(--rule-2); background: var(--bg-1);
+    padding: 28px 30px;
+  }
+  .col-block.warn { border-color: var(--warm); background: rgba(245,180,84,0.03); }
+  .col-block h2 {
+    font-family: var(--sans); font-size: 22px; font-weight: 600;
+    color: var(--ink); margin: 0 0 16px; letter-spacing: -0.018em;
+  }
+  .col-block h2 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+  .col-block.warn h2 .em { color: var(--warm); }
+  .col-block ul {
+    margin: 0; padding-left: 0; list-style: none;
+  }
+  .col-block ul li {
+    font-family: var(--sans); font-size: 15px; line-height: 1.55;
+    color: var(--ink-2);
+    padding: 8px 0 8px 22px;
+    border-bottom: 1px dashed var(--rule);
+    position: relative;
+  }
+  .col-block ul li:last-child { border-bottom: 0; }
+  .col-block ul li b { color: var(--ink); }
+  .col-block ul li::before {
+    content: '✓'; position: absolute; left: 0;
+    color: var(--cool); font-family: var(--mono); font-size: 13px;
+  }
+  .col-block.warn ul li::before { content: '✗'; color: var(--warm); }
+
+  footer.doc-foot {
+    margin-top: 80px;
+    padding: 40px 0 60px;
+    border-top: 1px solid var(--rule);
+    font-family: var(--mono); font-size: 11.5px;
+    color: var(--ink-3); letter-spacing: 0.14em; text-transform: uppercase;
+    display: flex; justify-content: space-between;
+  }
+  footer.doc-foot a { color: var(--cool); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<main>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a href="MayaTrail Landing.html" class="brand"><span class="mark"></span> MAYATRAIL</a>
+    <div class="nav-links">
+      <a href="MayaTrail Landing.html">Platform</a>
+      <a href="MayaTrail Run.html">Run</a>
+      <a href="MayaTrail Pitch.html">Pitch</a>
+      <a href="MayaTrail GTM.html">GTM</a>
+      <a href="MayaTrail Pricing.html">Pricing</a>
+      <a href="MayaTrail Battlecards.html">Battlecards</a>
+      <a class="active">Demo</a>
+    </div>
+    <a class="nav-cta" style="white-space:nowrap;" href="MayaTrail Run.html">Watch a run</a>
+  </div>
+</nav>
+
+<div class="doc-head">
+  <div class="meta">
+    <span><b>FOUNDER-LED DEMO SCRIPT</b></span>
+    <span>10 MINUTES · LIVE</span>
+    <span>v1 · MAY 2026</span>
+  </div>
+  <h1>The <span class="em">10-minute</span> demo.</h1>
+  <p class="lede">
+    For founder-led calls. The buyer is a detection engineer or detection-eng lead. They run the SIEM ruleset; they've used Stratus or written Sigma; they care about output.
+    <b>Goal: leave them wanting to install the OSS the same day.</b> Not closing the call - earning the next one.
+  </p>
+</div>
+
+<!-- TOP META -->
+<div class="meta-row">
+  <div>
+    <div class="k">DURATION</div>
+    <div class="v">10 min talk · <span class="em">5 min Q&amp;A</span></div>
+  </div>
+  <div>
+    <div class="k">AUDIENCE</div>
+    <div class="v">1-3 detection engineers</div>
+  </div>
+  <div>
+    <div class="k">FORMAT</div>
+    <div class="v">Live screen-share</div>
+  </div>
+  <div>
+    <div class="k">NEXT STEP</div>
+    <div class="v"><span class="em">Install OSS</span> · 14-day POC</div>
+  </div>
+</div>
+
+<!-- PREP / DON'T -->
+<div class="two-col">
+  <div class="col-block">
+    <h2>Before the call: <span class="em">prep.</span></h2>
+    <ul>
+      <li><b>5 min before:</b> Open <kbd>MayaTrail Landing.html</kbd> and <kbd>MayaTrail Run.html</kbd> in separate tabs. Pre-load AMBERSQUID plan view.</li>
+      <li><b>Look up their stack.</b> What SIEM do they use? Sentinel, Splunk, Elastic? Mention it specifically.</li>
+      <li><b>Find one APT relevant to their vertical.</b> Fintech → Scattered Spider. SaaS → AMBERSQUID. Healthtech → BlackCat.</li>
+      <li><b>Have the OSS install command in your clipboard:</b> <kbd>brew install mayatrail/tap/mayatrail</kbd>.</li>
+      <li><b>Mute notifications.</b> Demos with Slack notifications are unforgivable.</li>
+    </ul>
+  </div>
+  <div class="col-block warn">
+    <h2>During the call: <span class="em">do not.</span></h2>
+    <ul>
+      <li><b>Don't open the pitch deck.</b> This is a product demo. Slides come later if they ask.</li>
+      <li><b>Don't show the iso scene or aurora.</b> Visual polish doesn't win detection engineers; they want to see the data flow.</li>
+      <li><b>Don't compare to competitors unprompted.</b> If they ask, use the battlecard. Otherwise, sell our product not their flaws.</li>
+      <li><b>Don't oversell multi-cloud.</b> AWS-first, say it twice.</li>
+      <li><b>Don't quote pricing unless they ask.</b> Pricing late-game; product first.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- BEAT 1 -->
+<div class="beat">
+  <div class="left">
+    <div class="t">0:00</div>
+    <div class="label">OPEN</div>
+    <div class="duration">~90 sec</div>
+  </div>
+  <div class="body">
+    <h3>Mirror their pain. <span class="em">Don't pitch yet.</span></h3>
+
+    <p><b>Open with a question, not a slide.</b> Get them talking about their current workflow before showing them anything.</p>
+
+    <div class="h">SAY</div>
+    <p class="say"><b>You:</b> "Before I show you anything - quick context check. When your team writes a new Sigma rule for AWS, what's the loop look like? How do you confirm it fires end-to-end against a real attack chain, not just a synthetic test event?"</p>
+
+    <p>Listen. <b>Whatever they answer is the demo flow.</b> Common answers:</p>
+
+    <ul>
+      <li><b>"We don't test end-to-end."</b> → Lead with the chain demo. They have the pain we solve directly.</li>
+      <li><b>"We use Stratus Red Team."</b> → Position as "Stratus for atomic, MayaTrail for chains" early.</li>
+      <li><b>"We use synthetic events in our SIEM."</b> → Show the gap between synthetic and real CloudTrail.</li>
+      <li><b>"We run table-tops."</b> → They have budget pain you can wedge into.</li>
+    </ul>
+
+    <div class="h action">ACTION</div>
+    <p>Mirror their answer back in your own words. <b>"So today, you ship a rule, and the way you know it works is..." [their answer].</b> They nod. You earned the right to demo.</p>
+  </div>
+</div>
+
+<!-- BEAT 2 -->
+<div class="beat">
+  <div class="left">
+    <div class="t">1:30</div>
+    <div class="label">FRAME</div>
+    <div class="duration">~60 sec</div>
+  </div>
+  <div class="body">
+    <h3>State what MayaTrail is, <span class="em">in one breath.</span></h3>
+
+    <div class="h">SAY</div>
+    <p class="say"><b>You:</b> "MayaTrail runs real APT chains in your own AWS sandbox - Scattered Spider, AMBERSQUID, BlackCat, that level of fidelity - and ships you the Sigma rules to detect each step as evidence of the run. Same shape as dbt for the data world: you don't trust a transform until you've tested it; we don't trust a detection until we've watched it fire."</p>
+
+    <div class="h">SAY · MAYBE</div>
+    <p class="say"><b>You:</b> "Want to see the AMBERSQUID drill? It's 13 steps - real boto3 against a sandbox we provision - and it runs in about 12 minutes in real life, 36 seconds in the playback I'll show you."</p>
+
+    <div class="h action">ACTION</div>
+    <p>If they say yes: share screen, open <kbd>MayaTrail Run.html</kbd>. If they don't: keep talking about their stack until they say yes - <b>don't push past their hesitation.</b></p>
+  </div>
+</div>
+
+<!-- BEAT 3 -->
+<div class="beat">
+  <div class="left">
+    <div class="t">2:30</div>
+    <div class="label">PLAN VIEW</div>
+    <div class="duration">~90 sec</div>
+  </div>
+  <div class="body">
+    <h3>Walk the <span class="em">approval card</span> first.</h3>
+
+    <p>Screen-share <kbd>MayaTrail Run.html</kbd>. Pre-run plan view is the first thing they see. <b>This is the safety conversation.</b> Detection engineers will not let an outside tool near AWS without it.</p>
+
+    <div class="h">POINT AT</div>
+    <ul>
+      <li><b>Threat actor card</b> - "This is AMBERSQUID. Sysdig identified it in 2023. We have the source link right there."</li>
+      <li><b>Resource card</b> - "17 resources. Standing cost is $0.003/hour. Vpc 10.99.0.0/16, completely isolated."</li>
+      <li><b>Credential chain</b> - "Four sessions. The first one's a long-lived victim key - that's the static creds we want your stack to detect. The next three are STS sessions assumed by the attacker after they plant roles."</li>
+      <li><b>Detection registry</b> - "11 Sigma rules armed. <em>We wrote these.</em> They ship with the run. You can read them right now in the OSS repo before clicking Run."</li>
+    </ul>
+
+    <div class="h">SAY</div>
+    <p class="say"><b>You:</b> "Nothing here calls AWS until you click Run. The Pulumi sandbox spins up in 60 seconds, the chain executes, and <kbd>pulumi destroy</kbd> has a post-condition that <em>every</em> resource must return NotFound or the run is flagged incomplete. We've never had a leftover resource."</p>
+
+    <div class="h action">ACTION</div>
+    <p>Click <kbd>▶ Run emulation</kbd>. <b>Do not narrate during the transition.</b> Let the UI take over.</p>
+  </div>
+</div>
+
+<!-- BEAT 4 -->
+<div class="beat">
+  <div class="left">
+    <div class="t">4:00</div>
+    <div class="label">RUN VIEW</div>
+    <div class="duration">~2.5 min</div>
+  </div>
+  <div class="body">
+    <h3>The drill plays. <span class="em">Narrate, don't explain.</span></h3>
+
+    <p>Run view loads. Speed defaults to 1×; the run is ~36 seconds wall-clock. <b>Click 2× speed.</b> Cursor stays on the timeline rail.</p>
+
+    <div class="h">POINT AT</div>
+    <ul>
+      <li><b>Timeline rail (left).</b> "Every step lights up green as it lands. Click any step to inspect."</li>
+      <li><b>Story card (right).</b> "What's the attacker doing right now, in plain English."</li>
+      <li><b>USING strip.</b> "Active credential changes as the chain pivots. See it go from victim_creds to codecommit_role_session there? That's the AssumeRole moment."</li>
+      <li><b>API SEQUENCE.</b> "Real CloudTrail events. Done / current / pending. You're seeing what your CloudTrail would see."</li>
+    </ul>
+
+    <div class="h">SAY · KEY MOMENT</div>
+    <p class="say"><b>You:</b> "Watch this one. Step 12 - StopLogging. This is the moment AMBERSQUID kills CloudTrail and deletes the most recent log file. <em>The CloudWatch alarm on the StopLogging metric filter is your last chance to catch this attack.</em> If your stack doesn't have that alarm armed, you go blind from here."</p>
+
+    <div class="h">CLICK</div>
+    <p>Click step 12 in the rail. The story card switches. Read out the consequence line: <b>"If you miss this, you go blind. If you catch it, you have everything that came before."</b></p>
+
+    <div class="h action">ACTION</div>
+    <p>If they ask "would my stack catch this?" - <b>that's the buying signal.</b> Don't answer "yes definitely" or "no probably not." Answer:</p>
+    <p class="say"><b>You:</b> "That's exactly what the drill grades. You install the OSS, run AMBERSQUID against your dev account, and the evidence bundle includes the Sigma rule we wrote for this step. You compare what fired in your SIEM against what we expected. <em>That's the deliverable.</em>"</p>
+  </div>
+</div>
+
+<!-- BEAT 5 -->
+<div class="beat">
+  <div class="left">
+    <div class="t">6:30</div>
+    <div class="label">COMPLETE</div>
+    <div class="duration">~90 sec</div>
+  </div>
+  <div class="body">
+    <h3>The evidence package. <span class="em">This is the product.</span></h3>
+
+    <p>Run completes. Complete view loads. <b>Pause for two seconds before talking.</b> Let the screen settle.</p>
+
+    <div class="h">SAY</div>
+    <p class="say"><b>You:</b> "This is what you take home. CloudTrail dump, MITRE map, IR playbook, and the detection bundle - 11 Sigma rules, MITRE-mapped, signed and hash-chained. Drop the zip into your detection repo. Replay the bundle offline against your SIEM any time."</p>
+
+    <div class="h">POINT AT</div>
+    <ul>
+      <li><b>Detection content shipped panel.</b> "Each row is a rule we authored for this specific chain. Severity, source, MITRE technique. Production-grade."</li>
+      <li><b>Evidence cards.</b> "Three files. Total ~178 KB. Signed. Portable."</li>
+    </ul>
+
+    <div class="h">SAY · THE KILL SHOT</div>
+    <p class="say"><b>You:</b> "The mental model: <em>graded drill, not continuous validation</em>. The drill ends when the rule is committed to your repo. Done is done."</p>
+  </div>
+</div>
+
+<!-- BEAT 6 -->
+<div class="beat">
+  <div class="left">
+    <div class="t">8:00</div>
+    <div class="label">OSS HOOK</div>
+    <div class="duration">~60 sec</div>
+  </div>
+  <div class="body">
+    <h3>Hand them <span class="em">the install command.</span></h3>
+
+    <p><b>Don't pitch the hosted tier yet.</b> The OSS is the credibility play. Get them running it.</p>
+
+    <div class="h">SAY</div>
+    <p class="say"><b>You:</b> "Everything you just saw is in the OSS. Apache 2.0. Six APT chains today, all 11 rules included. Install is one line:"</p>
+
+    <p><kbd>brew install mayatrail/tap/mayatrail</kbd> &nbsp; or &nbsp; <kbd>pip install mayatrail</kbd></p>
+
+    <p class="say"><b>You:</b> "Run <kbd>mayatrail init</kbd> in a sandbox AWS account, then <kbd>mayatrail run ambersquid</kbd>. Twelve minutes later you have the same evidence bundle in your terminal. <em>Try it tonight, send me a screenshot.</em>"</p>
+
+    <div class="h">SAY · BRIDGE TO HOSTED</div>
+    <p class="say"><b>You:</b> "The hosted tier is for when your team needs the workspace, the signer, or the SIEM live ingest - we'll get to that on the next call if it makes sense. Today, just install."</p>
+  </div>
+</div>
+
+<!-- BEAT 7 -->
+<div class="beat">
+  <div class="left">
+    <div class="t">9:00</div>
+    <div class="label">Q&amp;A</div>
+    <div class="duration">~5 min</div>
+  </div>
+  <div class="body">
+    <h3>Stop talking. <span class="em">Let them lead.</span></h3>
+
+    <div class="h">SAY</div>
+    <p class="say"><b>You:</b> "What questions? Anything I should have shown but didn't?"</p>
+
+    <p><b>Common questions, in order of frequency:</b></p>
+
+    <ul>
+      <li><b>"What about Azure / GCP?"</b> → "AWS-first. Azure-light on the 2027 roadmap if AWS depth proves out. Honest: not us if you need parity today."</li>
+      <li><b>"How do you compare to Mitigant / Stratus?"</b> → Battlecard answer. See <a href="MayaTrail Battlecards.html" style="color: var(--cool); text-decoration: none; border-bottom: 1px dashed var(--cool);">battlecards page</a>.</li>
+      <li><b>"What does pricing look like?"</b> → "Team tier is $1,200/month for up to 5 engineers. Enterprise from $36k/yr. <em>You don't need to think about pricing until you've tried the OSS.</em>"</li>
+      <li><b>"Can we add a custom APT chain?"</b> → "Enterprise tier includes 4 custom chains per year, authored by our research team. The OSS includes a chain-authoring SDK if you want to write your own."</li>
+      <li><b>"How is this safe? It runs real attacks."</b> → "STS-only role, scoped sandbox account, Pulumi-managed resources with destroy post-condition. Nothing touches production. Walk through the safety model on the OSS readme."</li>
+      <li><b>"Who else is using this?"</b> → "14 detection teams in private beta - NA, EU, India. 4 paying design partners. <em>Happy to introduce you to one for a peer call.</em>"</li>
+    </ul>
+
+    <div class="h action">ACTION · CLOSE</div>
+    <p>Last 30 seconds, three asks:</p>
+    <ul>
+      <li><b>"Will you install the OSS in the next week?"</b> → Get a yes-or-no commit.</li>
+      <li><b>"Want a Slack channel with our team to ask questions?"</b> → Yes = warm pipeline. No = stay in newsletter.</li>
+      <li><b>"Anyone on your team I should talk to as well?"</b> → Referral, every time.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- AFTER CALL -->
+<div class="doc-head" style="margin-top: 70px; padding-top: 40px;">
+  <div class="meta">
+    <span><b>AFTER THE CALL</b></span>
+    <span>WITHIN 24 HOURS</span>
+  </div>
+  <h1 style="font-size: 42px;">Follow-up <span class="em">that doesn't suck.</span></h1>
+</div>
+
+<div class="two-col">
+  <div class="col-block">
+    <h2>The follow-up email <span class="em">(do).</span></h2>
+    <ul>
+      <li><b>Subject line:</b> "MayaTrail · AMBERSQUID drill · install link"</li>
+      <li><b>One line</b> reflecting back something specific they said. Show you listened.</li>
+      <li><b>The install command,</b> copy-pasteable: <kbd>brew install mayatrail/tap/mayatrail</kbd></li>
+      <li><b>One link only:</b> the OSS repo. Not the pitch deck. Not pricing.</li>
+      <li><b>A specific Sigma rule</b> you noticed they should write for their stack - attached as a code block in the email.</li>
+      <li><b>One question</b> for them to answer: "Which APT would you want to run first?"</li>
+    </ul>
+  </div>
+  <div class="col-block warn">
+    <h2>What <span class="em">not</span> to send.</h2>
+    <ul>
+      <li>Pitch deck PDF unless explicitly requested.</li>
+      <li>"Thanks for your time" boilerplate.</li>
+      <li>Pricing details before they ask.</li>
+      <li>Multiple follow-ups in a week.</li>
+      <li>A booking link without context.</li>
+      <li>Any line that begins "I wanted to follow up..."</li>
+    </ul>
+  </div>
+</div>
+
+<!-- CHEAT SHEET -->
+<div class="doc-head" style="margin-top: 70px; padding-top: 40px;">
+  <div class="meta">
+    <span><b>QUICK REFERENCE</b></span>
+    <span>SCRIPT CHEAT SHEET</span>
+  </div>
+  <h1 style="font-size: 42px;">The whole thing, <span class="em">on one card.</span></h1>
+</div>
+
+<div class="beat" style="margin-bottom: 60px;">
+  <div class="left">
+    <div class="t">10:00</div>
+    <div class="label">SUMMARY</div>
+  </div>
+  <div class="body">
+    <ol style="margin: 0; padding-left: 0; list-style: none; counter-reset: cli;">
+      <li style="position: relative; padding: 10px 0 10px 50px; border-bottom: 1px dashed var(--rule); counter-increment: cli; font-family: var(--sans); font-size: 16px; color: var(--ink-2); line-height: 1.5;">
+        <span style="position: absolute; left: 0; font-family: var(--mono); font-size: 13px; color: var(--cool); letter-spacing: 0.08em;">00:00</span>
+        <b style="color: var(--ink);">Mirror.</b> "How do you currently test your cloud rules end-to-end?"
+      </li>
+      <li style="position: relative; padding: 10px 0 10px 50px; border-bottom: 1px dashed var(--rule); counter-increment: cli; font-family: var(--sans); font-size: 16px; color: var(--ink-2); line-height: 1.5;">
+        <span style="position: absolute; left: 0; font-family: var(--mono); font-size: 13px; color: var(--cool); letter-spacing: 0.08em;">01:30</span>
+        <b style="color: var(--ink);">Frame.</b> "Real APT chains. Sigma rules as evidence."
+      </li>
+      <li style="position: relative; padding: 10px 0 10px 50px; border-bottom: 1px dashed var(--rule); counter-increment: cli; font-family: var(--sans); font-size: 16px; color: var(--ink-2); line-height: 1.5;">
+        <span style="position: absolute; left: 0; font-family: var(--mono); font-size: 13px; color: var(--cool); letter-spacing: 0.08em;">02:30</span>
+        <b style="color: var(--ink);">Plan view.</b> Walk the approval card. Safety first.
+      </li>
+      <li style="position: relative; padding: 10px 0 10px 50px; border-bottom: 1px dashed var(--rule); counter-increment: cli; font-family: var(--sans); font-size: 16px; color: var(--ink-2); line-height: 1.5;">
+        <span style="position: absolute; left: 0; font-family: var(--mono); font-size: 13px; color: var(--cool); letter-spacing: 0.08em;">04:00</span>
+        <b style="color: var(--ink);">Run.</b> Hit 2×, click step 12 (StopLogging) as the key moment.
+      </li>
+      <li style="position: relative; padding: 10px 0 10px 50px; border-bottom: 1px dashed var(--rule); counter-increment: cli; font-family: var(--sans); font-size: 16px; color: var(--ink-2); line-height: 1.5;">
+        <span style="position: absolute; left: 0; font-family: var(--mono); font-size: 13px; color: var(--cool); letter-spacing: 0.08em;">06:30</span>
+        <b style="color: var(--ink);">Evidence.</b> "This is the product. Rules as commits."
+      </li>
+      <li style="position: relative; padding: 10px 0 10px 50px; border-bottom: 1px dashed var(--rule); counter-increment: cli; font-family: var(--sans); font-size: 16px; color: var(--ink-2); line-height: 1.5;">
+        <span style="position: absolute; left: 0; font-family: var(--mono); font-size: 13px; color: var(--cool); letter-spacing: 0.08em;">08:00</span>
+        <b style="color: var(--ink);">OSS hook.</b> <kbd>brew install mayatrail/tap/mayatrail</kbd>
+      </li>
+      <li style="position: relative; padding: 10px 0 10px 50px; counter-increment: cli; font-family: var(--sans); font-size: 16px; color: var(--ink-2); line-height: 1.5;">
+        <span style="position: absolute; left: 0; font-family: var(--mono); font-size: 13px; color: var(--cool); letter-spacing: 0.08em;">09:00</span>
+        <b style="color: var(--ink);">Q&amp;A.</b> Stop talking. Close with 3 asks: install / Slack / referral.
+      </li>
+    </ol>
+  </div>
+</div>
+
+<footer class="doc-foot">
+  <span>MAYATRAIL · DEMO SCRIPT · v1 · MAY 2026</span>
+  <span>INTERNAL · <a href="MayaTrail GTM.html">GTM</a> · <a href="MayaTrail Battlecards.html">Battlecards</a></span>
+</footer>
+
+</main>
+
+<template id="__bundler_thumbnail" data-bg-color="#06070a">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <text x="120" y="280" font-family="ui-monospace, monospace" font-size="24" letter-spacing="10" fill="#6aa8ff">00:00 · MIRROR</text>
+    <text x="120" y="330" font-family="ui-monospace, monospace" font-size="24" letter-spacing="10" fill="#6aa8ff">01:30 · FRAME</text>
+    <text x="120" y="380" font-family="ui-monospace, monospace" font-size="24" letter-spacing="10" fill="#6aa8ff">02:30 · PLAN</text>
+    <text x="120" y="430" font-family="ui-monospace, monospace" font-size="24" letter-spacing="10" fill="#6aa8ff">04:00 · RUN</text>
+    <text x="120" y="480" font-family="ui-monospace, monospace" font-size="24" letter-spacing="10" fill="#6aa8ff">06:30 · EVIDENCE</text>
+    <text x="120" y="530" font-family="ui-monospace, monospace" font-size="24" letter-spacing="10" fill="#6aa8ff">08:00 · OSS</text>
+    <text x="600" y="700" text-anchor="middle"
+          font-family="ui-monospace, monospace"
+          font-size="40" letter-spacing="14" font-weight="600"
+          fill="#e8eaf0">DEMO SCRIPT · 10 MIN</text>
+  </svg>
+</template>
+
+</body>
+</html>

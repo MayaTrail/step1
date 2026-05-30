@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MayaTrail - Research</title>
+<link rel="stylesheet" href="mayatrail-base.css" />
+<style>
+  /* ============== LEAD FEATURE ============== */
+  .lead {
+    display: grid;
+    grid-template-columns: 1.15fr 1fr;
+    gap: 36px;
+    border: 1px solid var(--rule-2);
+    background:
+      radial-gradient(ellipse 500px 240px at 80% 0%, rgba(106,168,255,0.08), transparent 70%),
+      var(--bg-1);
+    padding: 36px;
+    margin-bottom: 24px;
+    position: relative;
+    overflow: hidden;
+  }
+  .lead-meta {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    margin-bottom: 18px;
+  }
+  .lead h2 {
+    font-family: var(--sans); font-weight: 600;
+    font-size: clamp(28px, 3vw, 38px);
+    line-height: 1.1; letter-spacing: -0.025em;
+    margin: 0 0 16px;
+    color: var(--ink);
+  }
+  .lead h2 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+  .lead .summary {
+    font-family: var(--sans); font-size: 16px;
+    line-height: 1.6; color: var(--ink-2);
+    margin: 0 0 22px; max-width: 540px;
+  }
+  .lead .by {
+    display: flex; align-items: center; gap: 10px;
+    font-family: var(--mono); font-size: 11px;
+    color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: 0.12em;
+  }
+  .lead .by .author {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: var(--cool);
+    color: var(--bg);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-weight: 600; font-size: 11px;
+    margin-right: 6px;
+  }
+  .lead-cta { margin-top: 24px; display: flex; gap: 12px; flex-wrap: wrap; }
+
+  /* lead figure - abstract code-flow */
+  .lead-fig {
+    border: 1px solid var(--rule);
+    background: var(--bg);
+    padding: 22px;
+    position: relative;
+    font-family: var(--mono); font-size: 11px;
+    color: var(--ink-2);
+    line-height: 1.8;
+    min-height: 320px;
+  }
+  .lead-fig .fig-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--rule);
+    font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .lead-fig .fig-head b { color: var(--ink); }
+  .lead-fig pre {
+    margin: 0; padding: 0;
+    font-family: var(--mono); font-size: 11.5px;
+    line-height: 1.8;
+    color: var(--ink-2);
+    white-space: pre-wrap;
+  }
+  .lead-fig .a { color: var(--cool); }
+  .lead-fig .e { color: var(--hot); }
+  .lead-fig .o { color: var(--ok); }
+  .lead-fig .w { color: var(--warm); }
+  .lead-fig .d { color: var(--ink-3); }
+  .lead-fig .hl { background: rgba(255,75,110,0.12); padding: 1px 5px; border-radius: 2px; color: var(--hot); }
+
+  /* ============== FILTERS ============== */
+  .filters {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 18px 0;
+    margin: 36px 0 0;
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+  }
+  .filters .lbl {
+    font-family: var(--mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.16em;
+    color: var(--ink-3); margin-right: 8px;
+  }
+  .filters .chip {
+    font-family: var(--mono); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.12em;
+    padding: 5px 11px;
+    border: 1px solid var(--rule-2);
+    background: transparent;
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+  .filters .chip:hover { color: var(--ink); border-color: var(--ink-3); }
+  .filters .chip.active { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .filters .search {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 10px;
+    padding: 5px 12px;
+    border: 1px solid var(--rule-2);
+    color: var(--ink-3);
+    font-family: var(--mono); font-size: 11px;
+    min-width: 280px;
+  }
+  .filters .search input {
+    background: transparent;
+    border: 0;
+    color: var(--ink);
+    font-family: var(--mono); font-size: 11.5px;
+    padding: 3px 0;
+    outline: none;
+    flex: 1;
+  }
+  .filters .search .kbd {
+    border: 1px solid var(--rule-2);
+    padding: 1px 6px;
+    font-size: 9.5px;
+    color: var(--ink-3);
+  }
+
+  /* ============== ARTICLES GRID ============== */
+  .articles {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    border-left: 1px solid var(--rule);
+    border-top: 1px solid var(--rule);
+    margin: 0 0 48px;
+  }
+  .article {
+    padding: 28px 28px 26px;
+    border-right: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    background: var(--bg-1);
+    cursor: pointer;
+    transition: background 0.15s;
+    display: flex; flex-direction: column; gap: 14px;
+    min-height: 260px;
+  }
+  .article:hover { background: var(--bg-2); }
+  .article:hover .title { color: var(--cool); }
+  .article .top {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    font-family: var(--mono); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.12em;
+    color: var(--ink-3);
+  }
+  .article .top .cat { color: var(--cool); }
+  .article .top .date { margin-left: auto; }
+  .article .title {
+    font-family: var(--sans); font-size: 20px; font-weight: 600;
+    line-height: 1.25; letter-spacing: -0.015em;
+    color: var(--ink); margin: 0;
+    transition: color 0.15s;
+  }
+  .article .title .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+  .article .blurb {
+    font-family: var(--sans); font-size: 13.5px; line-height: 1.55;
+    color: var(--ink-2); margin: 0;
+  }
+  .article .foot {
+    margin-top: auto;
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: var(--mono); font-size: 10.5px;
+    color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: 0.12em;
+    padding-top: 14px;
+    border-top: 1px dashed var(--rule);
+  }
+  .article .foot .author {
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .article .foot .dot {
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--rule-3);
+    color: var(--ink-2);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 9px; font-weight: 600;
+  }
+  .article .foot .dot.h { background: var(--hot); color: var(--bg); }
+  .article .foot .dot.c { background: var(--cool); color: var(--bg); }
+  .article .foot .dot.w { background: var(--warm); color: var(--bg); }
+
+  /* ============== SUBSCRIBE BAND ============== */
+  .subscribe {
+    border: 1px solid var(--rule-2);
+    padding: 36px 40px;
+    margin: 0 0 60px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 30px; align-items: center;
+    background:
+      radial-gradient(ellipse 500px 200px at 80% 50%, rgba(106,168,255,0.07), transparent 70%),
+      var(--bg-1);
+  }
+  .subscribe h3 {
+    font-family: var(--sans); font-weight: 600;
+    font-size: 26px; letter-spacing: -0.02em;
+    margin: 0 0 8px;
+  }
+  .subscribe h3 .em {
+    font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool);
+  }
+  .subscribe p {
+    font-family: var(--sans); font-size: 14.5px;
+    color: var(--ink-2); margin: 0;
+  }
+  .subscribe-form {
+    display: flex; align-items: center; gap: 10px;
+    flex-wrap: wrap;
+  }
+  .subscribe-form .input {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--rule-2);
+    padding: 11px 14px;
+    color: var(--ink);
+    font-family: var(--mono); font-size: 13px;
+    min-width: 220px;
+    transition: border-color 0.15s;
+  }
+  .subscribe-form .input:focus { outline: none; border-color: var(--cool); }
+  .subscribe-form .input::placeholder { color: var(--ink-3); }
+  .subscribe-form .feed-links {
+    display: flex; gap: 14px;
+    font-family: var(--mono); font-size: 10.5px;
+    color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: 0.12em;
+    margin-top: 12px;
+    flex-basis: 100%;
+  }
+  .subscribe-form .feed-links a { color: var(--ink-3); text-decoration: none; }
+  .subscribe-form .feed-links a:hover { color: var(--cool); }
+
+  /* ============== AUTHORS / NOTES ============== */
+  .below-grid {
+    display: grid; grid-template-columns: 1.4fr 1fr;
+    gap: 24px;
+    margin: 50px 0 80px;
+  }
+  .authors {
+    border: 1px solid var(--rule-2);
+    background: var(--bg-1);
+    padding: 28px;
+  }
+  .authors h3 {
+    font-family: var(--sans); font-weight: 600;
+    font-size: 18px; margin: 0 0 18px;
+    letter-spacing: -0.01em;
+  }
+  .authors-list { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .author-card {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px;
+    border: 1px solid var(--rule);
+    background: var(--bg);
+  }
+  .author-card .av {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    color: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--sans); font-size: 13px; font-weight: 600;
+    flex-shrink: 0;
+  }
+  .author-card .av.c1 { background: var(--cool); }
+  .author-card .av.c2 { background: var(--warm); color: #2a1d04; }
+  .author-card .av.c3 { background: var(--hot); }
+  .author-card .av.c4 { background: var(--ok); color: #122108; }
+  .author-card .name {
+    font-family: var(--sans); font-size: 13.5px; font-weight: 600;
+    color: var(--ink);
+  }
+  .author-card .role {
+    font-family: var(--mono); font-size: 10px;
+    color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: 0.1em;
+    margin-top: 2px;
+  }
+
+  .notes {
+    border: 1px solid var(--rule-2);
+    background: var(--bg-1);
+    padding: 28px;
+  }
+  .notes h3 {
+    font-family: var(--sans); font-weight: 600;
+    font-size: 18px; margin: 0 0 16px;
+    letter-spacing: -0.01em;
+  }
+  .note {
+    padding: 12px 0;
+    border-bottom: 1px dashed var(--rule);
+    font-family: var(--mono); font-size: 11.5px;
+    color: var(--ink-2);
+    line-height: 1.6;
+  }
+  .note:last-child { border-bottom: 0; }
+  .note .when {
+    display: block;
+    font-size: 10px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--ink-3);
+    margin-bottom: 4px;
+  }
+  .note .when .id { color: var(--cool); }
+
+  @media (max-width: 1080px) {
+    .articles { grid-template-columns: 1fr 1fr; }
+    .lead { grid-template-columns: 1fr; }
+    .below-grid { grid-template-columns: 1fr; }
+    .subscribe { grid-template-columns: 1fr; }
+    .authors-list { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 720px) {
+    .articles { grid-template-columns: 1fr; }
+    .filters .search { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<main>
+
+<!-- ============== NAV ============== -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="MayaTrail Landing.html"><span class="mark"></span> MAYATRAIL</a>
+    <div class="nav-links">
+      <a href="MayaTrail Scenarios.html">Scenarios</a>
+      <a href="MayaTrail Coverage.html">Coverage</a>
+      <a href="MayaTrail Research.html" class="active">Research</a>
+      <a>Docs</a>
+      <a>Pricing</a>
+    </div>
+    <div class="nav-readout">
+      <span class="stat">v0.4.1 · operational</span>
+    </div>
+    <a class="nav-cta">Request access</a>
+  </div>
+</nav>
+
+<!-- ============== CONSOLE + PAGE HEAD ============== -->
+<div class="console">
+  <div class="console-bar">
+    <span class="lbl">RESEARCH</span><span class="sep">·</span>
+    <span>field notes &amp; teardowns</span><span class="sep">·</span>
+    <span>23 articles · updated weekly</span>
+    <div class="right">
+      <span class="pulse"></span>
+      <span>peer-reviewed · CC BY-SA 4.0</span>
+    </div>
+  </div>
+
+  <section class="page-head">
+    <div class="eyebrow">Research · field notes</div>
+    <h1 class="h-1">Teardowns of the attacks <span class="em">we publish, run, and break.</span></h1>
+    <p class="lede">
+      Every post here ships with a runnable scenario, a CloudTrail signature,
+      and the detection rule that should catch it. Written by the people
+      shipping the catalogue, peer-reviewed, and never gated.
+    </p>
+  </section>
+
+  <!-- ============== LEAD ARTICLE ============== -->
+  <div class="lead">
+    <div>
+      <div class="lead-meta">
+        <span class="tag cool">Teardown</span>
+        <span class="tag">IAM · STS</span>
+        <span class="sev crit">Critical</span>
+        <span class="tag">14 min read</span>
+      </div>
+      <h2>The 12-second window: how <span class="em">AttachRolePolicy</span> chains break detection rules built for humans.</h2>
+      <p class="summary">
+        Most off-the-shelf detection rules look for <code style="font-family:var(--mono); background:var(--bg-3); padding:1px 5px; color:var(--cool);">AttachUserPolicy</code>
+        with a human principal. The chain we walked attaches to a <i>role</i>,
+        from a session token issued seconds earlier. We timed the gap, recorded
+        the trail, and stress-tested seven detection rule sets against it.
+      </p>
+      <div class="by">
+        <span class="author">H</span>
+        <span style="color:var(--ink);">Himanshu Khandelwal</span>
+        <span style="opacity:0.5;">·</span>
+        <span>Apr 18, 2026</span>
+        <span style="opacity:0.5;">·</span>
+        <span>3 detections of 7 fired</span>
+      </div>
+      <div class="lead-cta">
+        <a class="btn">Read teardown <span class="arrow">→</span></a>
+        <a class="btn outline">Run on your sandbox</a>
+      </div>
+    </div>
+
+    <div class="lead-fig">
+      <div class="fig-head">
+        <span><b>fig.01</b> · CloudTrail · run 2F4A</span>
+        <span>12.3s elapsed</span>
+      </div>
+<pre><span class="d">// 14:02:11.221</span>
+<span class="a">→</span> <span style="color:var(--ink);">sts:AssumeRole</span>
+  principal <span class="d">u/maint-bot</span>
+  → <span class="o">200</span> <span class="d">(token expires 3600s)</span>
+
+<span class="a">→</span> <span style="color:var(--ink);">iam:AttachRolePolicy</span>
+  policy <span class="hl">arn:aws:iam::aws:policy/AdministratorAccess</span>
+  role <span class="d">r/admin-7f</span>
+  → <span class="o">200</span>
+
+<span class="a">→</span> <span style="color:var(--ink);">iam:CreateUser</span> <span class="d">u/maint-bot-shadow</span> → <span class="o">200</span>
+<span class="a">→</span> <span style="color:var(--ink);">iam:CreateAccessKey</span> → <span class="o">200</span>
+
+<span class="d">// 14:02:23.512  elapsed 12.3s</span>
+<span class="w">⚠</span> <span style="color:var(--ink);">T1548.005</span> detected · GuardDuty · <span class="d">+3.1s</span>
+<span class="w">⚠</span> <span style="color:var(--ink);">T1078</span> detected · Custom · <span class="d">+28.0s</span>
+<span class="e">✗</span> <span style="color:var(--ink);">T1098</span> <span class="e">no rule fired</span> · <span class="d">SOC review only</span></pre>
+    </div>
+  </div>
+
+  <!-- ============== FILTERS ============== -->
+  <div class="filters">
+    <span class="lbl">Topic</span>
+    <button class="chip active">All</button>
+    <button class="chip">Teardowns</button>
+    <button class="chip">Detection notes</button>
+    <button class="chip">Threat intel</button>
+    <button class="chip">Engineering</button>
+    <button class="chip">Field reports</button>
+    <div class="search">
+      <span>⌕</span>
+      <input type="text" placeholder="Search 23 articles, MITRE IDs, services…" />
+      <span class="kbd">⌘ K</span>
+    </div>
+  </div>
+
+  <!-- ============== ARTICLES GRID ============== -->
+  <div class="articles">
+
+    <article class="article">
+      <div class="top">
+        <span class="cat">Detection notes</span>
+        <span class="date">Apr 11, 2026</span>
+      </div>
+      <h3 class="title">Why your <span class="em">GuardDuty</span> rule for KMS-imported keys probably misses ALPHV.</h3>
+      <p class="blurb">GuardDuty fires on <code style="font-family:var(--mono); background:var(--bg-3); padding:1px 4px;">CreateKey</code> with origin EXTERNAL - but the ALPHV variant we tracked imports material in a separate region first. We ran the chain four ways and only one triggered an alert.</p>
+      <div class="foot">
+        <span class="author"><span class="dot c">A</span>Ayush K.</span>
+        <span>9 min</span>
+      </div>
+    </article>
+
+    <article class="article">
+      <div class="top">
+        <span class="cat">Teardown</span>
+        <span class="date">Apr 04, 2026</span>
+      </div>
+      <h3 class="title">Eventual consistency in IAM, six years later. <span class="em">Still a race window.</span></h3>
+      <p class="blurb">Originally disclosed 2020, AWS partially mitigated by 2022. We measured the window again on five fresh accounts and got 18-second medians. The exploit hasn't been patched - it's been documented.</p>
+      <div class="foot">
+        <span class="author"><span class="dot h">H</span>Himanshu K.</span>
+        <span>11 min</span>
+      </div>
+    </article>
+
+    <article class="article">
+      <div class="top">
+        <span class="cat">Threat intel</span>
+        <span class="date">Mar 28, 2026</span>
+      </div>
+      <h3 class="title">Mapping APT41's AWS playbook against the cloud ATT&amp;CK matrix.</h3>
+      <p class="blurb">Pulled from the 2024 DOJ indictment and three IR reports. APT41 stays on three techniques 80% of the time. We've shipped two - the third's on the roadmap.</p>
+      <div class="foot">
+        <span class="author"><span class="dot w">S</span>Smita P.</span>
+        <span>14 min</span>
+      </div>
+    </article>
+
+    <article class="article">
+      <div class="top">
+        <span class="cat">Engineering</span>
+        <span class="date">Mar 19, 2026</span>
+      </div>
+      <h3 class="title">Pulumi for adversarial infra: shaping a sandbox that <span class="em">looks</span> like prod.</h3>
+      <p class="blurb">Most attack labs ship a clean account. Real attackers find prod-shaped accounts - noisy IAM, mixed regions, legacy roles. Here's how we shape ours to mirror that, in Pulumi.</p>
+      <div class="foot">
+        <span class="author"><span class="dot h">H</span>Himanshu K.</span>
+        <span>8 min</span>
+      </div>
+    </article>
+
+    <article class="article">
+      <div class="top">
+        <span class="cat">Detection notes</span>
+        <span class="date">Mar 12, 2026</span>
+      </div>
+      <h3 class="title">T1556.005 in the wild: the API calls that don't make it into CloudTrail.</h3>
+      <p class="blurb">A short list with sources. Two of them are documented, three we found by diffing actual traffic against trail outputs. Treat as a research note, not a complete list.</p>
+      <div class="foot">
+        <span class="author"><span class="dot c">A</span>Ayush K.</span>
+        <span>6 min</span>
+      </div>
+    </article>
+
+    <article class="article">
+      <div class="top">
+        <span class="cat">Field report</span>
+        <span class="date">Mar 04, 2026</span>
+      </div>
+      <h3 class="title">What we learned from <span class="em">14 detection teams</span> running MayaTrail in private beta.</h3>
+      <p class="blurb">Average detection coverage gap: 41%. Most-missed technique: T1098 (account manipulation). Most surprising: half the teams already had a rule for it - it just didn't trigger on the chain we ran.</p>
+      <div class="foot">
+        <span class="author"><span class="dot c">M</span>Maya team</span>
+        <span>7 min</span>
+      </div>
+    </article>
+
+    <article class="article">
+      <div class="top">
+        <span class="cat">Teardown</span>
+        <span class="date">Feb 22, 2026</span>
+      </div>
+      <h3 class="title">S3 enumeration patterns: how <span class="em">ListBucket</span> velocity maps to real exfil.</h3>
+      <p class="blurb">We ran the S3 exfil chain at 12 different request velocities. Below 4 RPS the standard CloudTrail rules don't fire. The interesting band is 8-20 RPS.</p>
+      <div class="foot">
+        <span class="author"><span class="dot h">H</span>Himanshu K.</span>
+        <span>10 min</span>
+      </div>
+    </article>
+
+    <article class="article">
+      <div class="top">
+        <span class="cat">Detection notes</span>
+        <span class="date">Feb 14, 2026</span>
+      </div>
+      <h3 class="title">Cross-region session re-use: the quiet half of <span class="em">T1078.</span></h3>
+      <p class="blurb">When a session originates in us-east-1 but the API calls land in ap-south-1, most off-the-shelf rules don't correlate. We rebuilt three of them to demonstrate the gap.</p>
+      <div class="foot">
+        <span class="author"><span class="dot w">S</span>Smita P.</span>
+        <span>9 min</span>
+      </div>
+    </article>
+
+    <article class="article">
+      <div class="top">
+        <span class="cat">Engineering</span>
+        <span class="date">Feb 02, 2026</span>
+      </div>
+      <h3 class="title">Why we re-wrote our scenario runner in Go.</h3>
+      <p class="blurb">Python+boto3 was fine for prototyping. For peer review and reproducibility, single-binary distribution mattered. Notes on the migration and what we lost.</p>
+      <div class="foot">
+        <span class="author"><span class="dot h">H</span>Himanshu K.</span>
+        <span>5 min</span>
+      </div>
+    </article>
+
+  </div>
+
+  <!-- ============== SUBSCRIBE ============== -->
+  <div class="subscribe">
+    <div>
+      <h3>The Mayatrail <span class="em">field notes</span>, fortnightly.</h3>
+      <p>One real attack, one detection note, one tool we built. No marketing, no funnels. Sent every other Tuesday by the research team.</p>
+    </div>
+    <form class="subscribe-form" onsubmit="event.preventDefault();">
+      <input class="input" type="email" placeholder="you@security-team.example" />
+      <button class="btn">Subscribe <span class="arrow">→</span></button>
+      <div class="feed-links">
+        <a>RSS feed ↗</a>
+        <a>JSON feed ↗</a>
+        <a>Atom ↗</a>
+        <span style="margin-left:auto;">1,840 subscribers</span>
+      </div>
+    </form>
+  </div>
+
+  <!-- ============== AUTHORS + NOTES ============== -->
+  <div class="below-grid">
+
+    <div class="authors">
+      <h3>Research team</h3>
+      <div class="authors-list">
+        <div class="author-card">
+          <span class="av c1">H</span>
+          <div>
+            <div class="name">Himanshu Khandelwal</div>
+            <div class="role">Founder · Cloud security</div>
+          </div>
+        </div>
+        <div class="author-card">
+          <span class="av c2">A</span>
+          <div>
+            <div class="name">Ayush Kumar</div>
+            <div class="role">Detection engineering</div>
+          </div>
+        </div>
+        <div class="author-card">
+          <span class="av c3">S</span>
+          <div>
+            <div class="name">Smita Patil</div>
+            <div class="role">Threat intel</div>
+          </div>
+        </div>
+        <div class="author-card">
+          <span class="av c4">R</span>
+          <div>
+            <div class="name">Rohan Mehta</div>
+            <div class="role">Scenario engineering</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <h3>Lab notes</h3>
+      <div class="note">
+        <span class="when"><span class="id">N-014</span> · May 09, 2026</span>
+        Reproducing the Capital One exfil chain on a current account - got the same shape, but the policy gates have shifted. Notes incoming.
+      </div>
+      <div class="note">
+        <span class="when"><span class="id">N-013</span> · May 02, 2026</span>
+        New detection rule from a beta customer for T1098 fired on our chain in 1.6s. Faster than any open-source rule we've tested. Asking permission to publish.
+      </div>
+      <div class="note">
+        <span class="when"><span class="id">N-012</span> · Apr 24, 2026</span>
+        Lambda execution-environment escape (T1611) prototype works in isolation, breaks under Pulumi destroy. Investigating teardown lifecycle.
+      </div>
+      <div class="note">
+        <span class="when"><span class="id">N-011</span> · Apr 17, 2026</span>
+        Reached out to AWS Security about the eventual-consistency window timing. Their response: documented behavior. Will not patch. Adding to teardown.
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<footer>
+  <span><b style="color:var(--ink-2)">© 2026 MAYATRAIL TECH</b> · v0.4.1</span>
+  <div class="links">
+    <a href="MayaTrail Landing.html">Landing</a>
+    <a href="MayaTrail Scenarios.html">Scenarios</a>
+    <a href="MayaTrail Coverage.html">Coverage</a>
+    <a>GitHub ↗</a>
+  </div>
+</footer>
+
+</main>
+</body>
+</html>

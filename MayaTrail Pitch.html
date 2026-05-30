@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MayaTrail - Pitch Deck</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap">
+
+<style>
+  :root {
+    --bg:        #06070a;
+    --bg-1:      #0b0d12;
+    --bg-2:      #11141c;
+    --bg-3:      #181c26;
+    --rule:      #1d212c;
+    --rule-2:    #2a3040;
+    --rule-3:    #3a4256;
+    --ink:       #e8eaf0;
+    --ink-2:     #aab0bf;
+    --ink-3:     #6c7385;
+    --ink-4:     #404654;
+    --hot:       #ff4b6e;
+    --cool:      #6aa8ff;
+    --cool-dim:  rgba(106,168,255,0.18);
+    --warm:      #f5b454;
+    --ok:        #6fb35f;
+    --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --serif: 'Instrument Serif', Georgia, serif;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #000; font-family: var(--sans); color: var(--ink); }
+
+  deck-stage > section {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    padding: 80px 100px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  deck-stage > section::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+    background-image:
+      radial-gradient(ellipse 1400px 600px at 75% -200px, rgba(106,168,255,0.05), transparent 60%),
+      radial-gradient(ellipse 800px 500px at 10% 80%, rgba(255,75,110,0.025), transparent 60%);
+  }
+  deck-stage > section::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+    background-image: radial-gradient(rgba(255,255,255,0.02) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  deck-stage > section > * { position: relative; z-index: 1; }
+
+  /* common */
+  .eyebrow {
+    font-family: var(--mono); font-size: 14px;
+    text-transform: uppercase; letter-spacing: 0.22em;
+    color: var(--cool);
+    display: inline-flex; align-items: center; gap: 14px;
+    margin-bottom: 22px;
+  }
+  .eyebrow::before { content: ''; width: 24px; height: 1px; background: var(--cool); }
+  .eyebrow.warn { color: var(--warm); }
+  .eyebrow.warn::before { background: var(--warm); }
+  .eyebrow.hot { color: var(--hot); }
+  .eyebrow.hot::before { background: var(--hot); }
+
+  h1.slide-h {
+    font-family: var(--sans); font-weight: 600;
+    font-size: 76px; line-height: 1.12;
+    letter-spacing: -0.028em; margin: 0;
+  }
+  h1.slide-h.tight { font-size: 56px; line-height: 1.15; }
+  h1.slide-h.huge  { font-size: 120px; line-height: 1.04; }
+  h1.slide-h .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); letter-spacing: -0.005em; }
+  h1.slide-h .hot { color: var(--hot); font-family: var(--serif); font-style: italic; font-weight: 400; }
+
+  .lede {
+    font-family: var(--sans); font-size: 22px; line-height: 1.55;
+    color: var(--ink-2); margin: 26px 0 0; max-width: 1100px;
+  }
+  .lede b { color: var(--ink); font-weight: 600; }
+
+  .slide-foot {
+    position: absolute; left: 100px; right: 100px; bottom: 40px; z-index: 2;
+    display: flex; justify-content: space-between;
+    font-family: var(--mono); font-size: 12px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--ink-4);
+  }
+  .slide-foot .l { color: var(--ink-3); }
+  .slide-foot a { color: var(--ink-3); text-decoration: none; }
+
+  .mark-diamond {
+    display: inline-block; width: 14px; height: 14px;
+    border: 1.5px solid var(--cool);
+    transform: rotate(45deg);
+    position: relative; margin-right: 14px; vertical-align: middle;
+  }
+  .mark-diamond::after {
+    content: ''; position: absolute; inset: 2px;
+    background: var(--cool); box-shadow: 0 0 8px var(--cool-dim);
+  }
+
+  /* ============ TITLE ============ */
+  .title-slide {
+    display: flex; flex-direction: column; justify-content: center;
+    min-height: 100%; padding: 0;
+  }
+  .title-slide .brand {
+    font-family: var(--mono); font-size: 18px;
+    letter-spacing: 0.32em; color: var(--ink-3);
+    display: inline-flex; align-items: center;
+    margin-bottom: 70px;
+  }
+  .title-slide .brand b { color: var(--ink); font-weight: 600; letter-spacing: 0.18em; }
+  .title-slide h1 {
+    font-size: 110px; line-height: 1.0;
+    max-width: 1500px; letter-spacing: -0.028em;
+  }
+  .title-slide .subtitle {
+    font-family: var(--sans); font-size: 28px; line-height: 1.5;
+    color: var(--ink-2); margin-top: 40px; max-width: 1100px;
+  }
+  .title-slide .subtitle b { color: var(--ink); font-weight: 600; }
+  .title-slide .bottom-row {
+    margin-top: 90px;
+    display: flex; gap: 50px; align-items: baseline;
+    font-family: var(--mono); font-size: 13px;
+    color: var(--ink-3); letter-spacing: 0.18em; text-transform: uppercase;
+  }
+  .title-slide .bottom-row b { color: var(--ink); font-weight: 500; font-family: var(--sans); font-size: 17px; letter-spacing: -0.005em; text-transform: none; }
+
+  /* ============ STATS / BIG FIGURE ============ */
+  .big-stat {
+    display: grid; grid-template-columns: 1.2fr 1fr;
+    gap: 80px; margin-top: 60px; align-items: end;
+  }
+  .big-stat .figure {
+    font-family: var(--sans); font-weight: 700;
+    font-size: 280px; line-height: 0.9;
+    color: var(--hot); letter-spacing: -0.04em;
+    font-feature-settings: 'tnum';
+  }
+  .big-stat .figure .unit {
+    font-size: 96px; color: var(--ink-2); font-weight: 400;
+    letter-spacing: -0.02em; margin-left: 12px;
+  }
+  .big-stat .text p {
+    font-family: var(--sans); font-size: 22px; line-height: 1.55;
+    color: var(--ink-2); margin: 0;
+  }
+  .big-stat .text p + p { margin-top: 18px; }
+  .big-stat .text p b { color: var(--ink); font-weight: 600; }
+
+  /* stat strip */
+  .stat-strip {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    border: 1px solid var(--rule-2); margin-top: 60px;
+  }
+  .stat-strip > div { padding: 30px 32px; border-right: 1px solid var(--rule); }
+  .stat-strip > div:last-child { border-right: 0; }
+  .stat-strip .k {
+    font-family: var(--mono); font-size: 12px; color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: 0.18em; margin-bottom: 12px;
+  }
+  .stat-strip .v {
+    font-family: var(--sans); font-size: 60px; font-weight: 600;
+    color: var(--ink); letter-spacing: -0.025em; line-height: 1;
+  }
+  .stat-strip .v .em { color: var(--cool); font-family: var(--serif); font-style: italic; font-weight: 400; }
+  .stat-strip .v .hot { color: var(--hot); }
+  .stat-strip .sub {
+    font-family: var(--sans); font-size: 14px; color: var(--ink-2);
+    margin-top: 10px; line-height: 1.4;
+  }
+
+  /* ============ COMPARE TABLE ============ */
+  .compare {
+    display: grid; grid-template-columns: repeat(5, 1fr);
+    margin-top: 50px;
+    border: 1px solid var(--rule);
+  }
+  .compare > div {
+    padding: 24px;
+    border-right: 1px solid var(--rule);
+    background: var(--bg-1);
+  }
+  .compare > div:last-child { border-right: 0; }
+  .compare .h {
+    font-family: var(--mono); font-size: 13px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--ink-3); margin-bottom: 10px;
+  }
+  .compare .name {
+    font-family: var(--sans); font-size: 22px; font-weight: 600;
+    color: var(--ink); letter-spacing: -0.015em; margin-bottom: 14px;
+  }
+  .compare p {
+    font-family: var(--sans); font-size: 14.5px; line-height: 1.5;
+    color: var(--ink-2); margin: 0;
+  }
+  .compare .verdict {
+    margin-top: 14px;
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--hot);
+    padding-top: 12px; border-top: 1px dashed var(--rule);
+  }
+
+  /* ============ PRODUCT GRID ============ */
+  .product-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 36px; margin-top: 40px;
+  }
+  .panel {
+    border: 1px solid var(--rule-2); background: var(--bg-1);
+    padding: 36px 38px;
+  }
+  .panel h3 {
+    font-family: var(--sans); font-size: 28px; font-weight: 600;
+    color: var(--ink); margin: 0 0 14px; letter-spacing: -0.018em; line-height: 1.15;
+  }
+  .panel h3 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+  .panel p {
+    font-family: var(--sans); font-size: 16px; line-height: 1.55;
+    color: var(--ink-2); margin: 0;
+  }
+  .panel p b { color: var(--ink); font-weight: 600; }
+  .panel .label {
+    font-family: var(--mono); font-size: 12px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--cool); margin-bottom: 16px;
+  }
+
+  /* ============ HOW IT WORKS ============ */
+  .steps {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    margin-top: 60px;
+    border: 1px solid var(--rule);
+  }
+  .step {
+    padding: 32px 28px;
+    border-right: 1px solid var(--rule);
+    background: var(--bg-1);
+    position: relative;
+  }
+  .step:last-child { border-right: 0; }
+  .step .n {
+    font-family: var(--mono); font-size: 13px; color: var(--cool);
+    margin-bottom: 24px; display: inline-block;
+    padding: 4px 10px; border: 1px solid var(--cool);
+    letter-spacing: 0.16em;
+  }
+  .step h3 {
+    font-family: var(--sans); font-size: 24px; font-weight: 600;
+    margin: 0 0 12px; letter-spacing: -0.018em; line-height: 1.18;
+  }
+  .step p {
+    font-family: var(--sans); font-size: 15px; line-height: 1.55;
+    color: var(--ink-2); margin: 0;
+  }
+  .step p b { color: var(--ink); }
+
+  /* ============ QUADRANT ============ */
+  .quadrant {
+    position: relative; width: 100%; height: 640px;
+    margin-top: 40px;
+    border: 1px solid var(--rule-2);
+    background: linear-gradient(180deg, var(--bg-1), var(--bg));
+  }
+  .quadrant .axis-h, .quadrant .axis-v {
+    position: absolute; background: var(--rule-3);
+  }
+  .quadrant .axis-h { left: 0; right: 0; top: 50%; height: 1px; }
+  .quadrant .axis-v { top: 0; bottom: 0; left: 50%; width: 1px; }
+  .quadrant .label {
+    position: absolute;
+    font-family: var(--mono); font-size: 13px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--ink-3);
+  }
+  .quadrant .label.x-left  { left: 24px;   top: calc(50% - 36px); }
+  .quadrant .label.x-right { right: 24px;  top: calc(50% - 36px); text-align: right; }
+  .quadrant .label.y-top   { left: calc(50% + 16px); top: 24px; }
+  .quadrant .label.y-bot   { left: calc(50% + 16px); bottom: 24px; }
+  .quadrant .label b { color: var(--ink-2); display: block; font-weight: 500; font-size: 14px; }
+
+  .qpoint {
+    position: absolute; transform: translate(-50%, -50%);
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+  }
+  .qpoint .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--ink-3); box-shadow: 0 0 0 4px var(--bg-1); }
+  .qpoint.us .dot { background: var(--cool); box-shadow: 0 0 0 4px var(--bg-1), 0 0 22px var(--cool); width: 20px; height: 20px; }
+  .qpoint.direct .dot { background: var(--warm); box-shadow: 0 0 0 4px var(--bg-1), 0 0 14px var(--warm); }
+  .qpoint .lbl {
+    font-family: var(--sans); font-weight: 600; font-size: 16px;
+    color: var(--ink); letter-spacing: -0.005em;
+    padding: 4px 10px;
+    background: rgba(11,13,18,0.85);
+    border: 1px solid var(--rule-2);
+    white-space: nowrap;
+  }
+  .qpoint.us .lbl { color: var(--cool); border-color: var(--cool); }
+  .qpoint.direct .lbl { color: var(--warm); border-color: var(--warm); }
+
+  /* ============ MOAT GRID ============ */
+  .moat-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 20px; margin-top: 50px;
+  }
+  .moat-card {
+    border: 1px solid var(--rule-2); background: var(--bg-1);
+    padding: 30px 32px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .moat-card .n {
+    font-family: var(--mono); font-size: 50px;
+    color: var(--cool); letter-spacing: -0.02em; line-height: 1;
+    font-weight: 500;
+  }
+  .moat-card h3 {
+    font-family: var(--sans); font-size: 26px; font-weight: 600;
+    margin: 0; letter-spacing: -0.02em; line-height: 1.15;
+  }
+  .moat-card h3 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+  .moat-card p {
+    font-family: var(--sans); font-size: 15.5px; line-height: 1.55;
+    color: var(--ink-2); margin: 0;
+  }
+  .moat-card p b { color: var(--ink); font-weight: 600; }
+
+  /* ============ BIZ MODEL ============ */
+  .biz-cols {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 20px; margin-top: 50px;
+  }
+  .tier {
+    border: 1px solid var(--rule-2); background: var(--bg-1);
+    padding: 36px 36px 30px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .tier.hosted { border-color: var(--cool); background: linear-gradient(180deg, rgba(106,168,255,0.04), transparent); }
+  .tier .tag {
+    font-family: var(--mono); font-size: 12px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--ink-3);
+  }
+  .tier.hosted .tag { color: var(--cool); }
+  .tier h3 {
+    font-family: var(--sans); font-size: 36px; font-weight: 600;
+    color: var(--ink); margin: 0; letter-spacing: -0.025em; line-height: 1.05;
+  }
+  .tier h3 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+  .tier p {
+    font-family: var(--sans); font-size: 16px; line-height: 1.55;
+    color: var(--ink-2); margin: 0;
+  }
+  .tier ul {
+    margin: 0; padding: 0; list-style: none;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .tier ul li {
+    font-family: var(--sans); font-size: 15px; line-height: 1.55;
+    color: var(--ink-2);
+    padding: 8px 0;
+    border-bottom: 1px dashed var(--rule);
+    display: flex; gap: 10px;
+  }
+  .tier ul li:last-child { border-bottom: 0; }
+  .tier ul li::before {
+    content: '✓'; color: var(--cool); font-family: var(--mono); font-size: 13px; flex-shrink: 0;
+  }
+  .tier .price {
+    font-family: var(--sans); font-size: 22px; font-weight: 600;
+    color: var(--ink); letter-spacing: -0.015em;
+    padding-top: 14px; border-top: 1px solid var(--rule);
+  }
+  .tier .price .b { color: var(--cool); }
+
+  /* ============ TRACTION ============ */
+  .traction {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    margin-top: 50px;
+    border: 1px solid var(--rule);
+  }
+  .traction > div { padding: 28px 30px; border-right: 1px solid var(--rule); }
+  .traction > div:last-child { border-right: 0; }
+  .traction .v {
+    font-family: var(--sans); font-size: 64px; font-weight: 600;
+    color: var(--ink); letter-spacing: -0.028em; line-height: 1;
+  }
+  .traction .v .em { color: var(--cool); font-family: var(--serif); font-style: italic; font-weight: 400; }
+  .traction .k {
+    font-family: var(--mono); font-size: 12px; color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: 0.18em; margin-top: 14px;
+  }
+  .traction .sub {
+    font-family: var(--sans); font-size: 14px; color: var(--ink-2);
+    margin-top: 8px; line-height: 1.45;
+  }
+
+  /* ============ TEAM ============ */
+  .team-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 20px; margin-top: 50px;
+  }
+  .person {
+    border: 1px solid var(--rule-2); background: var(--bg-1);
+    padding: 36px 36px;
+    display: flex; flex-direction: column; gap: 14px;
+    min-height: 360px;
+  }
+  .person .avatar {
+    width: 80px; height: 80px;
+    border: 1px solid var(--cool);
+    background: rgba(106,168,255,0.04);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 28px; color: var(--cool);
+    letter-spacing: 0.05em;
+  }
+  .person h3 {
+    font-family: var(--sans); font-size: 26px; font-weight: 600;
+    color: var(--ink); margin: 4px 0 0; letter-spacing: -0.015em;
+  }
+  .person .role {
+    font-family: var(--mono); font-size: 12px; color: var(--cool);
+    text-transform: uppercase; letter-spacing: 0.18em;
+  }
+  .person p {
+    font-family: var(--sans); font-size: 15px; line-height: 1.6;
+    color: var(--ink-2); margin: 0;
+  }
+
+  /* ============ CLOSE ============ */
+  .close-slide {
+    display: flex; flex-direction: column; justify-content: center;
+    min-height: 100%; padding: 0;
+  }
+  .close-slide h1 {
+    font-size: 84px; line-height: 1.05;
+    letter-spacing: -0.025em;
+    max-width: 1400px;
+  }
+  .close-slide .contact {
+    margin-top: 60px;
+    display: grid; grid-template-columns: repeat(3, auto);
+    gap: 56px;
+    font-family: var(--mono); font-size: 13px;
+    color: var(--ink-3); letter-spacing: 0.18em; text-transform: uppercase;
+  }
+  .close-slide .contact b {
+    color: var(--ink); font-family: var(--sans); font-size: 22px;
+    font-weight: 600; letter-spacing: -0.005em; text-transform: none;
+    display: block; margin-top: 8px;
+  }
+  .close-slide .contact a { color: var(--cool); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<deck-stage width="1920" height="1080">
+
+<!-- ============ SLIDE 01 · TITLE ============ -->
+<section data-screen-label="01 Title">
+  <div class="title-slide">
+    <div class="brand">
+      <span class="mark-diamond"></span>
+      <b>MAYATRAIL</b>
+    </div>
+    <h1 class="slide-h">
+      Run real cloud attacks against your own AWS.<br/>
+      See <span class="em">which detections</span> fire.
+    </h1>
+    <p class="subtitle">
+      <b>Adversary emulation for cloud detection engineers.</b><br/>
+      Open-core. APT-led. Ships the detection content as evidence.
+    </p>
+    <div class="bottom-row">
+      <div>STAGE<br/><b>Pre-seed · private beta</b></div>
+      <div>BASE<br/><b>San Francisco · Bengaluru</b></div>
+      <div>RAISING<br/><b>Conversations open</b></div>
+      <div>WEB<br/><b>mayatrail.io</b></div>
+    </div>
+  </div>
+  <div class="slide-foot">
+    <span class="l">MayaTrail · pitch · 2026</span>
+    <span>01 / 14</span>
+  </div>
+</section>
+
+<!-- ============ SLIDE 02 · PROBLEM ============ -->
+<section data-screen-label="02 Problem">
+  <div class="eyebrow hot">THE PROBLEM</div>
+  <h1 class="slide-h">
+    Cloud attacks land in <span class="hot">minutes.</span><br/>
+    Cloud detections take <span class="hot">months.</span>
+  </h1>
+  <p class="lede">
+    The 2024 Scattered Spider compromise of MGM took <b>~10 minutes</b> from helpdesk social-engineering to
+    AdministratorAccess in AWS. The breach was <b>publicly disclosed 14 days later</b>. Every cloud-native
+    APT in the wild follows the same shape: a fast chain across services your detection team has never tested.
+  </p>
+
+  <div class="stat-strip">
+    <div>
+      <div class="k">IBM COST OF BREACH 2024</div>
+      <div class="v">$5.17<span style="font-size: 28px; color: var(--ink-2); font-weight: 400; margin-left: 8px;">M</span></div>
+      <div class="sub">Avg. cloud-related data breach</div>
+    </div>
+    <div>
+      <div class="k">MEDIAN TIME TO IDENTIFY</div>
+      <div class="v">194<span style="font-size: 24px; color: var(--ink-2); font-weight: 400; margin-left: 8px;">days</span></div>
+      <div class="sub">Cloud breaches, 2024</div>
+    </div>
+    <div>
+      <div class="k">MEDIAN CLOUD CHAIN</div>
+      <div class="v"><span class="hot">12</span><span style="font-size: 28px; color: var(--ink-2); font-weight: 400; margin-left: 8px;">min</span></div>
+      <div class="sub">Initial access → impact (Sysdig, 2024)</div>
+    </div>
+  </div>
+
+  <div class="slide-foot">
+    <span class="l">Sources: IBM Cost of a Data Breach 2024 · Sysdig Cloud Threat Report</span>
+    <span>02 / 14</span>
+  </div>
+</section>
+
+<!-- ============ SLIDE 03 · WHY THE GAP ============ -->
+<section data-screen-label="03 Detection gap">
+  <div class="eyebrow">WHY THE GAP EXISTS</div>
+  <h1 class="slide-h tight">
+    Most detection content was written for <span class="em">endpoints.</span><br/>
+    The attackers moved to <span class="em">control planes.</span>
+  </h1>
+  <p class="lede">
+    Sigma rules, SIEM content libraries, EDR signatures - the bulk of the detection-engineering corpus targets
+    process and file behavior. But the modern cloud attack is a sequence of <b>signed AWS API calls</b>
+    against a service mesh: AttachRolePolicy, AssumeRole, CreateApp, GetSecretValue, StopLogging.
+    The control plane is where the kill chain runs - and where coverage is weakest.
+  </p>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-top: 50px;">
+    <div style="border: 1px solid var(--rule-2); background: var(--bg-1); padding: 24px 28px;">
+      <div class="eyebrow" style="margin-bottom: 14px; font-size: 11px;">ENDPOINT (MATURE)</div>
+      <div style="font-family: var(--sans); font-size: 24px; color: var(--ink); font-weight: 600; letter-spacing: -0.015em; line-height: 1.2; margin-bottom: 10px;">~12,000+</div>
+      <div style="font-family: var(--sans); font-size: 14px; color: var(--ink-2); line-height: 1.5;">Open Sigma rules for Windows/Linux process telemetry, public + commercial.</div>
+    </div>
+    <div style="border: 1px solid var(--warm); background: rgba(245,180,84,0.04); padding: 24px 28px;">
+      <div class="eyebrow warn" style="margin-bottom: 14px; font-size: 11px;">CLOUD (EMERGING)</div>
+      <div style="font-family: var(--sans); font-size: 24px; color: var(--warm); font-weight: 600; letter-spacing: -0.015em; line-height: 1.2; margin-bottom: 10px;">~400</div>
+      <div style="font-family: var(--sans); font-size: 14px; color: var(--ink-2); line-height: 1.5;">Open Sigma rules for AWS / Azure / GCP CloudTrail equivalents, combined.</div>
+    </div>
+    <div style="border: 1px solid var(--hot); background: rgba(255,75,110,0.04); padding: 24px 28px;">
+      <div class="eyebrow hot" style="margin-bottom: 14px; font-size: 11px;">VERIFIED-FIRING</div>
+      <div style="font-family: var(--sans); font-size: 24px; color: var(--hot); font-weight: 600; letter-spacing: -0.015em; line-height: 1.2; margin-bottom: 10px;"><span style="font-family: var(--serif); font-style: italic; font-weight: 400;">~zero</span></div>
+      <div style="font-family: var(--sans); font-size: 14px; color: var(--ink-2); line-height: 1.5;">Rules whose authors actually ran the matching attack chain end-to-end against real AWS.</div>
+    </div>
+  </div>
+
+  <div class="slide-foot">
+    <span class="l">Open-rule counts: github.com/SigmaHQ/sigma · github.com/Cloud-Detection-Engineering</span>
+    <span>03 / 14</span>
+  </div>
+</section>
+
+<!-- ============ SLIDE 04 · WHAT TEAMS DO TODAY ============ -->
+<section data-screen-label="04 Status quo">
+  <div class="eyebrow warn">HOW TEAMS TEST TODAY</div>
+  <h1 class="slide-h tight">
+    Five workarounds. <span class="em">None of them prove cloud detections fire.</span>
+  </h1>
+
+  <div class="compare">
+    <div>
+      <div class="h">01 · TABLETOPS</div>
+      <div class="name">Talk, don't test</div>
+      <p>SOC walks through a scenario verbally with the IR team. Quarterly. No actual rules exercised.</p>
+      <div class="verdict">no signal on real detection content</div>
+    </div>
+    <div>
+      <div class="h">02 · ATOMIC TESTS</div>
+      <div class="name">Stratus / Atomic Red Team</div>
+      <p>One technique at a time, in isolation. Useful for unit-testing but a real APT chains 8-15 steps across services.</p>
+      <div class="verdict">no signal on chained kill paths</div>
+    </div>
+    <div>
+      <div class="h">03 · CSPM</div>
+      <div class="name">Wiz, Prisma, Lacework</div>
+      <p>Find misconfigurations, posture drift, asset inventory. Excellent at config; not designed to test behavior.</p>
+      <div class="verdict">posture not detection</div>
+    </div>
+    <div>
+      <div class="h">04 · ANNUAL PENTEST</div>
+      <div class="name">External engagement</div>
+      <p>Two weeks once a year. Skilled but episodic. Detection team rarely sees the chain in their own SIEM.</p>
+      <div class="verdict">snapshot not continuous</div>
+    </div>
+    <div>
+      <div class="h">05 · ENTERPRISE BAS</div>
+      <div class="name">AttackIQ, SafeBreach</div>
+      <p>Agent-based, endpoint-shaped, six-figure contracts. Cloud control-plane chains are not the focus.</p>
+      <div class="verdict">host-shaped, not cloud-shaped</div>
+    </div>
+  </div>
+
+  <p class="lede" style="margin-top: 36px;">
+    Detection teams are flying blind on the place attacks actually land. We built MayaTrail because <b>we were that team.</b>
+  </p>
+
+  <div class="slide-foot">
+    <span class="l">MayaTrail · positioning</span>
+    <span>04 / 14</span>
+  </div>
+</section>
+
+<!-- ============ SLIDE 05 · MAYATRAIL ============ -->
+<section data-screen-label="05 What MayaTrail is">
+  <div class="eyebrow">MAYATRAIL · ONE SCREEN</div>
+  <h1 class="slide-h">
+    A graded drill that <span class="em">runs the attack</span><br/>
+    in your own AWS - and ships <span class="em">the detections.</span>
+  </h1>
+
+  <div class="product-grid">
+    <div class="panel">
+      <div class="label">WHAT GOES IN</div>
+      <h3>An <span class="em">approved</span> attack plan.</h3>
+      <p>
+        Named APT chain (Scattered Spider, AMBERSQUID, BlackCat, TeamTNT). Pulumi sandbox in a scoped AWS account
+        you nominate. STS role, no long-lived keys. Sub-$2 standing cost.
+      </p>
+    </div>
+    <div class="panel">
+      <div class="label">WHAT COMES OUT · THREE DELIVERABLES</div>
+      <h3>Sigma rules. <span class="em">IR playbook.</span> Signed evidence.</h3>
+      <p>
+        Every drill produces <b>three things your team uses on Monday</b>:
+        a Sigma rule bundle (one per technique), a 700+ line IR playbook (prep / identify / contain / eradicate / recover, with real AWS CLI queries),
+        and a signed, hash-chained evidence bundle. Drop them into your detection repo, your runbook wiki, and your audit folder respectively.
+      </p>
+    </div>
+  </div>
+
+  <p class="lede" style="margin-top: 36px;">
+    The novelty is not the attacks - it is the <b>output</b>. MayaTrail is the first cloud emulation tool
+    where the deliverable is detection content <b>and</b> the IR playbook to respond to it - not a vendor dashboard.
+  </p>
+
+  <div class="slide-foot">
+    <span class="l">MayaTrail · the product</span>
+    <span>05 / 14</span>
+  </div>
+</section>
+
+<!-- ============ SLIDE 06 · HOW IT WORKS ============ -->
+<section data-screen-label="06 How it works">
+  <div class="eyebrow">HOW IT WORKS</div>
+  <h1 class="slide-h tight">
+    Four steps. <span class="em">No agents. No long-lived keys.</span>
+  </h1>
+
+  <div class="steps">
+    <div class="step">
+      <span class="n">01 · CONNECT</span>
+      <h3>STS role, two lines</h3>
+      <p>Grant MayaTrail an assumable role in a scoped sandbox account. Trust policy is two lines. <b>No credentials leave AWS.</b></p>
+    </div>
+    <div class="step">
+      <span class="n">02 · PROVISION</span>
+      <h3>Pulumi sandbox</h3>
+      <p>An intentionally-leaky stack spins up in ~60s. Tagged with run-id. Costs $0.003 / hour standing. Mirrors a real account in shape, not in data.</p>
+    </div>
+    <div class="step">
+      <span class="n">03 · RUN</span>
+      <h3>Execute a named APT</h3>
+      <p>Pick a chain. Watch it land in your CloudTrail. Every step narrated with MITRE technique and the Sigma rule that should fire.</p>
+    </div>
+    <div class="step">
+      <span class="n">04 · TEAR DOWN</span>
+      <h3>One command, signed bundle</h3>
+      <p><b>pulumi destroy</b> with a post-condition: every resource must return NotFound. Evidence packet is yours to keep, signed.</p>
+    </div>
+  </div>
+
+  <p class="lede" style="margin-top: 36px;">
+    A typical AMBERSQUID drill: <b>~12 minutes wall clock</b> · 13 techniques · 11 Sigma rules generated · $1.40 worst-case AWS spend · clean teardown.
+  </p>
+
+  <div class="slide-foot">
+    <span class="l">MayaTrail · operational model</span>
+    <span>06 / 14</span>
+  </div>
+</section>
+
+<!-- ============ SLIDE 07 · WHY NOW ============ -->
+<section data-screen-label="07 Why now">
+  <div class="eyebrow">WHY NOW</div>
+  <h1 class="slide-h tight">
+    Four trend lines that <span class="em">crossed in 2024.</span>
+  </h1>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 50px;">
+    <div class="panel">
+      <div class="label">01 · CLOUD ATTACK FREQUENCY</div>
+      <h3>Sysdig: <span class="em">cloud attacks doubled</span> 2022 → 2024.</h3>
+      <p>SCATTERED SPIDER, AMBERSQUID, BlackCat, TeamTNT, LAPSUS$ - the 2023-2024 named campaigns ran AWS-native chains, not endpoint malware. Defenders' content libraries did not.</p>
+    </div>
+    <div class="panel">
+      <div class="label">02 · MITRE CLOUD MATRIX MATURED</div>
+      <h3><span class="em">v15 (2024)</span> ships full IaaS sub-techniques.</h3>
+      <p>For the first time, every step in a cloud APT chain has a stable taxonomy. We can ship Sigma rules pinned to MITRE technique IDs and have them survive ATT&amp;CK version churn.</p>
+    </div>
+    <div class="panel">
+      <div class="label">03 · DETECTION ENG. GREW UP</div>
+      <h3>It's a <span class="em">profession</span> now, with its own conferences.</h3>
+      <p>Detection Engineering Weekly, DEATHCon, the Sigma project, Red Canary's detection content openness. Buyers exist with budget and authority who didn't five years ago.</p>
+    </div>
+    <div class="panel">
+      <div class="label">04 · GENERATIVE-AI ATTACK ACCELERATION</div>
+      <h3>The <span class="em">attacker</span> got faster too.</h3>
+      <p>LLM-generated boto3 chains. Auto-tuned IAM enumeration. The window between novel technique and active exploit is closing. Detection content has to keep pace at attacker speed.</p>
+    </div>
+  </div>
+
+  <div class="slide-foot">
+    <span class="l">Sources: Sysdig 2024 Cloud Threat Report · MITRE ATT&amp;CK v15 · Red Canary Threat Detection Report</span>
+    <span>07 / 14</span>
+  </div>
+</section>
+
+<!-- ============ SLIDE 08 · MARKET ============ -->
+<section data-screen-label="08 Market">
+  <div class="eyebrow">MARKET LANDSCAPE</div>
+  <h1 class="slide-h tight">
+    A real category, <span class="em">with one direct competitor.</span>
+  </h1>
+
+  <div class="quadrant">
+    <div class="axis-h"></div>
+    <div class="axis-v"></div>
+
+    <div class="label x-left"><b>Host-focused</b>process / on-system</div>
+    <div class="label x-right"><b>Cloud-native</b>API / control plane</div>
+    <div class="label y-top"><b>Full APT chain</b>multi-step, mapped</div>
+    <div class="label y-bot"><b>Atomic technique</b>single, isolated</div>
+
+    <div class="qpoint us"      style="left: 78%; top: 28%;">
+      <div class="lbl">MayaTrail</div>
+      <div class="dot"></div>
+    </div>
+    <div class="qpoint direct"  style="left: 70%; top: 35%;">
+      <div class="lbl">Mitigant</div>
+      <div class="dot"></div>
+    </div>
+    <div class="qpoint"         style="left: 64%; top: 50%;">
+      <div class="lbl">Pacu</div>
+      <div class="dot"></div>
+    </div>
+    <div class="qpoint"         style="left: 80%; top: 70%;">
+      <div class="lbl">Stratus Red Team</div>
+      <div class="dot"></div>
+    </div>
+    <div class="qpoint"         style="left: 72%; top: 84%;">
+      <div class="lbl">CloudGoat</div>
+      <div class="dot"></div>
+    </div>
+    <div class="qpoint"         style="left: 22%; top: 22%;">
+      <div class="lbl">AttackIQ / SafeBreach</div>
+      <div class="dot"></div>
+    </div>
+    <div class="qpoint"         style="left: 32%; top: 40%;">
+      <div class="lbl">XM Cyber</div>
+      <div class="dot"></div>
+    </div>
+    <div class="qpoint"         style="left: 14%; top: 78%;">
+      <div class="lbl">Atomic Red Team</div>
+      <div class="dot"></div>
+    </div>
+  </div>
+
+  <p class="lede" style="margin-top: 36px;">
+    <b>TAM:</b> Cloud security $77B (2024). <b>SAM:</b> Adversarial Exposure Validation + Cloud BAS, ~$2B by 2027 (Gartner).
+    <b>SOM (3yr):</b> ~3,500 detection-engineering teams worldwide, AWS-shaped.
+  </p>
+
+  <div class="slide-foot">
+    <span class="l">Sources: Gartner Cloud Security Market · Mordor Intelligence BAS · public landscape scan</span>
+    <span>08 / 14</span>
+  </div>
+</section>
+
+<!-- ============ SLIDE 09 · COMPETITION ============ -->
+<section data-screen-label="09 Competition">
+  <div class="eyebrow">DIRECT COMPETITION</div>
+  <h1 class="slide-h tight">
+    Mitigant validates the category. <span class="em">We compete on output.</span>
+  </h1>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin-top: 50px; border: 1px solid var(--rule-2);">
+    <div style="padding: 36px 40px;">
+      <div class="eyebrow warn" style="margin-bottom: 14px;">MITIGANT (BERLIN)</div>
+      <h3 style="font-family: var(--sans); font-size: 28px; font-weight: 600; color: var(--ink); margin: 0 0 14px; letter-spacing: -0.018em; line-height: 1.15;">Continuous validation, hosted SaaS.</h3>
+      <p style="font-family: var(--sans); font-size: 15.5px; line-height: 1.6; color: var(--ink-2); margin: 0 0 18px;">
+        Multi-cloud. BYOR safety model. Attack Builder UI. AI-suggested next emulation. Integrates with Microsoft Sentinel.
+        Closed source. Series A. <b style="color:var(--ink)">A great product for buyers who want a dashboard.</b>
+      </p>
+      <div style="font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); letter-spacing: 0.14em; text-transform: uppercase; padding-top: 16px; border-top: 1px dashed var(--rule);">
+        AWS · AZURE · GCP planned · SaaS · enterprise
+      </div>
+    </div>
+    <div style="padding: 36px 40px; border-left: 1px solid var(--rule); background: rgba(106,168,255,0.025);">
+      <div class="eyebrow" style="margin-bottom: 14px;">MAYATRAIL</div>
+      <h3 style="font-family: var(--sans); font-size: 28px; font-weight: 600; color: var(--cool); margin: 0 0 14px; letter-spacing: -0.018em; line-height: 1.15;">Forensic drill with signed evidence.</h3>
+      <p style="font-family: var(--sans); font-size: 15.5px; line-height: 1.6; color: var(--ink-2); margin: 0 0 18px;">
+        AWS-first depth. APT-named catalogue (not abstract scenarios). Detection rules ship <em>as evidence</em>, not as integration.
+        Open core (Apache 2.0). Bundles are portable - replay any run offline. <b style="color: var(--cool)">A tool for buyers who want a commit.</b>
+      </p>
+      <div style="font-family: var(--mono); font-size: 11.5px; color: var(--cool); letter-spacing: 0.14em; text-transform: uppercase; padding-top: 16px; border-top: 1px dashed var(--rule);">
+        AWS-first · OSS core · pre-seed · open beta soon
+      </div>
+    </div>
+  </div>
+
+  <p class="lede" style="margin-top: 36px;">
+    Mitigant proved the buyer exists. They built for the <b>continuous validation</b> framing.
+    We built for the <b>graded drill</b> framing - the place detection engineers already shop for content.
+  </p>
+
+  <div class="slide-foot">
+    <span class="l">See: battlecards · MayaTrail Battlecard.html</span>
+    <span>09 / 14</span>
+  </div>
+</section>
+
+<!-- ============ SLIDE 10 · MOAT ============ -->
+<section data-screen-label="10 Moat">
+  <div class="eyebrow">DEFENSIBILITY</div>
+  <h1 class="slide-h tight">
+    Three moats. <span class="em">They compound.</span>
+  </h1>
+
+  <div class="moat-grid">
+    <div class="moat-card">
+      <div class="n">01</div>
+      <h3><span class="em">APT-led</span> catalogue with attribution</h3>
+      <p>Every chain traces to a named, observed adversary. Building this requires offensive cloud-research depth + threat-intel attribution. We have both founders.
+      Each new APT we ship is a moat increment - the catalogue can be replicated, but the editorial standard (boto3 truth-to-source) can't be rushed.</p>
+    </div>
+    <div class="moat-card">
+      <div class="n">02</div>
+      <h3>Detection + <span class="em">IR playbook</span> shipped together</h3>
+      <p>Sigma rules <em>and</em> the runbook to respond ship in the run output. SOAR vendors (Tines, Torq, Splunk SOAR) automate response but don't author content from real attack chains; detection vendors author rules but skip the IR side. <b>We're the only tool that ships both - generated from the same emulation.</b> Copying either piece is easy; copying both as a unit requires rewriting the product.</p>
+    </div>
+    <div class="moat-card">
+      <div class="n">03</div>
+      <h3><span class="em">Open core</span> + signed-bundle network</h3>
+      <p>OSS engine and chains are Apache 2.0 - hosted control plane adds the signer, run history, adapters.
+      Adoption flywheel: every public run improves shared rules · every customer carries our signed bundle into their workflow. Same model that made Hashi/dbt defensible.</p>
+    </div>
+  </div>
+
+  <div class="slide-foot">
+    <span class="l">MayaTrail · why we win</span>
+    <span>10 / 14</span>
+  </div>
+</section>
+
+<!-- ============ SLIDE 11 · BUSINESS MODEL ============ -->
+<section data-screen-label="11 Business model">
+  <div class="eyebrow">BUSINESS MODEL · OPEN CORE</div>
+  <h1 class="slide-h tight">
+    Free OSS that earns trust. <span class="em">Hosted that captures value.</span>
+  </h1>
+
+  <div class="biz-cols">
+    <div class="tier">
+      <span class="tag">OSS · APACHE 2.0</span>
+      <h3>MayaTrail Core</h3>
+      <p>The engine, six named APT chains, Pulumi recipes, CLI. Same chain runs as in hosted - byte-identical evidence bundles.</p>
+      <ul>
+        <li>Full engine + 6 APT chains</li>
+        <li>Local CLI · self-hosted</li>
+        <li>Sigma rules per technique</li>
+        <li>Pulumi destroy + post-conditions</li>
+        <li>MITRE ATT&amp;CK mapping</li>
+      </ul>
+      <div class="price">Free<span style="color: var(--ink-3); font-size: 14px; font-weight: 400; font-family: var(--mono); letter-spacing: 0.14em; text-transform: uppercase; margin-left: 12px;">FOREVER</span></div>
+    </div>
+
+    <div class="tier hosted">
+      <span class="tag">HOSTED · CONTROL PLANE</span>
+      <h3>MayaTrail <span class="em">Platform</span></h3>
+      <p>Run history, evidence signer, detection-stack adapters (Sentinel, Splunk, Chronicle, Elastic, Wazuh), team workspaces, SSO, audit log.</p>
+      <ul>
+        <li>Cryptographic evidence signer</li>
+        <li>SIEM adapters · live ingest</li>
+        <li>Custom chain authoring</li>
+        <li>SSO · audit · multi-tenant</li>
+        <li>Priority new-APT chains</li>
+      </ul>
+      <div class="price">
+        <span class="b">$1,200</span><span style="font-size: 16px; color: var(--ink-2); font-weight: 400;"> / month · team starter</span><br/>
+        <span style="font-size: 14px; color: var(--ink-3); font-weight: 400; font-family: var(--mono); letter-spacing: 0.08em; margin-top: 8px; display: inline-block;">→ enterprise from $36k/yr</span>
+      </div>
+    </div>
+  </div>
+
+  <p class="lede" style="margin-top: 36px;">
+    Adoption: OSS drives top-of-funnel · hosted closes when teams need shared workspace, audit, or SIEM integration.
+    <b>Comparable</b>: HashiCorp ($15B), Datadog ($55B), dbt Labs - same shape, security wedge.
+  </p>
+
+  <div class="slide-foot">
+    <span class="l">MayaTrail · pricing model</span>
+    <span>11 / 14</span>
+  </div>
+</section>
+
+<!-- ============ SLIDE 12 · TRACTION ============ -->
+<section data-screen-label="12 Traction">
+  <div class="eyebrow">EARLY SIGNAL</div>
+  <h1 class="slide-h tight">
+    Private beta, <span class="em">growing on its own merits.</span>
+  </h1>
+
+  <div class="traction">
+    <div>
+      <div class="v"><span class="em">14</span></div>
+      <div class="k">DETECTION TEAMS</div>
+      <div class="sub">in private beta across NA, EU, India</div>
+    </div>
+    <div>
+      <div class="v">4</div>
+      <div class="k">DESIGN PARTNERS</div>
+      <div class="sub">2 SOC platforms in stealth · 2 cloud-native scale-ups</div>
+    </div>
+    <div>
+      <div class="v">6</div>
+      <div class="k">APT CHAINS SHIPPED</div>
+      <div class="sub">+ 4 community-contributed in review</div>
+    </div>
+    <div>
+      <div class="v">32</div>
+      <div class="k">MITRE TECHNIQUES</div>
+      <div class="sub">~80% of MITRE Cloud IaaS sub-techniques</div>
+    </div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 30px;">
+    <div class="panel" style="padding: 28px 32px;">
+      <div class="label">FROM A BETA INTERVIEW</div>
+      <p style="font-family: var(--serif); font-style: italic; font-size: 22px; line-height: 1.45; color: var(--ink); margin: 0;">
+        "We spent six months writing Sigma rules for our cloud stack. MayaTrail wrote half of them as a side effect of one run, with evidence we could ship to audit."
+      </p>
+      <div style="font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); letter-spacing: 0.14em; text-transform: uppercase; margin-top: 14px;">
+        - Detection eng. lead · series C fintech · April 2026
+      </div>
+    </div>
+    <div class="panel" style="padding: 28px 32px;">
+      <div class="label">COMMUNITY · ORGANIC</div>
+      <p style="font-family: var(--sans); font-size: 16px; line-height: 1.55; color: var(--ink-2); margin: 0;">
+        Talks accepted at BSides Bangalore '26 and DEATHCon. Sigma project asked us to upstream our cloud rule set.
+        OSS repo at 380 stars three weeks post-launch with zero marketing spend.
+      </p>
+    </div>
+  </div>
+
+  <div class="slide-foot">
+    <span class="l">Traction figures · self-reported · please verify in conversation</span>
+    <span>12 / 14</span>
+  </div>
+</section>
+
+<!-- ============ SLIDE 13 · TEAM ============ -->
+<section data-screen-label="13 Team">
+  <div class="eyebrow">TEAM</div>
+  <h1 class="slide-h tight">
+    Three founders. <span class="em">Operator-built. Operator-loved.</span>
+  </h1>
+
+  <div class="team-grid">
+    <div class="person">
+      <div class="avatar">AP</div>
+      <h3>Ayush Pathak</h3>
+      <div class="role">FOUNDER · CLOUD SECURITY</div>
+      <p>
+        Built and broke cloud security at scale before founding MayaTrail. Knows the gap intimately: was the person on the SOC end staring at a CloudTrail dump trying to write the Sigma rule that should have caught it.
+      </p>
+    </div>
+    <div class="person">
+      <div class="avatar">AL</div>
+      <h3>Abhishek Lal</h3>
+      <div class="role">CO-FOUNDER · CLOUD SECURITY RESEARCHER</div>
+      <p>
+        Cloud security researcher with deep AWS attack-chain expertise. Authors the named APT emulations - the editorial voice behind the catalogue's truth-to-source standard.
+      </p>
+    </div>
+    <div class="person">
+      <div class="avatar">HB</div>
+      <h3>Himanshu Bhatnagar</h3>
+      <div class="role">SECURITY ENGINEER</div>
+      <p>
+        Security engineer building the platform. Owns the run engine, Pulumi orchestration, evidence signer, and the CLI. The reason a drill destroys cleanly in 60 seconds, every time.
+      </p>
+    </div>
+  </div>
+
+  <p class="lede" style="margin-top: 36px;">
+    We built MayaTrail because we couldn't find it. Each of us has been the customer.
+  </p>
+
+  <div class="slide-foot">
+    <span class="l">MayaTrail · team</span>
+    <span>13 / 14</span>
+  </div>
+</section>
+
+<!-- ============ SLIDE 14 · THE BET ============ -->
+<section data-screen-label="14 Close">
+  <div class="close-slide">
+    <div class="eyebrow">THE BET</div>
+    <h1 class="slide-h">
+      Every cloud detection team will run<br/>
+      MayaTrail <span class="em">before they ship a rule.</span>
+    </h1>
+    <p class="lede" style="font-size: 24px; margin-top: 30px; max-width: 1200px;">
+      The same way every backend team runs CI before deploy.<br/>
+      The same way every data team runs dbt test before commit.<br/>
+      <b>The graded drill becomes the default unit of cloud detection engineering.</b>
+    </p>
+
+    <div class="contact">
+      <div>
+        FOUNDER<br/><b>Ayush Pathak</b><br/>
+        <a href="mailto:ayush@mayatrail.io">ayush@mayatrail.io</a>
+      </div>
+      <div>
+        PRODUCT<br/><b>mayatrail.io</b><br/>
+        <a href="MayaTrail Landing.html">live demo · landing</a>
+      </div>
+      <div>
+        WATCH A RUN<br/><b>AMBERSQUID</b><br/>
+        <a href="MayaTrail Run.html">~36s playback</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-foot">
+    <span class="l">MayaTrail · close</span>
+    <span>14 / 14</span>
+  </div>
+</section>
+
+</deck-stage>
+
+<script src="deck-stage.js"></script>
+
+<template id="__bundler_thumbnail" data-bg-color="#06070a">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <g transform="translate(600 380) rotate(45)">
+      <rect x="-180" y="-180" width="360" height="360" fill="none" stroke="#6aa8ff" stroke-width="12"/>
+      <rect x="-110" y="-110" width="220" height="220" fill="#6aa8ff" opacity="0.95"/>
+      <rect x="-60"  y="-60"  width="120" height="120" fill="#06070a"/>
+    </g>
+    <text x="600" y="700" text-anchor="middle"
+          font-family="ui-monospace, monospace"
+          font-size="36" letter-spacing="10" font-weight="600"
+          fill="#e8eaf0">MAYATRAIL · PITCH</text>
+  </svg>
+</template>
+
+</body>
+</html>

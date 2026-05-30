@@ -1,0 +1,997 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MayaTrail - Go-to-market strategy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap">
+<link rel="stylesheet" href="mayatrail-base.css">
+
+<style>
+  main { padding-top: 60px; max-width: 1180px; margin: 0 auto; padding-left: 32px; padding-right: 32px; }
+
+  .doc-head {
+    padding: 70px 0 50px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 60px;
+  }
+  .doc-head .meta {
+    display: flex; gap: 26px; font-family: var(--mono); font-size: 11.5px;
+    text-transform: uppercase; letter-spacing: 0.16em;
+    color: var(--ink-3); margin-bottom: 28px;
+  }
+  .doc-head .meta b { color: var(--ink-2); font-weight: 500; }
+  .doc-head h1 {
+    font-family: var(--sans); font-weight: 600; font-size: 64px;
+    line-height: 1.05; letter-spacing: -0.028em; margin: 0;
+    max-width: 1000px;
+  }
+  .doc-head h1 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+  .doc-head p.lede {
+    font-family: var(--sans); font-size: 22px; line-height: 1.55;
+    color: var(--ink-2); margin: 26px 0 0; max-width: 900px;
+  }
+  .doc-head p.lede b { color: var(--ink); font-weight: 600; }
+
+  /* TOC */
+  .toc {
+    border: 1px solid var(--rule-2); background: var(--bg-1);
+    padding: 22px 26px; margin-bottom: 70px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px 32px;
+  }
+  .toc .h {
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--ink-3); grid-column: 1 / -1; margin-bottom: 8px;
+  }
+  .toc a {
+    font-family: var(--mono); font-size: 13.5px;
+    color: var(--ink-2); text-decoration: none;
+    padding: 6px 0; border-bottom: 1px dashed var(--rule);
+    display: grid; grid-template-columns: 30px 1fr auto;
+    gap: 12px; align-items: center;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .toc a:hover { color: var(--cool); border-color: var(--cool); }
+  .toc a .n { color: var(--ink-4); }
+  .toc a .p { color: var(--ink-4); font-size: 11px; }
+
+  /* SECTION */
+  section.s {
+    padding: 0 0 80px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 60px;
+  }
+  section.s:last-of-type { border-bottom: 0; }
+  section.s > .sh {
+    display: grid; grid-template-columns: 60px 1fr;
+    gap: 24px; align-items: baseline; margin-bottom: 36px;
+  }
+  section.s > .sh .n {
+    font-family: var(--mono); font-size: 14px;
+    color: var(--cool); letter-spacing: 0.18em;
+  }
+  section.s > .sh .t {
+    font-family: var(--sans); font-weight: 600; font-size: 42px;
+    line-height: 1.1; letter-spacing: -0.025em;
+    color: var(--ink);
+  }
+  section.s > .sh .t .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+
+  /* body text */
+  section.s p {
+    font-family: var(--sans); font-size: 17px; line-height: 1.62;
+    color: var(--ink-2); margin: 0 0 18px;
+    max-width: 850px;
+  }
+  section.s p b { color: var(--ink); font-weight: 600; }
+  section.s p code {
+    font-family: var(--mono); font-size: 14.5px;
+    background: var(--bg-2); padding: 1px 7px; color: var(--cool);
+  }
+  section.s p a { color: var(--cool); text-decoration: none; border-bottom: 1px dashed var(--cool); }
+
+  section.s h3 {
+    font-family: var(--sans); font-weight: 600;
+    font-size: 22px; line-height: 1.25; letter-spacing: -0.018em;
+    margin: 36px 0 14px; color: var(--ink);
+  }
+  section.s h3 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+
+  section.s h4 {
+    font-family: var(--mono); font-size: 12px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--ink-3); margin: 28px 0 14px;
+  }
+
+  /* lists */
+  section.s ul, section.s ol {
+    margin: 0 0 22px; padding-left: 0; list-style: none;
+    max-width: 850px;
+  }
+  section.s ul li, section.s ol li {
+    position: relative; padding: 10px 0 10px 32px;
+    border-bottom: 1px dashed var(--rule);
+    font-family: var(--sans); font-size: 16px; line-height: 1.55;
+    color: var(--ink-2);
+  }
+  section.s ul li b, section.s ol li b { color: var(--ink); font-weight: 600; }
+  section.s ul li::before {
+    content: '-'; position: absolute; left: 6px; color: var(--cool);
+    font-family: var(--mono);
+  }
+  section.s ol { counter-reset: olist; }
+  section.s ol li { counter-increment: olist; }
+  section.s ol li::before {
+    content: counter(olist, decimal-leading-zero);
+    position: absolute; left: 0;
+    color: var(--cool); font-family: var(--mono); font-size: 13px;
+    letter-spacing: 0.06em;
+  }
+
+  /* pull quote / callout */
+  .callout {
+    border-left: 3px solid var(--cool);
+    background: rgba(106,168,255,0.04);
+    padding: 22px 28px;
+    margin: 26px 0;
+    max-width: 850px;
+  }
+  .callout .lbl {
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--cool); margin-bottom: 8px;
+  }
+  .callout p {
+    font-family: var(--sans); font-size: 17px; line-height: 1.55;
+    color: var(--ink); margin: 0;
+  }
+  .callout p b { color: var(--ink); }
+  .callout.warn { border-left-color: var(--warm); background: rgba(245,180,84,0.04); }
+  .callout.warn .lbl { color: var(--warm); }
+  .callout.hot { border-left-color: var(--hot); background: rgba(255,75,110,0.04); }
+  .callout.hot .lbl { color: var(--hot); }
+
+  /* table */
+  table.tbl {
+    width: 100%; max-width: 100%;
+    border: 1px solid var(--rule); background: var(--bg-1);
+    border-collapse: collapse;
+    font-family: var(--mono); font-size: 13.5px;
+    margin: 22px 0;
+  }
+  table.tbl th, table.tbl td {
+    padding: 12px 14px;
+    border-right: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    text-align: left; vertical-align: top;
+  }
+  table.tbl th {
+    background: var(--bg-2);
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--ink-3); font-weight: 500;
+  }
+  table.tbl td.k { color: var(--cool); font-weight: 500; }
+  table.tbl td.ok { color: var(--ok); }
+  table.tbl td.warn { color: var(--warm); }
+  table.tbl td.hot { color: var(--hot); }
+  table.tbl tr:last-child td { border-bottom: 0; }
+
+  /* card grid */
+  .cards {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    margin: 22px 0;
+  }
+  .cards.three { grid-template-columns: repeat(3, 1fr); }
+  .card {
+    border: 1px solid var(--rule-2); background: var(--bg-1);
+    padding: 22px 24px;
+  }
+  .card .h {
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.16em;
+    color: var(--cool); margin-bottom: 10px;
+  }
+  .card h4 {
+    font-family: var(--sans); font-size: 19px; font-weight: 600;
+    color: var(--ink); letter-spacing: -0.015em; margin: 0 0 10px;
+    text-transform: none;
+  }
+  .card p {
+    font-family: var(--sans); font-size: 14.5px; line-height: 1.55;
+    color: var(--ink-2); margin: 0;
+  }
+
+  /* phase block */
+  .phase {
+    border: 1px solid var(--rule); background: var(--bg-1);
+    margin-bottom: 12px;
+    display: grid; grid-template-columns: 220px 1fr;
+  }
+  .phase > .left {
+    padding: 24px 26px;
+    background: var(--bg-2);
+    border-right: 1px solid var(--rule);
+  }
+  .phase > .left .ph {
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--cool); margin-bottom: 8px;
+  }
+  .phase > .left .ttl {
+    font-family: var(--sans); font-size: 20px; font-weight: 600;
+    color: var(--ink); letter-spacing: -0.015em; line-height: 1.2;
+  }
+  .phase > .left .when {
+    font-family: var(--mono); font-size: 11px;
+    color: var(--ink-3); letter-spacing: 0.14em; margin-top: 10px; text-transform: uppercase;
+  }
+  .phase > .right {
+    padding: 22px 28px;
+  }
+  .phase > .right p {
+    font-family: var(--sans); font-size: 15.5px; line-height: 1.55;
+    color: var(--ink-2); margin: 0 0 12px; max-width: none;
+  }
+  .phase > .right p:last-child { margin-bottom: 0; }
+  .phase > .right p b { color: var(--ink); }
+  .phase > .right ul {
+    margin: 8px 0 12px; max-width: none;
+  }
+  .phase > .right ul li {
+    font-size: 14.5px; padding: 6px 0 6px 22px;
+  }
+  .phase > .right ul li::before { left: 0; }
+
+  footer.doc-foot {
+    margin-top: 80px;
+    padding: 40px 0 60px;
+    border-top: 1px solid var(--rule);
+    font-family: var(--mono); font-size: 11.5px;
+    color: var(--ink-3); letter-spacing: 0.14em; text-transform: uppercase;
+    display: flex; justify-content: space-between;
+  }
+  footer.doc-foot a { color: var(--cool); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<main>
+
+<nav class="nav" style="position: fixed; top: 0; left: 0; right: 0;">
+  <div class="nav-inner">
+    <a href="MayaTrail Landing.html" class="brand"><span class="mark"></span> MAYATRAIL</a>
+    <div class="nav-links">
+      <a href="MayaTrail Landing.html">Platform</a>
+      <a href="MayaTrail Run.html">Run</a>
+      <a href="MayaTrail Pitch.html">Pitch</a>
+      <a class="active">GTM</a>
+      <a href="MayaTrail Pricing.html">Pricing</a>
+    </div>
+    <div class="nav-readout"><span class="stat">v0.4.1 · operational</span></div>
+    <a class="nav-cta" style="white-space:nowrap;" href="MayaTrail Run.html">Watch a run</a>
+  </div>
+</nav>
+
+<div class="doc-head">
+  <div class="meta">
+    <span><b>INTERNAL STRATEGY MEMO</b></span>
+    <span>v1 · MAY 2026</span>
+    <span>OWNER · AYUSH PATHAK</span>
+  </div>
+  <h1>MayaTrail go-to-market <span class="em">strategy.</span></h1>
+  <p class="lede">
+    The first 18 months. <b>How we get from 14 beta teams to a defensible open-core security company without losing the editorial voice that made the product good in the first place.</b>
+  </p>
+</div>
+
+<!-- TOC -->
+<div class="toc">
+  <div class="h">CONTENTS</div>
+  <a href="#s1"><span class="n">01</span><span>Positioning</span><span class="p">page 1</span></a>
+  <a href="#s2"><span class="n">02</span><span>Wedge ICP</span><span class="p">page 2</span></a>
+  <a href="#s3"><span class="n">03</span><span>Motion: bootstrap then seed</span><span class="p">page 3</span></a>
+  <a href="#s4"><span class="n">04</span><span>Channel mix</span><span class="p">page 4</span></a>
+  <a href="#s5"><span class="n">05</span><span>Pricing &amp; packaging</span><span class="p">page 5</span></a>
+  <a href="#s6"><span class="n">06</span><span>Sales motion · first 10 deals</span><span class="p">page 6</span></a>
+  <a href="#s7"><span class="n">07</span><span>Content &amp; community</span><span class="p">page 7</span></a>
+  <a href="#s8"><span class="n">08</span><span>OSS strategy</span><span class="p">page 8</span></a>
+  <a href="#s9"><span class="n">09</span><span>Metrics that matter</span><span class="p">page 9</span></a>
+  <a href="#s10"><span class="n">10</span><span>18-month roadmap</span><span class="p">page 10</span></a>
+  <a href="#s11"><span class="n">11</span><span>Risks &amp; mitigations</span><span class="p">page 11</span></a>
+</div>
+
+<!-- ============ 01 POSITIONING ============ -->
+<section class="s" id="s1">
+  <div class="sh">
+    <span class="n">01</span>
+    <span class="t">Positioning: <span class="em">graded drill</span>, not continuous validation.</span>
+  </div>
+
+  <p>
+    The cloud attack-emulation category exists - Mitigant proved that. The question is not whether buyers want to test detections; it is <b>what shape they want to buy.</b>
+    Mitigant sells <b>continuous adversarial exposure validation</b>: an always-on agent-style integration with the SIEM. We do not compete on that framing.
+  </p>
+
+  <p>
+    MayaTrail sells the <b>graded drill</b>: a punctuated, evidentiary event the detection team owns. The output is a commit to the detection repo, an updated IR playbook, a signed bundle for audit. That framing is closer to how detection engineers already work - they ship rules, they don't manage dashboards.
+  </p>
+
+  <div class="callout">
+    <div class="lbl">ONE-LINER</div>
+    <p><b>"The instrument for cloud detection engineering. Run real APT chains in your own AWS. Take home the Sigma rules, the evidence, and the playbook."</b></p>
+  </div>
+
+  <h3>The five first principles</h3>
+  <ol>
+    <li><b>APT-led, not abstract.</b> Every chain names a real adversary: Scattered Spider, AMBERSQUID, BlackCat, TeamTNT, SCARLETEED, LAPSUS$. Generic "Persistence test #3" never enters the catalogue.</li>
+    <li><b>Three deliverables, not one.</b> Every run ships Sigma rules <em>and</em> an IR playbook <em>and</em> a signed evidence bundle. Detection vendors author rules; SOAR vendors author response; we author both, generated from the same emulation. Nobody else closes that loop.</li>
+    <li><b>Signed bundle, portable.</b> Every run produces a hash-chained evidence packet replayable offline against any stack. The bundle is the deliverable.</li>
+    <li><b>Open core, Apache 2.0 engine.</b> OSS keeps the editorial standard honest and pulls top-of-funnel. Hosted captures the value (workspace, signer, adapters, support).</li>
+    <li><b>AWS-first, depth before breadth.</b> Azure and GCP are roadmap, not v1. We win because nobody has gone this deep on AWS attack chains; spreading thin would lose the moat.</li>
+  </ol>
+
+  <h3>What we are not</h3>
+  <ul>
+    <li><b>Not BAS.</b> BAS is enterprise, agent-based, host-shaped, six-figure contracts. We are bottoms-up, cloud-native, detection-engineer-led.</li>
+    <li><b>Not CSPM.</b> Wiz, Prisma, Lacework find misconfigurations. We test behavior. Adjacent, not overlapping.</li>
+    <li><b>Not a pentest tool.</b> Pacu and CloudGoat are pentest-flavored. We are detection-engineer-flavored. Same target, different buyer.</li>
+    <li><b>Not a CTF.</b> CloudGoat ships vulnerable labs to break into. We ship attack chains to test what your stack sees.</li>
+    <li><b>Not SOAR.</b> Tines, Torq, Splunk SOAR, Palo Alto XSOAR orchestrate response workflows you've already written. We <em>author</em> the playbook from a real run; they execute it. Complementary, not competing.</li>
+  </ul>
+</section>
+
+<!-- ============ 02 ICP ============ -->
+<section class="s" id="s2">
+  <div class="sh">
+    <span class="n">02</span>
+    <span class="t">The <span class="em">wedge ICP</span>: cloud-native detection engineers.</span>
+  </div>
+
+  <p>
+    The buyer who feels the pain hardest, has the budget authority, and has the technical capacity to integrate the output. We narrow before we broaden.
+  </p>
+
+  <h3>Primary ICP: detection-eng. teams at cloud-native scale-ups</h3>
+  <div class="cards">
+    <div class="card">
+      <div class="h">SHAPE</div>
+      <h4>Series B-D cloud-native company</h4>
+      <p>200-2,000 employees, 80%+ workloads on AWS, dedicated security team of 5-15, named detection engineering function with at least one full-time engineer.</p>
+    </div>
+    <div class="card">
+      <div class="h">BUYER</div>
+      <h4>Head of Detection Engineering / Senior Detection Engineer</h4>
+      <p>Owns the SIEM ruleset. Has budget authority for $20-100k tools without exec sign-off. Hands-on technically; ships rules to production weekly.</p>
+    </div>
+    <div class="card">
+      <div class="h">CHAMPION</div>
+      <h4>Cloud security engineer or SOC lead</h4>
+      <p>Person who has been begging detection eng to test their rules end-to-end. Knows the gap intimately. Will run the OSS in their AWS dev account before booking a call.</p>
+    </div>
+    <div class="card">
+      <div class="h">VERTICAL TILT</div>
+      <h4>Fintech · Healthtech · SaaS infra</h4>
+      <p>Regulated enough to need evidence; cloud-native enough to actually have the gap; budget enough to buy hosted. Avoid early-stage startups (no team), enterprise (too slow).</p>
+    </div>
+  </div>
+
+  <h3>Secondary ICP: MDR / MSSP providers</h3>
+  <p>
+    Managed Detection &amp; Response shops sell cloud detection content to their downstream customers. MayaTrail becomes their <b>R&amp;D engine</b>: every run produces rule content they can fold into their multi-tenant platform.
+    Higher contract value, longer sales cycle. Pursue once primary ICP is closing on its own.
+  </p>
+
+  <h3>Anti-ICP</h3>
+  <ul>
+    <li><b>Pre-series-B startups.</b> No detection team. No buyer.</li>
+    <li><b>Multi-cloud / on-prem heavy enterprises.</b> Need Azure + GCP + on-prem; we are AWS-first.</li>
+    <li><b>Compliance-driven buyers who only want a checkbox.</b> Will not value the open-core or community angle; will price-shop against Mitigant. Walk away.</li>
+    <li><b>Pure-pentest teams.</b> Different workflow; will reach for Pacu. Not our wedge.</li>
+  </ul>
+
+  <div class="callout warn">
+    <div class="lbl">PERSONA RULE</div>
+    <p>If the buyer asks "do you have an Azure version" in the first call, we are not the right tool today. Polite no, stay in touch, revisit in 12 months.</p>
+  </div>
+</section>
+
+<!-- ============ 03 MOTION ============ -->
+<section class="s" id="s3">
+  <div class="sh">
+    <span class="n">03</span>
+    <span class="t">Motion: <span class="em">bootstrap first</span>, raise on signal.</span>
+  </div>
+
+  <p>
+    Three founders, OSS already shipping, design partners interested, no immediate cash pressure. We have <b>optionality</b>: bootstrap to first $250-500k ARR, then decide if seed accelerates anything we cannot do alone.
+  </p>
+
+  <h3>Phase 0 (now → month 3): Bootstrap, prove the loop</h3>
+  <div class="phase">
+    <div class="left">
+      <div class="ph">PHASE 0</div>
+      <div class="ttl">Founder-led design partners</div>
+      <div class="when">M0 - M3</div>
+    </div>
+    <div class="right">
+      <p><b>Goal:</b> Six paying design partners at $1k/mo each. Not for revenue; for product feedback velocity and case studies.</p>
+      <ul>
+        <li>Convert 4 of 14 beta teams to paid design partners. $1k/mo, 6-month commit, monthly product councils.</li>
+        <li>Land 2 more from outbound to detection-eng community (BSides, Detection Engineering Weekly).</li>
+        <li>Ship 2 new APT chains based on partner requests (vote, not roadmap).</li>
+        <li>OSS to 1k GitHub stars. Talks at BSides Bangalore + DEATHCon.</li>
+      </ul>
+      <p><b>Cost:</b> ~$0 marketing. Founders + AWS sandbox cost (&lt;$500/mo).</p>
+    </div>
+  </div>
+
+  <h3>Phase 1 (month 3-9): Decision point</h3>
+  <div class="phase">
+    <div class="left">
+      <div class="ph">PHASE 1</div>
+      <div class="ttl">Bootstrap or raise</div>
+      <div class="when">M3 - M9</div>
+    </div>
+    <div class="right">
+      <p>Two paths fork here. We pick based on signal.</p>
+      <h4 style="margin: 14px 0 8px;">PATH A · CONTINUE BOOTSTRAPPING</h4>
+      <p>If we can hit $25-40k MRR from inbound + light outbound at 30%+ gross margin by month 9, we keep going. Profitable, slow-and-steady, full ownership. Hire engineer #2 from revenue.</p>
+      <h4 style="margin: 14px 0 8px;">PATH B · RAISE SEED ($2-3M)</h4>
+      <p>If we cannot make inbound + outbound work, OR if we see a market window closing (Mitigant raising B, AWS launching first-party, DataDog acquiring Stratus), we raise. The seed buys: dedicated GTM hire, marketing budget for 2 conferences, multi-cloud expansion ahead of competitor.</p>
+      <p><b>The trigger:</b> if 3+ of the following are true at month 6, we raise. Otherwise we stay bootstrapped.</p>
+      <ul>
+        <li>Inbound below 5 qualified conversations/month</li>
+        <li>Mitigant raises Series B at $50M+ post</li>
+        <li>A second well-funded competitor enters cloud-native</li>
+        <li>Customer asks for Azure/GCP from &gt;30% of conversations</li>
+        <li>OSS contributor growth flatlines under 50/month</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Phase 2 (month 9-18): Scale the loop that worked</h3>
+  <div class="phase">
+    <div class="left">
+      <div class="ph">PHASE 2</div>
+      <div class="ttl">Scale on the winning path</div>
+      <div class="when">M9 - M18</div>
+    </div>
+    <div class="right">
+      <p><b>Goal:</b> 20-30 paying teams. $50-100k MRR. Defendable product moat (15+ APT chains, 50+ Sigma rules contributed back, Sentinel + Splunk + Elastic adapters shipping).</p>
+      <ul>
+        <li>Hire #1: Senior detection engineer (content authoring).</li>
+        <li>Hire #2: DevRel - turns the talk circuit into pipeline.</li>
+        <li>If raised: outbound SDR.</li>
+        <li>Azure roadmap begins ONLY if 50%+ of inbound asks for it.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 04 CHANNEL MIX ============ -->
+<section class="s" id="s4">
+  <div class="sh">
+    <span class="n">04</span>
+    <span class="t">Channel mix: <span class="em">community-led</span>, then product-led.</span>
+  </div>
+
+  <p>
+    Cybersecurity buyers don't read marketing copy - they read each other. We invest where detection engineers already are; we don't try to teach them anywhere new.
+  </p>
+
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Channel</th>
+        <th>Why it works</th>
+        <th>First 90d play</th>
+        <th>Owner</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="k">OSS · GitHub</td>
+        <td>Detection engineers vet tools by reading source. OSS removes the buy-in friction; every star is a hand-raise.</td>
+        <td>Public repo with 6 chains + 11 rules. Weekly contributor highlights. Monthly "rule of the week".</td>
+        <td>Ayush + Himanshu</td>
+      </tr>
+      <tr>
+        <td class="k">Sigma project</td>
+        <td>Sigma is the de-facto detection language. Upstreaming our cloud rules buys credibility that no marketing can.</td>
+        <td>Open 3 PRs to SigmaHQ/sigma with our cloud rules. Co-author one technique with a Sigma maintainer.</td>
+        <td>Abhishek</td>
+      </tr>
+      <tr>
+        <td class="k">Conferences (community)</td>
+        <td>BSides, DEATHCon, fwd:cloudsec - detection engineers congregate. One good talk = 6 months of warm inbound.</td>
+        <td>Submit 4 CFPs: BSides Bangalore, BSides SF, DEATHCon, fwd:cloudsec. Aim for 2 acceptances.</td>
+        <td>Ayush</td>
+      </tr>
+      <tr>
+        <td class="k">Newsletters</td>
+        <td>Detection Engineering Weekly + tl;dr sec are read by every buyer in our ICP. One feature = 50+ visits.</td>
+        <td>Pitch DE Weekly with each new chain release. Pitch tl;dr sec when we hit 1k stars.</td>
+        <td>Ayush</td>
+      </tr>
+      <tr>
+        <td class="k">Founder content</td>
+        <td>One technical post per APT chain - "how we built the AMBERSQUID emulation" - lives forever, ranks on Google.</td>
+        <td>Six long-form posts in 90 days. One per APT we ship. 2000+ words. Code examples. Real CloudTrail.</td>
+        <td>Abhishek</td>
+      </tr>
+      <tr>
+        <td class="k">Inbound demo</td>
+        <td>Once the OSS + talks + content land, inbound starts. Quality conversation, not lead-form bait.</td>
+        <td>Calendly on every page. Founder-led 30-min demo, no SDR layer for first 50 calls.</td>
+        <td>Ayush</td>
+      </tr>
+      <tr>
+        <td class="k">Outbound · narrow</td>
+        <td>We will not spray. Hand-built list of 100 named detection engineers at scale-ups. Personal, technical first-touch.</td>
+        <td>Founder-built target list. One Slack/X/email per week. Pitch with a specific rule we wrote for their stack.</td>
+        <td>Ayush</td>
+      </tr>
+      <tr>
+        <td class="k">Paid (deferred)</td>
+        <td>Paid acquisition for security tools is generally bad ROI before brand exists. Park until phase 2.</td>
+        <td>Spend $0 on paid through month 6. Re-evaluate.</td>
+        <td>-</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <div class="lbl">CHANNEL PHILOSOPHY</div>
+    <p>If a channel requires us to interrupt a detection engineer who didn't ask, it is the wrong channel. We want every touchpoint to feel like a peer sharing a useful tool, not a vendor pitching software.</p>
+  </div>
+</section>
+
+<!-- ============ 05 PRICING ============ -->
+<section class="s" id="s5">
+  <div class="sh">
+    <span class="n">05</span>
+    <span class="t">Pricing &amp; packaging: <span class="em">open core</span>.</span>
+  </div>
+
+  <p>
+    The OSS is the moat. The hosted tier is the business. The pricing must respect both - free has to be genuinely free, paid has to be obviously worth it.
+  </p>
+
+  <h3>The two tiers</h3>
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width: 40%;">Tier</th>
+        <th>Includes</th>
+        <th style="width: 22%;">Price</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="k"><b>MayaTrail Core</b><br/><span style="color: var(--ink-3); font-size: 11px; letter-spacing: 0.14em;">APACHE 2.0 · SELF-HOSTED</span></td>
+        <td>Engine + 6 APT chains + 11+ Sigma rules + Pulumi sandboxes + CLI + MITRE map + IR playbook templates. Run anywhere. Byte-identical evidence bundles.</td>
+        <td class="ok">Free · forever</td>
+      </tr>
+      <tr>
+        <td class="k"><b>MayaTrail Platform</b><br/><span style="color: var(--ink-3); font-size: 11px; letter-spacing: 0.14em;">HOSTED · TEAM</span></td>
+        <td>Everything in Core + hosted control plane, evidence signer, SIEM adapters (Sentinel, Splunk, Chronicle, Elastic, Wazuh), shared workspace, audit log, SSO, priority new-APT chains.</td>
+        <td>$1.2k / mo · team starter</td>
+      </tr>
+      <tr>
+        <td class="k"><b>MayaTrail Enterprise</b><br/><span style="color: var(--ink-3); font-size: 11px; letter-spacing: 0.14em;">HOSTED · ANNUAL</span></td>
+        <td>Everything in Platform + custom chain authoring, dedicated APT research, on-prem control plane option, premium support, contractual SLAs, training.</td>
+        <td>From $36k / year</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Why these numbers</h3>
+  <ul>
+    <li><b>$1.2k/mo · team starter.</b> Below the threshold of needing exec approval. A senior detection engineer can expense it. Equivalent to a single conference ticket per quarter.</li>
+    <li><b>$36k/year · enterprise floor.</b> Three seats × $12k loaded. Equivalent to a single mid-tier SIEM subscription. Affordable to series-C and above without procurement gymnastics.</li>
+    <li><b>No per-run pricing.</b> We refuse meter-based pricing because it discourages the behavior we want (running drills frequently). Unlimited runs at all tiers.</li>
+    <li><b>No per-seat for Platform.</b> Team starter includes up to 5 engineers. Beyond that, enterprise. Removes friction for adoption inside teams.</li>
+  </ul>
+
+  <h3>What we won't sell</h3>
+  <ul>
+    <li><b>One-time perpetual licenses.</b> Doesn't fit the subscription model; doesn't justify ongoing APT chain investment.</li>
+    <li><b>Pure free for everyone.</b> A free tier inside Platform encourages buyers to never upgrade. Free is OSS; Platform is paid.</li>
+    <li><b>Heavy discounting.</b> Detection engineers respect price discipline; aggressive discounting signals desperation. We hold the line.</li>
+  </ul>
+
+  <div class="callout warn">
+    <div class="lbl">PRICING DISCIPLINE</div>
+    <p>If a prospect asks for a 50% discount, we say no and walk. The goal is 30+ teams at full price, not 200 teams at half price - the operational load of half-paid customers will sink us.</p>
+  </div>
+</section>
+
+<!-- ============ 06 SALES MOTION ============ -->
+<section class="s" id="s6">
+  <div class="sh">
+    <span class="n">06</span>
+    <span class="t">Sales motion: <span class="em">founder-led</span> through deal #25.</span>
+  </div>
+
+  <p>
+    No SDRs, no AEs, no marketing-qualified-lead funnel until we hit deal 25. The founders close every contract personally. The reason: detection engineers can tell when they are being sold to, and they buy from peers.
+  </p>
+
+  <h3>The conversation flow</h3>
+  <ol>
+    <li><b>First touch: technical.</b> Either inbound from OSS / talk / newsletter, or outbound with a specific Sigma rule we wrote for their stack. Never "would you like a demo of our platform" - always "here's a rule you might want, want to talk about how we generated it".</li>
+    <li><b>Demo: 30 minutes, founder-led.</b> Always start with their pain - "what do you currently do to test your cloud detections?" Their answer becomes the demo flow. Mirror, don't pitch.</li>
+    <li><b>POC: 14-day, self-serve.</b> They get Platform access, we ship one custom APT chain for their stack. They run it in their own AWS, against their own SIEM. Evidence bundle includes rules that fire AND rules they should write.</li>
+    <li><b>Close: contract over Notion / DocuSign.</b> Single-page MSA. Annual prepay or monthly. No legal back-and-forth for &lt;$50k deals.</li>
+    <li><b>Onboard: founder-led for first 15 customers.</b> Slack channel, weekly check-in for first month, monthly product council. Customer success comes after deal 25.</li>
+  </ol>
+
+  <h3>Objections we expect, by frequency</h3>
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Objection</th>
+        <th>Response</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="k">"We already use Mitigant"</td>
+        <td>Different framing. Mitigant integrates with your SIEM; we generate detection content as output. Ask if their team writes their own Sigma rules. If yes, we are the upstream.</td>
+      </tr>
+      <tr>
+        <td class="k">"We use Stratus Red Team"</td>
+        <td>Great tool for atomic tests. APT chains across services are what we ship. Want to see the Scattered Spider chain?</td>
+      </tr>
+      <tr>
+        <td class="k">"Why not just write the rules ourselves?"</td>
+        <td>You can - and most do. Our value is the run that proves the rules fire end-to-end, plus the evidence bundle. Even an experienced detection engineer takes 2-3 days per APT chain; we ship one in an hour.</td>
+      </tr>
+      <tr>
+        <td class="k">"We need Azure too"</td>
+        <td>Honest answer: not yet. AWS-first. Azure roadmap in 2027 if AWS depth lets us. Stay in touch.</td>
+      </tr>
+      <tr>
+        <td class="k">"Is this safe for production?"</td>
+        <td>It never touches production. Sandbox account, STS-only role, Pulumi sandbox with one-command destroy + post-conditions. Demo the safety model first.</td>
+      </tr>
+      <tr>
+        <td class="k">"We need on-prem"</td>
+        <td>Self-host the OSS core. Same engine, same bundle output. Enterprise tier offers on-prem control plane if needed.</td>
+      </tr>
+      <tr>
+        <td class="k">"Can we pay quarterly / monthly?"</td>
+        <td>Yes for Platform. Enterprise is annual.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <div class="lbl">FOUNDER-LED HEURISTIC</div>
+    <p>If you find yourself answering a question you've answered three times before, write a doc, link it, move on. Never answer the same question a fifth time live - that's the signal to write content.</p>
+  </div>
+</section>
+
+<!-- ============ 07 CONTENT ============ -->
+<section class="s" id="s7">
+  <div class="sh">
+    <span class="n">07</span>
+    <span class="t">Content &amp; community: <span class="em">credibility</span>, not lead-gen.</span>
+  </div>
+
+  <p>
+    Every piece of content we publish should pass a single test: <b>would I read this if I were the audience?</b>
+    If the answer is no, don't ship it. Detection engineers smell marketing copy from orbit and respect technical depth.
+  </p>
+
+  <h3>What we publish</h3>
+  <div class="cards three">
+    <div class="card">
+      <div class="h">CHAIN POSTS</div>
+      <h4>How we built X</h4>
+      <p>2,000+ words per APT. The boto3, the IAM, the Sigma rule. One per chain shipped. SEO target: "AMBERSQUID emulation", "AWS attack simulation".</p>
+    </div>
+    <div class="card">
+      <div class="h">TECHNIQUE NOTES</div>
+      <h4>One rule, dissected</h4>
+      <p>Short pieces (500-800 words) on a single Sigma rule. How it works, what it catches, what evades it. Aimed at SigmaHQ-level credibility.</p>
+    </div>
+    <div class="card">
+      <div class="h">ANNUAL REPORT</div>
+      <h4>State of cloud detection</h4>
+      <p>Yearly long-form, January release. Coverage gaps, what fires fastest, what doesn't. Becomes the artifact buyers cite for "why we need this".</p>
+    </div>
+  </div>
+
+  <h3>Community plays</h3>
+  <ul>
+    <li><b>Open detection challenge (quarterly).</b> We publish a 5-step AWS chain via blog + Twitter. First detection engineer to send us a working Sigma rule gets a $500 prize + their rule in our OSS. Marketing as an editorial event.</li>
+    <li><b>Cloud Detection Eng. office hours (monthly).</b> Open 1-hour Zoom. Anyone can show up with a rule they're stuck on. Founders + 1-2 community members debug live.</li>
+    <li><b>Sponsor (small) of community events we already love.</b> BSides Bangalore, fwd:cloudsec. $1-2k each. Pure brand investment.</li>
+    <li><b>Co-author with respected detection engineers.</b> Once we have visibility, invite folks like Florian Roth (Sigma), Christophe Tafani-Dereeper (Stratus author at DataDog) to collaborate on a chain. Position as peers.</li>
+  </ul>
+
+  <div class="callout">
+    <div class="lbl">CREDIBILITY RULE</div>
+    <p>Our community work is given freely. We do not gate content behind email forms. We do not put "request a demo" between the reader and a useful Sigma rule. The reward for being useful is being remembered.</p>
+  </div>
+</section>
+
+<!-- ============ 08 OSS STRATEGY ============ -->
+<section class="s" id="s8">
+  <div class="sh">
+    <span class="n">08</span>
+    <span class="t">OSS strategy: <span class="em">genuine</span>, with a clear monetization line.</span>
+  </div>
+
+  <p>
+    Open core only works when both halves are honest: the OSS has to be a tool people would use even if the company disappeared, and the paid tier has to add capabilities that genuinely require us.
+    Bad open core (the "tease and switch" model) corrodes trust faster than any other go-to-market sin.
+  </p>
+
+  <h3>What's in OSS (Apache 2.0, forever)</h3>
+  <ul>
+    <li>Engine: chain orchestrator, Pulumi templates, MITRE mapper, evidence emitter</li>
+    <li>All 6 APT chains we currently ship (and every future chain - we never paywall a chain)</li>
+    <li>11 Sigma rules + future rules - never paywall content content</li>
+    <li>CLI: <code>mayatrail run &lt;chain&gt;</code>, full functionality</li>
+    <li>IR playbook templates, MITRE coverage map generator</li>
+  </ul>
+
+  <h3>What's in Platform (paid)</h3>
+  <ul>
+    <li>Hosted control plane (run history, scheduling, team workspace)</li>
+    <li>Evidence signer (cryptographic + key management)</li>
+    <li>SIEM adapters with live ingest (Sentinel, Splunk, Chronicle, Elastic, Wazuh)</li>
+    <li>Custom chain authoring UI</li>
+    <li>SSO, audit log, role-based access</li>
+    <li>Priority access to new APT chains 30 days before OSS release</li>
+    <li>Support, SLAs, training</li>
+  </ul>
+
+  <h3>The rules we hold ourselves to</h3>
+  <ol>
+    <li><b>No chain or rule is ever paywalled forever.</b> 30-day exclusivity for Platform is acceptable. Permanent paywall is not.</li>
+    <li><b>If we deprecate an OSS feature, we replace it.</b> Functionality only moves OSS → Paid if there's a real reason (security, compute cost). And we ship a replacement.</li>
+    <li><b>License is and stays Apache 2.0.</b> We don't BSL or SSPL ourselves. If competitors fork, we compete on velocity + community + hosted, not lawyers.</li>
+    <li><b>Contributors get credit, always.</b> Every community-contributed chain is named after its author in the catalogue.</li>
+    <li><b>Public roadmap, public issues, public design discussions.</b> The OSS is the company's nervous system.</li>
+  </ol>
+
+  <div class="callout warn">
+    <div class="lbl">PRECEDENTS</div>
+    <p>HashiCorp's BSL move cost them more goodwill than it bought revenue. Elastic's SSPL did the same. dbt has held the line and won. We model on dbt: paid features are real value-add, OSS stays Apache 2.0.</p>
+  </div>
+</section>
+
+<!-- ============ 09 METRICS ============ -->
+<section class="s" id="s9">
+  <div class="sh">
+    <span class="n">09</span>
+    <span class="t">Metrics: <span class="em">what we measure</span>, what we ignore.</span>
+  </div>
+
+  <p>
+    Vanity metrics will lie to us. We instrument a small set of leading + lagging indicators and trust them.
+  </p>
+
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Metric</th>
+        <th>Why</th>
+        <th>Target by M9</th>
+        <th>Target by M18</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="k">Active OSS installations / week</td>
+        <td>True top-of-funnel. Telemetry opt-in.</td>
+        <td>200/week</td>
+        <td>800/week</td>
+      </tr>
+      <tr>
+        <td class="k">GitHub stars</td>
+        <td>Brand pulse, not pipeline.</td>
+        <td>2,500</td>
+        <td>7,000</td>
+      </tr>
+      <tr>
+        <td class="k">Paying teams</td>
+        <td>The actual business.</td>
+        <td>10</td>
+        <td>30</td>
+      </tr>
+      <tr>
+        <td class="k">MRR / ARR</td>
+        <td>Cash. The lagging indicator.</td>
+        <td>$25k MRR</td>
+        <td>$100k MRR · $1.2M ARR</td>
+      </tr>
+      <tr>
+        <td class="k">Conversion: OSS → demo</td>
+        <td>How well the product self-qualifies.</td>
+        <td>1.5%</td>
+        <td>2.5%</td>
+      </tr>
+      <tr>
+        <td class="k">Conversion: demo → paid</td>
+        <td>Sales effectiveness.</td>
+        <td>30%</td>
+        <td>40%</td>
+      </tr>
+      <tr>
+        <td class="k">Logo retention</td>
+        <td>Are we actually useful?</td>
+        <td>90%</td>
+        <td>95%</td>
+      </tr>
+      <tr>
+        <td class="k">Sigma rules contributed back</td>
+        <td>Community health.</td>
+        <td>40</td>
+        <td>150</td>
+      </tr>
+      <tr>
+        <td class="k">Conference talks accepted</td>
+        <td>Credibility signal.</td>
+        <td>3</td>
+        <td>8</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Metrics we explicitly ignore</h3>
+  <ul>
+    <li><b>"Pipeline coverage" / "qualified leads".</b> Vanity until we have a sales team. Before deal 25, every conversation is a real conversation.</li>
+    <li><b>NPS / CSAT scores.</b> Self-reported, gamed easily. Logo retention is the real signal.</li>
+    <li><b>Twitter follower count.</b> Engagement on technical posts matters; raw follower count does not.</li>
+    <li><b>Demos booked from paid ads.</b> We're not running paid ads in year 1.</li>
+  </ul>
+</section>
+
+<!-- ============ 10 ROADMAP ============ -->
+<section class="s" id="s10">
+  <div class="sh">
+    <span class="n">10</span>
+    <span class="t">18-month roadmap.</span>
+  </div>
+
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width: 12%;">Quarter</th>
+        <th>Product</th>
+        <th>GTM</th>
+        <th>Hiring</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="k">Q1 2026</td>
+        <td>Ship 2 new APT chains (target: MGM-style identity-pivot). Sentinel adapter v1.</td>
+        <td>BSides Bangalore. DE Weekly feature. 4 design partners signed.</td>
+        <td>Founders only.</td>
+      </tr>
+      <tr>
+        <td class="k">Q2 2026</td>
+        <td>Splunk + Elastic adapters. Evidence signer GA. Custom chain SDK in alpha.</td>
+        <td>10 paying teams. fwd:cloudsec talk. State of cloud detection 2026 report.</td>
+        <td>Hire senior detection engineer (content).</td>
+      </tr>
+      <tr>
+        <td class="k">Q3 2026</td>
+        <td>Hosted control plane GA. SSO + audit. Replay any run offline as a feature.</td>
+        <td>15-18 paying teams. Decision: bootstrap or raise seed.</td>
+        <td>DevRel.</td>
+      </tr>
+      <tr>
+        <td class="k">Q4 2026</td>
+        <td>OSS chain authoring SDK GA. Chronicle + Wazuh adapters. 12 APT chains live.</td>
+        <td>Annual report. DEATHCon talk. 25 paying teams.</td>
+        <td>If raised: SDR.</td>
+      </tr>
+      <tr>
+        <td class="k">Q1 2027</td>
+        <td>MSSP multi-tenant control plane. White-label option in private beta.</td>
+        <td>First MSSP design partners. 30 direct teams.</td>
+        <td>Engineer #3.</td>
+      </tr>
+      <tr>
+        <td class="k">Q2 2027</td>
+        <td>Azure-light: 3 named Azure APT chains as proof-of-extensibility (not full parity).</td>
+        <td>$100k MRR target. First non-founder-led deal.</td>
+        <td>First AE.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <div class="lbl">ROADMAP DISCIPLINE</div>
+    <p>Anything not on this table doesn't get built. New ideas go to the parking lot. We re-prioritize quarterly with public roadmap reviews so contributors and customers have a vote.</p>
+  </div>
+</section>
+
+<!-- ============ 11 RISKS ============ -->
+<section class="s" id="s11">
+  <div class="sh">
+    <span class="n">11</span>
+    <span class="t">Risks &amp; mitigations.</span>
+  </div>
+
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th style="width: 30%;">Risk</th>
+        <th>What we do</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="hot"><b>AWS launches first-party emulation</b></td>
+        <td>Plausible. Their version will be hosted-only, AWS-only, vendor-locked. We are open, portable, multi-vendor SIEM. Differentiation holds. We get acquired-or-marginalized scenarios; both have value.</td>
+      </tr>
+      <tr>
+        <td class="warn"><b>DataDog acquires Stratus + adds chains</b></td>
+        <td>They have distribution we don't; we have catalogue + OSS depth. Stay focused on detection-engineering use case; DataDog will optimize for observability buyer. Adjacent, not overlapping.</td>
+      </tr>
+      <tr>
+        <td class="warn"><b>Mitigant takes our APT-led angle</b></td>
+        <td>Their playbook is continuous validation. Pivoting hurts them. Even if they adopt language, our open-core + editorial depth is harder to fast-follow than 6 months would allow.</td>
+      </tr>
+      <tr>
+        <td class="k"><b>OSS fork by competitor</b></td>
+        <td>Apache 2.0; legally allowed. Our defense is velocity + community + brand. The hosted product is where the moat lives.</td>
+      </tr>
+      <tr>
+        <td class="k"><b>Founder bandwidth</b></td>
+        <td>Three founders, OSS engine to maintain, every demo personally led. Realistic. We will hit a wall at ~25 customers. Hire content engineer at M3, DevRel at M6. Don't take on more design partners than 4 simultaneous.</td>
+      </tr>
+      <tr>
+        <td class="k"><b>Slow seed market</b></td>
+        <td>We don't need to raise. Bootstrap path is real. The decision tree at month 6 (section 3) protects against pressure.</td>
+      </tr>
+      <tr>
+        <td class="k"><b>Pricing erosion from procurement</b></td>
+        <td>Discipline (section 5). Walk from bad-fit deals. The OSS gives us the option to say "use the free tier" without losing the buyer.</td>
+      </tr>
+      <tr>
+        <td class="warn"><b>Content treadmill</b></td>
+        <td>APT chains take real research time. Risk: we burn out. Mitigation: 1 chain/quarter from founders, 2/quarter community-contributed, formal editorial process.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <div class="lbl">CLOSING NOTE</div>
+    <p>Every line in this doc is reversible. We review quarterly with the team. If a tactic isn't working, we kill it. The principles in section 1 are the only things that don't change.</p>
+  </div>
+</section>
+
+<footer class="doc-foot">
+  <span>MAYATRAIL · GTM STRATEGY · v1 · 2026</span>
+  <span>FOR INTERNAL USE · <a href="MayaTrail Pitch.html">Pitch deck</a> · <a href="MayaTrail Pricing.html">Pricing</a></span>
+</footer>
+
+</main>
+
+<template id="__bundler_thumbnail" data-bg-color="#06070a">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <text x="120" y="380" font-family="ui-monospace, monospace" font-size="28" letter-spacing="10" fill="#6c7385">01 · POSITIONING</text>
+    <text x="120" y="430" font-family="ui-monospace, monospace" font-size="28" letter-spacing="10" fill="#6c7385">02 · ICP</text>
+    <text x="120" y="480" font-family="ui-monospace, monospace" font-size="28" letter-spacing="10" fill="#6c7385">03 · MOTION</text>
+    <text x="120" y="530" font-family="ui-monospace, monospace" font-size="28" letter-spacing="10" fill="#6c7385">04 · CHANNELS</text>
+    <text x="600" y="700" text-anchor="middle"
+          font-family="ui-monospace, monospace"
+          font-size="40" letter-spacing="14" font-weight="600"
+          fill="#e8eaf0">MAYATRAIL · GTM</text>
+  </svg>
+</template>
+
+</body>
+</html>

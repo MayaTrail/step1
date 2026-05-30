@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MayaTrail - Run · AMBERSQUID</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap">
+<link rel="stylesheet" href="mayatrail-base.css">
+
+<style>
+  main { padding-top: 60px; }
+  .nav { position: fixed; top: 0; left: 0; right: 0; }
+
+  @keyframes blip { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes pulse-dot { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+
+  .console-fixed {
+    position: sticky; top: 60px; z-index: 40;
+    background: rgba(6,7,10,0.92); backdrop-filter: blur(14px);
+  }
+
+  /* shared block heading used across panels */
+  .block-head {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--rule);
+    background: var(--bg-2);
+    font-family: var(--mono); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.16em;
+    color: var(--ink-2);
+    font-weight: 500;
+  }
+
+  @media (max-width: 1180px) { .nav-readout { display: none; } }
+  @media (max-width: 980px) {
+    .nav-links a:nth-of-type(5),
+    .nav-links a:nth-of-type(6) { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- AMBERSQUID run data - read by run-experience.jsx -->
+<script type="application/json" id="run-data">
+{
+  "run_id": "20260426_053635",
+  "threat_actor": "AMBERSQUID",
+  "attribution": "Indonesia",
+  "motivation": "financial · cryptocurrency mining",
+  "source": "https://www.sysdig.com/blog/ambersquid",
+  "platform": "aws",
+  "region": "us-east-1",
+  "duration_real_min": 60,
+  "fidelity_score": 0.91,
+  "narratives": {
+    "T1583.001": {
+      "headline": "Domain pre-staged",
+      "body": "Attacker registered an amplifyapp.com subdomain in a separate victim account during a prior campaign. No action in your account yet - but a callback endpoint sits waiting.",
+      "watch_for": "Nothing visible in your CloudTrail. Detection lives in PassiveDNS feeds and the CreateApp event later in step 7.",
+      "consequence": "Attacker infrastructure exists at zero cost to them."
+    },
+    "T1608.001": {
+      "headline": "Malicious image ready",
+      "body": "AMBERSQUID has a UPX-packed Docker image with SRBMiner-MULTI staged on a public registry. Lab uses a benign ubuntu:22.04 stand-in to avoid hosting real malware.",
+      "watch_for": "Container image scanning (ECR Inspector, Trivy) on pull. VirusTotal hash matches.",
+      "consequence": "Miner binary is one container pull away."
+    },
+    "T1204.003": {
+      "headline": "Container launches with stolen keys",
+      "body": "ECS Fargate task starts in your sandbox. Plaintext AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY env vars hand the attacker live victim credentials the moment the container boots.",
+      "watch_for": "ECS task definitions with WALLET/POOL env var names. Container Insights anomalous process.",
+      "consequence": "Attacker now holds long-lived IAM keys for the victim user."
+    },
+    "T1078.004": {
+      "headline": "Test-drive the stolen credentials",
+      "body": "Attacker confirms the keys work. GetCallerIdentity → GetUser → ListAttachedUserPolicies. They want to know exactly what those keys can do before making noise.",
+      "watch_for": "Rapid IAM enumeration from a non-console session within seconds of a new key surfacing in your account.",
+      "consequence": "Attacker now knows the blast radius of the keys."
+    },
+    "T1136.003": {
+      "headline": "Plant three IAM roles · one with AdministratorAccess",
+      "body": "Three roles get created via the victim's over-permissive policy. AWSCodeCommit-Role (Amplify + CodeCommit + CloudWatch), sugo-role (SageMaker), and - critically - ecsTaskExecutionRole, which gets AdministratorAccess attached. This is the persistence anchor.",
+      "watch_for": "iam:AttachRolePolicy with arn:aws:iam::aws:policy/AdministratorAccess to an attacker-named role. This is a P0 high-fidelity event.",
+      "consequence": "Persistence survives victim key rotation."
+    },
+    "T1098.001": {
+      "headline": "Assume all three new roles",
+      "body": "sts:AssumeRole on each role → three 3600s STS sessions running in parallel. From here on, the attacker mostly operates via these sessions rather than the original key - easier to evade identity-based alerts.",
+      "watch_for": "Three AssumeRole calls from one IAM user within seconds of CreateRole on those same role names.",
+      "consequence": "Three independent credential sessions; even revoking the original key doesn't stop them for an hour."
+    },
+    "T1059.009": {
+      "headline": "Burst-provision miner infrastructure",
+      "body": "Multi-service provisioning storm: CodeCommit repo, Amplify app (acquires the attacker callback domain as a side-effect), CodeBuild project, ECS cluster + task definition, SageMaker notebook. The mining substrate lights up across services your detection stack probably doesn't watch.",
+      "watch_for": "CreateApp + CreateProject + CreateNotebookInstance + CreateCluster from one principal within a minute.",
+      "consequence": "Compute is now live across five services across regions."
+    },
+    "T1525": {
+      "headline": "Touch CodeCommit · would push miner binaries",
+      "body": "Calls GetRepository to verify push access. Real AMBERSQUID would push entrypoint.sh, amplify-role.sh, repo.sh, etc. to CodeCommit across 16 regions - implanting the miner inside your own code infrastructure.",
+      "watch_for": "GetRepository from a session that was just created by iam:AssumeRole moments earlier.",
+      "consequence": "Code paths can be poisoned later without re-establishing IAM access."
+    },
+    "T1580": {
+      "headline": "Discovery sweep · canaries trip",
+      "body": "Wide enumeration: regions, account summary, roles, users, buckets. Pulls terraform.tfstate from the canary bucket and reads the prod/database/master_credentials canary secret. Both honeypots fire - these are your highest-fidelity discovery signals.",
+      "watch_for": "ListBuckets immediately followed by GetObject on terraform.tfstate. GetSecretValue on the canary secret name.",
+      "consequence": "If you set canary alarms, you find AMBERSQUID here, not at step 12."
+    },
+    "T1610": {
+      "headline": "Stage mass container deployment",
+      "body": "ECS task definition registered with an executionRole that bears AdministratorAccess. Real attack creates the service at desiredCount=30 × 16 regions; lab stops at register to avoid massive Fargate spend.",
+      "watch_for": "ecs:RegisterTaskDefinition where executionRoleArn references a role with admin-level policies attached.",
+      "consequence": "Mass deploy is one ecs:CreateService call away."
+    },
+    "T1578.002": {
+      "headline": "Spin up self-healing miner compute",
+      "body": "Dry-run only here. Real AMBERSQUID: 8 spot + 8 on-demand ASGs across 4 regions, CloudFormation stacks with EC2 ImageBuilder pipelines cron'd every minute, 8× ml.t3.2xlarge SageMaker notebooks across 4 regions. Self-healing miners that survive teardown.",
+      "watch_for": "CreateAutoScalingGroup + ImageBuilder StartImagePipelineExecution from a recently-assumed role.",
+      "consequence": "Mining persists even if you kill individual instances."
+    },
+    "T1070": {
+      "headline": "Disable CloudTrail · delete log file",
+      "body": "cloudtrail:StopLogging. Then s3:DeleteObject on the most recent log object. This is your last chance - and your best one. The StopLogging event fires BEFORE logging actually stops, meaning a CloudWatch alarm on it always captures the attempt.",
+      "watch_for": "Pre-configured CloudWatch alarm on the StopLogging metric filter. Fires in sub-60s. GuardDuty: Stealth:IAMUser/CloudTrailLoggingDisabled.",
+      "consequence": "If you miss this, you go blind. If you catch it, you have everything that came before."
+    },
+    "T1496": {
+      "headline": "Miner runs · bill spikes",
+      "body": "Data-plane. SRBMiner-MULTI connects to 2miners, c3pool, nanopool; hashes for ZEPHYR / TRX / RVN / XMR. No CloudTrail. In a real account, the only signal is your AWS bill - which spikes immediately. Lab blocks the mining ports at the SG.",
+      "watch_for": "GuardDuty CryptoCurrency findings. VPC Flow Logs to ports 3333/4444/5555/7777/8888/9999/14444/45560. AWS Cost Anomaly Detection.",
+      "consequence": "Whatever cost cap you have, AMBERSQUID will burn through it across regions."
+    }
+  },
+  "infra": {
+    "vpc_cidr": "10.99.0.0/16",
+    "hourly_cost_usd": 0.0027,
+    "monthly_cost_usd": 1.92,
+    "per_run_cost_usd": 0.0,
+    "resources": [
+      { "name": "ambersquid-victim-iam-user",      "type": "iam.User",         "category": "attack_surface" },
+      { "name": "ambersquid-victim-access-key",    "type": "iam.AccessKey",    "category": "attack_surface" },
+      { "name": "ambersquid-victim-policy",        "type": "iam.UserPolicy",   "category": "attack_surface" },
+      { "name": "ambersquid-ecs-cluster",          "type": "ecs.Cluster",      "category": "attack_surface" },
+      { "name": "ambersquid-task-definition",      "type": "ecs.TaskDef",      "category": "attack_surface" },
+      { "name": "ambersquid-ecs-execution-role",   "type": "iam.Role",         "category": "support" },
+      { "name": "ambersquid-vpc",                  "type": "ec2.Vpc",          "category": "support" },
+      { "name": "ambersquid-public-subnet",        "type": "ec2.Subnet",       "category": "support" },
+      { "name": "ambersquid-igw",                  "type": "ec2.InternetGW",   "category": "support" },
+      { "name": "ambersquid-task-sg",              "type": "ec2.SecurityGroup","category": "support" },
+      { "name": "ambersquid-log-group",            "type": "cw.LogGroup",      "category": "support" },
+      { "name": "ambersquid-codecommit-repo",      "type": "codecommit.Repo",  "category": "target" },
+      { "name": "ambersquid-cloudtrail-bucket",    "type": "s3.Bucket",        "category": "target" },
+      { "name": "ambersquid-cloudtrail",           "type": "cloudtrail.Trail", "category": "target" },
+      { "name": "ambersquid-terraform-state-bucket","type": "s3.Bucket",       "category": "bait" },
+      { "name": "ambersquid-honey-iam-user",       "type": "iam.User",         "category": "bait" },
+      { "name": "ambersquid-canary-secret",        "type": "secretsmanager.Secret", "category": "bait" }
+    ]
+  },
+  "credentials": [
+    {
+      "id": "victim_creds",
+      "type": "static_key",
+      "source_technique": "T1204.003",
+      "short": "Long-lived IAM key, plaintext env var on ECS container - never expires unless rotated.",
+      "used_in_phases": [4,5,6,9,11,12,13]
+    },
+    {
+      "id": "codecommit_role_session",
+      "type": "sts_session",
+      "source_technique": "T1098.001",
+      "short": "STS session for AWSCodeCommit-Role (Amplify + CodeCommit + CodeBuild + CloudWatch).",
+      "used_in_phases": [7,8,12]
+    },
+    {
+      "id": "sugo_role_session",
+      "type": "sts_session",
+      "source_technique": "T1098.001",
+      "short": "STS session for sugo-role (SageMakerFullAccess) - notebook-based mining.",
+      "used_in_phases": [7]
+    },
+    {
+      "id": "ecs_exec_role_session",
+      "type": "sts_session",
+      "source_technique": "T1098.001",
+      "short": "STS session for ecsTaskExecutionRole (AdministratorAccess + ECS) - unrestricted container deploy.",
+      "used_in_phases": [7,10]
+    }
+  ],
+  "chain": [
+    {
+      "step": 1, "phase": 1,
+      "technique": "T1583.001", "name": "Acquire attacker domain", "tactic": "Resource Development",
+      "risk": "low", "simulated": false, "documented": true,
+      "credential": null, "services": [],
+      "duration_s": 0.8, "events": [],
+      "detection": null
+    },
+    {
+      "step": 2, "phase": 1,
+      "technique": "T1608.001", "name": "Stage malicious image", "tactic": "Resource Development",
+      "risk": "low", "simulated": true,
+      "credential": null, "services": [],
+      "duration_s": 0.8, "events": [],
+      "detection": null
+    },
+    {
+      "step": 3, "phase": 2,
+      "technique": "T1204.003", "name": "Execute malicious container", "tactic": "Execution",
+      "risk": "low", "simulated": false,
+      "credential": null, "services": ["ecs", "fargate"],
+      "duration_s": 3.5,
+      "events": [
+        { "eventSource": "ecs.amazonaws.com", "eventName": "RunTask", "t_offset_s": 0.6, "note": "FARGATE · ubuntu:22.04 stand-in" },
+        { "eventSource": "ecs.amazonaws.com", "eventName": "DescribeTasks", "t_offset_s": 2.2 }
+      ],
+      "detection": null
+    },
+    {
+      "step": 4, "phase": 3,
+      "technique": "T1078.004", "name": "Validate victim credentials", "tactic": "Defense Evasion",
+      "risk": "low", "simulated": false,
+      "credential": "victim_creds", "services": ["sts", "iam"],
+      "duration_s": 2.0,
+      "events": [
+        { "eventSource": "sts.amazonaws.com", "eventName": "GetCallerIdentity", "t_offset_s": 0.3 },
+        { "eventSource": "iam.amazonaws.com", "eventName": "GetUser", "t_offset_s": 0.9 },
+        { "eventSource": "iam.amazonaws.com", "eventName": "ListAttachedUserPolicies", "t_offset_s": 1.4 }
+      ],
+      "detection": { "rule": "sigma_t1078.004", "latency_s": 1.6 }
+    },
+    {
+      "step": 5, "phase": 4,
+      "technique": "T1136.003", "name": "Create attacker IAM roles", "tactic": "Persistence",
+      "risk": "medium", "simulated": false,
+      "credential": "victim_creds", "services": ["iam"],
+      "duration_s": 4.5,
+      "events": [
+        { "eventSource": "iam.amazonaws.com", "eventName": "CreateRole", "t_offset_s": 0.3, "note": "AWSCodeCommit-Role" },
+        { "eventSource": "iam.amazonaws.com", "eventName": "AttachRolePolicy", "t_offset_s": 0.7, "note": "AmplifyFullAccess" },
+        { "eventSource": "iam.amazonaws.com", "eventName": "AttachRolePolicy", "t_offset_s": 1.0, "note": "CodeCommitFullAccess" },
+        { "eventSource": "iam.amazonaws.com", "eventName": "AttachRolePolicy", "t_offset_s": 1.3, "note": "CloudWatchFullAccess" },
+        { "eventSource": "iam.amazonaws.com", "eventName": "CreateRole", "t_offset_s": 1.9, "note": "sugo-role" },
+        { "eventSource": "iam.amazonaws.com", "eventName": "AttachRolePolicy", "t_offset_s": 2.3, "note": "SageMakerFullAccess" },
+        { "eventSource": "iam.amazonaws.com", "eventName": "CreateRole", "t_offset_s": 2.9, "note": "ecsTaskExecutionRole" },
+        { "eventSource": "iam.amazonaws.com", "eventName": "AttachRolePolicy", "t_offset_s": 3.3, "note": "AdministratorAccess ⚠" },
+        { "eventSource": "iam.amazonaws.com", "eventName": "AttachRolePolicy", "t_offset_s": 3.7, "note": "ECS_FullAccess" }
+      ],
+      "detection": { "rule": "sigma_t1136.003", "latency_s": 3.5 }
+    },
+    {
+      "step": 6, "phase": 4,
+      "technique": "T1098.001", "name": "Assume the three roles", "tactic": "Persistence",
+      "risk": "medium", "simulated": false,
+      "credential": "victim_creds", "services": ["sts", "iam"],
+      "duration_s": 2.5,
+      "events": [
+        { "eventSource": "sts.amazonaws.com", "eventName": "AssumeRole", "t_offset_s": 0.4, "note": "AWSCodeCommit-Role · session 3600s" },
+        { "eventSource": "sts.amazonaws.com", "eventName": "AssumeRole", "t_offset_s": 1.0, "note": "sugo-role · session 3600s" },
+        { "eventSource": "sts.amazonaws.com", "eventName": "AssumeRole", "t_offset_s": 1.6, "note": "ecsTaskExecutionRole · session 3600s" }
+      ],
+      "detection": { "rule": "sigma_t1098.001", "latency_s": 1.9 }
+    },
+    {
+      "step": 7, "phase": 5,
+      "technique": "T1059.009", "name": "Burst-provision miner infra", "tactic": "Execution",
+      "risk": "medium", "simulated": false,
+      "credential": "codecommit_role_session", "services": ["codecommit", "amplify", "codebuild", "ecs", "sagemaker"],
+      "duration_s": 5.0,
+      "events": [
+        { "eventSource": "codecommit.amazonaws.com", "eventName": "CreateRepository", "t_offset_s": 0.3, "note": "test · us-west-2" },
+        { "eventSource": "amplify.amazonaws.com",    "eventName": "CreateApp",         "t_offset_s": 0.9, "note": "miner-app · domain master.d19tgz4vpyd5.amplifyapp.com" },
+        { "eventSource": "codebuild.amazonaws.com",  "eventName": "CreateProject",     "t_offset_s": 1.6, "note": "miner-build-small" },
+        { "eventSource": "ecs.amazonaws.com",        "eventName": "CreateCluster",     "t_offset_s": 2.4, "note": "miner-cluster" },
+        { "eventSource": "ecs.amazonaws.com",        "eventName": "RegisterTaskDefinition", "t_offset_s": 3.0, "note": "miner-task · FARGATE" },
+        { "eventSource": "sagemaker.amazonaws.com",  "eventName": "CreateNotebookInstance", "t_offset_s": 3.9, "note": "miner-notebook · sugo-role" }
+      ],
+      "detection": { "rule": "sigma_t1059.009", "latency_s": 2.7 }
+    },
+    {
+      "step": 8, "phase": 6,
+      "technique": "T1525", "name": "Implant internal image", "tactic": "Persistence",
+      "risk": "low", "simulated": true,
+      "credential": "codecommit_role_session", "services": ["codecommit"],
+      "duration_s": 2.0,
+      "events": [
+        { "eventSource": "codecommit.amazonaws.com", "eventName": "GetRepository", "t_offset_s": 0.4, "note": "verify push access" },
+        { "eventSource": "codecommit.amazonaws.com", "eventName": "GitPush", "t_offset_s": 1.2, "simulated": true }
+      ],
+      "detection": { "rule": "sigma_t1525", "latency_s": 1.4 }
+    },
+    {
+      "step": 9, "phase": 7,
+      "technique": "T1580", "name": "Cloud infrastructure discovery", "tactic": "Discovery",
+      "risk": "low", "simulated": false,
+      "credential": "victim_creds", "services": ["ec2", "iam", "s3", "secretsmanager"],
+      "duration_s": 3.5,
+      "events": [
+        { "eventSource": "ec2.amazonaws.com",  "eventName": "DescribeRegions", "t_offset_s": 0.2 },
+        { "eventSource": "iam.amazonaws.com",  "eventName": "GetAccountSummary", "t_offset_s": 0.5 },
+        { "eventSource": "iam.amazonaws.com",  "eventName": "ListRoles", "t_offset_s": 0.8 },
+        { "eventSource": "iam.amazonaws.com",  "eventName": "ListUsers", "t_offset_s": 1.1 },
+        { "eventSource": "s3.amazonaws.com",   "eventName": "ListBuckets", "t_offset_s": 1.5 },
+        { "eventSource": "s3.amazonaws.com",   "eventName": "GetObject", "t_offset_s": 2.0, "note": "terraform.tfstate · CANARY TRIPPED" },
+        { "eventSource": "secretsmanager.amazonaws.com", "eventName": "ListSecrets", "t_offset_s": 2.5 },
+        { "eventSource": "secretsmanager.amazonaws.com", "eventName": "GetSecretValue", "t_offset_s": 3.0, "note": "prod/database/master_credentials · CANARY" }
+      ],
+      "detection": { "rule": "sigma_t1580", "latency_s": 2.4 }
+    },
+    {
+      "step": 10, "phase": 8,
+      "technique": "T1610", "name": "Deploy admin-priv container", "tactic": "Defense Evasion",
+      "risk": "low", "simulated": true,
+      "credential": "ecs_exec_role_session", "services": ["ecs", "fargate"],
+      "duration_s": 2.5,
+      "events": [
+        { "eventSource": "ecs.amazonaws.com", "eventName": "RegisterTaskDefinition", "t_offset_s": 0.5, "note": "miner-fargate-task · executionRole=AdministratorAccess ⚠" },
+        { "eventSource": "ecs.amazonaws.com", "eventName": "CreateService", "t_offset_s": 1.6, "simulated": true, "note": "desiredCount=30 × 16 regions" }
+      ],
+      "detection": { "rule": "sigma_t1610", "latency_s": 1.2 }
+    },
+    {
+      "step": 11, "phase": 9,
+      "technique": "T1578.002", "name": "Modify compute · scale", "tactic": "Defense Evasion",
+      "risk": "low", "simulated": true,
+      "credential": "victim_creds", "services": ["ec2", "cloudformation"],
+      "duration_s": 3.0,
+      "events": [
+        { "eventSource": "ec2.amazonaws.com",             "eventName": "DescribeLaunchTemplates", "t_offset_s": 0.4 },
+        { "eventSource": "cloudformation.amazonaws.com",  "eventName": "ValidateTemplate",        "t_offset_s": 1.1, "note": "dry-run only" },
+        { "eventSource": "autoscaling.amazonaws.com",     "eventName": "DescribeAutoScalingGroups", "t_offset_s": 1.9 },
+        { "eventSource": "ec2.amazonaws.com",             "eventName": "RunInstances", "t_offset_s": 2.4, "simulated": true, "note": "8× spot + 8× on-demand × 4 regions" }
+      ],
+      "detection": { "rule": "sigma_t1578.002", "latency_s": 999, "missed_reason": "dry-run only; CreateAutoScalingGroup never fired" }
+    },
+    {
+      "step": 12, "phase": 10,
+      "technique": "T1070", "name": "Indicator removal · disable CloudTrail", "tactic": "Defense Evasion",
+      "risk": "high", "simulated": false,
+      "credential": "victim_creds", "services": ["cloudtrail", "s3", "codecommit"],
+      "duration_s": 4.0,
+      "events": [
+        { "eventSource": "cloudtrail.amazonaws.com", "eventName": "DescribeTrails", "t_offset_s": 0.3 },
+        { "eventSource": "cloudtrail.amazonaws.com", "eventName": "GetTrailStatus", "t_offset_s": 0.7 },
+        { "eventSource": "cloudtrail.amazonaws.com", "eventName": "StopLogging",    "t_offset_s": 1.3, "note": "CRITICAL - alarm fires BEFORE call completes" },
+        { "eventSource": "s3.amazonaws.com",         "eventName": "ListObjectsV2",  "t_offset_s": 2.0, "note": "AWSLogs/.../CloudTrail/us-east-1/" },
+        { "eventSource": "s3.amazonaws.com",         "eventName": "DeleteObject",   "t_offset_s": 2.6, "note": "most recent log file" },
+        { "eventSource": "codecommit.amazonaws.com", "eventName": "ListRepositories", "t_offset_s": 3.2, "note": "evidence cleanup prep" }
+      ],
+      "detection": { "rule": "sigma_t1070", "latency_s": 1.6 }
+    },
+    {
+      "step": 13, "phase": 11,
+      "technique": "T1496", "name": "Resource hijacking · miner runs", "tactic": "Impact",
+      "risk": "low", "simulated": true,
+      "credential": "victim_creds", "services": ["ecs"],
+      "duration_s": 2.0,
+      "events": [
+        { "eventSource": "ecs.amazonaws.com", "eventName": "DescribeTasks", "t_offset_s": 0.4, "note": "verify task still running" }
+      ],
+      "detection": null
+    }
+  ],
+  "detection_registry": [
+    { "rule": "sigma_t1583.001", "technique": "T1583.001", "kind": "sigma", "severity": "medium",   "source": "AWS CloudTrail", "title": "Amplify CreateApp · attacker domain extraction" },
+    { "rule": "sigma_t1608.001", "technique": "T1608.001", "kind": "sigma", "severity": "medium",   "source": "ECR / Registry", "title": "Malicious container image push to registry" },
+    { "rule": "sigma_t1078.004", "technique": "T1078.004", "kind": "sigma", "severity": "high",     "source": "AWS CloudTrail", "title": "Valid cloud account · post-harvest validation pattern" },
+    { "rule": "sigma_t1136.003", "technique": "T1136.003", "kind": "sigma", "severity": "high",     "source": "AWS CloudTrail", "title": "IAM CreateRole + AdministratorAccess attach" },
+    { "rule": "sigma_t1098.001", "technique": "T1098.001", "kind": "sigma", "severity": "high",     "source": "AWS CloudTrail", "title": "STS AssumeRole burst from single principal" },
+    { "rule": "sigma_t1059.009", "technique": "T1059.009", "kind": "sigma", "severity": "high",     "source": "AWS CloudTrail", "title": "Multi-service provisioning burst · Amplify + CodeBuild + SageMaker" },
+    { "rule": "sigma_t1525",     "technique": "T1525",     "kind": "sigma", "severity": "medium",   "source": "AWS CloudTrail", "title": "CodeCommit access from attacker-assumed role" },
+    { "rule": "sigma_t1580",     "technique": "T1580",     "kind": "sigma", "severity": "medium",   "source": "AWS CloudTrail", "title": "Cloud discovery burst + canary trip" },
+    { "rule": "sigma_t1610",     "technique": "T1610",     "kind": "sigma", "severity": "high",     "source": "AWS CloudTrail", "title": "ECS task def · executionRole bears AdministratorAccess" },
+    { "rule": "sigma_t1578.002", "technique": "T1578.002", "kind": "sigma", "severity": "medium",   "source": "AWS CloudTrail", "title": "Compute scaling · ASG + ImageBuilder pipelines" },
+    { "rule": "sigma_t1070",     "technique": "T1070",     "kind": "sigma", "severity": "critical", "source": "AWS CloudTrail + CW Alarm", "title": "CloudTrail StopLogging · evidence cleanup" }
+  ]
+}
+</script>
+
+<main>
+
+<!-- NAV -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a href="MayaTrail Landing.html" class="brand"><span class="mark"></span> MAYATRAIL</a>
+    <div class="nav-links">
+      <a href="MayaTrail Landing.html">Platform</a>
+      <a href="MayaTrail Scenarios.html">Scenarios</a>
+      <a class="active">Run</a>
+      <a href="MayaTrail Pitch.html">Pitch</a>
+      <a href="MayaTrail GTM.html">GTM</a>
+      <a href="MayaTrail Pricing.html">Pricing</a>
+    </div>
+    <div class="nav-readout">
+      <span class="stat">v0.4.1 · operational</span>
+    </div>
+    <a class="nav-cta" style="white-space:nowrap;">Request access</a>
+  </div>
+</nav>
+
+<!-- CONSOLE BAR -->
+<div class="console-fixed">
+  <div class="console">
+    <div class="console-bar">
+      <span class="lbl">RUN</span><span class="sep">·</span>
+      <span>20260426_053635 · AMBERSQUID</span><span class="sep">·</span>
+      <span>region us-east-1</span>
+      <div class="right">
+        <span class="pulse"></span>
+        <span>sandbox active · STS only · pulumi v3.224.0</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- mount -->
+<div id="run-mount"></div>
+
+</main>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="run-experience.jsx"></script>
+<script type="text/babel">
+  ReactDOM.createRoot(document.getElementById('run-mount')).render(<window.RunApp />);
+</script>
+
+<template id="__bundler_thumbnail" data-bg-color="#06070a">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect x="200" y="280" width="800" height="240" fill="none" stroke="#6aa8ff" stroke-width="6"/>
+    <text x="600" y="430" text-anchor="middle"
+          font-family="ui-monospace, monospace"
+          font-size="80" letter-spacing="12" font-weight="600"
+          fill="#e8eaf0">RUN</text>
+    <text x="600" y="690" text-anchor="middle"
+          font-family="ui-monospace, monospace"
+          font-size="22" letter-spacing="10"
+          fill="#6c7385">AMBERSQUID · LIVE EMULATION</text>
+  </svg>
+</template>
+
+</body>
+</html>
