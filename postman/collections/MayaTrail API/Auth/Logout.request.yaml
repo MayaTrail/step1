@@ -1,0 +1,20 @@
+$kind: http-request
+description: |-
+  Blacklist the refresh token to invalidate the current session.
+
+  After calling this, both the access and refresh tokens are invalid.
+  The client must discard them from local storage.
+
+  Returns: 205 Reset Content on success.
+  Returns: 400 if the token is missing or already blacklisted.
+url: "{{base_url}}/api/auth/logout/"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "refresh": "{{refresh_token}}"
+    }
+order: 7000

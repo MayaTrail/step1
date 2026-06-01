@@ -1,5 +1,0 @@
-$kind: http-request
-description: "Enqueues `pulumi up` for the stack. Poll GET /api/stacks/{{stack_id}}/ to track status transitions: deploying → ready."
-url: "{{base_url}}/api/stacks/{{stack_id}}/deploy/"
-method: POST
-order: 4000

@@ -1,6 +1,8 @@
 $kind: http-request
 description: |-
-  List all registered emulation packages. Returns camelCase fields matching the frontend Emulation TypeScript type.
+  List all registered emulation packages discovered from the emulations registry.
+
+  Returns camelCase fields matching the frontend Emulation TypeScript type.
 
   Expected for SCARLETEEL:
   - id: "scarleteel"

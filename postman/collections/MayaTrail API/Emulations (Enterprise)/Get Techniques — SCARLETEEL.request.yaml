@@ -1,6 +1,6 @@
 $kind: http-request
 description: |-
-  Return MITRE ATT&CK kill-chain phases and full technique mappings.
+  Return MITRE ATT&CK kill-chain phases and full technique mappings from the MANIFEST.
 
   Expected for SCARLETEEL:
   - attackPath: 6 phases (Initial Access → Persistence)

@@ -1,3 +1,8 @@
 $kind: collection
-description: Authentication endpoints. Run Login first — the token is captured automatically.
+description: |-
+  Authentication endpoints.
+
+  Registration flow: Register → Verify OTP → Login.
+  Password reset flow: Forgot Password → Reset Password → Login.
+  Alternative: Google OAuth (single step).
 order: 1000

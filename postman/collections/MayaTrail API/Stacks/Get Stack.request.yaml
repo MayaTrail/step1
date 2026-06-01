@@ -1,5 +1,11 @@
 $kind: http-request
-description: Retrieve a specific stack by UUID. Use this to poll deployment status.
+description: |-
+  Retrieve a specific stack by UUID.
+
+  Use this to poll deployment status. The full status lifecycle for emulation stacks is:
+  `deploying → ec2_booting → ready_for_attack → attacking → attack_complete → destroying → (record deleted)`
+
+  Returns 404 once the stack is destroyed (record is deleted on successful destroy).
 url: "{{base_url}}/api/stacks/{{stack_id}}/"
 method: GET
-order: 3000
+order: 2000

@@ -1,5 +1,14 @@
 $kind: http-request
-description: Register a new user account. Open registration unless REGISTRATION_INVITE_CODE is set in .env.
+description: |-
+  Create a new (inactive) user account and send an OTP to the provided email address.
+
+  The user cannot log in until they verify the OTP via POST /api/auth/register/verify-otp/.
+
+  Fields:
+  - `invite_code` — optional; required only when REGISTRATION_INVITE_CODE is set in .env.
+  - `first_name` / `last_name` — optional but recommended.
+
+  Returns: 201 { message, email } on success.
 url: "{{base_url}}/api/auth/register/"
 method: POST
 headers:
@@ -10,7 +19,10 @@ body:
     {
       "username": "testuser",
       "email": "testuser@example.com",
-      "password": "SuperSecret123"
+      "password": "SuperSecret123",
+      "first_name": "Test",
+      "last_name": "User",
+      "invite_code": ""
     }
 auth:
   type: noauth

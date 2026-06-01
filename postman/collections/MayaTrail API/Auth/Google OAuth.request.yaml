@@ -1,12 +1,13 @@
 $kind: http-request
 description: |-
-  Obtain a JWT access + refresh token pair.
+  Authenticate via a Google ID token and receive a MayaTrail JWT pair.
 
-  The test script automatically stores both tokens in collection variables.
-  The user must have verified their email via OTP before this succeeds.
+  The `id_token` is obtained by the frontend after the user completes the Google sign-in consent screen via Google Identity Services.
 
-  Returns: 200 { access, refresh } on success.
-url: "{{base_url}}/api/auth/login/"
+  No invite code or OTP verification is required for Google accounts.
+
+  Returns: 200 { access, refresh, user } on success.
+url: "{{base_url}}/api/auth/google/"
 method: POST
 headers:
   Content-Type: application/json
@@ -14,8 +15,7 @@ body:
   type: text
   content: |-
     {
-      "email": "testuser@example.com",
-      "password": "SuperSecret123"
+      "id_token": "<Google ID token from Google Identity Services>"
     }
 auth:
   type: noauth
@@ -27,6 +27,7 @@ scripts:
           pm.collectionVariables.set('token', body.access);
           pm.collectionVariables.set('refresh_token', body.refresh);
           pm.test('Token captured', () => pm.expect(body.access).to.be.a('string'));
+          pm.test('User returned', () => pm.expect(body.user).to.be.an('object'));
       }
     language: text/javascript
-order: 4000
+order: 10000

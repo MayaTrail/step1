@@ -1,5 +1,15 @@
 $kind: http-request
-description: Return the authenticated user's profile. Also shows is_demo, is_enterprise, aws_role_arn — useful for debugging permission issues.
+description: |-
+  Return the authenticated user's profile.
+
+  Key fields to inspect:
+  - `is_enterprise` — must be true to use emulation endpoints
+  - `aws_role_arn` — set by POST /api/connectors/aws/verify/
+  - `is_demo` — set by POST /api/connectors/demo/
+  - `is_verified` — true once OTP is confirmed
+  - `auth_method` — 'password' or 'google'
+
+  Returns: 200 with user profile.
 url: "{{base_url}}/api/auth/me/"
 method: GET
-order: 4000
+order: 6000
