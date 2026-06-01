@@ -1,11 +1,9 @@
-import { awsEmulations } from './emulations'
-import { awsDetections, awsGuardrails } from './detections'
-import { awsPlaybooks } from './playbooks'
+import { awsGuardrails } from './detections'
 import type { PlatformData } from '@/types'
 
 export const awsData: PlatformData = {
-  emulations: awsEmulations,
-  detections: awsDetections,
+  emulations: [],
+  detections: { sigma: [], kql: [], totalCount: 0, formats: '' },
   guardrails: awsGuardrails,
-  playbooks: awsPlaybooks,
+  playbooks: [],
 }

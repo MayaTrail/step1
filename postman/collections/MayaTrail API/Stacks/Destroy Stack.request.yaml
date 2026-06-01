@@ -1,0 +1,5 @@
+$kind: http-request
+description: Enqueues `pulumi destroy` for the stack.
+url: "{{base_url}}/api/stacks/{{stack_id}}/destroy/"
+method: POST
+order: 5000

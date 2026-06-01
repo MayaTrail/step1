@@ -8,6 +8,11 @@ psycopg2-binary==2.9.9
 python-decouple==3.8
 django-cors-headers==4.4.0
 gunicorn==22.0.0
-docker==7.1.0
+pulumi==3.207.0
+pulumi-aws==7.11.1
+pulumi-std==2.2.0
 colorama==0.4.6
 cryptography==46.0.5
+google-auth==2.29.0
+requests==2.32.3
+django-celery-beat==2.9.0

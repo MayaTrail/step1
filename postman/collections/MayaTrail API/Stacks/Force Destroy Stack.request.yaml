@@ -1,0 +1,26 @@
+$kind: http-request
+description: |-
+  Force-destroy a stack regardless of its current status.
+
+  Unlike the standard destroy endpoint, this is NOT blocked by busy statuses such as 'deploying' or 'refreshing'. Use this to recover stacks stuck in a non-terminal state because the Celery task was never picked up or the Pulumi run hung.
+
+  Only blocked if the stack is already 'destroying' (returns 409).
+
+  For enterprise emulation stacks use POST /api/emulations/{{stack_id}}/destroy/ instead — that endpoint uses STS credentials to run pulumi destroy in the user's account.
+url: "{{base_url}}/api/stacks/{{stack_id}}/force-destroy/"
+method: POST
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Accepted or already destroying', () => {
+          pm.expect(pm.response.code).to.be.oneOf([202, 409]);
+      });
+      if (pm.response.code === 202) {
+          const body = pm.response.json();
+          pm.test('task_id present', () => pm.expect(body.task_id).to.be.a('string'));
+          console.log('Force destroy queued. Poll GET /api/stacks/{{stack_id}}/ until status == destroyed or record is deleted (404).');
+      } else {
+          console.log('Stack is already being destroyed (409). No action needed.');
+      }
+    language: text/javascript
+order: 6000

@@ -1,0 +1,5 @@
+$kind: http-request
+description: Activate demo mode for the current user. Sets is_demo=True and records demo_activated_at on the user profile.
+url: "{{base_url}}/api/connectors/demo/activate/"
+method: POST
+order: 2000

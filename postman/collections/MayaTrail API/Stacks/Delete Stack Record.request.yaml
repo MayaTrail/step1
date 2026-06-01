@@ -1,0 +1,5 @@
+$kind: http-request
+description: Delete the stack database record only (does not run pulumi destroy).
+url: "{{base_url}}/api/stacks/{{stack_id}}/"
+method: DELETE
+order: 10000

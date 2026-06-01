@@ -1,0 +1,27 @@
+// SCARLETEEL Phase 2 — T1552.005: Cloud Instance Metadata API
+// Detects EC2 instance role credentials being used from a source IP that is
+// not an AWS-internal address, indicating the credentials may have been stolen
+// via IMDSv1 and replayed from an attacker-controlled host.
+//
+// Reference: https://attack.mitre.org/techniques/T1552/005/
+
+AWSCloudTrail
+| where TimeGenerated > ago(1h)
+| where UserIdentityType == "AssumedRole"
+// EC2 instance roles use session names matching the instance ID pattern
+| where UserIdentityPrincipalId matches regex @"AROA[A-Z0-9]+:i-[0-9a-f]+"
+// Exclude AWS-internal service calls and private network ranges
+| where SourceIpAddress !endswith ".amazonaws.com"
+    and SourceIpAddress !startswith "10."
+    and SourceIpAddress !startswith "172.16."
+    and SourceIpAddress !startswith "192.168."
+    and SourceIpAddress !startswith "169.254."
+| summarize
+    CallCount = count(),
+    EventNames = make_set(EventName),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated)
+    by UserIdentityArn, SourceIpAddress, AWSRegion
+| where CallCount > 1
+| extend AlertTitle = "EC2 instance role used from external IP — possible IMDSv1 theft"
+| order by CallCount desc

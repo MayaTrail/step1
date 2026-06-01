@@ -1,38 +1,56 @@
 import { useState, useCallback, useEffect } from 'react'
-import { Outlet } from 'react-router-dom'
+import { Outlet, useLocation } from 'react-router-dom'
 import { TopNav } from './TopNav'
 import { Sidebar } from './Sidebar'
 
 export function AppLayout() {
   const [searchOpen, setSearchOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const location = useLocation()
 
   const openSearch = useCallback(() => setSearchOpen(true), [])
   const closeSearch = useCallback(() => setSearchOpen(false), [])
+  const toggleSidebar = useCallback(() => setSidebarOpen(v => !v), [])
+  const closeSidebar = useCallback(() => setSidebarOpen(false), [])
 
-  // Keyboard shortcut: "/" to open search, Escape to close
+  // Close mobile sidebar on route change
+  useEffect(() => {
+    setSidebarOpen(false)
+  }, [location.pathname])
+
+  // Keyboard shortcut: "/" to open search, Escape to close search or sidebar
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === '/' && !searchOpen && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
         e.preventDefault()
         openSearch()
       }
-      if (e.key === 'Escape' && searchOpen) {
-        closeSearch()
+      if (e.key === 'Escape') {
+        if (searchOpen) closeSearch()
+        else if (sidebarOpen) closeSidebar()
       }
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [searchOpen, openSearch, closeSearch])
+  }, [searchOpen, sidebarOpen, openSearch, closeSearch, closeSidebar])
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-surface-deep">
-      <TopNav onOpenSearch={openSearch} />
+      <TopNav onOpenSearch={openSearch} onToggleSidebar={toggleSidebar} />
 
-      <div className="flex flex-1 overflow-hidden">
-        <Sidebar />
+      <div className="flex flex-1 overflow-hidden relative">
+        {/* Mobile backdrop — sits above content, below sidebar */}
+        {sidebarOpen && (
+          <div
+            className="fixed inset-0 top-[58px] bg-black/60 z-[140] lg:hidden"
+            onClick={closeSidebar}
+          />
+        )}
 
-        <main className="flex-1 overflow-hidden relative">
-          <div className="h-full overflow-y-auto px-8 py-7 animate-fadeIn">
+        <Sidebar isOpen={sidebarOpen} onClose={closeSidebar} />
+
+        <main className="flex-1 overflow-hidden relative min-w-0">
+          <div className="h-full overflow-y-auto px-6 lg:px-8 py-7 animate-fadeIn">
             <Outlet />
           </div>
         </main>

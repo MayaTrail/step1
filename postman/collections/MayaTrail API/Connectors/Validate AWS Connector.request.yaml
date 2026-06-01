@@ -1,0 +1,15 @@
+$kind: http-request
+description: Validate AWS credentials via STS GetCallerIdentity and store the role ARN on the user profile. Sets is_enterprise=True on success.
+url: "{{base_url}}/api/connectors/aws/"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+      "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+      "aws_role_arn": "arn:aws:iam::123456789012:role/MayaTrailEnterpriseRole"
+    }
+order: 1000

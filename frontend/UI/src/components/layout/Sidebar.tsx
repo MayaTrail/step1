@@ -12,7 +12,12 @@ const subNavItems = [
   { key: 'guardrails', label: 'Guardrails', icon: '\uD83D\uDEE1' },
 ] as const
 
-export function Sidebar() {
+interface SidebarProps {
+  isOpen: boolean
+  onClose: () => void
+}
+
+export function Sidebar({ isOpen }: SidebarProps) {
   const location = useLocation()
   const [expanded, setExpanded] = useState<Set<PlatformId>>(() => {
     // Auto-expand the platform that matches the current URL
@@ -32,7 +37,12 @@ export function Sidebar() {
   const isActivePlatform = (route: string) => location.pathname.startsWith(`/${route}`)
 
   return (
-    <aside className="w-[240px] bg-surface-base border-r border-border overflow-y-auto shrink-0 py-4">
+    <aside className={`
+      w-[240px] bg-surface-base border-r border-border overflow-y-auto shrink-0 py-4
+      fixed top-[58px] bottom-0 left-0 z-[150] transition-transform duration-200 ease-in-out
+      lg:static lg:top-auto lg:bottom-auto lg:z-auto lg:translate-x-0
+      ${isOpen ? 'translate-x-0' : '-translate-x-full'}
+    `}>
 
       {/* ── Dashboard Section ── */}
       <SectionLabel>Dashboard</SectionLabel>
@@ -101,8 +111,10 @@ export function Sidebar() {
               <div className="bg-black/20 border-l border-border ml-6">
                 {subNavItems.map((item) => {
                   // Build the sub-item path
-                  const path = item.key === 'playbooks'
-                    ? `/${platform.route}/playbooks/0`
+                  // Playbooks and Detections are per-emulation — link to the
+                  // emulations list so the user picks an emulation first.
+                  const path = (item.key === 'playbooks' || item.key === 'detections')
+                    ? `/${platform.route}/emulations`
                     : `/${platform.route}/${item.key}`
                   const isSubActive = location.pathname.startsWith(`/${platform.route}/${item.key}`)
 

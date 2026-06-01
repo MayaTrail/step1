@@ -1,0 +1,3 @@
+$kind: collection
+description: Authentication endpoints. Run Login first — the token is captured automatically.
+order: 1000

@@ -1,0 +1,5 @@
+$kind: http-request
+description: Retrieve a specific stack by UUID. Use this to poll deployment status.
+url: "{{base_url}}/api/stacks/{{stack_id}}/"
+method: GET
+order: 3000

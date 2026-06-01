@@ -1,0 +1,3 @@
+$kind: collection
+description: Audit log entries for stacks and simulation runs.
+order: 5000

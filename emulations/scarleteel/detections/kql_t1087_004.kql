@@ -1,0 +1,40 @@
+// SCARLETEEL Phase 3 — T1087.004 / T1580: Cloud Account and Infrastructure Discovery
+// Detects an enumeration burst: more than 20 IAM/S3/SecretsManager read operations
+// from a single principal within a 5-minute window.
+//
+// References:
+//   https://attack.mitre.org/techniques/T1087/004/
+//   https://attack.mitre.org/techniques/T1580/
+
+let LookbackWindow = 5m;
+let EnumerationThreshold = 20;
+
+AWSCloudTrail
+| where TimeGenerated > ago(1h)
+| where EventSource in (
+    "iam.amazonaws.com",
+    "s3.amazonaws.com",
+    "secretsmanager.amazonaws.com"
+  )
+| where EventName startswith "List"
+    or EventName startswith "Describe"
+    or EventName startswith "Get"
+| summarize
+    CallCount = count(),
+    EventNames = make_set(EventName, 50),
+    Services = make_set(EventSource),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, LookbackWindow)
+| where CallCount >= EnumerationThreshold
+| extend DurationSeconds = datetime_diff('second', LastSeen, FirstSeen)
+| extend AlertTitle = "IAM/S3/SecretsManager enumeration burst — possible post-exploitation discovery"
+| project
+    TimeGenerated,
+    AlertTitle,
+    UserIdentityArn,
+    CallCount,
+    DurationSeconds,
+    Services,
+    EventNames
+| order by CallCount desc

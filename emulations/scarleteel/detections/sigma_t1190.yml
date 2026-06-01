@@ -1,0 +1,36 @@
+title: SCARLETEEL Phase 1 — GetCallerIdentity from EC2 Instance Role After Container RCE
+id: a1b2c3d4-1111-4aaa-b111-111111111111
+status: experimental
+description: |
+  Detects an attacker verifying their foothold after container RCE by calling
+  GetCallerIdentity using IMDSv1-derived credentials.  A sudden GetCallerIdentity
+  call from an EC2 instance role that has never made this call before, or from an
+  unusual source IP, is a strong signal that credentials were stolen via IMDS and
+  used outside the instance.
+references:
+  - https://sysdig.com/blog/cloud-breach-terraform-data-theft/
+  - https://attack.mitre.org/techniques/T1190/
+author: MayaTrail Security Research
+date: 2024/01/01
+tags:
+  - attack.initial_access
+  - attack.t1190
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: sts.amazonaws.com
+    eventName: GetCallerIdentity
+    userIdentity.type: AssumedRole
+  filter_internal:
+    sourceIPAddress|startswith:
+      - '10.'
+      - '172.16.'
+      - '192.168.'
+      - '169.254.'
+  condition: selection and not filter_internal
+falsepositives:
+  - CI/CD pipelines running sts:GetCallerIdentity as a connectivity check
+  - Legitimate automation using instance role credentials from external tooling
+level: medium

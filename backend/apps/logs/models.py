@@ -11,14 +11,13 @@ from django.conf import settings
 from django.db import models
 
 from apps.infrastructure.models import Stack
-from apps.simulations.models import SimulationRun
 
 
 class LogEntry(models.Model):
     """
     Immutable audit log entry.
 
-    Records discrete events (stack deployments, simulation runs) with
+    Records discrete events (stack deployments, emulation runs) with
     free-form message text.  All foreign keys are nullable so that a
     log entry survives the deletion of its referenced objects.
     """
@@ -35,9 +34,9 @@ class LogEntry(models.Model):
 
         STACK_DEPLOYED = "stack.deployed", "Stack Deployed"
         STACK_DESTROYED = "stack.destroyed", "Stack Destroyed"
-        SIMULATION_STARTED = "simulation.started", "Simulation Started"
-        SIMULATION_COMPLETED = "simulation.completed", "Simulation Completed"
-        SIMULATION_FAILED = "simulation.failed", "Simulation Failed"
+        EMULATION_STARTED = "emulation.started", "Emulation Started"
+        EMULATION_COMPLETED = "emulation.completed", "Emulation Completed"
+        EMULATION_FAILED = "emulation.failed", "Emulation Failed"
 
     id = models.UUIDField(
         primary_key=True,
@@ -74,14 +73,6 @@ class LogEntry(models.Model):
         blank=True,
         related_name="log_entries",
         help_text="Stack this event relates to, if applicable.",
-    )
-    run = models.ForeignKey(
-        SimulationRun,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="log_entries",
-        help_text="SimulationRun this event relates to, if applicable.",
     )
     timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
 

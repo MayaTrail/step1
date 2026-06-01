@@ -1,0 +1,5 @@
+$kind: http-request
+description: List all stacks owned by the authenticated user.
+url: "{{base_url}}/api/stacks/"
+method: GET
+order: 1000

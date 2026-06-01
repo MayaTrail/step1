@@ -1,0 +1,24 @@
+$kind: http-request
+description: Exchange the refresh token for a new access token. Updates the `token` variable automatically.
+url: "{{base_url}}/api/auth/refresh/"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "refresh": "{{refresh_token}}"
+    }
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    code: |-
+      if (pm.response.code === 200) {
+          const body = pm.response.json();
+          pm.collectionVariables.set('token', body.access);
+          pm.test('New access token captured', () => pm.expect(body.access).to.be.a('string'));
+      }
+    language: text/javascript
+order: 3000

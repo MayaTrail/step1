@@ -28,7 +28,6 @@ class LogEntrySerializer(serializers.ModelSerializer):
             "message",
             "actor",
             "stack",
-            "run",
             "timestamp",
         ]
         read_only_fields = fields

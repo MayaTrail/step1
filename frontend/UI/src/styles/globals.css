@@ -2,81 +2,149 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Base Styles ── */
 @layer base {
   html {
     scroll-behavior: smooth;
   }
 
-  /* Dark theme (default) — Matched to frontend/css/custom.css design system */
+  /*
+   * Dark theme — Raycast design system
+   *
+   * Surface scale (darkest to lightest):
+   *   deep (#07080a) → base/card (#101111) → elevated (#1b1c1e)
+   *
+   * Text scale (brightest to dimmest):
+   *   primary (#f9f9f9) → secondary (#cecece) → dim (#9c9c9d) → muted (#6a6b6c)
+   *
+   * All grays are cool-neutral, never warm — matches the near-black blue-tinted canvas.
+   */
   :root {
-    --surface-deep: #07080c;
-    --surface-base: #0d0f16;
-    --surface-card: #111420;
-    --surface-elevated: #1a1d2a;
-    --content-primary: #e8eaf0;
-    --content-secondary: #8a90a4;
-    --content-dim: #4a5068;
-    --border-subtle: rgba(255, 255, 255, 0.06);
+    --surface-deep:    #07080a;
+    --surface-base:    #101111;
+    --surface-card:    #101111;
+    --surface-elevated: #1b1c1e;
+
+    --content-primary:   #f9f9f9;
+    --content-secondary: #cecece;
+    --content-dim:       #9c9c9d;
+    --content-muted:     #6a6b6c;
+
+    /* Borders use white at very low opacity — barely visible, structurally essential */
+    --border-subtle:  rgba(255, 255, 255, 0.06);
     --border-default: rgba(255, 255, 255, 0.06);
-    --border-active: rgba(255, 255, 255, 0.15);
-    --cyan: #00d4ff;
-    --orange: #ff6b35;
+    --border-active:  rgba(255, 255, 255, 0.1);
+
+    /* Brand & semantic */
+    --danger:       #FF6363;
+    --danger-glow:  rgba(255, 99, 99, 0.15);
+    --green:        #5fc992;
+    --green-glow:   rgba(95, 201, 146, 0.15);
+    --yellow:       #ffbc33;
+    --yellow-glow:  rgba(255, 188, 51, 0.15);
+    --blue:         #55b3ff;
+    --blue-glow:    hsla(202, 100%, 67%, 0.15);
+
+    /* Dashboard accent colors */
+    --cyan:   #55b3ff;
+    --orange: #FF6363;
     --purple: #a78bfa;
-    --green: #10b981;
-    --danger: #ff2244;
-    --safe: #00e676;
-    --accent-blue: #00b4d8;
-    --accent-cyan: #48e8c8;
+
+    /* Shadow tokens — macOS-native multi-layer depth system */
+    --shadow-ring:    rgb(27, 28, 30) 0px 0px 0px 1px, rgb(7, 8, 10) 0px 0px 0px 1px inset;
+    --shadow-button:  rgba(255, 255, 255, 0.05) 0px 1px 0px 0px inset,
+                      rgba(255, 255, 255, 0.25) 0px 0px 0px 1px,
+                      rgba(0, 0, 0, 0.2) 0px -1px 0px 0px inset;
+    --shadow-float:   rgba(0, 0, 0, 0.5) 0px 0px 0px 2px,
+                      rgba(255, 255, 255, 0.19) 0px 0px 14px,
+                      rgba(255, 255, 255, 0.05) 0px 1px 0px 0px inset;
   }
 
-  /* Light theme overrides */
+  /* Light theme overrides — kept minimal, Raycast is dark-first */
   [data-theme='light'] {
-    --surface-deep: #f5f7fa;
-    --surface-base: #ffffff;
-    --surface-card: #ffffff;
+    --surface-deep:    #f5f7fa;
+    --surface-base:    #ffffff;
+    --surface-card:    #ffffff;
     --surface-elevated: #e8ecf1;
-    --content-primary: #1a2332;
+
+    --content-primary:   #1a2332;
     --content-secondary: #4a5568;
-    --content-dim: #718096;
-    --border-subtle: rgba(0, 0, 0, 0.08);
+    --content-dim:       #718096;
+    --content-muted:     #a0aec0;
+
+    --border-subtle:  rgba(0, 0, 0, 0.08);
     --border-default: rgba(0, 0, 0, 0.08);
-    --border-active: rgba(0, 0, 0, 0.18);
-    --cyan: #0088bb;
-    --orange: #d45a20;
-    --purple: #7c5cbf;
-    --green: #0d8a63;
-    --danger: #cc1a36;
-    --safe: #0d8a63;
-    --accent-blue: #007a96;
-    --accent-cyan: #2db89e;
+    --border-active:  rgba(0, 0, 0, 0.18);
+
+    --danger:       #e03e3e;
+    --danger-glow:  rgba(224, 62, 62, 0.12);
+    --green:        #2e8a57;
+    --green-glow:   rgba(46, 138, 87, 0.12);
+    --yellow:       #b88000;
+    --yellow-glow:  rgba(184, 128, 0, 0.12);
+    --blue:         #0077cc;
+    --blue-glow:    rgba(0, 119, 204, 0.12);
+
+    --cyan:   #0077cc;
+    --orange: #e03e3e;
+    --purple: #6d4ec0;
+
+    --shadow-ring:   rgba(0, 0, 0, 0.08) 0px 0px 0px 1px;
+    --shadow-button: rgba(0, 0, 0, 0.06) 0px 1px 3px;
+    --shadow-float:  rgba(0, 0, 0, 0.15) 0px 4px 24px;
   }
 
   body {
-    @apply bg-surface-deep text-content-primary font-body antialiased;
+    @apply bg-surface-deep text-content-primary font-sans antialiased;
     min-height: 100vh;
+    /* Raycast body baseline: weight 500, +0.2px letter-spacing */
+    font-weight: 500;
+    letter-spacing: 0.2px;
+  }
+
+  /*
+   * Inter OpenType features — enabled globally.
+   * calt: contextual alternates, kern: kerning, liga: ligatures,
+   * ss03: stylistic set 3 (slightly more geometric Inter variant)
+   */
+  * {
+    font-feature-settings: 'calt' 1, 'kern' 1, 'liga' 1, 'ss03' 1;
   }
 }
 
-/* ── Gradient Text Utilities ── */
+/* ── Gradient text utilities ── */
 @layer utilities {
   .text-gradient-danger {
     @apply bg-clip-text text-transparent;
-    background-image: linear-gradient(135deg, #ff2244, #ff6644);
+    background-image: linear-gradient(135deg, #FF6363, #ff8f8f);
   }
 
   .text-gradient-safe {
     @apply bg-clip-text text-transparent;
-    background-image: linear-gradient(135deg, #00e676, #48e8c8);
+    background-image: linear-gradient(135deg, #5fc992, #a8e6c3);
   }
 
-  .text-gradient-cyan {
+  .text-gradient-blue {
     @apply bg-clip-text text-transparent;
-    background-image: linear-gradient(135deg, #00b4d8, #48e8c8);
+    background-image: linear-gradient(135deg, #55b3ff, #a8d8ff);
+  }
+
+  /* Raycast macOS-native button depth */
+  .shadow-button {
+    box-shadow: var(--shadow-button);
+  }
+
+  /* Double-ring card containment */
+  .shadow-ring {
+    box-shadow: var(--shadow-ring);
+  }
+
+  /* Floating panel / command palette depth */
+  .shadow-float {
+    box-shadow: var(--shadow-float);
   }
 }
 
-/* ── Feature Card Accent Lines ── */
+/* ── Card hover accent line ── */
 @layer components {
   .card-hover-accent::before {
     content: '';
@@ -84,24 +152,25 @@
     top: 0;
     left: 0;
     right: 0;
-    height: 2px;
+    height: 1px;
     background: linear-gradient(90deg, transparent, var(--danger), transparent);
     opacity: 0;
     transition: opacity 0.4s;
   }
+
   .card-hover-accent:hover::before {
     opacity: 1;
   }
 
-  .card-hover-accent-cyan::before {
-    background: linear-gradient(90deg, transparent, var(--accent-cyan), transparent);
+  .card-hover-accent-blue::before {
+    background: linear-gradient(90deg, transparent, var(--blue), transparent);
   }
 }
 
-/* ── Scrollbar (matched to frontend) ── */
+/* ── Scrollbar ── */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -109,32 +178,92 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #1e293b;
-  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
-}
-
-[data-theme='light'] ::-webkit-scrollbar-track {
-  background: #f5f7fa;
+  background: rgba(255, 255, 255, 0.14);
 }
 
 [data-theme='light'] ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
+  background: rgba(0, 0, 0, 0.12);
 }
 
 [data-theme='light'] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.25);
+  background: rgba(0, 0, 0, 0.2);
 }
 
-/* ── Light theme specific overrides ── */
-[data-theme='light'] .bg-surface-deep {
-  background-color: var(--surface-deep);
-}
-
-/* ── Code Block Styling ── */
+/* ── Code block styling ── */
 pre code {
   @apply font-mono text-xs leading-relaxed;
+  letter-spacing: 0.2px;
+}
+
+/*
+ * Chrome autofill override.
+ *
+ * When Chrome autofills an input it injects its own background-color via the
+ * :-webkit-autofill pseudo-class which overrides any inline `background-color`
+ * set on the element. The standard workaround is a large inset box-shadow in
+ * the desired background color — Chrome cannot override box-shadow with autofill.
+ * `caret-color` and `-webkit-text-fill-color` keep the text and cursor readable.
+ */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0px 1000px #1b1c1e inset !important;
+  box-shadow: 0 0 0px 1000px #1b1c1e inset !important;
+  -webkit-text-fill-color: rgb(249, 249, 249) !important;
+  caret-color: rgb(249, 249, 249) !important;
+}
+
+/*
+ * Auth-form input solid surface — defeats any override.
+ *
+ * Layered defense to guarantee the field renders solid #1b1c1e regardless of:
+ *   1. Tailwind preflight or any other stylesheet rule
+ *   2. Browser extensions (Dark Reader, Stylus)
+ *   3. Chrome autofill background injection
+ *   4. Any `:where()` low-specificity rule
+ * Each declaration uses `!important` so inline styles are NOT required to win,
+ * and the inset box-shadow paints the content box behind text — beats anything
+ * that resets background-color.
+ */
+.auth-input-solid,
+.auth-input-solid:hover,
+.auth-input-solid:focus,
+.auth-input-solid:active,
+.auth-input-solid:-webkit-autofill {
+  background-color: #1b1c1e !important;
+  background-image: none !important;
+  -webkit-box-shadow: 0 0 0 1000px #1b1c1e inset !important;
+  box-shadow: 0 0 0 1000px #1b1c1e inset !important;
+  -webkit-text-fill-color: rgb(249, 249, 249) !important;
+  color: rgb(249, 249, 249) !important;
+  caret-color: rgb(249, 249, 249) !important;
+}
+
+/* Focus ring is appended after the surface inset so the surface still paints. */
+.auth-input-solid:focus {
+  border-color: rgba(85, 179, 255, 0.5) !important;
+  -webkit-box-shadow:
+    0 0 0 1000px #1b1c1e inset,
+    hsla(202, 100%, 67%, 0.18) 0px 0px 0px 3px !important;
+  box-shadow:
+    0 0 0 1000px #1b1c1e inset,
+    hsla(202, 100%, 67%, 0.18) 0px 0px 0px 3px !important;
+}
+
+/* Error variant — red ring layered above the same surface. */
+.auth-input-solid.auth-input-error,
+.auth-input-solid.auth-input-error:focus {
+  border-color: rgba(255, 99, 99, 0.6) !important;
+  -webkit-box-shadow:
+    0 0 0 1000px #1b1c1e inset,
+    rgba(255, 99, 99, 0.18) 0px 0px 0px 3px !important;
+  box-shadow:
+    0 0 0 1000px #1b1c1e inset,
+    rgba(255, 99, 99, 0.18) 0px 0px 0px 3px !important;
 }

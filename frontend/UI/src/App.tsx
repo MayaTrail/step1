@@ -5,8 +5,10 @@ import { PlatformProvider } from './context/PlatformContext'
 import { ProtectedRoute } from './components/auth/ProtectedRoute'
 import { AppLayout } from './components/layout/AppLayout'
 import { LoginPage } from './components/auth/LoginPage'
+import { ConnectorPage } from './components/auth/ConnectorPage'
 import { DashboardPage } from './components/dashboard/DashboardPage'
 import { ProfilePage } from './components/profile/ProfilePage'
+import { SettingsPage } from './components/settings/SettingsPage'
 import { StacksPage } from './components/stacks/StacksPage'
 import { EmulationsListPage } from './components/emulations/EmulationsListPage'
 import { EmulationDetailPage } from './components/emulations/EmulationDetailPage'
@@ -21,15 +23,17 @@ export default function App() {
         <PlatformProvider>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/connector" element={<ConnectorPage />} />
             <Route element={<ProtectedRoute />}>
               <Route element={<AppLayout />}>
                 <Route index element={<DashboardPage />} />
                 <Route path="me" element={<ProfilePage />} />
+                <Route path="settings" element={<SettingsPage />} />
                 <Route path="stacks" element={<StacksPage />} />
                 <Route path=":platformId/emulations" element={<EmulationsListPage />} />
                 <Route path=":platformId/emulations/:emulationId" element={<EmulationDetailPage />} />
-                <Route path=":platformId/playbooks/:playbookId" element={<PlaybookPage />} />
-                <Route path=":platformId/detections" element={<DetectionsPage />} />
+                <Route path=":platformId/emulations/:emulationId/playbook" element={<PlaybookPage />} />
+                <Route path=":platformId/emulations/:emulationId/detections" element={<DetectionsPage />} />
                 <Route path=":platformId/guardrails" element={<GuardrailsPage />} />
               </Route>
             </Route>

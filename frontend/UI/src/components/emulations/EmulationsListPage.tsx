@@ -179,7 +179,7 @@ function EmulationCard({ emulation: em, platformId, onRun }: { emulation: Emulat
           &#9654; Run
         </button>
         <Link
-          to={`/${platformId}/playbooks/${em.id}`}
+          to={`/${platformId}/emulations/${em.id}/playbook`}
           onClick={(e) => e.stopPropagation()}
           className="inline-flex items-center gap-2 px-4 py-2 rounded-btn font-body text-[0.85rem] font-medium cursor-pointer
             bg-transparent border border-[rgba(255,255,255,0.15)] text-content-primary transition-all no-underline

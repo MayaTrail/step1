@@ -1,0 +1,5 @@
+$kind: http-request
+description: Retrieve a single log entry by UUID.
+url: "{{base_url}}/api/logs/{{run_id}}/"
+method: GET
+order: 2000

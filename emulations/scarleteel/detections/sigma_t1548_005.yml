@@ -1,0 +1,36 @@
+title: SCARLETEEL Phase 5 — Anomalous Cross-Account STS AssumeRole
+id: e5f6a7b8-5555-4eee-b555-555555555555
+status: experimental
+description: |
+  Detects an STS AssumeRole call that targets a role in a different AWS account
+  from an EC2 instance role principal.  SCARLETEEL uses this to pivot from the
+  compromised container's IAM role into the target account's Terraform state bucket
+  after CloudTrail logging has been stopped.
+references:
+  - https://sysdig.com/blog/cloud-breach-terraform-data-theft/
+  - https://attack.mitre.org/techniques/T1548/005/
+  - https://attack.mitre.org/techniques/T1550/001/
+author: MayaTrail Security Research
+date: 2024/01/01
+tags:
+  - attack.privilege_escalation
+  - attack.lateral_movement
+  - attack.t1548.005
+  - attack.t1550.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: sts.amazonaws.com
+    eventName: AssumeRole
+    userIdentity.type: AssumedRole
+  filter_same_account:
+    # Exclude assumes where caller and target share the same account ID
+    # (cross-account is indicated when the requestParameters.roleArn account differs)
+    requestParameters.roleArn|contains: ':role/'
+  condition: selection and filter_same_account
+falsepositives:
+  - Legitimate cross-account federation for CI/CD pipelines
+  - Centralized logging or security tooling assuming roles in member accounts
+level: medium

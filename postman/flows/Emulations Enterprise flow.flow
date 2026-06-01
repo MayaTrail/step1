@@ -1,0 +1,199 @@
+{
+  "version": 1,
+  "name": "Emulations (Enterprise) flow",
+  "description": "",
+  "flow": {
+    "description": "",
+    "nodes": {
+      "UBp8Rl8t": {
+        "type": "ev/endpoint@3",
+        "pos": {
+          "x": -696,
+          "y": -256
+        },
+        "config": {
+          "inputs": [
+            {
+              "id": "tNxC2CUK",
+              "type": "value/reference@2",
+              "kind": "reference",
+              "value": "",
+              "key": "Input 1",
+              "__noIn": true
+            },
+            {
+              "id": "XyUSksVK",
+              "type": "value/reference@2",
+              "kind": "reference",
+              "value": "",
+              "key": "Input 2",
+              "__noIn": true
+            }
+          ],
+          "data": "",
+          "language": "json",
+          "allowAnyType": false,
+          "inputs__expanded": true
+        },
+        "ui": {
+          "data": {
+            "triggerType": "ev/endpoint@3"
+          },
+          "namedInputsExpanded": true
+        }
+      },
+      "daa_SxiD": {
+        "type": "task/http-request@2",
+        "pos": {
+          "x": -432,
+          "y": -616
+        },
+        "config": {
+          "element": {
+            "id": "0cE01Ec9c6df6dafe4A0AA29",
+            "collection": "3A093AA6DD2ff38EC51DEEe7",
+            "name": "Login",
+            "method": "POST"
+          },
+          "environment": null,
+          "parseBody": "auto",
+          "requestVariables": [
+            {
+              "id": "xlxX1hhs",
+              "type": null,
+              "kind": null,
+              "value": null,
+              "key": "base_url"
+            }
+          ],
+          "scriptsModifyEnvVars": true,
+          "ignoreTestResults": true,
+          "trackGlobalEnvironment": true,
+          "requestVariables__expanded": true
+        },
+        "ui": {
+          "data": {},
+          "namedInputsExpanded": true,
+          "requestVariablesExpanded": false
+        }
+      },
+      "KfWw4-z9": {
+        "type": "task/http-request@2",
+        "pos": {
+          "x": 48,
+          "y": -376
+        },
+        "config": {
+          "element": {
+            "id": "1bbBEfB5da8Fa9AB81417be7",
+            "collection": "3A093AA6DD2ff38EC51DEEe7",
+            "name": "List Emulations",
+            "method": "GET"
+          },
+          "environment": null,
+          "parseBody": "auto",
+          "requestVariables": [
+            {
+              "id": "CT_xRa6C",
+              "type": null,
+              "kind": null,
+              "value": null,
+              "key": "token"
+            },
+            {
+              "id": "dlDhJCim",
+              "type": null,
+              "kind": null,
+              "value": null,
+              "key": "base_url"
+            }
+          ],
+          "scriptsModifyEnvVars": true,
+          "ignoreTestResults": true,
+          "trackGlobalEnvironment": true,
+          "requestVariables__expanded": true
+        },
+        "ui": {
+          "data": {},
+          "namedInputsExpanded": true
+        }
+      }
+    },
+    "connections": {
+      "-Y3M5FaL": {
+        "source": "R2DmkSS6",
+        "sourcePort": "@",
+        "target": "UBp8Rl8t",
+        "targetPort": "inputs|tNxC2CUK"
+      },
+      "4iGAfQlh": {
+        "source": "daa_SxiD",
+        "target": "KfWw4-z9",
+        "sourcePort": "success",
+        "targetPort": "AI"
+      },
+      "8z2o3ymA": {
+        "source": "FqfLN8jm",
+        "sourcePort": "@",
+        "target": "UBp8Rl8t",
+        "targetPort": "inputs|XyUSksVK"
+      }
+    },
+    "annotations": {},
+    "groups": {},
+    "webhook": {
+      "payloadContent": "body-only",
+      "responseType": "default"
+    },
+    "forms": {},
+    "modules": {},
+    "io": {
+      "R2DmkSS6": {
+        "type": "input",
+        "name": "Input 1",
+        "typeDef": {
+          "type": "string"
+        }
+      },
+      "FqfLN8jm": {
+        "type": "input",
+        "name": "Input 2",
+        "typeDef": {
+          "type": "string"
+        }
+      }
+    },
+    "ports": {},
+    "meta": {},
+    "scenes": {},
+    "scenarios": {
+      "66su0ZRy": {
+        "name": "Start Trigger",
+        "type": "scenario@3",
+        "triggerType": "ev/endpoint@3",
+        "createdOn": 1779288106214,
+        "updatedOn": 1779288106214,
+        "data": {
+          "R2DmkSS6": {
+            "id": "R2DmkSS6",
+            "key": "Input 1",
+            "value": "",
+            "type": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "config": {
+      "definitions": {},
+      "constants": {}
+    }
+  },
+  "lockbox": {},
+  "info": {
+    "_postman_id": "b58bc298-eec2-4382-ad17-4a2ffbeec628"
+  },
+  "_postman_exported_at": "2026-05-20T19:49:18.503Z",
+  "_postman_exported_using": "Postman/Local Mode"
+}

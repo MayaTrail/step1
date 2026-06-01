@@ -31,6 +31,7 @@ export interface Reference {
   color: string
 }
 
+/** Enterprise emulation package — driven by the backend MANIFEST and API. */
 export interface Emulation {
   id: string
   name: string
@@ -47,6 +48,8 @@ export interface Emulation {
   attackPath: AttackPhase[]
   mitreMappings: MitreMapping[]
   references: Reference[]
+  phaseCount?: number
+  schemaVersion?: number
 }
 
 export interface DetectionRule {
@@ -55,9 +58,12 @@ export interface DetectionRule {
 }
 
 export interface DetectionData {
-  ruleCount: number
+  emulationType?: string
+  displayName?: string
+  sigma: DetectionRule[]
+  kql: DetectionRule[]
+  totalCount: number
   formats: string
-  rules: DetectionRule[]
 }
 
 export interface Guardrails {
@@ -74,6 +80,12 @@ export interface PlaybookStep {
 
 export interface Playbook {
   steps: PlaybookStep[]
+}
+
+export interface PlaybookRaw {
+  emulationType: string
+  displayName: string
+  content: string
 }
 
 export interface PlatformData {
@@ -93,7 +105,18 @@ export interface PlatformMeta {
 
 /* ── Stack (mirrors backend infrastructure.Stack model) ── */
 
-export type StackStatus = 'pending' | 'deploying' | 'ready' | 'destroying' | 'refreshing' | 'failed'
+export type StackStatus =
+  | 'pending'
+  | 'deploying'
+  | 'ready'
+  | 'destroying'
+  | 'refreshing'
+  | 'failed'
+  | 'ec2_booting'
+  | 'ready_for_attack'
+  | 'attacking'
+  | 'attack_complete'
+  | 'destroyed'
 
 export interface Stack {
   id: string
@@ -102,6 +125,8 @@ export interface Stack {
   status: StackStatus
   outputs: Record<string, unknown>
   owner: string
+  emulation_type?: string
+  expires_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -116,23 +141,17 @@ export interface StackActionResponse {
   task_id: string
 }
 
-/* ── Simulation Module (from GET /api/simulations/modules/) ── */
+/* ── Enterprise EmulationRun (mirrors backend EmulationRun model) ── */
 
-export interface SimulationModule {
-  id: number
-  name: string
-  description: string
-}
+export type EmulationRunStatus = 'pending' | 'running' | 'completed' | 'failed'
 
-/* ── Simulation Run (mirrors backend SimulationRun model) ── */
-
-export type SimulationStatus = 'pending' | 'running' | 'completed' | 'failed'
-
-export interface SimulationRun {
+export interface EmulationRunRecord {
   id: string
   stack: string
-  module: string
-  status: SimulationStatus
+  emulation_type: string
+  status: EmulationRunStatus
+  phase_current: number
+  phase_total: number
   stdout: string
   stderr: string
   triggered_by: string
@@ -141,24 +160,23 @@ export interface SimulationRun {
   created_at: string
 }
 
-export interface TriggerSimulationRequest {
-  stack_id: string
-  module_id: number
+export interface DeployEmulationResponse {
+  stackId: string
+  stackName: string
 }
 
-export interface TriggerSimulationResponse {
-  run: SimulationRun
-  task_id: string
+export interface TriggerAttackResponse {
+  runId: string
+  stackId: string
 }
 
-/**
- * Maps UI emulation IDs to backend simulation module IDs.
- * IDs correspond to the `id` field from GET /api/simulations/modules/.
- */
-export const EMULATION_MODULE_MAP: Record<string, number> = {
-  'priv-esc-attach-role-policy': 1,
-  'iam-enumeration': 2,
-  'eventual-consistency-attack': 3,
-  's3-initial-access': 4,
-  's3-kms-ransomware': 5,
+export interface EmulationEstimate {
+  emulationType: string
+  displayName: string
+  resources: Array<{ name: string; count: number; cost_per_hour_usd: number }>
+  totalCostPerHourUsd: number
+  defaultTtlHours: number
+  estimatedTotalUsd: number
+  note: string
 }
+

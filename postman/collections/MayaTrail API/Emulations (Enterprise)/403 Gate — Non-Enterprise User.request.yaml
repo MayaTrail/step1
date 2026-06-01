@@ -1,0 +1,19 @@
+$kind: http-request
+description: |-
+  Verify that non-enterprise users receive 403. Replace PASTE_DEMO_USER_TOKEN_HERE with a token from a demo/non-enterprise account.
+
+  Expected: HTTP 403 Forbidden.
+url: "{{base_url}}/api/emulations/"
+method: GET
+auth:
+  type: bearer
+  credentials:
+    token: PASTE_DEMO_USER_TOKEN_HERE
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Returns 403 for non-enterprise user', () => {
+          pm.expect(pm.response.code).to.equal(403);
+      });
+    language: text/javascript
+order: 11000

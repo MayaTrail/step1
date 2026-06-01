@@ -1,0 +1,19 @@
+$kind: http-request
+description: |-
+  Return the raw PLAYBOOK.md content for the emulation.
+
+  Expected: content field with the full markdown IR playbook. The frontend parses this into steps using the ## H2-section parser in platform.service.ts.
+url: "{{base_url}}/api/emulations/{{emulation_type}}/playbook/"
+method: GET
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Status 200', () => pm.response.to.have.status(200));
+      const body = pm.response.json();
+      pm.test('Content is non-empty markdown', () => {
+          pm.expect(body.content).to.be.a('string').with.length.above(500);
+          pm.expect(body.content).to.include('SCARLETEEL');
+      });
+      pm.test('Display name correct', () => pm.expect(body.displayName).to.equal('SCARLETEEL 2.0'));
+    language: text/javascript
+order: 5000
