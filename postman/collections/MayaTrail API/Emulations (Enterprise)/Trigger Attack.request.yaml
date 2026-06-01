@@ -1,21 +1,30 @@
 $kind: http-request
 description: |-
-  Trigger the attack phase against a ready_for_attack emulation stack.
+  Trigger the 6-phase SCARLETEEL attack against a ready_for_attack emulation stack.
 
-  Returns 202 with runId. Stores runId in the collection variable automatically.
+  Creates an EmulationRun record and enqueues run_emulation_attack in the enterprise queue.
 
-  Returns 409 if the stack is not in ready_for_attack status.
+  **Response (202):** { runId, stackId }
+  **Response (409):** stack is not in ready_for_attack status
+  **Response (404):** stack not found or not owned by caller
+
+  The test script stores runId in the `run_id` collection variable.
 url: "{{base_url}}/api/emulations/{{stack_id}}/attack/"
 method: POST
 scripts:
   - type: afterResponse
     code: |-
+      pm.test('Accepted or conflict', () => {
+          pm.expect(pm.response.code).to.be.oneOf([202, 409]);
+      });
       if (pm.response.code === 202) {
           const body = pm.response.json();
           pm.collectionVariables.set('run_id', body.runId);
           pm.test('runId captured', () => pm.expect(body.runId).to.be.a('string'));
           console.log('Run ID:', body.runId);
-          console.log('Poll GET /api/emulations/' + body.runId + '/ for attack progress');
+          console.log('Poll GET /api/emulations/' + body.runId + '/ for attack progress.');
+      } else {
+          console.log('Conflict — stack is not in ready_for_attack status.');
       }
     language: text/javascript
-order: 8000
+order: 7000

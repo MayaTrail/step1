@@ -2,8 +2,10 @@ $kind: http-request
 description: |-
   Return SIGMA and KQL detection rules for the emulation.
 
+  Reads .yml (SIGMA) and .kql (KQL) files from the emulation's detections/ subdirectory.
+
   Expected for SCARLETEEL:
-  - sigma: 6 rules (one per MITRE phase: T1190, T1552.005, T1087.004, T1562.008, T1548.005, T1098)
+  - sigma: 6 rules (one per MITRE phase)
   - kql: 6 rules (same techniques)
   - totalCount: 12
   - formats: "SIGMA (6) · KQL (6)"

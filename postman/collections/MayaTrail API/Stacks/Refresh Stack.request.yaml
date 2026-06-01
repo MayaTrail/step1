@@ -1,5 +1,0 @@
-$kind: http-request
-description: Sync Pulumi state with actual AWS resources without modifying infrastructure.
-url: "{{base_url}}/api/stacks/{{stack_id}}/refresh/"
-method: POST
-order: 7000

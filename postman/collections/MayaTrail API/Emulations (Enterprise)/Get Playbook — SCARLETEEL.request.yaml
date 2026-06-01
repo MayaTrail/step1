@@ -2,7 +2,10 @@ $kind: http-request
 description: |-
   Return the raw PLAYBOOK.md content for the emulation.
 
-  Expected: content field with the full markdown IR playbook. The frontend parses this into steps using the ## H2-section parser in platform.service.ts.
+  The `content` field contains the full markdown IR playbook. The frontend parses this into sections using the ## H2-section parser in platform.service.ts.
+
+  Returns 404 if no PLAYBOOK.md exists for the emulation type.
+  Returns 503 if EMULATIONS_BASE_DIR is not configured on the server.
 url: "{{base_url}}/api/emulations/{{emulation_type}}/playbook/"
 method: GET
 scripts:

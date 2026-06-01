@@ -1,5 +1,10 @@
 $kind: http-request
-description: Delete the stack database record only (does not run pulumi destroy).
+description: |-
+  Delete the stack database record only. Does NOT run `pulumi destroy`.
+
+  Use this to clean up orphaned DB records after manually destroying resources in AWS.
+
+  The stack is simply removed from the database — no cloud resources are touched.
 url: "{{base_url}}/api/stacks/{{stack_id}}/"
 method: DELETE
-order: 10000
+order: 4000

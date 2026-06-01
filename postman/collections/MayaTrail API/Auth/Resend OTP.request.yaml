@@ -1,0 +1,20 @@
+$kind: http-request
+description: |-
+  Generate and re-send a fresh OTP to the given email address.
+
+  Use this if the original OTP has expired or was not received.
+
+  Returns: 200 { message } on success.
+url: "{{base_url}}/api/auth/register/resend-otp/"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "email": "testuser@example.com"
+    }
+auth:
+  type: noauth
+order: 3000

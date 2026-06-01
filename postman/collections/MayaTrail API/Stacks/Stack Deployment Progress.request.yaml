@@ -2,7 +2,7 @@ $kind: http-request
 description: |-
   Poll live deployment progress for a stack currently being deployed.
 
-  Reads Celery task state from the Redis result backend and returns how many AWS resources have been created so far.
+  Reads Celery task state from the Redis result backend and returns how many AWS resources have been created so far. The deploy task calls update_state(state='PROGRESS') every 2 Pulumi log lines.
 
   **Response fields:**
   - `resources_created` — number of Pulumi resources successfully created
@@ -28,4 +28,4 @@ scripts:
       });
       console.log(`Deployment progress: ${body.resources_created}/${body.total_resources} resources (${body.percentage}%) — status: ${body.status}`);
     language: text/javascript
-order: 9000
+order: 3000

@@ -1,3 +1,8 @@
 $kind: collection
-description: AWS connector validation and demo mode activation.
+description: |-
+  AWS role connector verification and demo mode activation.
+
+  Connector flow:
+  - Enterprise path: POST /api/connectors/aws/verify/ with a role ARN
+  - Demo path: POST /api/connectors/demo/ (one-time activation, irreversible)
 order: 4000

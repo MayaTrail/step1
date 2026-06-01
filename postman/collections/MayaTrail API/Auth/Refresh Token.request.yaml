@@ -1,5 +1,10 @@
 $kind: http-request
-description: Exchange the refresh token for a new access token. Updates the `token` variable automatically.
+description: |-
+  Exchange the stored refresh token for a new access token.
+
+  The test script updates the `token` collection variable automatically.
+
+  Returns: 200 { access } on success.
 url: "{{base_url}}/api/auth/refresh/"
 method: POST
 headers:
@@ -21,4 +26,4 @@ scripts:
           pm.test('New access token captured', () => pm.expect(body.access).to.be.a('string'));
       }
     language: text/javascript
-order: 3000
+order: 5000

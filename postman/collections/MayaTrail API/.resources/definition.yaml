@@ -7,7 +7,7 @@ description: |-
   2. Run "Auth / Login" — the `token` variable is set automatically via the test script.
   3. All subsequent requests use `{{token}}` in the Authorization header.
 
-  **Enterprise endpoints** (Emulations folder) require the authenticated user to have `aws_role_arn` set on their account.
+  **Enterprise endpoints** (Emulations folder) require the authenticated user to have `aws_role_arn` set on their account (i.e. `is_enterprise=True`).  Use POST /api/connectors/aws/verify/ to set it.
 variables:
   base_url: http://localhost:8000
   token: ""
@@ -16,7 +16,7 @@ variables:
   run_id: ""
   emulation_type: scarleteel
 auth:
-  - id: d80816d4-c924-4fbc-aab5-b76b12430043
+  - id: aefe7eca-c608-4b6e-bfe0-8e041e579337
     type: bearer
     name: bearer auth
     credentials:
