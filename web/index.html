@@ -1,0 +1,1348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MayaTrail - Cloud attack emulation</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap">
+<link rel="stylesheet" href="mayatrail-base.css">
+
+<style>
+  /* ===== Page-specific overrides ===== */
+  .nav { position: fixed; top: 0; left: 0; right: 0; }
+  main { padding-top: 60px; }
+
+  /* keep iso-path animations available */
+  @keyframes pathDash { to { stroke-dashoffset: -24; } }
+  @keyframes sweepDown { 0% { top: -40%; } 100% { top: 100%; } }
+  @keyframes blip { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  @keyframes pulse-dot { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+
+  .tag { display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.16em;
+    color: var(--cool); border: 1px solid var(--cool);
+    background: rgba(106,168,255,0.05); padding: 4px 10px; }
+  .tag .dot { width: 6px; height: 6px; background: var(--cool); border-radius: 50%; box-shadow: 0 0 8px var(--cool); }
+
+  .h1 { font-family: var(--sans); font-weight: 600; line-height: 1.05; letter-spacing: -0.025em; color: var(--ink); margin: 0; }
+  .h1 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); letter-spacing: -0.005em; }
+
+  /* ============== CONSOLE BAR positioned right under fixed nav ============== */
+  .console-fixed {
+    position: sticky; top: 60px; z-index: 40;
+    background: rgba(6,7,10,0.92); backdrop-filter: blur(14px);
+  }
+
+  /* ============== LIVE RUN SECTION ============== */
+  .live-run { display: grid; grid-template-columns: 1fr 1.05fr; gap: 0; border: 1px solid var(--rule); }
+  .live-run > * { padding: 28px 32px; }
+  .live-run .code-side { border-right: 1px solid var(--rule); background: var(--bg-1); position: relative; }
+  .live-run .term-side { background: var(--bg); }
+  .code-side .lbl, .term-side .lbl {
+    display: flex; align-items: center; gap: 10px;
+    font-family: var(--mono); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.16em;
+    color: var(--ink-3); margin-bottom: 14px;
+  }
+  .code-side .lbl::before, .term-side .lbl::before {
+    content:''; width:14px; height:1px; background: var(--cool);
+  }
+  .code-side .lbl b, .term-side .lbl b { color: var(--ink); font-weight: 500; }
+  pre.code {
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.7;
+    color: var(--ink-2); margin: 0; white-space: pre-wrap;
+  }
+  pre.code .c { color: var(--ink-4); }       /* comment */
+  pre.code .k { color: var(--cool); }         /* keyword */
+  pre.code .s { color: var(--warm); }         /* string */
+  pre.code .n { color: var(--ink); }          /* name */
+  pre.code .v { color: var(--hot); }          /* hot value */
+  pre.code .fn { color: #c69aff; }            /* function */
+  .code-side .ln {
+    color: var(--ink-4); padding-right: 14px;
+    user-select: none;
+    display: inline-block; width: 28px; text-align: right;
+  }
+
+  /* terminal tape */
+  .term {
+    font-family: var(--mono); font-size: 12px; line-height: 1.7;
+    color: var(--ink-2);
+    border: 1px solid var(--rule);
+    background: var(--bg-1);
+    padding: 14px 16px;
+    max-height: 460px; overflow: hidden;
+    position: relative;
+  }
+  .term::after {
+    content:''; position: absolute; left: 0; right: 0; bottom: 0; height: 60px;
+    background: linear-gradient(180deg, transparent, var(--bg-1));
+    pointer-events: none;
+  }
+  .term .line { display: flex; gap: 12px; }
+  .term .t  { color: var(--ink-4); width: 56px; flex-shrink: 0; }
+  .term .l  { flex: 1; }
+  .term .api  { color: var(--cool); }
+  .term .ok   { color: var(--ok); }
+  .term .warn { color: var(--warm); }
+  .term .err  { color: var(--hot); }
+  .term .mut  { color: var(--ink-4); }
+  .term .cursor::after {
+    content:'▍'; color: var(--cool); animation: pulse-dot 1s ease-out infinite;
+    margin-left: 2px;
+  }
+
+  /* ============== STRIP (kept from v1) ============== */
+  .strip {
+    border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+    padding: 18px 0;
+  }
+  .strip-inner {
+    max-width: 1320px; margin: 0 auto; padding: 0 28px;
+    display: flex; gap: 50px; align-items: center; flex-wrap: wrap;
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.16em;
+    color: var(--ink-3);
+  }
+  .strip-inner b { color: var(--ink-2); font-weight: 600; }
+
+  /* ============== SCENARIOS (kept) ============== */
+  .scenarios { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .scenario {
+    border: 1px solid var(--rule-2);
+    background: var(--bg-1);
+    padding: 24px;
+    display: flex; flex-direction: column; gap: 12px;
+    cursor: pointer;
+    transition: border-color 0.15s, transform 0.15s, background 0.15s;
+    min-height: 200px;
+    position: relative; overflow: hidden;
+    color: var(--ink); text-decoration: none;
+  }
+  .scenario::before {
+    content: ''; position: absolute; inset: 0;
+    background: radial-gradient(circle at 80% 0%, var(--cool-dim), transparent 60%);
+    opacity: 0; transition: opacity 0.2s;
+    pointer-events: none;
+  }
+  .scenario:hover { border-color: var(--cool); transform: translateY(-2px); }
+  .scenario:hover::before { opacity: 1; }
+  .scenario .head {
+    display: flex; justify-content: space-between;
+    font-family: var(--mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--ink-3);
+  }
+  .scenario .head b { color: var(--ink); }
+  .scenario .title {
+    font-family: var(--sans); font-size: 19px; font-weight: 600;
+    color: var(--ink); margin: 0; line-height: 1.25; letter-spacing: -0.015em;
+  }
+  .scenario .meta {
+    margin-top: auto;
+    display: flex; justify-content: space-between;
+    font-family: var(--mono); font-size: 10.5px;
+    color: var(--ink-3);
+    border-top: 1px dashed var(--rule);
+    padding-top: 10px;
+  }
+  .scenario .meta .id { color: var(--ink-2); }
+
+  /* APT card additions */
+  .scenario .apt-source {
+    font-family: var(--mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--ink-3); margin-top: -4px;
+  }
+  .scenario .apt-source b { color: var(--ink-2); font-weight: 500; }
+  .scenario .maps {
+    display: flex; gap: 6px; flex-wrap: wrap;
+    margin-top: 2px;
+  }
+  .scenario .maps .pill {
+    font-family: var(--mono); font-size: 9.5px;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    border: 1px solid var(--rule-2); padding: 2px 6px;
+    color: var(--ink-3);
+  }
+  .scenario .maps .pill.scen {
+    border-color: var(--cool); color: var(--cool);
+    background: rgba(106,168,255,0.05);
+  }
+  /* ============== DETECTION MATRIX ============== */
+  .matrix-wrap { border: 1px solid var(--rule); background: var(--bg-1); }
+  .matrix {
+    display: grid;
+    grid-template-columns: 320px repeat(5, 1fr);
+    border-bottom: 1px solid var(--rule);
+  }
+  .matrix > div { padding: 16px 18px; border-right: 1px solid var(--rule); }
+  .matrix > div:last-child { border-right: 0; }
+  .matrix.head > div {
+    font-family: var(--mono); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--ink-3); padding: 12px 18px;
+    background: var(--bg-2); border-bottom: 1px solid var(--rule);
+  }
+  .matrix.head > div b { color: var(--ink); }
+  .matrix.row { border-top: 1px solid var(--rule); transition: background 0.15s; }
+  .matrix.row:hover { background: rgba(106,168,255,0.025); }
+  .matrix.row > div:first-child { background: transparent; }
+  .matrix.row .scenario-cell {
+    font-family: var(--sans); font-size: 14.5px;
+    color: var(--ink);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .matrix.row .scenario-cell .tid {
+    font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+    letter-spacing: 0.12em; text-transform: uppercase;
+  }
+  .matrix .cell {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+    font-family: var(--mono); font-size: 11px;
+    color: var(--ink-2);
+    letter-spacing: 0.06em;
+  }
+  .matrix .cell .sig {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-weight: 600; text-transform: uppercase; letter-spacing: 0.14em;
+    font-size: 10.5px;
+  }
+  .matrix .cell .sig .mark {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px;
+    border: 1px solid currentColor; font-size: 9px; line-height: 1;
+  }
+  .matrix .cell.fired .sig { color: var(--ok); }
+  .matrix .cell.late  .sig { color: var(--warm); }
+  .matrix .cell.missed .sig { color: var(--hot); }
+  .matrix .cell.na .sig { color: var(--ink-4); }
+  .matrix .cell .lat { color: var(--ink-3); font-size: 10px; letter-spacing: 0.12em; }
+
+  .matrix-foot {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 16px 18px;
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--ink-3);
+    background: var(--bg-2);
+  }
+  .matrix-foot b { color: var(--ink); }
+  .matrix-foot .legend { display: flex; gap: 18px; }
+  .matrix-foot .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .matrix-foot .legend i { width: 8px; height: 8px; display: inline-block; }
+  .matrix-foot .legend .ok  { background: var(--ok); }
+  .matrix-foot .legend .lt  { background: var(--warm); }
+  .matrix-foot .legend .ms  { background: var(--hot); }
+  .matrix-foot .legend .na  { background: var(--ink-4); }
+
+  /* ============== ATTACK SURFACE (sphere) - kept ============== */
+  .surface { display: grid; grid-template-columns: 1.2fr 1fr; gap: 60px; align-items: center; }
+  .surface-copy ul { list-style: none; padding: 0; margin: 24px 0 0; display: flex; flex-direction: column; gap: 14px; }
+  .surface-copy li {
+    display: grid; grid-template-columns: 24px 1fr;
+    gap: 14px; padding: 12px 0;
+    border-bottom: 1px dashed var(--rule-2);
+    font-family: var(--sans); font-size: 15px; color: var(--ink-2);
+  }
+  .surface-copy li b { color: var(--ink); font-weight: 600; }
+  .surface-copy li .n { font-family: var(--mono); font-size: 11px; color: var(--cool); letter-spacing: 0.08em; }
+
+  .sphere-frame { position: relative; border: 1px solid var(--rule-2); background: linear-gradient(180deg, var(--bg-1), var(--bg)); height: 460px; overflow: hidden; }
+  .sphere-frame-head {
+    display: flex; gap: 12px; align-items: center;
+    padding: 10px 14px; border-bottom: 1px solid var(--rule); background: var(--bg-2);
+    font-family: var(--mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--ink-3);
+  }
+  .sphere-frame-head b { color: var(--ink); }
+  .sphere-frame-head .meter { margin-left: auto; color: var(--ok); display: inline-flex; gap: 6px; align-items: center; }
+  .sphere-frame-head .meter::before { content:''; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .sphere-stage { position: relative; height: calc(100% - 38px); perspective: 1200px; perspective-origin: 50% 50%; }
+  .sphere-wrap { position: absolute; inset: 30px; }
+  .gridlines {
+    position: absolute; inset: 0;
+    background-image:
+      radial-gradient(circle, transparent 62%, var(--rule) 62%, var(--rule) 63%, transparent 64%),
+      radial-gradient(circle, transparent 76%, var(--rule) 76%, var(--rule) 77%, transparent 78%);
+    border-radius: 50%; pointer-events: none;
+  }
+  .scan-beam {
+    position: absolute; inset: 0; border-radius: 50%;
+    background: conic-gradient(from 0deg, transparent 0deg, var(--cool-dim) 36deg, transparent 72deg);
+    animation: spin 5s linear infinite; mix-blend-mode: screen; pointer-events: none;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .sphere { position: absolute; inset: 0; border-radius: 50%; border: 1px solid var(--rule-3); transform-style: preserve-3d; animation: glob 30s linear infinite; }
+  @keyframes glob { to { transform: rotateY(360deg); } }
+  .ring { position: absolute; inset: 0; border: 1px solid var(--rule-2); border-radius: 50%; transform-style: preserve-3d; }
+  .ring.r1 { transform: rotateY(60deg); }
+  .ring.r2 { transform: rotateY(120deg); }
+  .ring.r3 { transform: rotateX(60deg); }
+  .ring.r4 { transform: rotateX(30deg); }
+  .ring.eq { transform: rotateX(90deg); border-color: var(--cool); }
+  .vuln { position: absolute; width: 9px; height: 9px; border-radius: 50%; background: var(--hot); box-shadow: 0 0 10px var(--hot), 0 0 26px var(--hot-dim); }
+  .vuln.blink { animation: blink 1.6s ease-in-out infinite; }
+  .sphere-readout {
+    position: absolute; top: 30px; left: 18px;
+    font-family: var(--mono); font-size: 10px; color: var(--ink-3);
+    line-height: 1.7; text-transform: uppercase; letter-spacing: 0.12em;
+  }
+  .sphere-readout span { display: block; }
+  .sphere-readout .v { color: var(--ink); }
+  .sphere-readout .h { color: var(--hot); }
+
+  /* ============== EVIDENCE PACKAGE ============== */
+  .evidence { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .ev-card {
+    border: 1px solid var(--rule-2); background: var(--bg-1);
+    padding: 0; overflow: hidden;
+    display: flex; flex-direction: column;
+    transition: border-color 0.2s, transform 0.2s;
+  }
+  .ev-card:hover { border-color: var(--cool); transform: translateY(-2px); }
+  .ev-head {
+    padding: 12px 16px; border-bottom: 1px solid var(--rule); background: var(--bg-2);
+    display: flex; gap: 10px; align-items: center;
+    font-family: var(--mono); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--ink-3);
+  }
+  .ev-head b { color: var(--ink); font-weight: 500; }
+  .ev-head .sz { margin-left: auto; }
+  .ev-preview {
+    flex: 1; padding: 18px; min-height: 220px;
+    background: var(--bg-1);
+    position: relative; overflow: hidden;
+  }
+  .ev-foot {
+    padding: 14px 16px; border-top: 1px solid var(--rule);
+    font-family: var(--sans); font-size: 13.5px; color: var(--ink-2); line-height: 1.5;
+  }
+  .ev-foot b { color: var(--ink); font-weight: 600; display: block; margin-bottom: 4px; font-size: 14px; }
+
+  /* JSON preview */
+  pre.json {
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.6;
+    color: var(--ink-2); margin: 0; white-space: pre;
+    overflow: hidden;
+  }
+  pre.json .key { color: var(--cool); }
+  pre.json .val { color: var(--warm); }
+  pre.json .punct { color: var(--ink-4); }
+  pre.json .num { color: var(--ok); }
+
+  /* MITRE map mini */
+  .mini-mitre {
+    display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px;
+  }
+  .mini-mitre .cell {
+    aspect-ratio: 1.4 / 1;
+    background: var(--bg-2);
+    border: 1px solid var(--rule);
+  }
+  .mini-mitre .cell.f { background: var(--cool); border-color: var(--cool); }
+  .mini-mitre .cell.h { background: rgba(106,168,255,0.5); border-color: var(--cool); }
+  .mini-mitre .cell.l { background: rgba(106,168,255,0.2); border-color: var(--rule-2); }
+  .mini-mitre-labels {
+    display: flex; justify-content: space-between; margin-top: 10px;
+    font-family: var(--mono); font-size: 9.5px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--ink-4);
+  }
+
+  /* PDF mockup */
+  .pdf-thumb {
+    aspect-ratio: 1 / 1.3;
+    background: var(--bg-3);
+    border: 1px solid var(--rule-2);
+    padding: 16px;
+    display: flex; flex-direction: column;
+    gap: 10px;
+    position: relative;
+    margin: 0 auto; max-width: 200px;
+  }
+  .pdf-thumb .pf-h {
+    font-family: var(--mono); font-size: 8px; color: var(--ink-4);
+    letter-spacing: 0.14em; text-transform: uppercase;
+    display: flex; justify-content: space-between;
+  }
+  .pdf-thumb .pf-title {
+    font-family: var(--sans); font-size: 13px; font-weight: 600;
+    color: var(--ink); letter-spacing: -0.01em; line-height: 1.2;
+  }
+  .pdf-thumb .pf-em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+  .pdf-thumb .pf-meta {
+    font-family: var(--mono); font-size: 8px; color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: 0.12em;
+    line-height: 1.6; margin-top: auto;
+  }
+  .pdf-thumb .pf-meta b { color: var(--ink); font-weight: 500; }
+  .pdf-thumb .pf-lines { display: flex; flex-direction: column; gap: 3px; }
+  .pdf-thumb .pf-lines span { display: block; height: 4px; background: var(--rule-2); }
+  .pdf-thumb .pf-lines span.short { width: 60%; }
+
+  /* Tighten nav at narrow widths */
+  @media (max-width: 1180px) {
+    .nav-readout { display: none; }
+  }
+
+
+  /* ============== STEPS (kept) ============== */
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--rule); }
+  .step {
+    padding: 28px 24px; border-right: 1px solid var(--rule);
+    background: var(--bg-1);
+    position: relative; overflow: hidden;
+  }
+  .step:last-child { border-right: 0; }
+  .step::before {
+    content:''; position: absolute; left: 0; top: 0; height: 1px; width: 0;
+    background: var(--cool); transition: width 0.4s;
+  }
+  .step:hover::before { width: 100%; }
+  .step .n {
+    font-family: var(--mono); font-size: 11px; color: var(--cool);
+    margin-bottom: 16px; display: inline-block;
+    padding: 3px 8px; border: 1px solid var(--cool);
+    letter-spacing: 0.08em;
+  }
+  .step h3 { font-family: var(--sans); font-weight: 600; font-size: 17px; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .step p { font-family: var(--sans); font-size: 13.5px; line-height: 1.55; color: var(--ink-2); margin: 0; }
+
+  /* ============== VS ALTERNATIVES ============== */
+  .vs-wrap {
+    border: 1px solid var(--rule);
+    background: var(--bg-1);
+    overflow: hidden;
+  }
+  .vs {
+    display: grid;
+    grid-template-columns: 1.4fr repeat(5, 1fr);
+  }
+  .vs > div {
+    padding: 16px 18px; border-right: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    display: flex; align-items: center;
+  }
+  .vs > div:nth-child(6n) { border-right: 0; }
+  .vs.head > div {
+    background: var(--bg-2);
+    font-family: var(--mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--ink-2);
+    font-weight: 500;
+  }
+  .vs.head > div:first-child { color: var(--ink-3); }
+  .vs.row .pname {
+    font-family: var(--sans); font-size: 14.5px; color: var(--ink); font-weight: 600;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .vs.row .pname.us {
+    color: var(--cool);
+    background-image: linear-gradient(90deg, rgba(106,168,255,0.06), transparent);
+  }
+  .vs.row .pname .sub {
+    font-family: var(--mono); font-size: 10px; color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: 0.14em; font-weight: 400;
+  }
+  .vs.row .cmark {
+    font-family: var(--mono); font-size: 13px;
+    color: var(--ink-3);
+  }
+  .vs.row .cmark.y { color: var(--ok); }
+  .vs.row .cmark.n { color: var(--ink-4); }
+  .vs.row .cmark.p { color: var(--warm); }
+  .vs.row.us > div { background: rgba(106,168,255,0.025); }
+
+  /* ============== FAQ ============== */
+  .faq { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--rule); }
+  .faq > details {
+    padding: 22px 26px;
+    border-right: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    background: var(--bg-1);
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .faq > details:hover { background: var(--bg-2); }
+  .faq > details:nth-child(2n) { border-right: 0; }
+  .faq > details:nth-last-child(-n+2) { border-bottom: 0; }
+  .faq summary {
+    list-style: none;
+    font-family: var(--sans); font-size: 16px; font-weight: 600;
+    color: var(--ink); letter-spacing: -0.01em;
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 14px;
+  }
+  .faq summary::-webkit-details-marker { display: none; }
+  .faq summary::after {
+    content:'+';
+    font-family: var(--mono); color: var(--cool);
+    font-size: 20px; line-height: 0.7;
+    transition: transform 0.2s, content 0.2s;
+  }
+  .faq details[open] summary::after { content:'−'; }
+  .faq .a {
+    margin-top: 14px;
+    font-family: var(--sans); font-size: 14px; line-height: 1.6;
+    color: var(--ink-2);
+  }
+  .faq .a b { color: var(--ink); }
+  .faq .a code {
+    font-family: var(--mono); font-size: 12.5px;
+    background: var(--bg-3); padding: 1px 6px;
+    color: var(--cool);
+  }
+
+  /* ============== CTA ============== */
+  .final {
+    border: 1px solid var(--rule-2);
+    padding: 60px 48px;
+    text-align: center;
+    background:
+      radial-gradient(ellipse 600px 200px at 50% 50%, rgba(106,168,255,0.06), transparent 70%),
+      var(--bg-1);
+    position: relative; overflow: hidden;
+  }
+  .final::before, .final::after {
+    content: ''; position: absolute; width: 60px; height: 60px;
+    border: 1px solid var(--cool); opacity: 0.3;
+  }
+  .final::before { top: 12px; left: 12px; border-right: 0; border-bottom: 0; }
+  .final::after  { bottom: 12px; right: 12px; border-left: 0; border-top: 0; }
+  .final .h-2 { max-width: none; margin: 16px auto 18px; }
+  .final p { font-family: var(--sans); font-size: 16px; color: var(--ink-2); max-width: 540px; margin: 0 auto 28px; }
+  .final .cta-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .final .note {
+    margin-top: 24px;
+    font-family: var(--mono); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--ink-3);
+  }
+
+  /* Horizontal scroll containers for wide tables on narrow viewports */
+  .h-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border: 1px solid var(--rule);
+    background: var(--bg-1);
+    position: relative;
+  }
+  .h-scroll::after {
+    content: 'SWIPE →';
+    position: absolute; top: 8px; right: 12px; z-index: 1;
+    font-family: var(--mono); font-size: 9px; color: var(--ink-4);
+    text-transform: uppercase; letter-spacing: 0.18em;
+    background: var(--bg-1); padding: 2px 6px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .h-scroll.scrollable::after { opacity: 1; }
+  .h-scroll .matrix-wrap, .h-scroll .vs-wrap { border: 0; min-width: 920px; }
+
+  @media (max-width: 1080px) {
+    .live-run, .surface { grid-template-columns: 1fr; }
+    .scenarios, .evidence { grid-template-columns: 1fr 1fr; }
+    .steps { grid-template-columns: 1fr 1fr; }
+    .faq { grid-template-columns: 1fr; }
+    .faq > details { border-right: 0; }
+  }
+  @media (max-width: 720px) {
+    .scenarios, .evidence, .steps { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<main>
+
+<!-- ============== NAV ============== -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a href="index.html" class="brand"><svg class="brand-mark" width="24" height="24" viewBox="0 0 120 120" aria-hidden="true"><line x1="60" y1="20" x2="22" y2="90" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="60" y1="20" x2="98" y2="90" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="22" y1="90" x2="98" y2="90" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="60" y1="20" x2="60" y2="64" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="22" y1="90" x2="60" y2="64" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="98" y1="90" x2="60" y2="64" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><circle cx="22" cy="90" r="7" fill="#6aa8ff"/><circle cx="98" cy="90" r="7" fill="#6aa8ff"/><circle cx="60" cy="64" r="6" fill="#6aa8ff"/><circle cx="60" cy="20" r="7" fill="#ff4b6e"/></svg><span class="brand-wm"><span class="bm-maya">Maya</span><span class="bm-trail">Trail</span></span></a>
+    <div class="nav-links">
+      <a href="index.html" class="active">Platform</a>
+      <a href="scenarios.html">Scenarios</a>
+      <a href="run.html">Run</a>
+      <a href="coverage.html">Coverage</a>
+      <a href="pricing.html">Pricing</a>
+      <a href="research.html">Research</a>
+    </div>
+    <div class="nav-readout">
+      <span class="stat">v0.1 · private beta</span>
+    </div>
+    <a class="nav-cta" style="white-space:nowrap;" href="mailto:admin@mayatrail.tech?subject=MayaTrail%20access%20request">Request access</a>
+  </div>
+</nav>
+
+<!-- ============== CONSOLE BAR (under fixed nav) ============== -->
+<div class="console-fixed">
+  <div class="console">
+    <div class="console-bar">
+      <span class="lbl">CONSOLE</span><span class="sep">·</span>
+      <span>sandbox · dev-user</span><span class="sep">·</span>
+      <span>region ap-south-1</span>
+      <div class="right">
+        <span class="pulse"></span>
+        <span>linked · STS only · no long-lived keys</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============== HERO - Vault (React, scroll-driven) ============== -->
+<div id="vault-hero-mount" style="min-height:calc(100vh - 60px); background:var(--bg);"></div>
+
+<!-- ============== LIVE RUN - code + animated terminal ============== -->
+<section class="s" style="padding-top:30px;">
+  <div class="section-head">
+    <div>
+      <div class="eyebrow">A single run · start to evidence</div>
+      <h2 class="h-2">What runs. <span class="em">What you see.</span></h2>
+    </div>
+    <p>The left is real boto3 - the same code MayaTrail packages, signs, and replays. The right is what lands in CloudTrail while it runs. Both are exported with every run.</p>
+  </div>
+
+  <div class="live-run">
+    <!-- LEFT: Python code -->
+    <div class="code-side">
+      <div class="lbl"><b>emulations/attach_role_policy.py</b> · python · 56 lines</div>
+<pre class="code"><span class="ln">01</span><span class="c"># T1548.005 · T1098 - abuse role policy attachment for priv-esc</span>
+<span class="ln">02</span><span class="k">from</span> <span class="n">mayatrail</span> <span class="k">import</span> <span class="n">Chain</span>, <span class="n">step</span>
+<span class="ln">03</span><span class="k">import</span> <span class="n">boto3</span>
+<span class="ln">04</span>
+<span class="ln">05</span><span class="n">chain</span> = <span class="n">Chain</span>(<span class="s">"attach_role_policy"</span>, mitre=[<span class="s">"T1548.005"</span>, <span class="s">"T1098"</span>])
+<span class="ln">06</span>
+<span class="ln">07</span><span class="k">@</span><span class="fn">step</span>(<span class="s">"recon"</span>, mitre=<span class="s">"T1087.004"</span>)
+<span class="ln">08</span><span class="k">def</span> <span class="fn">enumerate_roles</span>(<span class="n">ctx</span>):
+<span class="ln">09</span>    <span class="n">iam</span> = <span class="n">ctx</span>.<span class="fn">client</span>(<span class="s">"iam"</span>)
+<span class="ln">10</span>    <span class="k">return</span> <span class="n">iam</span>.<span class="fn">list_roles</span>()[<span class="s">"Roles"</span>]
+<span class="ln">11</span>
+<span class="ln">12</span><span class="k">@</span><span class="fn">step</span>(<span class="s">"priv-esc"</span>, mitre=<span class="s">"T1548.005"</span>)
+<span class="ln">13</span><span class="k">def</span> <span class="fn">attach_admin</span>(<span class="n">ctx</span>, target):
+<span class="ln">14</span>    <span class="n">iam</span> = <span class="n">ctx</span>.<span class="fn">client</span>(<span class="s">"iam"</span>)
+<span class="ln">15</span>    <span class="n">iam</span>.<span class="fn">attach_role_policy</span>(
+<span class="ln">16</span>        RoleName=<span class="n">target</span>[<span class="s">"RoleName"</span>],
+<span class="ln">17</span>        PolicyArn=<span class="v">"arn:aws:iam::aws:policy/AdministratorAccess"</span>,
+<span class="ln">18</span>    )
+<span class="ln">19</span>    <span class="k">return</span> <span class="n">ctx</span>.<span class="fn">assume</span>(<span class="n">target</span>[<span class="s">"Arn"</span>])
+<span class="ln">20</span>
+<span class="ln">21</span><span class="k">@</span><span class="fn">step</span>(<span class="s">"exfil"</span>, mitre=<span class="s">"T1567.002"</span>)
+<span class="ln">22</span><span class="k">def</span> <span class="fn">walk_buckets</span>(<span class="n">elevated</span>):
+<span class="ln">23</span>    <span class="n">s3</span> = <span class="n">elevated</span>.<span class="fn">client</span>(<span class="s">"s3"</span>)
+<span class="ln">24</span>    <span class="k">for</span> b <span class="k">in</span> <span class="n">s3</span>.<span class="fn">list_buckets</span>()[<span class="s">"Buckets"</span>]:
+<span class="ln">25</span>        <span class="n">elevated</span>.<span class="fn">exfil_objects</span>(b[<span class="s">"Name"</span>])
+<span class="ln">26</span>
+<span class="ln">27</span><span class="n">chain</span>.<span class="fn">run</span>(teardown=<span class="k">True</span>, evidence=<span class="s">"./run-2f4a/"</span>)</pre>
+    </div>
+
+    <!-- RIGHT: animated terminal -->
+    <div class="term-side">
+      <div class="lbl"><b>cloudtrail</b> · live tail · sandbox/dev-user</div>
+      <div class="term" id="term">
+        <!-- lines injected by JS -->
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== STRIP ============== -->
+<div class="strip">
+  <div class="strip-inner">
+    <b>BUILT FOR</b>
+    <span>· detection engineers</span>
+    <span>· purple teams</span>
+    <span>· cloud security teams</span>
+    <span>· incident responders</span>
+  </div>
+</div>
+
+<!-- ============== ADVERSARY CATALOGUE ============== -->
+<section class="s">
+  <div class="section-head">
+    <div>
+      <div class="eyebrow">Adversary catalogue</div>
+      <h2 class="h-2">Real APTs. <span class="em">Each one runs as code.</span></h2>
+    </div>
+    <p>Every chain in MayaTrail traces back to an observed cloud campaign. Reproducible to the second, mapped to MITRE ATT&amp;CK, with the detection content that should (and didn't) catch it.</p>
+  </div>
+
+  <div class="scenarios">
+    <a class="scenario" href="scenarios.html">
+      <div class="head"><span><b>§ 01</b> · UNC3944</span><span class="sev crit">Critical</span></div>
+      <div class="title">Scattered Spider</div>
+      <div class="apt-source">Identity-first · <b>MGM, Caesars, Twilio</b> (2023-24)</div>
+      <p style="margin:0; color:var(--ink-2); font-size:13.5px; line-height:1.5;">
+        Calls the help-desk, resets MFA, attaches <span style="font-family:var(--mono); color:var(--ink); font-size:12.5px;">AdministratorAccess</span> to an existing IAM role. Sub-60s priv-esc.
+      </p>
+      <div class="maps">
+        <span class="pill scen">§ attach_role_policy</span>
+        <span class="pill">T1548.005</span><span class="pill">T1556.006</span><span class="pill">T1098</span>
+      </div>
+      <div class="meta"><span class="id">helpdesk → IAM admin</span><span>~12s</span></div>
+    </a>
+
+    <a class="scenario" href="scenarios.html">
+      <div class="head"><span><b>§ 02</b> · ALPHV / BlackCat</span><span class="sev crit">Critical</span></div>
+      <div class="title">BlackCat cloud-ransom</div>
+      <div class="apt-source">RaaS · <b>MGM, Reddit, Henry Schein</b> (2023)</div>
+      <p style="margin:0; color:var(--ink-2); font-size:13.5px; line-height:1.5;">
+        Imports external KMS key material, re-encrypts target buckets with the attacker key, drops the import. Recovery requires their key.
+      </p>
+      <div class="maps">
+        <span class="pill scen">§ s3_kms_encryption</span>
+        <span class="pill">T1486</span><span class="pill">T1485</span>
+      </div>
+      <div class="meta"><span class="id">BYO-key extortion</span><span>~1m04s</span></div>
+    </a>
+
+    <a class="scenario" href="scenarios.html">
+      <div class="head"><span><b>§ 03</b> · SCARLETEEL</span><span class="sev high">High</span></div>
+      <div class="title">SCARLETEEL</div>
+      <div class="apt-source">Sysdig, 2023 · <b>Kubernetes → AWS lateral</b></div>
+      <p style="margin:0; color:var(--ink-2); font-size:13.5px; line-height:1.5;">
+        Compromised EKS pod token harvests AWS creds, enumerates S3, exfils objects to attacker-controlled bucket while CloudTrail data-events are off.
+      </p>
+      <div class="maps">
+        <span class="pill scen">§ s3_initial_access</span>
+        <span class="pill">T1530</span><span class="pill">T1552</span><span class="pill">T1567.002</span>
+      </div>
+      <div class="meta"><span class="id">EKS → S3 exfil</span><span>~42s</span></div>
+    </a>
+
+    <a class="scenario" href="scenarios.html">
+      <div class="head"><span><b>§ 04</b> · LAPSUS$</span><span class="sev high">High</span></div>
+      <div class="title">LAPSUS$ race</div>
+      <div class="apt-source">Extortion · <b>Okta, Microsoft, Nvidia</b> (2022)</div>
+      <p style="margin:0; color:var(--ink-2); font-size:13.5px; line-height:1.5;">
+        Compromised IdP, SAML token replay against AWS - racing the IAM eventual-consistency window so revoked creds still authenticate.
+      </p>
+      <div class="maps">
+        <span class="pill scen">§ eventual_consistency</span>
+        <span class="pill">T1078</span><span class="pill">T1098</span>
+      </div>
+      <div class="meta"><span class="id">IdP → STS race</span><span>~18s</span></div>
+    </a>
+
+    <a class="scenario" href="run.html">
+      <div class="head"><span><b>§ 05</b> · AMBERSQUID</span><span class="sev med">Medium</span></div>
+      <div class="title">AMBERSQUID <span style="font-family:var(--mono); font-size:10px; padding:2px 6px; border:1px solid var(--cool); color:var(--cool); margin-left:6px; letter-spacing:0.14em; text-transform:uppercase; vertical-align:1px;">▶ RUN</span></div>
+      <div class="apt-source">Sysdig, 2023 · <b>cloud-native cryptomining</b></div>
+      <p style="margin:0; color:var(--ink-2); font-size:13.5px; line-height:1.5;">
+        Spins miners across Amplify, Fargate, SageMaker - the under-monitored services GuardDuty doesn't watch. Maps the permission surface first.
+      </p>
+      <div class="maps">
+        <span class="pill scen">§ enumeration</span>
+        <span class="pill">T1496</span><span class="pill">T1087.004</span><span class="pill">T1580</span>
+      </div>
+      <div class="meta"><span class="id">surface map → miner</span><span>~31s</span></div>
+    </a>
+
+    <a class="scenario" href="scenarios.html">
+      <div class="head"><span><b>§ 06</b> · TeamTNT</span><span class="sev high">High</span></div>
+      <div class="title">TeamTNT blind-spot</div>
+      <div class="apt-source">Long-running · <b>IMDS abuse, log evasion</b> (2020-)</div>
+      <p style="margin:0; color:var(--ink-2); font-size:13.5px; line-height:1.5;">
+        Hits IMDSv1/2 endpoints for instance creds, then chains behind APIs that CloudTrail simply doesn't log. Silent persistence.
+      </p>
+      <div class="maps">
+        <span class="pill scen">§ cloudtrail_blindspot</span>
+        <span class="pill">T1552.005</span><span class="pill">T1556.005</span>
+      </div>
+      <div class="meta"><span class="id">IMDS → silent persist</span><span>~27s</span></div>
+    </a>
+  </div>
+</section>
+
+<!-- ============== LIVE RUN TEASER ============== -->
+<section class="s" style="padding-top:40px;">
+  <a href="run.html" style="
+    display:grid; grid-template-columns: 1.3fr 1fr;
+    border: 1px solid var(--rule-2);
+    background: linear-gradient(135deg, var(--bg-1) 0%, var(--bg) 100%);
+    text-decoration: none; color: var(--ink);
+    position: relative; overflow: hidden;
+    transition: border-color 0.2s, transform 0.2s;
+  " onmouseover="this.style.borderColor='var(--cool)';this.style.transform='translateY(-2px)';" onmouseout="this.style.borderColor='var(--rule-2)';this.style.transform='none';">
+    <div style="padding: 40px 44px;">
+      <div class="eyebrow">Live emulation</div>
+      <h2 class="h-2" style="margin-top:14px;">Watch <span class="em">AMBERSQUID</span> run end&#8209;to&#8209;end.</h2>
+      <p style="font-family:var(--sans); font-size:15px; line-height:1.6; color:var(--ink-2); max-width: 480px; margin-top: 16px;">
+        13 kill-chain steps. 4 credential pivots. 11 Sigma rules armed. Watch the chain land in real time -
+        every CloudTrail event, every detection trigger, the StopLogging moment. No AWS calls; pure playback
+        from an approved emulation plan.
+      </p>
+      <div style="display: flex; gap: 28px; margin-top: 28px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.14em;">
+        <div>
+          <b style="display: block; color: var(--ink); font-family: var(--sans); font-size: 22px; font-weight: 600; letter-spacing: -0.015em; text-transform: none; margin-bottom: 2px;">13</b>
+          steps
+        </div>
+        <div>
+          <b style="display: block; color: var(--ink); font-family: var(--sans); font-size: 22px; font-weight: 600; letter-spacing: -0.015em; text-transform: none; margin-bottom: 2px;">11</b>
+          detections armed
+        </div>
+        <div>
+          <b style="display: block; color: var(--ink); font-family: var(--sans); font-size: 22px; font-weight: 600; letter-spacing: -0.015em; text-transform: none; margin-bottom: 2px;">~36s</b>
+          playback
+        </div>
+        <div>
+          <b style="display: block; color: var(--ink); font-family: var(--sans); font-size: 22px; font-weight: 600; letter-spacing: -0.015em; text-transform: none; margin-bottom: 2px;">$0.00</b>
+          per run
+        </div>
+      </div>
+      <div style="display: inline-flex; align-items: center; gap: 10px; margin-top: 32px; padding: 12px 18px; background: var(--cool); color: var(--bg); font-family: var(--sans); font-size: 13px; font-weight: 500;">
+        ▶ &nbsp;Run the AMBERSQUID emulation <span style="font-size:14px;">→</span>
+      </div>
+    </div>
+
+    <!-- right column: terminal preview -->
+    <div style="padding: 28px 30px; border-left: 1px solid var(--rule); background: var(--bg); position: relative; overflow: hidden;">
+      <div style="font-family: var(--mono); font-size: 10px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.16em; margin-bottom: 14px; display: flex; gap: 8px; align-items: center;">
+        <span style="width:7px; height:7px; background:var(--hot); border-radius:50%; box-shadow:0 0 8px var(--hot); animation: blip 1.2s ease-out infinite;"></span>
+        LIVE PREVIEW · RUN-20260426
+      </div>
+      <pre style="font-family: var(--mono); font-size: 11.5px; line-height: 1.65; color: var(--ink-2); margin: 0; white-space: pre;">
+<span style="color:var(--ink-4)">+02.40</span> <span style="color:var(--cool)">iam</span>             <span style="color:var(--ink)">CreateRole</span>          <span style="color:var(--warm)">⚠ ecsTaskExecutionRole</span>
+<span style="color:var(--ink-4)">+02.78</span> <span style="color:var(--cool)">iam</span>             <span style="color:var(--ink)">AttachRolePolicy</span>    <span style="color:var(--warm)">⚠ AdministratorAccess</span>
+<span style="color:var(--ink-4)">+03.34</span> <span style="color:var(--cool)">sts</span>             <span style="color:var(--ink)">AssumeRole</span>          <span style="color:var(--ink-4)">codecommit-session</span>
+<span style="color:var(--ink-4)">+04.20</span> <span style="color:var(--cool)">amplify</span>         <span style="color:var(--ink)">CreateApp</span>           <span style="color:var(--ink-4)">miner-app</span>
+<span style="color:var(--ink-4)">+05.10</span> <span style="color:var(--cool)">sagemaker</span>       <span style="color:var(--ink)">CreateNotebook</span>
+<span style="color:var(--ink-4)">+09.20</span> <span style="color:var(--cool)">s3</span>              <span style="color:var(--ink)">GetObject</span>           <span style="color:var(--hot)">⚠ CANARY · tfstate</span>
+<span style="color:var(--ink-4)">+12.40</span> <span style="color:var(--cool)">cloudtrail</span>      <span style="color:var(--hot)">StopLogging</span>         <span style="color:var(--hot)">⚠ CRITICAL</span>
+<span style="color:var(--ink-4)">+13.40</span> <span style="color:var(--cool)">s3</span>              <span style="color:var(--ink)">DeleteObject</span>        <span style="color:var(--ink-4)">log file</span>
+<span style="color:var(--ok)">✓</span> chain complete · <span style="color:var(--ok)">10/11 detections fired</span> · 1 missed
+      </pre>
+      <div style="position: absolute; left: 0; right: 0; bottom: 0; height: 60px; background: linear-gradient(180deg, transparent, var(--bg)); pointer-events:none;"></div>
+    </div>
+  </a>
+</section>
+
+<!-- ============== DETECTION MATRIX ============== -->
+<section class="s">
+  <div class="section-head">
+    <div>
+      <div class="eyebrow">Which detections fire</div>
+      <h2 class="h-2">Our APT chains, your detection sources, <span class="em">multiple cells of truth.</span></h2>
+    </div>
+    <p>Illustrative of what each source typically produces for these techniques - <b style="color:var(--ok)">fired</b>, <b style="color:var(--warm)">late</b> (&gt;30s), or <b style="color:var(--hot)">missed</b>. Numbers are median latency.</p>
+  </div>
+
+  <div class="h-scroll">
+    <div class="matrix-wrap">
+    <div class="matrix head">
+      <div><b>SCENARIO</b></div>
+      <div>GUARDDUTY</div>
+      <div>CLOUDTRAIL</div>
+      <div>FALCO</div>
+      <div>SIGMA RULES</div>
+      <div>SPLUNK ESCU</div>
+    </div>
+
+    <!-- AttachRolePolicy / Scattered Spider -->
+    <div class="matrix row">
+      <div class="scenario-cell">
+        <span>§ 01 · Scattered Spider</span>
+        <span class="tid">T1548.005 · T1098</span>
+      </div>
+      <div class="cell fired"><span class="sig"><span class="mark">✓</span>FIRED</span><span class="lat">+3.1s</span></div>
+      <div class="cell fired"><span class="sig"><span class="mark">✓</span>FIRED</span><span class="lat">+0.8s</span></div>
+      <div class="cell na"><span class="sig"><span class="mark">·</span>N/A</span><span class="lat">no host</span></div>
+      <div class="cell fired"><span class="sig"><span class="mark">✓</span>FIRED</span><span class="lat">+2.0s</span></div>
+      <div class="cell fired"><span class="sig"><span class="mark">✓</span>FIRED</span><span class="lat">+4.4s</span></div>
+    </div>
+
+    <!-- KMS ransomware / BlackCat -->
+    <div class="matrix row">
+      <div class="scenario-cell">
+        <span>§ 02 · BlackCat cloud-ransom</span>
+        <span class="tid">T1486 · T1485</span>
+      </div>
+      <div class="cell missed"><span class="sig"><span class="mark">✗</span>MISSED</span><span class="lat">no rule</span></div>
+      <div class="cell late"><span class="sig"><span class="mark">!</span>LATE</span><span class="lat">+58s</span></div>
+      <div class="cell na"><span class="sig"><span class="mark">·</span>N/A</span><span class="lat">no host</span></div>
+      <div class="cell missed"><span class="sig"><span class="mark">✗</span>MISSED</span><span class="lat">no rule</span></div>
+      <div class="cell late"><span class="sig"><span class="mark">!</span>LATE</span><span class="lat">+42s</span></div>
+    </div>
+
+    <!-- S3 exfil / SCARLETEEL -->
+    <div class="matrix row">
+      <div class="scenario-cell">
+        <span>§ 03 · SCARLETEEL</span>
+        <span class="tid">T1530 · T1567.002</span>
+      </div>
+      <div class="cell fired"><span class="sig"><span class="mark">✓</span>FIRED</span><span class="lat">+6.0s</span></div>
+      <div class="cell fired"><span class="sig"><span class="mark">✓</span>FIRED</span><span class="lat">+1.4s</span></div>
+      <div class="cell na"><span class="sig"><span class="mark">·</span>N/A</span><span class="lat">no host</span></div>
+      <div class="cell late"><span class="sig"><span class="mark">!</span>LATE</span><span class="lat">+45s</span></div>
+      <div class="cell missed"><span class="sig"><span class="mark">✗</span>MISSED</span><span class="lat">no rule</span></div>
+    </div>
+
+    <!-- IAM EC / LAPSUS$ -->
+    <div class="matrix row">
+      <div class="scenario-cell">
+        <span>§ 04 · LAPSUS$ race</span>
+        <span class="tid">T1078 · T1098</span>
+      </div>
+      <div class="cell missed"><span class="sig"><span class="mark">✗</span>MISSED</span><span class="lat">no rule</span></div>
+      <div class="cell fired"><span class="sig"><span class="mark">✓</span>FIRED</span><span class="lat">+1.2s</span></div>
+      <div class="cell na"><span class="sig"><span class="mark">·</span>N/A</span><span class="lat">no host</span></div>
+      <div class="cell missed"><span class="sig"><span class="mark">✗</span>MISSED</span><span class="lat">no rule</span></div>
+      <div class="cell late"><span class="sig"><span class="mark">!</span>LATE</span><span class="lat">+38s</span></div>
+    </div>
+
+    <!-- Service mapping / AMBERSQUID -->
+    <div class="matrix row">
+      <div class="scenario-cell">
+        <span>§ 05 · AMBERSQUID</span>
+        <span class="tid">T1087.004 · T1580</span>
+      </div>
+      <div class="cell fired"><span class="sig"><span class="mark">✓</span>FIRED</span><span class="lat">+4.0s</span></div>
+      <div class="cell fired"><span class="sig"><span class="mark">✓</span>FIRED</span><span class="lat">+0.9s</span></div>
+      <div class="cell na"><span class="sig"><span class="mark">·</span>N/A</span><span class="lat">no host</span></div>
+      <div class="cell fired"><span class="sig"><span class="mark">✓</span>FIRED</span><span class="lat">+2.1s</span></div>
+      <div class="cell fired"><span class="sig"><span class="mark">✓</span>FIRED</span><span class="lat">+3.6s</span></div>
+    </div>
+
+    <!-- CloudTrail blind-spot / TeamTNT -->
+    <div class="matrix row">
+      <div class="scenario-cell">
+        <span>§ 06 · TeamTNT blind-spot</span>
+        <span class="tid">T1556.005</span>
+      </div>
+      <div class="cell missed"><span class="sig"><span class="mark">✗</span>MISSED</span><span class="lat">by design</span></div>
+      <div class="cell missed"><span class="sig"><span class="mark">✗</span>MISSED</span><span class="lat">silent API</span></div>
+      <div class="cell na"><span class="sig"><span class="mark">·</span>N/A</span><span class="lat">no host</span></div>
+      <div class="cell missed"><span class="sig"><span class="mark">✗</span>MISSED</span><span class="lat">no rule</span></div>
+      <div class="cell missed"><span class="sig"><span class="mark">✗</span>MISSED</span><span class="lat">no rule</span></div>
+    </div>
+
+    <div class="matrix-foot">
+      <span>30 cells · illustrative example · <span style="color:var(--ink-2)">your run produces the real grid</span></span>
+      <div class="legend">
+        <span><i class="ok"></i> Fired &lt;30s</span>
+        <span><i class="lt"></i> Late &gt;30s</span>
+        <span><i class="ms"></i> Missed</span>
+        <span><i class="na"></i> Not applicable</span>
+      </div>
+    </div>
+  </div>
+  </div>
+</section>
+
+<!-- ============== ATTACK SURFACE (sphere) ============== -->
+<section class="s">
+  <div class="surface">
+    <div class="surface-copy">
+      <div class="eyebrow">Attack surface · indexed</div>
+      <h2 class="h-2">An <span class="em">instrument</span> for cloud attack emulation, not a checklist.</h2>
+      <p style="margin-top:20px; font-family:var(--sans); font-size:16px; line-height:1.6; color:var(--ink-2); max-width:520px;">
+        Every IAM action, every STS handshake, every KMS call is mapped to a technique and a detection. The sphere is a live index of what we can run against your AWS today.
+      </p>
+      <ul>
+        <li><span class="n">01</span><span><b>Technique-level coverage</b> - 32 MITRE techniques shipped, scored against real CloudTrail.</span></li>
+        <li><span class="n">02</span><span><b>Scriptable end-to-end</b> - every chain has a Python SDK call and a one-line CLI.</span></li>
+        <li><span class="n">03</span><span><b>Bring your own infra</b> - hosted, or self-hosted on the OSS core (Apache 2.0).</span></li>
+      </ul>
+    </div>
+
+    <div class="sphere-frame">
+      <div class="sphere-frame-head">
+        <span><b>SCANNER</b></span>
+        <span style="opacity:0.4">·</span>
+        <span>32 techniques · 4 services</span>
+        <span class="meter">indexed</span>
+      </div>
+      <div class="sphere-stage">
+        <div class="sphere-wrap">
+          <div class="gridlines"></div>
+          <div class="scan-beam"></div>
+          <div class="sphere">
+            <div class="ring r1"></div>
+            <div class="ring r2"></div>
+            <div class="ring r3"></div>
+            <div class="ring r4"></div>
+            <div class="ring eq"></div>
+          </div>
+          <div class="vuln blink" style="left:36%; top:36%;"></div>
+          <div class="vuln blink" style="left:60%; top:46%; animation-delay:0.3s;"></div>
+          <div class="vuln blink" style="left:48%; top:64%; animation-delay:0.6s;"></div>
+          <div class="vuln" style="left:34%; top:58%;"></div>
+          <div class="vuln" style="left:70%; top:62%;"></div>
+          <div class="vuln" style="left:54%; top:30%;"></div>
+        </div>
+        <div class="sphere-readout">
+          <span>SERVICE <span class="v">IAM · STS · S3 · KMS</span></span>
+          <span>HOT <span class="h">6 findings</span></span>
+          <span>LAST SCAN <span class="v">14:02:11</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== THREE DELIVERABLES ============== -->
+<section class="s">
+  <div class="section-head">
+    <div>
+      <div class="eyebrow">Take home · three deliverables</div>
+      <h2 class="h-2">Detection rules. <span class="em">IR playbook.</span> Signed evidence.</h2>
+    </div>
+    <p>Every run ends with three artifacts your team uses on Monday - one for the detection repo, one for the runbook wiki, one for the audit folder. Hash-chained, portable, replayable.</p>
+  </div>
+
+  <div class="evidence">
+    <!-- Detection bundle -->
+    <div class="ev-card">
+      <div class="ev-head"><b>detection-bundle.zip</b> <span class="sz">18 KB</span></div>
+      <div class="ev-preview" style="display:flex; flex-direction:column; justify-content:center; gap:12px;">
+        <div class="mini-mitre">
+          <div class="cell"></div><div class="cell h"></div><div class="cell f"></div><div class="cell l"></div><div class="cell"></div><div class="cell"></div>
+          <div class="cell l"></div><div class="cell f"></div><div class="cell h"></div><div class="cell f"></div><div class="cell"></div><div class="cell l"></div>
+          <div class="cell"></div><div class="cell"></div><div class="cell l"></div><div class="cell h"></div><div class="cell f"></div><div class="cell"></div>
+          <div class="cell"></div><div class="cell l"></div><div class="cell"></div><div class="cell f"></div><div class="cell l"></div><div class="cell"></div>
+        </div>
+        <div class="mini-mitre-labels">
+          <span>INITIAL</span><span>EXEC</span><span>PERSIST</span><span>PRIV-ESC</span><span>EVASION</span><span>EXFIL</span>
+        </div>
+      </div>
+      <div class="ev-foot">
+        <b>Sigma rules · MITRE-mapped</b>
+        One rule per technique we ran. Drop into your detection repo. Fires next time the chain lands.
+      </div>
+    </div>
+
+    <!-- IR Playbook -->
+    <div class="ev-card" style="border-color: var(--cool);">
+      <div class="ev-head"><b>playbook_AMBERSQUID.md</b> <span class="sz">32 KB · 739 lines</span></div>
+      <div class="ev-preview" style="position:relative;">
+        <pre style="font-family:var(--mono); font-size:10.5px; line-height:1.55; color:var(--ink-2); margin:0; white-space:pre;">
+<span style="color:var(--cool)"># 1. Preparation</span>
+<span style="color:var(--ink-3)">- CloudTrail multi-region trail enabled</span>
+<span style="color:var(--ink-3)">- GuardDuty + S3 Protection</span>
+
+<span style="color:var(--cool)"># 2. Identification</span>
+<span style="color:var(--ink-3)">- P0 · cloudtrail:StopLogging</span>
+<span style="color:var(--ink-3)">- P0 · AttachRolePolicy + Admin</span>
+<span style="color:var(--ink-3)">- P1 · canary.tfstate accessed</span>
+
+<span style="color:var(--cool)"># 3. Containment</span>
+<span style="color:var(--ink-3)">aws cloudtrail start-logging \</span>
+<span style="color:var(--ink-3)">  --name $TRAIL_NAME</span>
+
+<span style="color:var(--cool)"># 4. Eradication ...</span></pre>
+        <div style="position:absolute; right:14px; top:14px; padding:3px 8px; border:1px solid var(--cool); color:var(--cool); font-family:var(--mono); font-size:9.5px; letter-spacing:0.14em; text-transform:uppercase;">VIEW ↗</div>
+      </div>
+      <div class="ev-foot">
+        <b>739-line incident runbook</b>
+        Prep · identify (P0-P3 triggers) · contain · eradicate · recover. Real AWS CLI queries. Tabletop-ready.
+        <div style="margin-top:8px;">
+          <a href="playbook.html" style="color:var(--cool); text-decoration:none; font-family:var(--mono); font-size:11px; letter-spacing:0.14em; text-transform:uppercase;">Read the AMBERSQUID playbook →</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Signed evidence -->
+    <div class="ev-card">
+      <div class="ev-head"><b>evidence.zip</b> <span class="sz">142 KB · signed</span></div>
+      <div class="ev-preview">
+<pre class="json"><span class="punct">{</span>
+  <span class="key">"runId"</span><span class="punct">:</span> <span class="val">"run-2f4a"</span><span class="punct">,</span>
+  <span class="key">"trail"</span><span class="punct">:</span> <span class="val">"cloudtrail.json"</span><span class="punct">,</span>
+  <span class="key">"map"</span><span class="punct">:</span> <span class="val">"mitre-map.svg"</span><span class="punct">,</span>
+  <span class="key">"signature"</span><span class="punct">:</span> <span class="val">"sha256:8ed1f4..."</span><span class="punct">,</span>
+  <span class="key">"chain"</span><span class="punct">:</span> <span class="punct">[</span>
+    <span class="val">"step-01..."</span><span class="punct">,</span>
+    <span class="val">"step-02..."</span><span class="punct">,</span>
+    <span class="val">"... 11 more"</span>
+  <span class="punct">],</span>
+  <span class="key">"verified"</span><span class="punct">:</span> <span class="num">true</span>
+<span class="punct">}</span></pre>
+      </div>
+      <div class="ev-foot">
+        <b>CloudTrail dump + MITRE map</b>
+        Hash-chained. Replay offline against any SIEM. Audit-ready.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== STEPS ============== -->
+<section class="s">
+  <div class="section-head">
+    <div>
+      <div class="eyebrow">How it runs</div>
+      <h2 class="h-2">Four steps. <span class="em">No agents. No long-lived keys.</span></h2>
+    </div>
+    <p>The whole platform sits behind an STS-only role you grant in your sandbox account. Every resource is tagged. Every action is in your CloudTrail.</p>
+  </div>
+
+  <div class="steps">
+    <div class="step">
+      <span class="n">01 · CONNECT</span>
+      <h3>STS role, no keys</h3>
+      <p>Grant MayaTrail an assumable role in your sandbox account. Trust policy is two lines. No long-lived credentials ever leave AWS.</p>
+    </div>
+    <div class="step">
+      <span class="n">02 · PROVISION</span>
+      <h3>Pulumi sandbox</h3>
+      <p>A tagged stack of intentionally-leaky resources spins up in ~60s. Mirrors a real account in shape, not in data.</p>
+    </div>
+    <div class="step">
+      <span class="n">03 · RUN</span>
+      <h3>Execute a chain</h3>
+      <p>Pick a scenario. Watch the chain land in your CloudTrail. Read which detections fired, which didn't.</p>
+    </div>
+    <div class="step">
+      <span class="n">04 · TEAR DOWN</span>
+      <h3>One command</h3>
+      <p>The sandbox is destroyed; the evidence packet - CloudTrail, MITRE map, signed report - is yours to keep.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============== VS ALTERNATIVES ============== -->
+<section class="s">
+  <div class="section-head">
+    <div>
+      <div class="eyebrow">Where it sits</div>
+      <h2 class="h-2">There are other tools. <span class="em">None of them are this.</span></h2>
+    </div>
+    <p>MayaTrail isn't a vulnerable lab or a single-call test. It's an instrument: real cloud, full chain, mapped, signed, replayable. Here's how it compares.</p>
+  </div>
+
+  <div class="h-scroll">
+  <div class="vs-wrap">
+    <div class="vs head">
+      <div>&nbsp;</div>
+      <div>Real AWS</div>
+      <div>End-to-end chain</div>
+      <div>MITRE-mapped</div>
+      <div>1-cmd teardown</div>
+      <div>Signed evidence</div>
+    </div>
+
+    <div class="vs row us">
+      <div class="pname us">MayaTrail<span class="sub">v0.1 · private beta</span></div>
+      <div class="cmark y">✓ live · STS-scoped</div>
+      <div class="cmark y">✓ priv-esc + exfil</div>
+      <div class="cmark y">✓ 32 techniques</div>
+      <div class="cmark y">✓ Pulumi destroy</div>
+      <div class="cmark y">✓ hash-chained</div>
+    </div>
+
+    <div class="vs row">
+      <div class="pname">CloudGoat<span class="sub">Rhino Security Labs</span></div>
+      <div class="cmark y">✓ live</div>
+      <div class="cmark p">~ scenario-only</div>
+      <div class="cmark n">- manual map</div>
+      <div class="cmark y">✓ terraform destroy</div>
+      <div class="cmark n">- none</div>
+    </div>
+
+    <div class="vs row">
+      <div class="pname">Stratus Red Team<span class="sub">DataDog</span></div>
+      <div class="cmark y">✓ live</div>
+      <div class="cmark p">~ single technique</div>
+      <div class="cmark y">✓ tagged</div>
+      <div class="cmark p">~ per-technique</div>
+      <div class="cmark n">- stdout only</div>
+    </div>
+
+    <div class="vs row">
+      <div class="pname">Pacu<span class="sub">Rhino Security Labs</span></div>
+      <div class="cmark y">✓ live · any creds</div>
+      <div class="cmark p">~ operator-driven</div>
+      <div class="cmark n">- manual map</div>
+      <div class="cmark n">- manual cleanup</div>
+      <div class="cmark n">- session log only</div>
+    </div>
+
+    <div class="vs row">
+      <div class="pname">Atomic Red Team<span class="sub">Red Canary</span></div>
+      <div class="cmark p">~ mostly on-host</div>
+      <div class="cmark p">~ atomic tests</div>
+      <div class="cmark y">✓ technique-aligned</div>
+      <div class="cmark n">- N/A</div>
+      <div class="cmark n">- logs only</div>
+    </div>
+  </div>
+  </div>
+</section>
+
+<!-- ============== FAQ ============== -->
+<section class="s">
+  <div class="section-head">
+    <div>
+      <div class="eyebrow">Open questions</div>
+      <h2 class="h-2">The objections worth <span class="em">answering directly.</span></h2>
+    </div>
+    <p>The questions we hear most. If yours isn't here, ask: <a href="mailto:admin@mayatrail.tech" style="color:var(--cool); text-decoration:none;">admin@mayatrail.tech</a>.</p>
+  </div>
+
+  <div class="faq">
+    <details>
+      <summary>Will this touch my production account?</summary>
+      <div class="a">
+        No. MayaTrail only acts inside a separate <b>sandbox account</b> you nominate. The trust policy enforces a single sandbox <code>aws:PrincipalAccount</code> condition. Cross-account actions are statically blocked at the SDK layer and at the IAM boundary. Nothing executes against prod, ever.
+      </div>
+    </details>
+
+    <details>
+      <summary>What does a run cost in AWS spend?</summary>
+      <div class="a">
+        A typical chain (~30s of API calls + a small KMS key + a 4-object S3 bucket) costs <b>under $0.10</b>. Worst-case scenarios (DynamoDB write storm, GuardDuty findings billed by sample) cap at <b>~$1.40</b>. Every run prints a forecast before execution.
+      </div>
+    </details>
+
+    <details>
+      <summary>How do I know teardown is real?</summary>
+      <div class="a">
+        Teardown is <code>pulumi destroy</code> with a post-condition: every resource the stack declared must return <code>DescribeX → NotFound</code>. If any survive, the run is flagged <b>incomplete</b> and the evidence packet refuses to sign. You get logs for both halves.
+      </div>
+    </details>
+
+    <details>
+      <summary>What if my detections aren't on this list?</summary>
+      <div class="a">
+        The matrix shows the five we've benchmarked in beta. The evidence packet is <b>raw</b> - CloudTrail JSON + a MITRE map - so you can replay any run against your own detection stack offline. Custom adapters (Wazuh, Elastic, Chronicle, custom Lambda) ship as plugins.
+      </div>
+    </details>
+
+    <details>
+      <summary>Is this red-team or detection-eng oriented?</summary>
+      <div class="a">
+        Detection engineering first. Red-team second. The product is built around the question <em>"did your stack notice?"</em>, not <em>"can you compromise this?"</em> Pacu and others already do the latter well. We're complementary, not a replacement.
+      </div>
+    </details>
+
+    <details>
+      <summary>Self-host or SaaS?</summary>
+      <div class="a">
+        Both. The emulation core, Pulumi recipes, and CLI are <b>OSS (Apache 2.0)</b>. The hosted control plane adds run history, the evidence signer, the detection adapters, and a UI. Same chain runs in either mode - evidence packets are byte-identical.
+      </div>
+    </details>
+  </div>
+</section>
+
+<!-- ============== CTA ============== -->
+<section class="s" style="padding-bottom:80px;">
+  <div class="final">
+    <div class="eyebrow" style="justify-content:center;">Get access</div>
+    <h2 class="h-2">See your AWS the way <span class="em">attackers</span> see it.</h2>
+    <p>Private beta. Tell us a few sentences about what you want to test and we'll get you set up.</p>
+    <div class="cta-row">
+      <a class="btn" href="mailto:admin@mayatrail.tech?subject=MayaTrail%20access%20request">Request access <span class="arrow">→</span></a>
+      <a class="btn outline" href="run.html">Watch a live run</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <span><b style="color:var(--ink-2)">© 2026 MAYATRAIL TECH</b> · v0.1</span>
+  <div class="links">
+    <a href="index.html">Platform</a>
+    <a href="scenarios.html">Scenarios</a>
+    <a href="run.html">Run</a>
+    <a href="coverage.html">Coverage</a>
+    <a href="pricing.html">Pricing</a>
+    <a href="research.html">Research</a>
+    <a href="https://github.com/MayaTrail">GitHub ↗</a>
+  </div>
+</footer>
+
+</main>
+
+<!-- React + Tweaks + Vault hero -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="landing-vault.jsx"></script>
+<script type="text/babel">
+  ReactDOM.createRoot(document.getElementById('vault-hero-mount')).render(<window.VaultHeroApp />);
+</script>
+
+<!-- Terminal animation -->
+<script>
+// h-scroll indicator
+(function() {
+  const els = document.querySelectorAll('.h-scroll');
+  function check() {
+    els.forEach(el => {
+      el.classList.toggle('scrollable', el.scrollWidth > el.clientWidth + 4);
+    });
+  }
+  check();
+  window.addEventListener('resize', check);
+})();
+(function() {
+  const lines = [
+    { t: '+00.00', l: 'mayatrail run attach_role_policy --sandbox dev-user', cls: 'api' },
+    { t: '+00.42', l: '✓ stack up · 6 resources · pulumi/sandbox-2f4a', cls: 'ok' },
+    { t: '+00.84', l: 'sts:AssumeRole → arn:aws:iam::***:role/maya-runner', cls: 'api' },
+    { t: '+01.12', l: 'iam:ListRoles → 14 roles · indexed', cls: 'mut' },
+    { t: '+02.40', l: 'iam:AttachRolePolicy → admin-7f · AdministratorAccess', cls: 'api' },
+    { t: '+02.41', l: '⚠ T1548.005 · detection window opens', cls: 'warn' },
+    { t: '+03.12', l: '✓ guardduty:IAMUser/AnomalousBehavior · fired +0.7s', cls: 'ok' },
+    { t: '+04.55', l: 'sts:AssumeRole(admin-7f) → elevated session', cls: 'api' },
+    { t: '+05.20', l: 's3:ListBuckets → 4 buckets · 4.2GB indexed', cls: 'mut' },
+    { t: '+05.90', l: 's3:GetObject × 128 · data-lake-x → attacker-bucket', cls: 'api' },
+    { t: '+06.10', l: '⚠ T1567.002 · exfil window opens', cls: 'warn' },
+    { t: '+08.40', l: '✗ cloudtrail:DataEvents missing · exfil silent', cls: 'err' },
+    { t: '+10.20', l: 'chain complete · 3 detections fired · 1 missed', cls: 'mut' },
+    { t: '+11.10', l: 'pulumi destroy → 6 resources teardown', cls: 'api' },
+    { t: '+12.40', l: '✓ run-2f4a sealed · cloudtrail.json · mitre-map.svg · report.pdf', cls: 'ok' },
+  ];
+
+  const term = document.getElementById('term');
+  if (!term) return;
+  let i = 0;
+  function emit() {
+    if (i >= lines.length) {
+      setTimeout(() => { term.innerHTML = ''; i = 0; emit(); }, 4500);
+      return;
+    }
+    const line = lines[i++];
+    const el = document.createElement('div');
+    el.className = 'line';
+    el.innerHTML = `<span class="t">${line.t}</span><span class="l ${line.cls}">${line.l}</span>`;
+    term.appendChild(el);
+    // cap at 12 visible lines
+    while (term.children.length > 12) term.removeChild(term.firstChild);
+    setTimeout(emit, 600 + Math.random() * 400);
+  }
+  // start only when visible
+  const io = new IntersectionObserver((entries) => {
+    if (entries[0].isIntersecting) { emit(); io.disconnect(); }
+  });
+  io.observe(term);
+})();
+</script>
+
+<template id="__bundler_thumbnail" data-bg-color="#06070a">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <g transform="translate(600 400) rotate(45)">
+      <rect x="-180" y="-180" width="360" height="360" fill="none" stroke="#6aa8ff" stroke-width="12"/>
+      <rect x="-110" y="-110" width="220" height="220" fill="#6aa8ff" opacity="0.95"/>
+      <rect x="-60"  y="-60"  width="120" height="120" fill="#06070a"/>
+    </g>
+    <text x="600" y="690" text-anchor="middle"
+          font-family="ui-monospace, monospace"
+          font-size="42" letter-spacing="14" font-weight="600"
+          fill="#e8eaf0">MAYATRAIL</text>
+    <text x="600" y="730" text-anchor="middle"
+          font-family="ui-monospace, monospace"
+          font-size="16" letter-spacing="6"
+          fill="#6c7385">CLOUD ATTACK EMULATION</text>
+  </svg>
+</template>
+
+</body>
+</html>
