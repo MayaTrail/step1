@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MayaTrail - Scenarios</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="mayatrail-base.css" />
+<style>
+  /* ============== FILTERS ============== */
+  .filters {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 14px 0 0;
+    margin-top: 28px;
+    border-top: 1px solid var(--rule);
+  }
+  .filters .lbl {
+    font-family: var(--mono); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.16em;
+    color: var(--ink-3);
+    margin-right: 10px;
+  }
+  .filters .chip {
+    font-family: var(--mono); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.12em;
+    padding: 5px 11px;
+    border: 1px solid var(--rule-2);
+    background: transparent;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .filters .chip:hover { color: var(--ink); border-color: var(--ink-3); }
+  .filters .chip.active { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+
+  /* ============== CATALOGUE ============== */
+  .catalogue {
+    border: 1px solid var(--rule-2);
+    background: var(--bg-1);
+    margin: 40px 0 80px;
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 180px 1fr 380px;
+    border-bottom: 1px solid var(--rule);
+    transition: background 0.15s;
+  }
+  .row:last-child { border-bottom: 0; }
+  .row:hover { background: var(--bg-2); }
+
+  .row .meta {
+    padding: 30px 28px;
+    border-right: 1px solid var(--rule);
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .row .meta .num {
+    font-family: var(--mono); font-size: 12px; font-weight: 600;
+    color: var(--ink); letter-spacing: 0.1em;
+  }
+  .row .meta .num .hash { color: var(--cool); margin-right: 6px; }
+  .row .meta .ttf {
+    margin-top: auto;
+    font-family: var(--sans); font-size: 13px;
+    color: var(--ink-3);
+  }
+  .row .meta .ttf b {
+    display: block;
+    font-family: var(--sans); font-size: 26px; font-weight: 600;
+    color: var(--ink); letter-spacing: -0.02em;
+    margin-bottom: 2px;
+  }
+
+  .row .center {
+    padding: 30px 32px;
+    border-right: 1px solid var(--rule);
+  }
+  .row .center .title {
+    font-family: var(--sans); font-size: 22px; font-weight: 600;
+    line-height: 1.2; letter-spacing: -0.015em;
+    color: var(--ink); margin: 0 0 10px;
+  }
+  .row .center .desc {
+    font-family: var(--sans); font-size: 14.5px; line-height: 1.6;
+    color: var(--ink-2); margin: 0 0 16px; max-width: 520px;
+  }
+  .row .center .mitre {
+    display: flex; gap: 6px; flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+  .row .center .cta {
+    display: flex; align-items: center; gap: 14px;
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+  }
+  .row .center .cta a {
+    color: var(--ink-2); text-decoration: none;
+    display: inline-flex; align-items: center; gap: 6px;
+    transition: color 0.15s;
+  }
+  .row .center .cta a:hover { color: var(--cool); }
+  .row .center .cta .run { color: var(--cool); }
+
+  /* mini chain diagram on the right */
+  .row .chain {
+    padding: 30px 28px;
+    background: var(--bg);
+    position: relative;
+  }
+  .chain-stage {
+    display: flex; flex-direction: column; gap: 0;
+    font-family: var(--mono); font-size: 10.5px;
+  }
+  .step {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0;
+  }
+  .step .ord {
+    width: 22px; height: 22px;
+    border: 1px solid var(--rule-2);
+    color: var(--ink-3);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 600;
+    flex-shrink: 0;
+  }
+  .step .b {
+    flex: 1;
+    border: 1px solid var(--rule-2);
+    background: var(--bg-1);
+    padding: 6px 10px;
+    color: var(--ink-2);
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .step .api {
+    font-family: var(--mono);
+    color: var(--ink); font-size: 10px;
+    text-transform: none; letter-spacing: 0;
+    display: block;
+    margin-top: 2px;
+    opacity: 0.7;
+  }
+  .step.hot .b { border-color: var(--hot); color: var(--hot); background: rgba(255,75,110,0.06); }
+  .step.hot .ord { border-color: var(--hot); color: var(--hot); }
+  .step.warm .b { border-color: var(--warm); color: var(--warm); background: rgba(245,180,84,0.06); }
+  .step.warm .ord { border-color: var(--warm); color: var(--warm); }
+  .step.cool .b { border-color: var(--cool); color: var(--cool); background: rgba(106,168,255,0.06); }
+  .step.cool .ord { border-color: var(--cool); color: var(--cool); }
+
+  .step-arrow {
+    height: 14px; width: 1px; margin-left: 11px;
+    background: linear-gradient(180deg, var(--rule-2), transparent);
+    position: relative;
+  }
+  .step-arrow::after {
+    content: ''; position: absolute;
+    bottom: 0; left: 50%; transform: translateX(-50%);
+    border-left: 3px solid transparent;
+    border-right: 3px solid transparent;
+    border-top: 4px solid var(--rule-2);
+  }
+
+  /* ============== FOOT CTA ============== */
+  .foot-cta {
+    border: 1px solid var(--rule-2);
+    padding: 36px 40px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 30px; align-items: center;
+    background:
+      radial-gradient(ellipse 600px 200px at 30% 50%, rgba(106,168,255,0.05), transparent 70%),
+      var(--bg-1);
+  }
+  .foot-cta h3 {
+    font-family: var(--sans); font-weight: 600;
+    font-size: 24px; letter-spacing: -0.02em;
+    margin: 0 0 6px;
+  }
+  .foot-cta p { font-family: var(--sans); font-size: 14.5px; color: var(--ink-2); margin: 0; }
+
+  @media (max-width: 1080px) {
+    .row { grid-template-columns: 140px 1fr; }
+    .row .chain { grid-column: 1 / -1; border-right: 0; border-top: 1px solid var(--rule); }
+    .row .center { border-right: 0; }
+  }
+  @media (max-width: 720px) {
+    .row { grid-template-columns: 1fr; }
+    .row .meta { border-right: 0; border-bottom: 1px solid var(--rule); flex-direction: row; align-items: baseline; gap: 16px; }
+    .row .meta .ttf { margin-top: 0; }
+    .row .meta .ttf b { font-size: 18px; }
+    .foot-cta { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<main>
+
+<!-- ============== NAV ============== -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="index.html"><svg class="brand-mark" width="24" height="24" viewBox="0 0 120 120" aria-hidden="true"><line x1="60" y1="20" x2="22" y2="90" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="60" y1="20" x2="98" y2="90" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="22" y1="90" x2="98" y2="90" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="60" y1="20" x2="60" y2="64" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="22" y1="90" x2="60" y2="64" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="98" y1="90" x2="60" y2="64" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><circle cx="22" cy="90" r="7" fill="#6aa8ff"/><circle cx="98" cy="90" r="7" fill="#6aa8ff"/><circle cx="60" cy="64" r="6" fill="#6aa8ff"/><circle cx="60" cy="20" r="7" fill="#ff4b6e"/></svg><span class="brand-wm"><span class="bm-maya">Maya</span><span class="bm-trail">Trail</span></span></a>
+    <div class="nav-links">
+      <a href="index.html">Platform</a>
+      <a href="scenarios.html" class="active">Scenarios</a>
+      <a href="run.html">Run</a>
+      <a href="coverage.html">Coverage</a>
+      <a href="pricing.html">Pricing</a>
+      <a href="research.html">Research</a>
+    </div>
+    <div class="nav-readout">
+      <span class="stat">v0.1 · private beta</span>
+    </div>
+    <a class="nav-cta" style="white-space:nowrap;" href="mailto:admin@mayatrail.tech?subject=MayaTrail%20access%20request">Request access</a>
+  </div>
+</nav>
+
+<!-- ============== CONSOLE + PAGE HEAD ============== -->
+<div class="console">
+  <div class="console-bar">
+    <span class="lbl">CATALOGUE</span><span class="sep">·</span>
+    <span>APT chains · cloud techniques</span><span class="sep">·</span>
+    <span>shipped from the repo</span>
+    <div class="right">
+      <span class="pulse"></span>
+      <span>open source</span>
+    </div>
+  </div>
+
+  <section class="page-head">
+    <div class="eyebrow">Attack catalogue</div>
+    <h1 class="h-1">Our APT chains, your detection sources. <span class="em">Every step published and reproducible.</span></h1>
+    <p class="lede">
+      Each scenario is a Pulumi stack, a boto3 module, and a runnable chain.
+      We publish the technique map, the CloudTrail it produces, and the detection rule that
+      should catch it. Six full campaigns below, plus 43 atomic single-technique tests in the
+      <a href="coverage.html" style="color:var(--cool); text-decoration:none;">coverage matrix</a>.
+    </p>
+
+    <div class="filters">
+      <span class="lbl">Filter</span>
+      <button class="chip active">All</button>
+      <button class="chip">Critical</button>
+      <button class="chip">High</button>
+      <button class="chip">Medium</button>
+      <span style="width:1px; height:18px; background:var(--rule-2); margin:0 6px;"></span>
+      <button class="chip">IAM</button>
+      <button class="chip">STS</button>
+      <button class="chip">S3</button>
+      <button class="chip">KMS</button>
+      <button class="chip">Lambda</button>
+      <span style="margin-left:auto; font-family:var(--mono); font-size:10px; letter-spacing:0.14em; text-transform:uppercase; color:var(--ink-3);">sort · severity ▾</span>
+    </div>
+  </section>
+
+  <!-- ============== CATALOGUE ============== -->
+  <div class="catalogue">
+
+    <!-- 01 -->
+    <div class="row">
+      <div class="meta">
+        <div class="num"><span class="hash">§</span>01</div>
+        <span class="sev crit">Critical</span>
+        <div class="ttf"><b>DangerDev</b>UNC-attributed</div>
+      </div>
+      <div class="center">
+        <h3 class="title">DangerDev - phishing to broad cloud compromise</h3>
+        <p class="desc">Spearphishing and a trusted-relationship foothold escalate into new cloud roles, wide service discovery, RDP lateral movement and resource hijacking. The broadest of our chains - 16 techniques across nine tactics.</p>
+        <div class="mitre">
+          <span class="tag hot">T1566.002</span>
+          <span class="tag hot">T1098.003</span>
+          <span class="tag">T1526</span>
+          <span class="tag">T1496</span>
+        </div>
+        <div class="cta">
+          <a class="run">▶ Run scenario</a>
+          <a>View teardown ↗</a>
+          <a>Detection rule ↗</a>
+        </div>
+      </div>
+      <div class="chain">
+        <div class="chain-stage">
+          <div class="step"><span class="ord">1</span><span class="b">Spearphishing link <span class="api">T1566.002</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step hot"><span class="ord">2</span><span class="b">Add cloud roles <span class="api">iam:CreateRole · AttachRolePolicy</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step hot"><span class="ord">3</span><span class="b">Resource hijack <span class="api">run compute · T1496</span></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 02 -->
+    <div class="row">
+      <div class="meta">
+        <div class="num"><span class="hash">§</span>02</div>
+        <span class="sev crit">Critical</span>
+        <div class="ttf"><b>AmberSquid</b>Sysdig, 2023</div>
+      </div>
+      <div class="center">
+        <h3 class="title">AmberSquid - multi-service cryptomining</h3>
+        <p class="desc">Burst-provisions miners across Amplify, ECS Fargate, SageMaker, CodeBuild and Auto Scaling, then disables CloudTrail and deletes the trail. Hits the under-monitored services GuardDuty doesn't watch. This is the chain you can run live on the Run page.</p>
+        <div class="mitre">
+          <span class="tag hot">T1059.009</span>
+          <span class="tag hot">T1496</span>
+          <span class="tag">T1610</span>
+          <span class="tag">T1070</span>
+        </div>
+        <div class="cta">
+          <a class="run">▶ Run scenario</a>
+          <a>View teardown ↗</a>
+          <a>Detection rule ↗</a>
+        </div>
+      </div>
+      <div class="chain">
+        <div class="chain-stage">
+          <div class="step warm"><span class="ord">1</span><span class="b">Create roles &amp; assume <span class="api">iam:CreateRole · sts:AssumeRole</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step hot"><span class="ord">2</span><span class="b">Burst-provision miners <span class="api">amplify · sagemaker · ecs</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step hot"><span class="ord">3</span><span class="b">Disable CloudTrail <span class="api">cloudtrail:StopLogging</span></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 03 -->
+    <div class="row">
+      <div class="meta">
+        <div class="num"><span class="hash">§</span>03</div>
+        <span class="sev high">High</span>
+        <div class="ttf"><b>SCARLETEEL</b>Sysdig, 2023</div>
+      </div>
+      <div class="center">
+        <h3 class="title">SCARLETEEL - compute exploit to cloud theft</h3>
+        <p class="desc">Exploits a public-facing compute workload, steals credentials from the instance metadata API and files, disables cloud logging, then sweeps cloud storage and runs miners. The original cloud-native data-theft chain.</p>
+        <div class="mitre">
+          <span class="tag hot">T1190</span>
+          <span class="tag hot">T1552.005</span>
+          <span class="tag">T1562.008</span>
+          <span class="tag">T1530</span>
+        </div>
+        <div class="cta">
+          <a class="run">▶ Run scenario</a>
+          <a>View teardown ↗</a>
+          <a>Detection rule ↗</a>
+        </div>
+      </div>
+      <div class="chain">
+        <div class="chain-stage">
+          <div class="step cool"><span class="ord">1</span><span class="b">Exploit public app <span class="api">T1190</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step warm"><span class="ord">2</span><span class="b">Steal creds via IMDS <span class="api">169.254.169.254</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step hot"><span class="ord">3</span><span class="b">Disable logs, sweep S3 <span class="api">cloudtrail off · s3:GetObject</span></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 04 -->
+    <div class="row">
+      <div class="meta">
+        <div class="num"><span class="hash">§</span>04</div>
+        <span class="sev high">High</span>
+        <div class="ttf"><b>SCARLETEEL2</b>evolved variant</div>
+      </div>
+      <div class="center">
+        <h3 class="title">SCARLETEEL2 - exploit plus token theft</h3>
+        <p class="desc">The evolved variant: same exploit entry, but steals an application access token, mints additional cloud credentials, disables logging and exfiltrates over an alternative protocol to evade egress monitoring.</p>
+        <div class="mitre">
+          <span class="tag hot">T1528</span>
+          <span class="tag hot">T1048</span>
+          <span class="tag">T1098.001</span>
+          <span class="tag">T1562.008</span>
+        </div>
+        <div class="cta">
+          <a class="run">▶ Run scenario</a>
+          <a>View teardown ↗</a>
+          <a>Detection rule ↗</a>
+        </div>
+      </div>
+      <div class="chain">
+        <div class="chain-stage">
+          <div class="step cool"><span class="ord">1</span><span class="b">Exploit + steal token <span class="api">T1190 · T1528</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step warm"><span class="ord">2</span><span class="b">Mint cloud creds <span class="api">T1098.001</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step hot"><span class="ord">3</span><span class="b">Exfil over alt protocol <span class="api">T1048</span></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 05 -->
+    <div class="row">
+      <div class="meta">
+        <div class="num"><span class="hash">§</span>05</div>
+        <span class="sev med">Medium</span>
+        <div class="ttf"><b>CodeFinger</b>2025</div>
+      </div>
+      <div class="center">
+        <h3 class="title">CodeFinger - S3 ransomware via SSE-C</h3>
+        <p class="desc">Uses valid cloud credentials to re-encrypt S3 objects with an attacker-supplied SSE-C key, then sets a short lifecycle to destroy originals - inhibiting recovery. The data stays in place and is unreadable without the attacker's key.</p>
+        <div class="mitre">
+          <span class="tag hot">T1486</span>
+          <span class="tag hot">T1490</span>
+          <span class="tag">T1485</span>
+          <span class="tag">T1530</span>
+        </div>
+        <div class="cta">
+          <a class="run">▶ Run scenario</a>
+          <a>View teardown ↗</a>
+          <a>Detection rule ↗</a>
+        </div>
+      </div>
+      <div class="chain">
+        <div class="chain-stage">
+          <div class="step cool"><span class="ord">1</span><span class="b">Valid cloud creds <span class="api">T1078.004</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step hot"><span class="ord">2</span><span class="b">Re-encrypt with SSE-C <span class="api">s3:CopyObject · customer key</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step hot"><span class="ord">3</span><span class="b">Inhibit recovery <span class="api">lifecycle expiry · T1490</span></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 06 -->
+    <div class="row">
+      <div class="meta">
+        <div class="num"><span class="hash">§</span>06</div>
+        <span class="sev high">High</span>
+        <div class="ttf"><b>LUCR-3</b>Scattered Spider</div>
+      </div>
+      <div class="center">
+        <h3 class="title">LUCR-3 - identity-first intrusion</h3>
+        <p class="desc">The Scattered Spider playbook: MFA fatigue and interception, device registration for persistence, secrets-manager raids, SaaS and code-repo collection, and cloud-log tampering. The broadest identity-driven chain - 19 techniques.</p>
+        <div class="mitre">
+          <span class="tag hot">T1621</span>
+          <span class="tag hot">T1111</span>
+          <span class="tag">T1098.005</span>
+          <span class="tag">T1555.006</span>
+        </div>
+        <div class="cta">
+          <a class="run">▶ Run scenario</a>
+          <a>View teardown ↗</a>
+          <a>Detection rule ↗</a>
+        </div>
+      </div>
+      <div class="chain">
+        <div class="chain-stage">
+          <div class="step cool"><span class="ord">1</span><span class="b">MFA fatigue / intercept <span class="api">T1621 · T1111</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step warm"><span class="ord">2</span><span class="b">Register device, raid secrets <span class="api">T1098.005 · T1555.006</span></span></div>
+          <div class="step-arrow"></div>
+          <div class="step hot"><span class="ord">3</span><span class="b">Collect &amp; tamper logs <span class="api">code repos · T1562.008</span></span></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ============== FOOT CTA ============== -->
+  <div class="foot-cta">
+    <div>
+      <h3>Have a chain we should ship next?</h3>
+      <p>The catalogue is open. Open an RFC on GitHub or email <a href="mailto:admin@mayatrail.tech" style="font-family:var(--mono); color:var(--cool); text-decoration:none;">admin@mayatrail.tech</a>.</p>
+    </div>
+    <a class="btn" href="https://github.com/MayaTrail">Open an RFC <span class="arrow">→</span></a>
+  </div>
+
+</div>
+
+<footer>
+  <span><b style="color:var(--ink-2)">© 2026 MAYATRAIL TECH</b> · v0.1</span>
+  <div class="links">
+    <a href="index.html">Platform</a>
+    <a href="scenarios.html">Scenarios</a>
+    <a href="run.html">Run</a>
+    <a href="coverage.html">Coverage</a>
+    <a href="pricing.html">Pricing</a>
+    <a href="research.html">Research</a>
+    <a href="https://github.com/MayaTrail">GitHub ↗</a>
+  </div>
+</footer>
+
+</main>
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script></body>
+</html>

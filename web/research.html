@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MayaTrail - Research</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="mayatrail-base.css" />
+<style>
+  main { padding-top: 60px; }
+  .nav { position: fixed; top: 0; left: 0; right: 0; }
+
+  .soon {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 140px 28px 160px;
+    text-align: center;
+  }
+  .soon .eyebrow { justify-content: center; }
+  .soon h1 {
+    font-family: var(--sans); font-weight: 600;
+    font-size: clamp(34px, 6vw, 56px); line-height: 1.08;
+    letter-spacing: -0.028em; margin: 20px 0 0;
+  }
+  .soon h1 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+  .soon p {
+    font-family: var(--sans); font-size: clamp(15px, 2.4vw, 18px); line-height: 1.6;
+    color: var(--ink-2); margin: 24px auto 0; max-width: 560px;
+  }
+  .soon .glyph {
+    width: 88px; height: 88px; margin: 0 auto 8px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .soon .cta-row {
+    display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;
+    margin-top: 36px;
+  }
+</style>
+</head>
+<body>
+<main>
+
+<!-- ============== NAV ============== -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="index.html"><svg class="brand-mark" width="24" height="24" viewBox="0 0 120 120" aria-hidden="true"><line x1="60" y1="20" x2="22" y2="90" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="60" y1="20" x2="98" y2="90" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="22" y1="90" x2="98" y2="90" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="60" y1="20" x2="60" y2="64" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="22" y1="90" x2="60" y2="64" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="98" y1="90" x2="60" y2="64" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><circle cx="22" cy="90" r="7" fill="#6aa8ff"/><circle cx="98" cy="90" r="7" fill="#6aa8ff"/><circle cx="60" cy="64" r="6" fill="#6aa8ff"/><circle cx="60" cy="20" r="7" fill="#ff4b6e"/></svg><span class="brand-wm"><span class="bm-maya">Maya</span><span class="bm-trail">Trail</span></span></a>
+    <div class="nav-links">
+      <a href="index.html">Platform</a>
+      <a href="scenarios.html">Scenarios</a>
+      <a href="run.html">Run</a>
+      <a href="coverage.html">Coverage</a>
+      <a href="pricing.html">Pricing</a>
+      <a href="research.html" class="active">Research</a>
+    </div>
+    <div class="nav-readout">
+      <span class="stat">v0.1 · private beta</span>
+    </div>
+    <a class="nav-cta" style="white-space:nowrap;" href="mailto:admin@mayatrail.tech?subject=MayaTrail%20access%20request">Request access</a>
+  </div>
+</nav>
+
+<!-- ============== COMING SOON ============== -->
+<section class="soon">
+  <div class="glyph">
+    <svg width="88" height="88" viewBox="0 0 120 120" aria-hidden="true">
+      <line x1="60" y1="20" x2="22" y2="90" stroke="#6aa8ff" stroke-opacity=".4" stroke-width="2.6" stroke-linecap="round"/>
+      <line x1="60" y1="20" x2="98" y2="90" stroke="#6aa8ff" stroke-opacity=".4" stroke-width="2.6" stroke-linecap="round"/>
+      <line x1="22" y1="90" x2="98" y2="90" stroke="#6aa8ff" stroke-opacity=".4" stroke-width="2.6" stroke-linecap="round"/>
+      <line x1="60" y1="20" x2="60" y2="64" stroke="#6aa8ff" stroke-opacity=".4" stroke-width="2.6" stroke-linecap="round"/>
+      <line x1="22" y1="90" x2="60" y2="64" stroke="#6aa8ff" stroke-opacity=".4" stroke-width="2.6" stroke-linecap="round"/>
+      <line x1="98" y1="90" x2="60" y2="64" stroke="#6aa8ff" stroke-opacity=".4" stroke-width="2.6" stroke-linecap="round"/>
+      <circle cx="22" cy="90" r="6" fill="#6aa8ff"/>
+      <circle cx="98" cy="90" r="6" fill="#6aa8ff"/>
+      <circle cx="60" cy="64" r="5" fill="#6aa8ff"/>
+      <circle cx="60" cy="20" r="6" fill="#ff4b6e"/>
+    </svg>
+  </div>
+  <div class="eyebrow">Research</div>
+  <h1>Field notes are <span class="em">on the way.</span></h1>
+  <p>
+    We're building a library of cloud attack teardowns - each one shipping with a runnable
+    scenario, the CloudTrail signature, and the detection rule that should catch it.
+    Nothing's published yet. Want to know when the first one drops?
+  </p>
+  <div class="cta-row">
+    <a class="btn" href="mailto:admin@mayatrail.tech?subject=Notify%20me%20-%20MayaTrail%20Research">Notify me <span class="arrow">→</span></a>
+    <a class="btn outline" href="run.html">Watch a live run</a>
+  </div>
+</section>
+
+<footer>
+  <span><b style="color:var(--ink-2)">© 2026 MAYATRAIL TECH</b> · v0.1</span>
+  <div class="links">
+    <a href="index.html">Platform</a>
+    <a href="scenarios.html">Scenarios</a>
+    <a href="run.html">Run</a>
+    <a href="coverage.html">Coverage</a>
+    <a href="pricing.html">Pricing</a>
+    <a href="research.html">Research</a>
+    <a href="https://github.com/MayaTrail">GitHub ↗</a>
+  </div>
+</footer>
+
+</main>
+</body>
+</html>

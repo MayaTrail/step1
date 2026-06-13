@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MayaTrail - Pricing</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap">
+<link rel="stylesheet" href="mayatrail-base.css">
+
+<style>
+  main { padding-top: 60px; }
+  .nav { position: fixed; top: 0; left: 0; right: 0; }
+
+  .price-head {
+    max-width: 1080px; margin: 0 auto;
+    padding: 80px 32px 50px; text-align: center;
+  }
+  .price-head .eyebrow { justify-content: center; }
+  .price-head h1 {
+    font-family: var(--sans); font-weight: 600;
+    font-size: 64px; line-height: 1.05;
+    letter-spacing: -0.028em; margin: 20px 0 0;
+  }
+  .price-head h1 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+  .price-head p {
+    font-family: var(--sans); font-size: 20px; line-height: 1.55;
+    color: var(--ink-2); margin: 24px auto 0; max-width: 720px;
+  }
+  .price-head p b { color: var(--ink); font-weight: 600; }
+
+  /* TIERS */
+  .tiers-wrap {
+    max-width: 1240px; margin: 0 auto;
+    padding: 30px 32px 80px;
+  }
+  .tiers {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  .tier {
+    border: 1px solid var(--rule-2); background: var(--bg-1);
+    padding: 36px 32px 30px;
+    display: flex; flex-direction: column; gap: 18px;
+    position: relative;
+  }
+  .tier.featured {
+    border-color: var(--cool);
+    background: linear-gradient(180deg, rgba(106,168,255,0.05), var(--bg-1) 60%);
+  }
+  .tier.featured::before {
+    content: 'MOST TEAMS START HERE';
+    position: absolute; top: -1px; left: -1px; right: -1px;
+    background: var(--cool); color: var(--bg);
+    text-align: center;
+    font-family: var(--mono); font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.2em;
+    padding: 6px 0; font-weight: 600;
+  }
+  .tier.featured { padding-top: 52px; }
+  .tier .tag {
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--ink-3);
+  }
+  .tier.featured .tag { color: var(--cool); }
+  .tier h2 {
+    font-family: var(--sans); font-size: 34px; font-weight: 600;
+    color: var(--ink); letter-spacing: -0.025em; margin: 0; line-height: 1.05;
+  }
+  .tier h2 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+  .tier .desc {
+    font-family: var(--sans); font-size: 15px; line-height: 1.55;
+    color: var(--ink-2); margin: 0;
+  }
+  .tier .price-row {
+    margin-top: 4px;
+    padding: 18px 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+  }
+  .tier .price-row .p {
+    font-family: var(--sans); font-size: 44px; font-weight: 600;
+    color: var(--ink); letter-spacing: -0.028em; line-height: 1;
+  }
+  .tier .price-row .p .small { font-size: 18px; color: var(--ink-2); font-weight: 400; }
+  .tier .price-row .when {
+    font-family: var(--mono); font-size: 11px;
+    color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.16em;
+    margin-top: 8px;
+  }
+  .tier .price-row.free .p { color: var(--ok); }
+  .tier .price-row.enterprise .p { font-size: 28px; }
+  .tier ul {
+    margin: 0; padding: 0; list-style: none;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .tier ul li {
+    font-family: var(--sans); font-size: 14.5px; line-height: 1.5;
+    color: var(--ink-2);
+    padding: 9px 0 9px 26px; border-bottom: 1px dashed var(--rule);
+    position: relative;
+  }
+  .tier ul li:last-child { border-bottom: 0; }
+  .tier ul li b { color: var(--ink); font-weight: 600; }
+  .tier ul li::before {
+    content: '✓'; position: absolute; left: 0; top: 9px;
+    color: var(--cool); font-family: var(--mono);
+    font-size: 13px; line-height: 1.5;
+  }
+  .tier ul li.x::before { content: '×'; color: var(--ink-4); }
+  .tier ul li.star::before { content: '◆'; color: var(--cool); }
+  .tier .cta {
+    display: block; text-align: center; padding: 12px 16px;
+    font-family: var(--sans); font-size: 14px; font-weight: 500;
+    text-decoration: none;
+    cursor: pointer;
+    margin-top: 6px;
+  }
+  .tier .cta.primary { background: var(--ink); color: var(--bg); }
+  .tier .cta.outline { border: 1px solid var(--rule-2); color: var(--ink); }
+  .tier.featured .cta.primary { background: var(--cool); color: var(--bg); }
+
+  /* COMPARE TABLE */
+  .compare-section {
+    max-width: 1240px; margin: 60px auto 80px;
+    padding: 0 32px;
+  }
+  .compare-section h2 {
+    font-family: var(--sans); font-weight: 600; font-size: 36px;
+    letter-spacing: -0.025em; margin: 0 0 30px;
+  }
+  .compare-section h2 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+
+  .compare-table {
+    width: 100%;
+    border: 1px solid var(--rule);
+    background: var(--bg-1);
+    border-collapse: collapse;
+    font-family: var(--mono); font-size: 13.5px;
+  }
+  .compare-table th, .compare-table td {
+    padding: 14px 16px;
+    border-right: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    text-align: left; vertical-align: middle;
+  }
+  .compare-table th {
+    background: var(--bg-2);
+    font-family: var(--mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--ink-3); font-weight: 500;
+  }
+  .compare-table th.featured { color: var(--cool); }
+  .compare-table .feature {
+    font-family: var(--sans); font-size: 14.5px; color: var(--ink-2);
+  }
+  .compare-table .feature b { color: var(--ink); font-weight: 600; }
+  .compare-table .feature .lbl {
+    display: block;
+    font-family: var(--mono); font-size: 10px; color: var(--ink-4);
+    text-transform: uppercase; letter-spacing: 0.14em; margin-top: 3px;
+  }
+  .compare-table .y { color: var(--ok); }
+  .compare-table .n { color: var(--ink-4); }
+  .compare-table .star { color: var(--cool); font-weight: 600; }
+  .compare-table .center { text-align: center; }
+  .compare-table .featured-col { background: rgba(106,168,255,0.03); }
+  .compare-table tr:last-child td { border-bottom: 0; }
+
+  /* FAQ */
+  .faq-section {
+    max-width: 1080px; margin: 60px auto 100px;
+    padding: 0 32px;
+  }
+  .faq-section h2 {
+    font-family: var(--sans); font-weight: 600; font-size: 36px;
+    letter-spacing: -0.025em; margin: 0 0 30px;
+  }
+  .faq-section h2 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+  .faq-section details {
+    border: 1px solid var(--rule); background: var(--bg-1);
+    margin-bottom: 10px;
+    padding: 18px 22px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .faq-section details:hover { background: var(--bg-2); }
+  .faq-section summary {
+    list-style: none;
+    font-family: var(--sans); font-size: 16px; font-weight: 600;
+    color: var(--ink); letter-spacing: -0.01em;
+    display: flex; justify-content: space-between; gap: 14px; align-items: flex-start;
+  }
+  .faq-section summary::-webkit-details-marker { display: none; }
+  .faq-section summary::after {
+    content: '+'; color: var(--cool); font-family: var(--mono);
+    font-size: 22px; line-height: 0.7;
+  }
+  .faq-section details[open] summary::after { content: '-'; }
+  .faq-section .a {
+    margin-top: 14px;
+    font-family: var(--sans); font-size: 14.5px; line-height: 1.62;
+    color: var(--ink-2);
+  }
+  .faq-section .a b { color: var(--ink); }
+  .faq-section .a code {
+    font-family: var(--mono); font-size: 13px;
+    background: var(--bg-3); padding: 1px 6px; color: var(--cool);
+  }
+
+  /* CTA */
+  .cta-band {
+    max-width: 1240px; margin: 0 auto 100px;
+    padding: 0 32px;
+  }
+  .cta-band .inner {
+    border: 1px solid var(--rule-2);
+    background: linear-gradient(135deg, var(--bg-1) 0%, var(--bg) 100%);
+    padding: 60px 50px; text-align: center;
+    position: relative; overflow: hidden;
+  }
+  .cta-band .inner::before, .cta-band .inner::after {
+    content: ''; position: absolute; width: 60px; height: 60px;
+    border: 1px solid var(--cool); opacity: 0.3;
+  }
+  .cta-band .inner::before { top: 12px; left: 12px; border-right: 0; border-bottom: 0; }
+  .cta-band .inner::after  { bottom: 12px; right: 12px; border-left: 0; border-top: 0; }
+  .cta-band h2 {
+    font-family: var(--sans); font-weight: 600; font-size: 40px;
+    line-height: 1.1; letter-spacing: -0.025em; margin: 16px 0 18px;
+    max-width: 700px; margin-left: auto; margin-right: auto;
+  }
+  .cta-band h2 .em { font-family: var(--serif); font-style: italic; font-weight: 400; color: var(--cool); }
+  .cta-band p {
+    font-family: var(--sans); font-size: 17px; color: var(--ink-2);
+    max-width: 540px; margin: 0 auto 28px; line-height: 1.55;
+  }
+  .cta-band .row { display: flex; gap: 10px; justify-content: center; }
+
+  @media (max-width: 980px) {
+    .tiers { grid-template-columns: 1fr; gap: 14px; }
+    .price-head { padding: 60px 24px 36px; }
+    .price-head h1 { font-size: clamp(34px, 7vw, 52px); }
+    .compare-section, .faq-section { margin: 44px auto 56px; }
+  }
+  @media (max-width: 680px) {
+    .price-head { padding: 48px 18px 28px; }
+    .price-head p { font-size: 16px; }
+    .tiers-wrap { padding: 20px 18px 56px; }
+    .compare-section, .faq-section, .cta-band { padding-left: 18px; padding-right: 18px; }
+    .compare-table { display: block; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
+    .cta-band .inner { padding: 40px 24px; }
+    .cta-band h2 { font-size: 28px; }
+    .cta-band .row { flex-direction: column; }
+    .cta-band .row .btn { width: 100%; text-align: center; }
+  }
+</style>
+</head>
+<body>
+
+<main>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a href="index.html" class="brand"><svg class="brand-mark" width="24" height="24" viewBox="0 0 120 120" aria-hidden="true"><line x1="60" y1="20" x2="22" y2="90" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="60" y1="20" x2="98" y2="90" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="22" y1="90" x2="98" y2="90" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="60" y1="20" x2="60" y2="64" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="22" y1="90" x2="60" y2="64" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><line x1="98" y1="90" x2="60" y2="64" stroke="#6aa8ff" stroke-opacity=".45" stroke-width="2.6" stroke-linecap="round"/><circle cx="22" cy="90" r="7" fill="#6aa8ff"/><circle cx="98" cy="90" r="7" fill="#6aa8ff"/><circle cx="60" cy="64" r="6" fill="#6aa8ff"/><circle cx="60" cy="20" r="7" fill="#ff4b6e"/></svg><span class="brand-wm"><span class="bm-maya">Maya</span><span class="bm-trail">Trail</span></span></a>
+    <div class="nav-links">
+      <a href="index.html">Platform</a>
+      <a href="scenarios.html">Scenarios</a>
+      <a href="run.html">Run</a>
+      <a href="coverage.html">Coverage</a>
+      <a href="pricing.html" class="active">Pricing</a>
+      <a href="research.html">Research</a>
+    </div>
+    <div class="nav-readout"><span class="stat">v0.1 · private beta</span></div>
+    <a class="nav-cta" style="white-space:nowrap;" href="mailto:admin@mayatrail.tech?subject=MayaTrail%20access%20request">Request access</a>
+  </div>
+</nav>
+
+<div class="price-head">
+  <div class="eyebrow">PRICING · OPEN CORE</div>
+  <h1>Free OSS that earns your trust.<br/><span class="em">Hosted</span> that earns its keep.</h1>
+  <p>
+    The engine, every APT chain, and every detection rule are open source and free forever.
+    The hosted tier adds the signer, the SIEM adapters, and the workspace your team needs. <b>No per-run fees. No seat tax for small teams.</b>
+  </p>
+</div>
+
+<div class="tiers-wrap">
+  <div class="tiers">
+
+    <!-- CORE / OSS -->
+    <div class="tier">
+      <span class="tag">CORE · APACHE 2.0</span>
+      <h2>Self-hosted</h2>
+      <p class="desc">Run MayaTrail anywhere. Same engine, same chains, same evidence bundles as the hosted tier.</p>
+      <div class="price-row free">
+        <span class="p">Free</span>
+        <div class="when">FOREVER · NO LIMITS</div>
+      </div>
+      <ul>
+        <li><b>Engine</b> + Pulumi orchestration + CLI</li>
+        <li><b>All 6 APT chains</b> · OSS today, every future chain ships free</li>
+        <li><b>11+ Sigma rules</b>, MITRE-mapped, technique-by-technique</li>
+        <li><b>IR playbooks</b> per chain · 700+ lines, prep / identify / contain / recover</li>
+        <li>MITRE coverage map · byte-identical evidence bundles</li>
+        <li>Self-host on any AWS account</li>
+        <li class="x">No hosted control plane</li>
+        <li class="x">No SIEM adapters</li>
+        <li class="x">No evidence signer</li>
+      </ul>
+      <a class="cta outline" href="https://github.com/MayaTrail">View on GitHub →</a>
+    </div>
+
+    <!-- TEAM / HOSTED -->
+    <div class="tier featured">
+      <span class="tag">PLATFORM · HOSTED</span>
+      <h2><span class="em">Team</span></h2>
+      <p class="desc">For detection-engineering teams that want shared runs, signed evidence, and live SIEM ingest.</p>
+      <div class="price-row">
+        <span class="p">$1,200<span class="small">/mo</span></span>
+        <div class="when">UP TO 5 ENGINEERS · MONTHLY OR ANNUAL</div>
+      </div>
+      <ul>
+        <li class="star">Everything in Core, plus:</li>
+        <li><b>Hosted control plane</b> · run history, scheduling, shared workspace</li>
+        <li><b>Cryptographic evidence signer</b> with managed keys</li>
+        <li><b>SIEM adapters</b>: Sentinel · Splunk · Chronicle · Elastic · Wazuh</li>
+        <li>Custom chain authoring UI</li>
+        <li>SSO · audit log · RBAC</li>
+        <li>Priority access to new APT chains <b>30 days</b> before OSS release</li>
+        <li>Slack support · 1 business day</li>
+      </ul>
+      <a class="cta primary" href="mailto:admin@mayatrail.tech?subject=Team%20tier%20interest">Start a Team plan →</a>
+    </div>
+
+    <!-- ENTERPRISE -->
+    <div class="tier">
+      <span class="tag">PLATFORM · ENTERPRISE</span>
+      <h2>Enterprise</h2>
+      <p class="desc">For larger teams, MSSPs, and orgs that need on-prem control plane, custom chains, or SLAs.</p>
+      <div class="price-row enterprise">
+        <span class="p">From $36,000<span class="small">/yr</span></span>
+        <div class="when">ANNUAL · CUSTOM CONTRACT</div>
+      </div>
+      <ul>
+        <li class="star">Everything in Team, plus:</li>
+        <li><b>Unlimited seats</b></li>
+        <li><b>Custom APT chain authoring</b> by our research team</li>
+        <li><b>On-prem control plane</b> option</li>
+        <li>Dedicated multi-tenant support (MSSPs)</li>
+        <li>White-label option in private preview</li>
+        <li>Premium support · 4-hour SLA</li>
+        <li>Training for your detection team</li>
+        <li>Contractual indemnification</li>
+      </ul>
+      <a class="cta outline" href="mailto:admin@mayatrail.tech?subject=Enterprise%20inquiry">Talk to founders →</a>
+    </div>
+  </div>
+</div>
+
+<!-- DETAILED COMPARISON -->
+<div class="compare-section">
+  <h2>What's <span class="em">actually</span> different.</h2>
+  <table class="compare-table">
+    <thead>
+      <tr>
+        <th style="width: 32%;">&nbsp;</th>
+        <th class="center">Core · Free</th>
+        <th class="center featured">Team · $1.2k/mo</th>
+        <th class="center">Enterprise</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="feature"><b>Engine + APT chains</b><span class="lbl">Engine, chains, MITRE map, IR playbooks</span></td>
+        <td class="center y">✓</td>
+        <td class="center y featured-col">✓</td>
+        <td class="center y">✓</td>
+      </tr>
+      <tr>
+        <td class="feature"><b>Sigma rule library</b><span class="lbl">11+ rules today · all future rules</span></td>
+        <td class="center y">✓</td>
+        <td class="center y featured-col">✓</td>
+        <td class="center y">✓</td>
+      </tr>
+      <tr>
+        <td class="feature"><b>Number of runs / month</b><span class="lbl">No per-run charges, ever</span></td>
+        <td class="center star">Unlimited</td>
+        <td class="center star featured-col">Unlimited</td>
+        <td class="center star">Unlimited</td>
+      </tr>
+      <tr>
+        <td class="feature"><b>Hosted control plane</b><span class="lbl">Run history · scheduled drills · workspace</span></td>
+        <td class="center n">×</td>
+        <td class="center y featured-col">✓</td>
+        <td class="center y">✓</td>
+      </tr>
+      <tr>
+        <td class="feature"><b>Evidence signer</b><span class="lbl">Cryptographic, hash-chained, audit-ready</span></td>
+        <td class="center n">self-host</td>
+        <td class="center y featured-col">managed</td>
+        <td class="center y">managed</td>
+      </tr>
+      <tr>
+        <td class="feature"><b>SIEM adapters</b><span class="lbl">Sentinel · Splunk · Chronicle · Elastic · Wazuh</span></td>
+        <td class="center n">×</td>
+        <td class="center y featured-col">all 5</td>
+        <td class="center y">all 5 + custom</td>
+      </tr>
+      <tr>
+        <td class="feature"><b>Engineers / seats</b></td>
+        <td class="center">unlimited (self-host)</td>
+        <td class="center featured-col">5 included</td>
+        <td class="center">unlimited</td>
+      </tr>
+      <tr>
+        <td class="feature"><b>SSO + audit log</b></td>
+        <td class="center n">×</td>
+        <td class="center y featured-col">✓</td>
+        <td class="center y">✓ + SCIM</td>
+      </tr>
+      <tr>
+        <td class="feature"><b>Custom chain authoring</b><span class="lbl">Our researchers build a chain to your spec</span></td>
+        <td class="center n">×</td>
+        <td class="center n featured-col">×</td>
+        <td class="center y">✓ · 4 per yr</td>
+      </tr>
+      <tr>
+        <td class="feature"><b>On-prem control plane</b></td>
+        <td class="center y">N/A · self-host</td>
+        <td class="center n featured-col">×</td>
+        <td class="center y">✓</td>
+      </tr>
+      <tr>
+        <td class="feature"><b>Priority new-chain access</b><span class="lbl">30 days before OSS release</span></td>
+        <td class="center n">×</td>
+        <td class="center y featured-col">✓</td>
+        <td class="center y">✓</td>
+      </tr>
+      <tr>
+        <td class="feature"><b>Support</b></td>
+        <td class="center">community · GitHub</td>
+        <td class="center featured-col">Slack · 1 BD</td>
+        <td class="center">premium · 4hr SLA</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- FAQ -->
+<div class="faq-section">
+  <h2>Pricing <span class="em">questions</span> we hear.</h2>
+
+  <details>
+    <summary>Is the OSS really useful by itself, or is it a teaser for the paid tier?</summary>
+    <div class="a">
+      <b>It's genuinely useful by itself.</b> The OSS includes the full engine, every APT chain we ship, all Sigma rules, the MITRE mapper, and the Pulumi sandbox machinery. Many of our early users will never upgrade and that's fine - the hosted tier adds the team workflow (signer, SIEM adapters, shared workspace), not the actual emulation capability. If you're a solo detection engineer or your team is happy self-hosting, Core forever is the right answer.
+    </div>
+  </details>
+
+  <details>
+    <summary>Do you charge per run, per technique, or per evidence bundle?</summary>
+    <div class="a">
+      <b>None of the above.</b> Pricing is tier-based, not metered. Run as many drills as you want. We refuse meter-based pricing because it would discourage exactly the behavior we want: testing detections frequently. The only cost variable to you is your AWS sandbox spend, which is typically under $2 per run.
+    </div>
+  </details>
+
+  <details>
+    <summary>Will you paywall existing OSS features later?</summary>
+    <div class="a">
+      <b>No.</b> Our OSS principles: Apache 2.0, never re-licensed, never paywalled retroactively. Hosted features (signer, adapters, controll plane) are additive. We hold ourselves to the dbt Labs model, not the HashiCorp/Elastic playbook.
+    </div>
+  </details>
+
+  <details>
+    <summary>What about Azure or GCP?</summary>
+    <div class="a">
+      <b>Not in pricing yet.</b> We're AWS-first by design. Azure-light is on the roadmap (Q2 2027) but only after we have AWS depth that no competitor can match. We'd rather be the best AWS attack-emulation tool than the third-best multi-cloud one. If you're &gt;50% AWS, we're a fit today; if you need multi-cloud parity, we're not the right vendor yet.
+    </div>
+  </details>
+
+  <details>
+    <summary>How does the Enterprise tier scale beyond $36k?</summary>
+    <div class="a">
+      <b>By scope, not seats.</b> Base Enterprise is $36k/year for unlimited seats. Scope additions: custom chain authoring beyond 4/year, on-prem control plane, white-label (for MSSPs), additional 4-hour SLA tiers, dedicated solutions architect. Most Enterprise contracts land in the $36-90k range; nothing six-figure-plus unless it's an MSSP with multi-tenant deployment.
+    </div>
+  </details>
+
+  <details>
+    <summary>Can we try Platform before committing?</summary>
+    <div class="a">
+      <b>Yes - 14-day POC.</b> Free 14-day access to Platform with one custom APT chain built by our team for your specific stack. You run it in your AWS, against your SIEM, with our researchers on Slack. If you don't convert, you keep the chain and the Sigma rules.
+    </div>
+  </details>
+
+  <details>
+    <summary>What's your refund policy?</summary>
+    <div class="a">
+      Monthly Team plans: cancel any time, no refund for current month. Annual Team plans: <b>pro-rated refund</b> within first 60 days. Enterprise contracts: per-contract clauses, but we will not lock you in past first 90 days.
+    </div>
+  </details>
+
+  <details>
+    <summary>Do you accept POs and procurement processes?</summary>
+    <div class="a">
+      For Enterprise, yes - we have a vendor security questionnaire, SOC 2 Type I (Type II in progress), and a standard MSA. For Team, we prefer to avoid procurement: <b>single-page MSA, credit card or invoice</b>, contracts close in days not months. If procurement is unavoidable, expect 2-3 weeks.
+    </div>
+  </details>
+
+  <details>
+    <summary>What discounts do you offer?</summary>
+    <div class="a">
+      <b>Annual prepay:</b> 15% off Team if paid annually upfront. <b>Open-source maintainers:</b> 50% off Team for any individual who maintains a relevant detection-engineering OSS project (Sigma, Atomic, Stratus, etc.). <b>Education / nonprofit:</b> 70% off, by application. No volume or "logo" discounts.
+    </div>
+  </details>
+</div>
+
+<!-- CTA -->
+<div class="cta-band">
+  <div class="inner">
+    <div class="eyebrow" style="justify-content: center;">GET STARTED</div>
+    <h2>Run your first drill in <span class="em">an hour.</span></h2>
+    <p>The OSS installs in one command. Or jump straight to a hosted Team trial - 14 days, one custom chain for your stack, founder-led onboarding.</p>
+    <div class="row">
+      <a class="btn" href="https://github.com/MayaTrail">Install OSS</a>
+      <a class="btn outline" href="mailto:admin@mayatrail.tech?subject=Team%20trial%20interest">Start a Team trial</a>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <span><b style="color:var(--ink-2)">© 2026 MAYATRAIL TECH</b> · v0.1</span>
+  <div class="links">
+    <a href="index.html">Platform</a>
+    <a href="scenarios.html">Scenarios</a>
+    <a href="run.html">Run</a>
+    <a href="coverage.html">Coverage</a>
+    <a href="pricing.html">Pricing</a>
+    <a href="research.html">Research</a>
+    <a href="https://github.com/MayaTrail">GitHub ↗</a>
+  </div>
+</footer>
+
+</main>
+
+<template id="__bundler_thumbnail" data-bg-color="#06070a">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect x="150" y="200" width="280" height="400" fill="none" stroke="#3a4256" stroke-width="3"/>
+    <rect x="460" y="200" width="280" height="400" fill="none" stroke="#6aa8ff" stroke-width="3"/>
+    <rect x="770" y="200" width="280" height="400" fill="none" stroke="#3a4256" stroke-width="3"/>
+    <text x="600" y="700" text-anchor="middle"
+          font-family="ui-monospace, monospace"
+          font-size="38" letter-spacing="14" font-weight="600"
+          fill="#e8eaf0">PRICING</text>
+  </svg>
+</template>
+
+</body>
+</html>
