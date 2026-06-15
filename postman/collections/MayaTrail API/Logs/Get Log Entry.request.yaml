@@ -1,8 +1,0 @@
-$kind: http-request
-description: |-
-  Retrieve a single audit log entry by UUID.
-
-  Note: The `run_id` variable is used here as a convenience since log entry IDs are UUIDs. Replace with the actual log entry UUID if different from the current run_id.
-url: "{{base_url}}/api/logs/{{run_id}}/"
-method: GET
-order: 2000

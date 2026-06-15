@@ -1,8 +1,0 @@
-$kind: http-request
-description: |-
-  Return all audit log entries for the authenticated user's stacks and emulation runs.
-
-  Log entries are created automatically by the system on deploy, destroy, attack, and other lifecycle events.
-url: "{{base_url}}/api/logs/"
-method: GET
-order: 1000

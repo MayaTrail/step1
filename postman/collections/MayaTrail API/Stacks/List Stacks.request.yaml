@@ -1,8 +1,0 @@
-$kind: http-request
-description: |-
-  List all stacks owned by the authenticated user.
-
-  Returns all stacks regardless of status, including destroyed and failed ones.
-url: "{{base_url}}/api/stacks/"
-method: GET
-order: 1000
