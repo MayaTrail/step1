@@ -25,6 +25,9 @@ MANIFEST = {
     ),
     "tier": "enterprise",
 
+    # Readiness: explicit default, identical to the legacy ec2_http behavior.
+    "readiness": {"type": "ec2_http", "ip_output": "vuln_instance_ip", "port": 8080, "path": "/health"},
+
     # ── UI catalogue metadata ─────────────────────────────────────────────────
     "origin": "unknown",
     "origin_label": "APT EMULATION",

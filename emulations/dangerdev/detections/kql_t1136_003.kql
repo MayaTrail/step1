@@ -1,0 +1,41 @@
+// T1136.003 Create Account: Cloud Account — DangerDev Backdoor IAM User Burst
+// Three-call chain: CreateUser (email-format) → CreateLoginProfile → CreateAccessKey
+// all from the same actor within 120 seconds. Email '@' in username = DangerDev fingerprint.
+
+let burst_window = 120s;
+
+let created_users = AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName == "CreateUser"
+| extend NewUserName = tostring(parse_json(RequestParameters).userName)
+| where NewUserName contains "@"
+| project CreateTime = TimeGenerated, ActorArn = UserIdentityArn,
+          ActorUser = UserIdentityUserName, NewUserName, SourceIpAddress;
+
+let login_profiles = AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName == "CreateLoginProfile"
+| extend ProfileUser = tostring(parse_json(RequestParameters).userName)
+| project LoginTime = TimeGenerated, ActorArn = UserIdentityArn, ProfileUser;
+
+let access_keys = AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName == "CreateAccessKey"
+| extend KeyUser = tostring(parse_json(RequestParameters).userName)
+| project KeyTime = TimeGenerated, ActorArn = UserIdentityArn, KeyUser;
+
+created_users
+| join kind=inner (login_profiles) on ActorArn
+| where LoginTime between (CreateTime .. (CreateTime + burst_window))
+| where ProfileUser == NewUserName
+| join kind=inner (access_keys) on ActorArn
+| where KeyTime between (CreateTime .. (CreateTime + burst_window))
+| where KeyUser == NewUserName
+| extend ElapsedSeconds = datetime_diff('second', KeyTime, CreateTime)
+| extend AlertTitle = "CRITICAL: DangerDev Backdoor Account Creation Burst"
+| project CreateTime, AlertTitle, ActorUser, ActorArn,
+          BackdoorUsername = NewUserName, ElapsedSeconds, SourceIpAddress
+| sort by CreateTime desc

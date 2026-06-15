@@ -1,0 +1,40 @@
+title: DangerDev — SES Sending Quota and Identity Enumeration from Anomalous IAM Principal
+id: b2c3d4e5-f6a7-4901-bcde-f12345678901
+status: experimental
+description: >
+  Detects SES GetSendQuota + ListIdentities from an IAM user principal not associated
+  with SES administration. DangerDev enumerated SES capacity before committing to
+  persistence, assessing the account's phishing/spam potential. The call pair from
+  a non-SES-admin principal is a strong pre-exploitation reconnaissance signal.
+  Activity was observed repeated on two separate days ~14 days apart, consistent
+  with automated scripted access.
+references:
+    - https://attack.mitre.org/techniques/T1526/
+    - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1526
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: ses.amazonaws.com
+        eventName:
+            - GetSendQuota
+            - ListIdentities
+        userIdentity.type: IAMUser
+    filter_ses_ops:
+        userIdentity.arn|contains:
+            - ':assumed-role/SESAdmin'
+            - ':assumed-role/EmailAutomation'
+            - 'ses-smtp-user'
+            - ':root'
+    condition: selection and not filter_ses_ops
+falsepositives:
+    - SES administrators reviewing account sending limits from console
+    - Cost monitoring scripts checking SES quota usage
+    - Authorized email platform teams auditing registered identities
+level: medium

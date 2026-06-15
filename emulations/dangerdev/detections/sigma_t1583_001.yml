@@ -1,0 +1,35 @@
+title: DangerDev — Route53 Domain Registration from Anomalous IAM Principal
+id: b4c5d6e7-f8a9-4123-bcde-000000000013
+status: experimental
+description: >
+  Detects route53domains:RegisterDomain called by an IAM principal not associated
+  with approved domain administration. DangerDev registered four PayPal-mimicking
+  domains for credential-harvesting phishing pages using alice.chen's hijacked
+  credentials. Domain registration creates internet-facing infrastructure and generates
+  an AWS billing event — any call from a non-designated registrar role is critical.
+  Cannot safely emulate with real PayPal-mimicking domains; attack plan documents
+  the CloudTrail event structure only.
+references:
+    - https://attack.mitre.org/techniques/T1583/001/
+    - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.resource_development
+    - attack.t1583.001
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: route53domains.amazonaws.com
+        eventName: RegisterDomain
+    filter_approved:
+        userIdentity.arn|contains:
+            - ':assumed-role/DomainRegistrationRole'
+            - ':assumed-role/InfraAdmin'
+    condition: selection and not filter_approved
+falsepositives:
+    - Marketing or engineering teams registering new product domains (use dedicated role)
+    - Automated domain provisioning for SaaS tenants (should use dedicated role)
+level: critical

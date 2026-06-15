@@ -1,0 +1,42 @@
+title: DangerDev — IAM Resource Name Typosquatting AWS Reserved Conventions
+id: b8c9d0e1-f2a3-4567-bcde-567890000007
+status: experimental
+description: >
+  Detects IAM CreateUser or CreateRole where the name typosquats AWS reserved naming:
+  (1) single-word username matching an AWS service abbreviation ('ses', 'iam', 'ec2')
+  to blend with ses-smtp-user.* auto-accounts; (2) role name 'AWSeservedSSO_*' (lowercase
+  'e' vs legitimate 'AWSReservedSSO_*' — one character diff); (3) role named
+  'AWSLanding-Zones-ConfigRecorderRoles' with AdministratorAccess (wrong policy for
+  a Config recorder role). AWS SSO creates legitimate AWSReservedSSO_* roles — the exact
+  prefix would NOT match the typosquat filter.
+references:
+    - https://attack.mitre.org/techniques/T1036/005/
+    - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1036.005
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_service_username:
+        eventSource: iam.amazonaws.com
+        eventName: CreateUser
+        requestParameters.userName|re: '^(ses|sts|iam|ec2|s3|rds|sns|sqs|ssm|kms)$'
+    selection_typosquat_role:
+        eventSource: iam.amazonaws.com
+        eventName: CreateRole
+        requestParameters.roleName|contains:
+            - 'AWSeservedSSO'
+            - 'AWSLanding-Zones-ConfigRecorder'
+    filter_aws_internal:
+        userIdentity.arn|contains:
+            - ':assumed-role/AWSServiceRole'
+            - ':root'
+    condition: (selection_service_username or selection_typosquat_role) and not filter_aws_internal
+falsepositives:
+    - Legacy automation using short service-named IAM users (strongly discouraged)
+    - AWS SSO integration creates AWSReservedSSO_* (exact prefix, would not match typosquat)
+level: critical

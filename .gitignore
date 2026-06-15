@@ -224,6 +224,8 @@ step1-plans/
 # Documentations
 DESIGN.md
 CLAUDE.md
+# Local superpowers specs/playbooks (working artifacts, not product code)
+docs/superpowers/
 # Local Postman app state (collections live in postman/ and backend/*.postman_collection.json)
 .postman/
 

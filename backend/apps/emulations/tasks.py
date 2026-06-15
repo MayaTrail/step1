@@ -41,6 +41,7 @@ from django.utils import timezone
 from pulumi import automation as auto
 
 from apps.emulations.registry import get_emulation
+from apps.emulations.readiness import requires_http_probe, resolve_readiness
 
 logger = logging.getLogger(__name__)
 
@@ -362,15 +363,21 @@ def deploy_emulation_stack(self, stack_id: str) -> dict:
             result = pulumi_stack.up(on_output=on_output)
 
             stack.outputs = {key: val.value for key, val in result.outputs.items()}
-            stack.status = Stack.Status.EC2_BOOTING
+            readiness = resolve_readiness(manifest)
+            if requires_http_probe(readiness):
+                stack.status = Stack.Status.EC2_BOOTING
+            else:
+                # No vulnerable web service — ready for attack immediately.
+                stack.status = Stack.Status.READY_FOR_ATTACK
             stack.save(update_fields=["status", "outputs", "updated_at"])
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-        # Begin non-blocking EC2 readiness polling.
-        poll_ec2_readiness.apply_async(args=[stack_id], queue="enterprise")
-
-        logger.info("Emulation stack deployed: name=%s → EC2_BOOTING", stack.name)
+        if requires_http_probe(readiness):
+            poll_ec2_readiness.apply_async(args=[stack_id], queue="enterprise")
+            logger.info("Emulation stack deployed: name=%s → EC2_BOOTING", stack.name)
+        else:
+            logger.info("Emulation stack deployed: name=%s → READY_FOR_ATTACK (no probe)", stack.name)
         return {"stack_id": stack_id, "status": stack.status}
 
     except Exception as exc:
@@ -409,18 +416,24 @@ def poll_ec2_readiness(self, stack_id: str) -> None:
     Stack = apps.get_model("infrastructure", "Stack")
 
     stack = _get_stack(stack_id)
-    ip = stack.outputs.get("vuln_instance_ip")
+    entry = get_emulation(stack.emulation_type)
+    manifest = entry.get("manifest", entry) if entry else {}
+    readiness = resolve_readiness(manifest)
+    ip = stack.outputs.get(readiness["ip_output"])
 
     if not ip:
         logger.error(
-            "poll_ec2_readiness: no vuln_instance_ip in outputs for stack=%s", stack_id,
+            "poll_ec2_readiness: no %s in outputs for stack=%s",
+            readiness["ip_output"], stack_id,
         )
         stack.status = Stack.Status.FAILED
         stack.save(update_fields=["status", "updated_at"])
         return
 
     try:
-        resp = http_requests.get(f"http://{ip}:8080/health", timeout=5)
+        resp = http_requests.get(
+            f"http://{ip}:{readiness['port']}{readiness['path']}", timeout=5,
+        )
         if resp.status_code == 200:
             stack.status = Stack.Status.READY_FOR_ATTACK
             stack.save(update_fields=["status", "updated_at"])

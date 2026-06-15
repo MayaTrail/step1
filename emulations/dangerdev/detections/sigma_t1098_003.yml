@@ -1,0 +1,37 @@
+title: DangerDev — AdministratorAccess Policy Attached to Newly Created IAM User
+id: e5f6a7b8-c9d0-4234-ef01-234567890004
+status: experimental
+description: >
+  Detects AttachUserPolicy granting arn:aws:iam::aws:policy/AdministratorAccess to
+  any IAM user from a non-approved provisioning principal. DangerDev attached
+  AdministratorAccess to DangerDev@protonmail.me immediately after account creation
+  using the AWS-managed policy to avoid custom policy artifact creation that might
+  trigger additional detection. AdministratorAccess on a user is almost never
+  legitimate in a well-governed AWS account.
+references:
+    - https://attack.mitre.org/techniques/T1098/003/
+    - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.privilege_escalation
+    - attack.t1098.003
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: iam.amazonaws.com
+        eventName: AttachUserPolicy
+        requestParameters.policyArn: 'arn:aws:iam::aws:policy/AdministratorAccess'
+    filter_provisioning:
+        userIdentity.arn|contains:
+            - ':assumed-role/IAMAdminRole'
+            - ':assumed-role/BreakGlassAdmin'
+            - ':assumed-role/OrganizationAccountAccessRole'
+            - ':root'
+    condition: selection and not filter_provisioning
+falsepositives:
+    - Initial account setup by cloud admin teams (use break-glass role — should be filtered)
+    - Break-glass emergency access provisioning during incidents
+level: critical

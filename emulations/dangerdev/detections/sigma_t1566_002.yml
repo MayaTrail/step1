@@ -1,0 +1,41 @@
+title: DangerDev — SES Email Send or Identity Creation from Non-Automation Principal
+id: c5d6e7f8-a9b0-4234-cdef-000000000014
+status: experimental
+description: >
+  Detects SES SendEmail, SendRawEmail, or VerifyEmailIdentity from IAM user principals
+  not associated with approved email delivery roles. DangerDev used alice.chen's hijacked
+  credentials to create SES identities for phishing campaigns targeting cryptocurrency
+  exchange users and PayPal accounts. SES sandbox mode in the lab account prevents
+  external delivery, but CloudTrail events are still generated. Production SES abuse
+  triggers AWS Trust & Safety suspension.
+references:
+    - https://attack.mitre.org/techniques/T1566/002/
+    - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.initial_access
+    - attack.t1566.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: ses.amazonaws.com
+        eventName:
+            - SendEmail
+            - SendRawEmail
+            - VerifyEmailIdentity
+            - CreateEmailIdentity
+        userIdentity.type: IAMUser
+    filter_ses_roles:
+        userIdentity.arn|contains:
+            - ':assumed-role/SESDeliveryRole'
+            - ':assumed-role/EmailSendingRole'
+            - ':assumed-role/MarketingAutomation'
+            - 'ses-smtp-user'
+    condition: selection and not filter_ses_roles
+falsepositives:
+    - Developers testing SES integration from personal IAM credentials (sandbox only)
+    - Legacy applications using IAM user credentials for SES (should migrate to roles)
+level: high

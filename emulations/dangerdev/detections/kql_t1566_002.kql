@@ -1,0 +1,40 @@
+// T1566.002 Phishing: Spearphishing Link — SES Abuse via Hijacked alice.chen
+// DangerDev: VerifyEmailIdentity + SendEmail using alice.chen hijacked session.
+// Critical chain: T1098 (alice.chen key creation) → T1566.002 (SES send) within 24h.
+// SES sandbox blocks external delivery but CloudTrail events still fully logged.
+
+let hijacked_accounts = AWSCloudTrail
+| where TimeGenerated > ago(2d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName in ("CreateAccessKey", "UpdateLoginProfile")
+| extend TargetUser = tostring(parse_json(RequestParameters).userName)
+| where UserIdentityUserName != TargetUser
+| project HijackTime = TimeGenerated, HijackedUser = TargetUser,
+          HijackActor = UserIdentityUserName;
+
+AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "ses.amazonaws.com"
+| where EventName in ("SendEmail", "SendRawEmail", "VerifyEmailIdentity", "CreateEmailIdentity")
+| where UserIdentityType == "IAMUser"
+| where UserIdentityArn !contains "SESDeliveryRole"
+| where UserIdentityArn !contains "MarketingAutomation"
+| where UserIdentityArn !contains "ses-smtp-user"
+| extend EmailIdentity = tostring(parse_json(RequestParameters).emailAddress)
+| join kind=leftouter (hijacked_accounts) on $left.UserIdentityUserName == $right.HijackedUser
+| extend WasHijacked = isnotempty(HijackTime)
+| extend Severity = case(
+    WasHijacked and EventName in ("SendEmail", "SendRawEmail"), "Critical",
+    WasHijacked,                                                 "High",
+    EventName in ("SendEmail", "SendRawEmail"),                  "High",
+    "Medium"
+  )
+| extend AlertTitle = case(
+    WasHijacked, strcat("SES Phishing via Hijacked Account: ",
+        UserIdentityUserName, " (hijacked by ", HijackActor, ")"),
+    strcat("SES Send/Identity from Non-Service IAM Principal: ", UserIdentityUserName)
+  )
+| project TimeGenerated, Severity, AlertTitle, EventName, UserIdentityUserName,
+          UserIdentityArn, EmailIdentity, WasHijacked, HijackTime, HijackActor,
+          SourceIpAddress, UserAgent, AwsRegion
+| sort by TimeGenerated desc
