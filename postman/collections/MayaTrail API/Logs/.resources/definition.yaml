@@ -1,3 +1,0 @@
-$kind: collection
-description: Read-only audit log entries for stacks and emulation runs.
-order: 5000

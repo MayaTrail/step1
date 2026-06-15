@@ -20,6 +20,10 @@ DESIGN.md
 # Legacy vanilla JS files (not used in React build)
 mayatrail_ui.html
 
+# Design reference screenshots (not part of the React build)
+screens/
+screen.png
+
 # Editor & OS files
 .vscode/
 .idea/
