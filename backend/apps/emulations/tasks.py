@@ -42,6 +42,16 @@ from pulumi import automation as auto
 
 from apps.emulations.registry import get_emulation
 
+# Reuse the infrastructure app's persistence helpers so emulation stacks get the
+# same logs / failure reason / resource inventory as generic stacks, without
+# duplicating the logic. (infrastructure.tasks does not import this module, so
+# there is no circular import.)
+from apps.infrastructure.tasks import (
+    _persist_failure,
+    _summarize_resources,
+    _trim_logs,
+)
+
 logger = logging.getLogger(__name__)
 
 # S3 bucket for Pulumi state (same value used by infrastructure/tasks.py).
@@ -172,27 +182,32 @@ def _get_pulumi_stack(
     return stack
 
 
-def _make_log_handler(label: str) -> tuple[list[str], Callable[[str], None]]:
+def _make_log_handler(label: str) -> tuple[list[dict], Callable[[str], None]]:
     """
-    Return a (lines_list, on_output) pair for capturing Pulumi output in real time.
+    Return an (entries_list, on_output) pair for capturing Pulumi output in real time.
 
-    Each line is forwarded to the Python logger immediately so it appears in
-    the worker log stream without waiting for the full operation to complete.
+    Each line is forwarded to the Python logger immediately so it appears in the
+    worker log stream, and is also appended as a timestamped entry so it can be
+    persisted on the Stack record for the deployment-logs view.
 
     Args:
         label: Stack name used as log context.
 
     Returns:
-        Tuple of (accumulated_lines, on_output_callback).
+        Tuple of (entries, on_output_callback).  Each entry is a dict
+        {"t": ISO-8601 UTC timestamp, "line": str}.
     """
-    lines: list[str] = []
+    entries: list[dict] = []
 
     def on_output(msg: str) -> None:
         stripped = msg.rstrip()
         logger.info("[pulumi/%s] %s", label, stripped)
-        lines.append(stripped)
+        entries.append({
+            "t": timezone.now().isoformat(timespec="seconds"),
+            "line": stripped,
+        })
 
-    return lines, on_output
+    return entries, on_output
 
 
 def _make_progress_handler(
@@ -200,7 +215,7 @@ def _make_progress_handler(
     task_id: str,
     total_resources: int,
     label: str,
-) -> tuple[list[str], Callable[[str], None]]:
+) -> tuple[list[dict], Callable[[str], None]]:
     """
     Return a (lines_list, on_output) pair that tracks Pulumi resource creation
     progress and reports it to the Celery result backend via update_state.
@@ -226,13 +241,16 @@ def _make_progress_handler(
     Returns:
         Tuple of (accumulated_lines, on_output_callback).
     """
-    lines: list[str] = []
+    entries: list[dict] = []
     state: dict = {"resources_created": 0, "flush_counter": 0}
 
     def on_output(msg: str) -> None:
         stripped = msg.rstrip()
         logger.info("[pulumi/%s] %s", label, stripped)
-        lines.append(stripped)
+        entries.append({
+            "t": timezone.now().isoformat(timespec="seconds"),
+            "line": stripped,
+        })
 
         if " created" in stripped:
             state["resources_created"] += 1
@@ -249,7 +267,7 @@ def _make_progress_handler(
                         "resources_created": created,
                         "total_resources": total_resources,
                         "percentage": min(pct, 99),
-                        "recent_logs": lines[-10:],
+                        "recent_logs": [e["line"] for e in entries[-10:]],
                     },
                 )
             except Exception as exc:  # noqa: BLE001
@@ -257,7 +275,7 @@ def _make_progress_handler(
                 # deploy.  Log once at debug level and carry on.
                 logger.debug("progress update_state failed (non-fatal): %s", exc)
 
-    return lines, on_output
+    return entries, on_output
 
 
 def _prepare_work_dir(source_dir: str) -> str:
@@ -336,6 +354,9 @@ def deploy_emulation_stack(self, stack_id: str) -> dict:
     """
     Stack = apps.get_model("infrastructure", "Stack")
 
+    # Defined before the try so the failure path can persist whatever was
+    # captured even if the deploy aborts early.
+    entries: list[dict] = []
     try:
         stack = _get_stack(stack_id)
         aws_creds = _assume_user_role(stack.owner)
@@ -353,7 +374,7 @@ def deploy_emulation_stack(self, stack_id: str) -> dict:
                 work_dir=tmp_dir,
                 aws_creds=aws_creds,
             )
-            _, on_output = _make_progress_handler(self, self.request.id, total_resources, stack.name)
+            entries, on_output = _make_progress_handler(self, self.request.id, total_resources, stack.name)
 
             logger.info(
                 "Deploying emulation stack: name=%s type=%s region=%s",
@@ -363,7 +384,13 @@ def deploy_emulation_stack(self, stack_id: str) -> dict:
 
             stack.outputs = {key: val.value for key, val in result.outputs.items()}
             stack.status = Stack.Status.EC2_BOOTING
-            stack.save(update_fields=["status", "outputs", "updated_at"])
+            stack.resource_summary = _summarize_resources(pulumi_stack)
+            stack.last_logs = _trim_logs(entries)
+            stack.last_error = ""
+            stack.save(update_fields=[
+                "status", "outputs", "resource_summary",
+                "last_logs", "last_error", "updated_at",
+            ])
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -377,12 +404,7 @@ def deploy_emulation_stack(self, stack_id: str) -> dict:
         logger.error(
             "deploy_emulation_stack failed for stack=%s: %s", stack_id, exc, exc_info=True,
         )
-        try:
-            stack = _get_stack(stack_id)
-            stack.status = Stack.Status.FAILED
-            stack.save(update_fields=["status", "updated_at"])
-        except Exception:  # noqa: BLE001
-            pass
+        _persist_failure(stack_id, entries, exc)
         raise self.retry(exc=exc, max_retries=0) from exc
 
 
@@ -540,6 +562,8 @@ def destroy_emulation_stack(self, stack_id: str) -> dict:
     """
     Stack = apps.get_model("infrastructure", "Stack")
 
+    # Defined before the try so the failure path can persist captured output.
+    entries: list[dict] = []
     try:
         stack = _get_stack(stack_id)
         stack.status = Stack.Status.DESTROYING
@@ -556,7 +580,7 @@ def destroy_emulation_stack(self, stack_id: str) -> dict:
                 work_dir=tmp_dir,
                 aws_creds=aws_creds,
             )
-            _, on_output = _make_log_handler(stack.name)
+            entries, on_output = _make_log_handler(stack.name)
 
             logger.info(
                 "Destroying emulation stack: name=%s type=%s region=%s",
@@ -566,6 +590,7 @@ def destroy_emulation_stack(self, stack_id: str) -> dict:
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
+        # Success removes the DB record entirely — no logs to retain.
         stack.delete()
         logger.info("Emulation stack destroyed: stack_id=%s — DB record deleted", stack_id)
         return {"stack_id": stack_id, "status": "destroyed"}
@@ -574,12 +599,7 @@ def destroy_emulation_stack(self, stack_id: str) -> dict:
         logger.error(
             "destroy_emulation_stack failed for stack=%s: %s", stack_id, exc, exc_info=True,
         )
-        try:
-            stack = _get_stack(stack_id)
-            stack.status = Stack.Status.FAILED
-            stack.save(update_fields=["status", "updated_at"])
-        except Exception:  # noqa: BLE001
-            pass
+        _persist_failure(stack_id, entries, exc)
         raise self.retry(exc=exc, max_retries=0) from exc
 
 

@@ -31,11 +31,15 @@ class StackSerializer(serializers.ModelSerializer):
             "emulation_type",
             "expires_at",
             "task_id",
+            "last_logs",
+            "last_error",
+            "resource_summary",
             "created_at",
             "updated_at",
         ]
         read_only_fields = [
             "id", "status", "outputs", "owner",
             "emulation_type", "expires_at", "task_id",
+            "last_logs", "last_error", "resource_summary",
             "created_at", "updated_at",
         ]

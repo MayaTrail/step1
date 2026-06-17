@@ -1,22 +1,31 @@
 /**
- * StacksPage — full Infrastructure Stack management UI.
+ * StacksPage — security-focused environment management for Pulumi stacks.
  *
- * Features:
- *   - List all stacks owned by the current user
- *   - Create a new stack
- *   - View stack details (expand row)
- *   - Deploy / Destroy / Refresh / Preview actions
- *   - Delete stack record
- *   - Live polling when an action is in progress
+ * Responsibilities:
+ *   - List the user's stacks as operational cards (health, metadata, progress)
+ *   - Search and filter the list (client-side)
+ *   - Drive Deploy / Destroy / Refresh / Preview / Force-Destroy / Delete
+ *   - Open a per-stack deployment logs modal
+ *   - Live-poll while an action is in progress
+ *
+ * This page is manage/monitor-only. Stacks are created by deploying an emulation
+ * (POST /api/emulations/deploy/, via RunEmulationModal on the emulation pages),
+ * which is the only path that produces a deployable stack — the generic create
+ * endpoint produced un-deployable records (no emulation_type) and was removed
+ * from the UI.
+ *
+ * This page is the orchestrator: it owns all stack state and operations and
+ * delegates presentation to StackCard, StackFilters, and DeploymentLogsModal.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react'
-import type { Stack, StackStatus, CreateStackRequest } from '@/types'
-import { InfraGraphView } from './InfraGraphView'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import type { Stack, StackStatus } from '@/types'
+import { StackCard, type StackDetailView } from './StackCard'
+import { StackFilters, filterStacks, EMPTY_FILTERS, type StackFilterState } from './StackFilters'
+import { DeploymentLogsModal } from './DeploymentLogsModal'
 import {
     listStacks,
     getStack,
-    createStack,
     deployStack,
     destroyStack,
     refreshStack,
@@ -29,78 +38,35 @@ import { destroyEmulationStack } from '@/services/emulation.service'
 import { Breadcrumb } from '@/components/ui/Breadcrumb'
 import { EmptyState } from '@/components/ui/EmptyState'
 
-/* ── Status styling ── */
-const STATUS_CONFIG: Record<StackStatus, { label: string; color: string; bg: string; dot?: string }> = {
-    pending:          { label: 'Pending',           color: 'text-yellow-400',  bg: 'bg-yellow-400/[0.08]',  dot: 'bg-yellow-400' },
-    deploying:        { label: 'Deploying',         color: 'text-accent-blue', bg: 'bg-accent-blue/[0.08]', dot: 'bg-accent-blue' },
-    ready:            { label: 'Ready',             color: 'text-safe',        bg: 'bg-safe/[0.08]',        dot: 'bg-safe' },
-    destroying:       { label: 'Destroying',        color: 'text-orange-400',  bg: 'bg-orange-400/[0.08]',  dot: 'bg-orange-400' },
-    refreshing:       { label: 'Refreshing',        color: 'text-purple-400',  bg: 'bg-purple-400/[0.08]',  dot: 'bg-purple-400' },
-    failed:           { label: 'Failed',            color: 'text-danger',      bg: 'bg-danger/[0.08]',      dot: 'bg-danger' },
-    ec2_booting:      { label: 'EC2 Booting',       color: 'text-accent-blue', bg: 'bg-accent-blue/[0.08]', dot: 'bg-accent-blue' },
-    ready_for_attack: { label: 'Ready for Attack',  color: 'text-safe',        bg: 'bg-safe/[0.08]',        dot: 'bg-safe' },
-    attacking:        { label: 'Attacking',         color: 'text-danger',      bg: 'bg-danger/[0.08]',      dot: 'bg-danger' },
-    attack_complete:  { label: 'Attack Complete',   color: 'text-safe',        bg: 'bg-safe/[0.08]',        dot: 'bg-safe' },
-    destroyed:        { label: 'Destroyed',         color: 'text-content-dim', bg: 'bg-content-dim/[0.08]', dot: 'bg-content-dim' },
-}
-
 const BUSY_STATUSES = new Set<StackStatus>(['deploying', 'destroying', 'refreshing'])
-
-// Statuses where an emulation stack has live AWS resources (or may have them)
-// and can be force-destroyed by the user via the emulation destroy endpoint.
-const EMULATION_DESTROYABLE = new Set<StackStatus>([
-    'deploying',
-    'ec2_booting',
-    'ready_for_attack',
-    'attacking',
-    'attack_complete',
-    'failed',
-])
-
-const REGIONS = [
-    { value: 'ap-south-1', label: 'ap-south-1 (Mumbai)' },
-    { value: 'us-east-1', label: 'us-east-1 (N. Virginia)' },
-    { value: 'us-west-2', label: 'us-west-2 (Oregon)' },
-    { value: 'eu-west-1', label: 'eu-west-1 (Ireland)' },
-]
 
 export function StacksPage() {
     const [stacks, setStacks] = useState<Stack[]>([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
 
-    // Expanded detail row
-    const [expandedId, setExpandedId] = useState<string | null>(null)
-    // Which tab is active inside the expanded detail panel
-    const [detailView, setDetailView] = useState<'details' | 'graph'>('details')
+    // Filters
+    const [filters, setFilters] = useState<StackFilterState>(EMPTY_FILTERS)
 
-    // Reset to Details tab whenever the user opens a different stack row
+    // Expanded detail row + active tab
+    const [expandedId, setExpandedId] = useState<string | null>(null)
+    const [detailView, setDetailView] = useState<StackDetailView>('details')
     useEffect(() => { setDetailView('details') }, [expandedId])
 
-    // Create new stack
-    const [showCreate, setShowCreate] = useState(false)
-    const [newName, setNewName] = useState('')
-    const [newRegion, setNewRegion] = useState('ap-south-1')
-    const [creating, setCreating] = useState(false)
+    // Logs modal
+    const [logsStack, setLogsStack] = useState<Stack | null>(null)
 
-    // Action feedback
+    // Action feedback / busy tracking
     const [actionMsg, setActionMsg] = useState<Record<string, string>>({})
     const [polling, setPolling] = useState<Set<string>>(new Set())
     const abortRefs = useRef<Map<string, AbortController>>(new Map())
-
-    // Confirm delete
-    const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
-
-    // Confirm force-destroy
-    const [confirmForceDestroyId, setConfirmForceDestroyId] = useState<string | null>(null)
 
     // ── Load stacks ──
     const loadStacks = useCallback(async () => {
         setLoading(true)
         setError(null)
         try {
-            const data = await listStacks()
-            setStacks(data)
+            setStacks(await listStacks())
         } catch {
             setError('Failed to load stacks.')
         } finally {
@@ -111,31 +77,9 @@ export function StacksPage() {
     useEffect(() => { loadStacks() }, [loadStacks])
 
     // Cleanup all abort controllers on unmount
-    useEffect(() => {
-        return () => {
-            abortRefs.current.forEach((c) => c.abort())
-        }
-    }, [])
+    useEffect(() => () => { abortRefs.current.forEach((c) => c.abort()) }, [])
 
-    // ── Create stack ──
-    const handleCreate = useCallback(async () => {
-        if (!newName.trim()) return
-        setCreating(true)
-        setError(null)
-        try {
-            const payload: CreateStackRequest = { name: newName.trim(), region: newRegion }
-            const stack = await createStack(payload)
-            setStacks((prev) => [stack, ...prev])
-            setNewName('')
-            setShowCreate(false)
-        } catch (err: unknown) {
-            const apiErr = (err as { response?: { data?: Record<string, string[]> } })?.response?.data
-            const msg = apiErr ? Object.values(apiErr).flat().join(' ') : 'Failed to create stack.'
-            setError(msg)
-        } finally {
-            setCreating(false)
-        }
-    }, [newName, newRegion])
+    const filtered = useMemo(() => filterStacks(stacks, filters), [stacks, filters])
 
     // ── Stack action (deploy/destroy/refresh/preview) ──
     const handleAction = useCallback(async (
@@ -145,7 +89,6 @@ export function StacksPage() {
         const actionFn = { deploy: deployStack, destroy: destroyStack, refresh: refreshStack, preview: previewStack }[action]
         const label = action.charAt(0).toUpperCase() + action.slice(1)
 
-        // Immediately mark as busy so all sibling action buttons get disabled
         setPolling((prev) => new Set(prev).add(stackId))
         setActionMsg((prev) => ({ ...prev, [stackId]: `${label} request sent...` }))
         setError(null)
@@ -153,13 +96,11 @@ export function StacksPage() {
         try {
             await actionFn(stackId)
 
-            // Update status locally
             if (action !== 'preview') {
                 const newStatus = action === 'deploy' ? 'deploying' : action === 'destroy' ? 'destroying' : 'refreshing'
                 setStacks((prev) => prev.map((s) => s.id === stackId ? { ...s, status: newStatus as StackStatus } : s))
             }
 
-            // Start polling
             const controller = new AbortController()
             abortRefs.current.set(stackId, controller)
             setActionMsg((prev) => ({
@@ -172,9 +113,7 @@ export function StacksPage() {
             const final = await pollStackUntilReady(
                 stackId,
                 3000,
-                (updated) => {
-                    setStacks((prev) => prev.map((s) => s.id === updated.id ? updated : s))
-                },
+                (updated) => setStacks((prev) => prev.map((s) => s.id === updated.id ? updated : s)),
                 controller.signal,
             )
 
@@ -190,8 +129,7 @@ export function StacksPage() {
         } catch (err: unknown) {
             if (err instanceof DOMException && err.name === 'AbortError') return
             const apiDetail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-            const msg = apiDetail ?? (err instanceof Error ? err.message : 'Action failed.')
-            setActionMsg((prev) => ({ ...prev, [stackId]: `Error: ${msg}` }))
+            setActionMsg((prev) => ({ ...prev, [stackId]: `Error: ${apiDetail ?? (err instanceof Error ? err.message : 'Action failed.')}` }))
         } finally {
             setPolling((prev) => { const next = new Set(prev); next.delete(stackId); return next })
             abortRefs.current.delete(stackId)
@@ -204,7 +142,6 @@ export function StacksPage() {
         try {
             await deleteStack(stackId)
             setStacks((prev) => prev.filter((s) => s.id !== stackId))
-            setConfirmDeleteId(null)
         } catch (err: unknown) {
             const apiDetail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
             setActionMsg((prev) => ({ ...prev, [stackId]: `Delete failed: ${apiDetail ?? 'Unknown error'}` }))
@@ -213,14 +150,13 @@ export function StacksPage() {
 
     // ── Force-destroy a stuck or completed emulation stack ──
     const handleForceDestroy = useCallback(async (stack: Stack) => {
-        setConfirmForceDestroyId(null)
         setPolling((prev) => new Set(prev).add(stack.id))
         setActionMsg((prev) => ({ ...prev, [stack.id]: 'Destroy queued...' }))
         setError(null)
 
         try {
-            // Enterprise emulation stacks must use the STS-aware emulation destroy
-            // endpoint so Pulumi runs in the user's account, not the platform account.
+            // Enterprise emulation stacks use the STS-aware emulation destroy endpoint
+            // so Pulumi runs in the user's account, not the platform account.
             if (stack.emulation_type) {
                 await destroyEmulationStack(stack.id)
             } else {
@@ -236,18 +172,14 @@ export function StacksPage() {
             const final = await pollStackUntilReady(
                 stack.id,
                 3000,
-                (updated) => {
-                    setStacks((prev) => prev.map((s) => s.id === updated.id ? updated : s))
-                },
+                (updated) => setStacks((prev) => prev.map((s) => s.id === updated.id ? updated : s)),
                 controller.signal,
             )
 
             setStacks((prev) => prev.map((s) => s.id === final.id ? final : s))
             setActionMsg((prev) => ({
                 ...prev,
-                [stack.id]: final.status === 'failed'
-                    ? 'Destroy failed. Check worker logs.'
-                    : 'Stack destroyed successfully.',
+                [stack.id]: final.status === 'failed' ? 'Destroy failed. Check worker logs.' : 'Stack destroyed successfully.',
             }))
         } catch (err: unknown) {
             if (err instanceof DOMException && err.name === 'AbortError') return
@@ -259,16 +191,20 @@ export function StacksPage() {
         }
     }, [])
 
-    // ── Refresh single stack details ──
-    const handleRetrieve = useCallback(async (stackId: string) => {
+    // ── Toggle expand (fetches fresh detail when opening) ──
+    const handleToggleExpand = useCallback(async (stackId: string) => {
+        if (expandedId === stackId) {
+            setExpandedId(null)
+            return
+        }
+        setExpandedId(stackId)
         try {
             const fresh = await getStack(stackId)
             setStacks((prev) => prev.map((s) => s.id === fresh.id ? fresh : s))
-            setExpandedId(stackId)
         } catch {
-            setError('Failed to retrieve stack details.')
+            // Keep the existing record if the refresh fails — non-fatal.
         }
-    }, [])
+    }, [expandedId])
 
     if (loading) {
         return (
@@ -283,10 +219,7 @@ export function StacksPage() {
 
     return (
         <div className="animate-fadeIn">
-            <Breadcrumb items={[
-                { label: 'Home', to: '/' },
-                { label: 'Infrastructure Stacks' },
-            ]} />
+            <Breadcrumb items={[{ label: 'Home', to: '/' }, { label: 'Infrastructure Stacks' }]} />
 
             {/* Page header */}
             <div className="flex items-start justify-between mb-6 gap-4">
@@ -294,346 +227,92 @@ export function StacksPage() {
                     <div className="font-mono text-[0.7rem] uppercase tracking-[2px] text-cyan font-medium mb-2">
                         Infrastructure
                     </div>
-                    <div className="font-display text-[1.8rem] font-[800] text-content-primary leading-tight tracking-[-1px]">
-                        Pulumi Stacks
+                    <div className="font-display text-[1.8rem] font-extrabold text-content-primary leading-tight tracking-[-1px]">
+                        Security Environments
                     </div>
                     <div className="text-[0.9rem] text-content-secondary mt-1.5">
-                        {stacks.length} stack{stacks.length !== 1 ? 's' : ''} &middot; Manage your cloud infrastructure
+                        {stacks.length} stack{stacks.length !== 1 ? 's' : ''} &middot; Manage and monitor your deployed infrastructure
                     </div>
                 </div>
                 <div className="flex gap-3 shrink-0">
                     <button
                         onClick={loadStacks}
                         className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn font-body text-[0.9rem] font-medium cursor-pointer
-              bg-transparent border border-[rgba(255,255,255,0.15)] text-content-primary transition-all
-              hover:bg-[rgba(255,255,255,0.05)] hover:border-border-active"
+                            bg-transparent border border-[rgba(255,255,255,0.15)] text-content-primary transition-all
+                            hover:bg-[rgba(255,255,255,0.05)] hover:border-border-active"
                     >
-                        ↻ Refresh List
-                    </button>
-                    <button
-                        onClick={() => setShowCreate((v) => !v)}
-                        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn font-body text-[0.9rem] font-semibold cursor-pointer border-none
-              bg-cyan text-[#07080c] transition-all hover:-translate-y-px hover:shadow-[0_8px_40px_rgba(72,232,200,0.3)]"
-                    >
-                        + New Stack
+                        Refresh List
                     </button>
                 </div>
             </div>
 
             {/* Error banner */}
             {error && (
-                <div className="bg-danger/[0.08] border border-danger/20 rounded-[8px] px-4 py-3 font-mono text-xs text-danger mb-5">
+                <div className="bg-danger/[0.08] border border-danger/20 rounded-btn px-4 py-3 font-mono text-xs text-danger mb-5">
                     {error}
                     <button onClick={() => setError(null)} className="ml-3 text-content-dim hover:text-content-primary bg-transparent border-none cursor-pointer text-xs">✕</button>
                 </div>
             )}
 
-            {/* Create stack form */}
-            {showCreate && (
-                <div className="bg-surface-card border border-cyan/20 rounded-card p-6 mb-6 animate-slideUp">
-                    <div className="font-mono text-[10px] uppercase tracking-[1.5px] text-cyan font-bold mb-4">
-                        Create New Stack
-                    </div>
-                    <div className="grid grid-cols-[1fr_200px_auto] gap-3 items-end">
-                        <div>
-                            <label className="font-mono text-[10px] text-content-dim block mb-1">
-                                Stack Name <span className="text-danger">*</span>
-                            </label>
-                            <input
-                                type="text"
-                                value={newName}
-                                onChange={(e) => setNewName(e.target.value)}
-                                placeholder="dev-yourname"
-                                disabled={creating}
-                                className="w-full font-mono text-sm text-content-primary bg-surface-base border border-border rounded-[6px] px-3 py-2.5
-                  placeholder:text-content-dim/50 focus:outline-none focus:border-cyan transition-colors disabled:opacity-50"
-                            />
-                        </div>
-                        <div>
-                            <label className="font-mono text-[10px] text-content-dim block mb-1">Region</label>
-                            <select
-                                value={newRegion}
-                                onChange={(e) => setNewRegion(e.target.value)}
-                                disabled={creating}
-                                className="w-full font-mono text-sm text-content-primary bg-surface-base border border-border rounded-[6px] px-3 py-2.5
-                  focus:outline-none focus:border-cyan transition-colors appearance-none cursor-pointer disabled:opacity-50"
-                            >
-                                {REGIONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-                            </select>
-                        </div>
-                        <div className="flex gap-2">
-                            <button
-                                onClick={handleCreate}
-                                disabled={!newName.trim() || creating}
-                                className="px-5 py-2.5 rounded-btn font-body text-[0.85rem] font-semibold cursor-pointer border-none
-                  bg-cyan text-[#07080c] transition-all hover:-translate-y-px hover:shadow-[0_6px_30px_rgba(72,232,200,0.3)]
-                  disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0"
-                            >
-                                {creating ? 'Creating...' : 'Create'}
-                            </button>
-                            <button
-                                onClick={() => setShowCreate(false)}
-                                className="px-4 py-2.5 rounded-btn font-body text-[0.85rem] font-medium cursor-pointer
-                  bg-transparent border border-[rgba(255,255,255,0.15)] text-content-primary transition-all
-                  hover:bg-[rgba(255,255,255,0.05)]"
-                            >
-                                Cancel
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Stacks list */}
-            {stacks.length === 0 && !showCreate ? (
+            {/* Empty state (no stacks at all) */}
+            {stacks.length === 0 ? (
                 <EmptyState
                     icon="&#9881;&#65039;"
                     title="No stacks yet"
-                    body="Create your first infrastructure stack to deploy cloud resources for emulations."
+                    body="Stacks appear here once you deploy an emulation. Open a platform's emulations to launch one."
                 />
             ) : (
-                <div className="flex flex-col gap-3">
-                    {stacks.map((stack) => {
-                        const cfg = STATUS_CONFIG[stack.status]
-                        const isBusy = BUSY_STATUSES.has(stack.status) || polling.has(stack.id)
-                        const isExpanded = expandedId === stack.id
-                        const msg = actionMsg[stack.id]
+                <>
+                    <StackFilters
+                        value={filters}
+                        onChange={setFilters}
+                        stacks={stacks}
+                        resultCount={filtered.length}
+                    />
 
-                        return (
-                            <div key={stack.id} className="group">
-                                {/* Stack row */}
-                                <div
-                                    className={`bg-surface-card border rounded-card px-5 py-4 flex items-center gap-4 cursor-pointer
-                    transition-all duration-[250ms] relative overflow-hidden
-                    ${isExpanded ? 'border-cyan/30 bg-cyan/[0.02]' : 'border-border hover:border-[rgba(72,232,200,0.2)] hover:-translate-y-px hover:shadow-[0_4px_20px_rgba(0,0,0,0.3)]'}
-                  `}
-                                    onClick={() => handleRetrieve(stack.id)}
-                                >
-                                    {/* Left accent */}
-                                    <div className={`absolute left-0 top-0 bottom-0 w-[3px] transition-colors ${isExpanded ? 'bg-cyan' : stack.status === 'ready' ? 'bg-safe' : stack.status === 'failed' ? 'bg-danger' : 'bg-border group-hover:bg-cyan/50'
-                                        }`} />
-
-                                    {/* Stack info */}
-                                    <div className="flex-1 min-w-0 ml-1">
-                                        <div className="flex items-center gap-3 mb-1">
-                                            <span className="font-display text-[0.95rem] font-bold text-content-primary truncate">
-                                                {stack.name}
-                                            </span>
-                                            <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full font-mono text-[10px] font-bold uppercase tracking-[0.5px] ${cfg.color} ${cfg.bg}`}>
-                                                {isBusy && <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot} animate-pulse`} />}
-                                                {cfg.label}
-                                            </span>
-                                        </div>
-                                        <div className="flex items-center gap-4 font-mono text-[11px] text-content-dim">
-                                            <span>📍 {stack.region}</span>
-                                            <span>👤 {stack.owner}</span>
-                                            <span title={stack.id}>🆔 {stack.id.slice(0, 8)}…</span>
-                                            <span>🕐 {new Date(stack.created_at).toLocaleDateString()}</span>
-                                        </div>
-                                    </div>
-
-                                    {/* Action buttons */}
-                                    <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
-                                        <ActionBtn
-                                            label="Deploy" icon="&#128640;" variant="safe"
-                                            disabled={isBusy}
-                                            onClick={() => handleAction(stack.id, 'deploy')}
-                                        />
-                                        <ActionBtn
-                                            label="Destroy" icon="&#128465;" variant="orange"
-                                            disabled={isBusy}
-                                            onClick={() => handleAction(stack.id, 'destroy')}
-                                        />
-                                        <ActionBtn
-                                            label="Refresh" icon="&#8635;" variant="blue"
-                                            disabled={isBusy}
-                                            onClick={() => handleAction(stack.id, 'refresh')}
-                                        />
-                                        <ActionBtn
-                                            label="Preview" icon="&#128065;" variant="purple"
-                                            disabled={isBusy}
-                                            onClick={() => handleAction(stack.id, 'preview')}
-                                        />
-
-                                        {/* Force Destroy — shown for emulation stacks in stuck/live-resource states */}
-                                        {stack.emulation_type && EMULATION_DESTROYABLE.has(stack.status) && (
-                                            <>
-                                                <div className="w-px h-6 bg-border mx-1" />
-                                                {confirmForceDestroyId === stack.id ? (
-                                                    <div className="flex items-center gap-1.5">
-                                                        <span className="font-mono text-[9px] text-orange-400 mr-1">Destroy AWS resources?</span>
-                                                        <button
-                                                            onClick={() => handleForceDestroy(stack)}
-                                                            className="px-2.5 py-1.5 rounded-[6px] font-mono text-[10px] font-bold cursor-pointer border-none
-                                                                bg-orange-500 text-white transition-all hover:shadow-[0_0_15px_rgba(249,115,22,0.4)]"
-                                                        >
-                                                            Confirm
-                                                        </button>
-                                                        <button
-                                                            onClick={() => setConfirmForceDestroyId(null)}
-                                                            className="px-2 py-1.5 rounded-[6px] font-mono text-[10px] cursor-pointer
-                                                                bg-transparent border border-border text-content-dim hover:text-content-primary transition-colors"
-                                                        >
-                                                            &#10005;
-                                                        </button>
-                                                    </div>
-                                                ) : (
-                                                    <button
-                                                        onClick={() => setConfirmForceDestroyId(stack.id)}
-                                                        disabled={stack.status === 'destroying'}
-                                                        title="Force-destroy emulation stack and all AWS resources"
-                                                        className="px-3 py-1.5 rounded-[6px] font-mono text-[10px] font-medium cursor-pointer
-                                                            bg-transparent border border-orange-500/30 text-orange-400 transition-all
-                                                            hover:border-orange-500/60 hover:bg-orange-500/[0.08] hover:shadow-[0_0_12px_rgba(249,115,22,0.2)]
-                                                            disabled:opacity-30 disabled:cursor-not-allowed"
-                                                    >
-                                                        &#9889; Force Destroy
-                                                    </button>
-                                                )}
-                                            </>
-                                        )}
-
-                                        <div className="w-px h-6 bg-border mx-1" />
-                                        {confirmDeleteId === stack.id ? (
-                                            <div className="flex items-center gap-1.5">
-                                                <button
-                                                    onClick={() => handleDelete(stack.id)}
-                                                    className="px-2.5 py-1.5 rounded-[6px] font-mono text-[10px] font-bold cursor-pointer border-none
-                            bg-danger text-white transition-all hover:shadow-[0_0_15px_rgba(255,34,68,0.4)]"
-                                                >
-                                                    Confirm
-                                                </button>
-                                                <button
-                                                    onClick={() => setConfirmDeleteId(null)}
-                                                    className="px-2 py-1.5 rounded-[6px] font-mono text-[10px] cursor-pointer
-                            bg-transparent border border-border text-content-dim hover:text-content-primary transition-colors"
-                                                >
-                                                    &#10005;
-                                                </button>
-                                            </div>
-                                        ) : (
-                                            <button
-                                                onClick={() => setConfirmDeleteId(stack.id)}
-                                                disabled={isBusy}
-                                                title="Delete stack record"
-                                                className="px-2.5 py-1.5 rounded-[6px] font-mono text-[10px] text-content-dim cursor-pointer
-                          bg-transparent border border-transparent transition-all
-                          hover:border-danger/30 hover:text-danger hover:bg-danger/[0.06]
-                          disabled:opacity-30 disabled:cursor-not-allowed"
-                                            >
-                                                &#10005; Delete
-                                            </button>
-                                        )}
-                                    </div>
-                                </div>
-
-                                {/* Action message */}
-                                {msg && (
-                                    <div className={`mx-5 mt-1 font-mono text-[11px] flex items-center gap-2 ${msg.startsWith('Error') ? 'text-danger' : msg.includes('successfully') || msg.includes('completed') ? 'text-safe' : 'text-accent-blue'
-                                        }`}>
-                                        {isBusy && <span className="inline-block w-2.5 h-2.5 border-2 border-current border-t-transparent rounded-full animate-spin" />}
-                                        {msg}
-                                    </div>
-                                )}
-
-                                {/* Expanded details */}
-                                {isExpanded && (
-                                    <div className="bg-surface-base border border-border border-t-0 rounded-b-card px-6 py-4 -mt-1 animate-slideUp">
-                                        {/* Tab bar */}
-                                        <div className="flex items-center gap-1 mb-4">
-                                            <DetailTab
-                                                label="Details"
-                                                active={detailView === 'details'}
-                                                onClick={() => setDetailView('details')}
-                                            />
-                                            <DetailTab
-                                                label="Resource Graph"
-                                                active={detailView === 'graph'}
-                                                onClick={() => setDetailView('graph')}
-                                            />
-                                            <div className="flex-1 h-px bg-border ml-2" />
-                                        </div>
-
-                                        {/* Details tab */}
-                                        {detailView === 'details' && (
-                                            <div className="grid grid-cols-2 gap-x-8 gap-y-3">
-                                                <DetailRow label="Stack ID" value={stack.id} mono />
-                                                <DetailRow label="Name" value={stack.name} />
-                                                <DetailRow label="Region" value={stack.region} />
-                                                <DetailRow label="Status" value={stack.status.toUpperCase()} valueClass={cfg.color} />
-                                                <DetailRow label="Owner" value={stack.owner} />
-                                                <DetailRow label="Created" value={new Date(stack.created_at).toLocaleString()} />
-                                                <DetailRow label="Updated" value={new Date(stack.updated_at).toLocaleString()} />
-                                                <DetailRow label="Outputs" value={Object.keys(stack.outputs).length > 0 ? JSON.stringify(stack.outputs, null, 2) : '(none)'} mono />
-                                            </div>
-                                        )}
-
-                                        {/* Resource Graph tab */}
-                                        {detailView === 'graph' && (
-                                            <InfraGraphView stack={stack} />
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        )
-                    })}
-                </div>
+                    {filtered.length === 0 ? (
+                        <EmptyState
+                            icon="&#128269;"
+                            title="No matching stacks"
+                            body="No stacks match the current filters. Try clearing or adjusting them."
+                        />
+                    ) : (
+                        <div className="flex flex-col gap-3">
+                            {filtered.map((stack) => {
+                                const isBusy = BUSY_STATUSES.has(stack.status) || polling.has(stack.id)
+                                return (
+                                    <StackCard
+                                        key={stack.id}
+                                        stack={stack}
+                                        isBusy={isBusy}
+                                        isExpanded={expandedId === stack.id}
+                                        onToggleExpand={() => handleToggleExpand(stack.id)}
+                                        detailView={detailView}
+                                        onDetailViewChange={setDetailView}
+                                        actionMsg={actionMsg[stack.id]}
+                                        onAction={(action) => handleAction(stack.id, action)}
+                                        onOpenLogs={() => setLogsStack(stack)}
+                                        onDelete={() => handleDelete(stack.id)}
+                                        onForceDestroy={() => handleForceDestroy(stack)}
+                                    />
+                                )
+                            })}
+                        </div>
+                    )}
+                </>
             )}
-        </div>
-    )
-}
 
-/* ── Action Button ── */
-function ActionBtn({
-    label, icon, variant, disabled, onClick,
-}: {
-    label: string; icon: string; variant: 'safe' | 'orange' | 'blue' | 'purple'; disabled: boolean; onClick: () => void
-}) {
-    const styles: Record<string, string> = {
-        safe: 'hover:border-safe/40 hover:text-safe hover:bg-safe/[0.06]',
-        orange: 'hover:border-orange/40 hover:text-orange hover:bg-orange/[0.06]',
-        blue: 'hover:border-accent-blue/40 hover:text-accent-blue hover:bg-accent-blue/[0.06]',
-        purple: 'hover:border-purple/40 hover:text-purple hover:bg-purple/[0.06]',
-    }
-    return (
-        <button
-            onClick={onClick}
-            disabled={disabled}
-            title={label}
-            className={`px-3 py-1.5 rounded-[6px] font-mono text-[10px] font-medium cursor-pointer
-        bg-transparent border border-border text-content-secondary transition-all
-        ${styles[variant]}
-        disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:border-border disabled:hover:bg-transparent disabled:hover:text-content-secondary`}
-        >
-            {icon} {label}
-        </button>
-    )
-}
-
-/* ── Detail Tab ── */
-function DetailTab({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-    return (
-        <button
-            onClick={onClick}
-            className={`px-3 py-1.5 rounded-[6px] font-mono text-[10px] font-medium cursor-pointer border transition-all
-        ${active
-                    ? 'bg-cyan/[0.1] border-cyan/30 text-cyan'
-                    : 'bg-transparent border-transparent text-content-dim hover:text-content-primary hover:border-border'
-                }`}
-        >
-            {label}
-        </button>
-    )
-}
-
-/* ── Detail Row ── */
-function DetailRow({ label, value, mono, valueClass = '' }: { label: string; value: string; mono?: boolean; valueClass?: string }) {
-    return (
-        <div>
-            <div className="font-mono text-[9px] text-content-dim tracking-[1px] mb-0.5 uppercase">{label}</div>
-            <div className={`text-[13px] text-content-primary ${mono ? 'font-mono text-[11px] break-all' : 'font-body'} ${valueClass}`}>
-                {value}
-            </div>
+            {/* Deployment logs modal */}
+            {logsStack && (
+                <DeploymentLogsModal
+                    stackId={logsStack.id}
+                    stackName={logsStack.name}
+                    status={logsStack.status}
+                    initialLogs={logsStack.last_logs}
+                    error={logsStack.last_error}
+                    onClose={() => setLogsStack(null)}
+                />
+            )}
         </div>
     )
 }

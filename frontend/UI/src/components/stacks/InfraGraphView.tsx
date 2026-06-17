@@ -1,591 +1,430 @@
 /**
- * InfraGraphView — SVG DAG visualization of the AWS resources Pulumi deploys.
+ * InfraGraphView — data-driven resource dependency graph (Milestone 2).
  *
- * Renders the 10-resource graph from src/__main__.py as a two-column directed
- * acyclic graph.  Column 0 holds root resources; column 1 holds their
- * dependents.  Clicking a node opens a detail panel showing resource
- * configuration and any known runtime values from stack.outputs.
+ * Renders the stack's ACTUAL deployed resources and their dependency edges from
+ * `stack.resource_summary` (persisted from Pulumi state on the last successful
+ * deploy/refresh). Layout is computed with dagre (left-to-right layered DAG);
+ * nodes are drawn as the same SVG cards used elsewhere on the page, and edges
+ * follow dagre's routed points. Selecting a node opens a data-driven detail
+ * panel with the resource's type/name and its Depends On / Used By relations.
  *
- * No external graph library is used — layout is computed from fixed constants
- * that match the Pulumi program structure, and the canvas is plain SVG.
+ * When a stack has no persisted inventory yet (never deployed under the current
+ * build, or torn down), an empty state is shown rather than a fabricated graph.
+ *
+ * Out of scope here: per-resource health (all nodes carry the stack's status —
+ * real per-resource state is Milestone 4), and canvas controls like pan/zoom/
+ * minimap (Milestone 2 Phase 3).
  */
 
-import { useState } from 'react'
-import type { Stack, StackStatus } from '@/types'
+import { useMemo, useState } from 'react'
+import dagre from 'dagre'
+import type { Stack, StackStatus, StackResourceSummary } from '@/types'
+import { Badge } from '@/components/ui/Badge'
+import { deriveHealth, STACK_HEALTH } from '@/components/dashboard/stackHelpers'
 
-// ── Canvas layout constants ──────────────────────────────────────────────────
+// ── Layout constants ─────────────────────────────────────────────────────────
 
-const CW = 820          // viewBox width
-const CH = 400          // viewBox height
-const NW = 158          // node width
-const NH = 54           // node height
-const NRX = 7           // node border-radius
-const COL_X: Record<0 | 1, number> = { 0: 183, 1: 637 }
-const ROWS = 5
-const ROW_SPACING = 72
-const ROW_TOP = (CH - (ROWS * ROW_SPACING - (ROW_SPACING - NH))) / 2
+const NW = 178          // node width
+const NH = 50           // node height
+const NRX = 9           // node corner radius
 
-function ry(row: number) { return ROW_TOP + row * ROW_SPACING }
+// ── Status → node colour (legend: Healthy / Deploying / Failed / Destroyed) ───
 
-// ── Types ────────────────────────────────────────────────────────────────────
+type NodeState = 'healthy' | 'deploying' | 'failed' | 'destroyed' | 'pending'
 
-type Service = 'iam' | 's3'
-
-interface GraphNode {
-  id: string
-  lines: string[]
-  resourceType: string
-  service: Service
-  col: 0 | 1
-  row: number
+const STATE_COLOR: Record<NodeState, string> = {
+  healthy:   '#5fc992',
+  deploying: '#ffbc33',
+  failed:    '#FF6363',
+  destroyed: '#6a6b6c',
+  pending:   '#6a6b6c',
 }
 
-interface GraphEdge {
-  from: string
-  to: string
+function stackNodeState(status: StackStatus): NodeState {
+  if (['ready', 'ready_for_attack', 'attacking', 'attack_complete'].includes(status)) return 'healthy'
+  if (status === 'failed') return 'failed'
+  if (['destroying', 'destroyed'].includes(status)) return 'destroyed'
+  if (status === 'pending') return 'pending'
+  return 'deploying'
 }
 
-// ── Static graph definition — mirrors src/__main__.py resource graph ──────────
+const ACCENT = '#55b3ff'
 
-const NODES: GraphNode[] = [
-  // Column 0: root resources (no dependencies within this stack)
-  { id: 'iam_user',        lines: ['IAM User'],              resourceType: 'AWS::IAM::User',                service: 'iam', col: 0, row: 0 },
-  { id: 'user_policy',     lines: ['User Policy'],           resourceType: 'AWS::IAM::ManagedPolicy',       service: 'iam', col: 0, row: 1 },
-  { id: 'iam_role',        lines: ['IAM Role'],              resourceType: 'AWS::IAM::Role',                service: 'iam', col: 0, row: 2 },
-  { id: 'role_policy',     lines: ['Role Policy'],           resourceType: 'AWS::IAM::ManagedPolicy',       service: 'iam', col: 0, row: 3 },
-  { id: 's3_bucket',       lines: ['S3 Bucket'],             resourceType: 'AWS::S3::Bucket',               service: 's3',  col: 0, row: 4 },
-  // Column 1: dependent resources (require column-0 resources to exist first)
-  { id: 'access_key',      lines: ['Access Key'],            resourceType: 'AWS::IAM::AccessKey',           service: 'iam', col: 1, row: 0 },
-  { id: 'login_cleanup',   lines: ['Login Profile', 'Cleanup'], resourceType: 'Custom::LoginCleanup',      service: 'iam', col: 1, row: 1 },
-  { id: 'user_attachment', lines: ['Policy Binding', '(User)'], resourceType: 'AWS::IAM::UserPolicyAttach', service: 'iam', col: 1, row: 2 },
-  { id: 'role_attachment', lines: ['Policy Binding', '(Role)'], resourceType: 'AWS::IAM::RolePolicyAttach', service: 'iam', col: 1, row: 3 },
-  { id: 's3_object',       lines: ['Bucket Object'],         resourceType: 'AWS::S3::BucketObject',         service: 's3',  col: 1, row: 4 },
-]
+// ── Pulumi type parsing → label + icon ────────────────────────────────────────
 
-const EDGES: GraphEdge[] = [
-  { from: 'iam_user',    to: 'access_key' },
-  { from: 'iam_user',    to: 'login_cleanup' },
-  { from: 'iam_user',    to: 'user_attachment' },
-  { from: 'user_policy', to: 'user_attachment' },
-  { from: 'iam_role',    to: 'role_attachment' },
-  { from: 'role_policy', to: 'role_attachment' },
-  { from: 's3_bucket',   to: 's3_object' },
-]
+type IconKey = 'user' | 'key' | 'doc' | 'shield' | 'link' | 'bucket' | 'cube' | 'gear'
 
-const NODE_BY_ID = Object.fromEntries(NODES.map((n) => [n.id, n]))
-
-// ── Style helpers ────────────────────────────────────────────────────────────
-
-const SVC_LIVE: Record<Service, string>     = { iam: '#fbbf24', s3: '#5fc992' }
-const SVC_DEPLOY: Record<Service, string>   = { iam: '#fbbf2455', s3: '#5fc99255' }
-const SVC_BADGE: Record<Service, { bg: string; text: string }> = {
-  iam: { bg: 'rgba(251,191,36,0.12)',  text: '#fbbf24' },
-  s3:  { bg: 'rgba(95,201,146,0.12)', text: '#5fc992' },
+const SERVICE_LABELS: Record<string, string> = {
+  s3: 'S3', iam: 'IAM', lambda: 'Lambda', ec2: 'EC2', dynamodb: 'DynamoDB',
+  cloudtrail: 'CloudTrail', secretsmanager: 'Secrets Manager', kms: 'KMS',
+  cloudwatch: 'CloudWatch', guardduty: 'GuardDuty', rds: 'RDS', sns: 'SNS', sqs: 'SQS',
 }
 
-function nodeStroke(service: Service, status: StackStatus, selected: boolean): string {
-  if (selected) return '#48e8c8'
-  if (['ready', 'ready_for_attack', 'attacking', 'attack_complete'].includes(status))
-    return SVC_LIVE[service]
-  if (status === 'deploying') return SVC_DEPLOY[service]
-  if (status === 'failed')    return 'rgba(255,99,99,0.45)'
-  return 'rgba(255,255,255,0.1)'
+/** Split "aws:s3/bucket:Bucket" into its service ("s3") and kind ("Bucket"). */
+function parseType(ptype: string): { service: string; kind: string } {
+  const parts = ptype.split(':')
+  const service = parts[1]?.split('/')[0] ?? ''
+  const kind = parts[2] ?? parts[0] ?? 'Resource'
+  return { service, kind }
 }
 
-function nodeFill(service: Service, status: StackStatus, selected: boolean): string {
-  if (selected) return 'rgba(72,232,200,0.06)'
-  if (['ready', 'ready_for_attack', 'attacking', 'attack_complete'].includes(status))
-    return service === 'iam' ? 'rgba(251,191,36,0.05)' : 'rgba(95,201,146,0.05)'
-  if (status === 'failed') return 'rgba(255,99,99,0.04)'
-  return '#101111'
+/** Human label for a node title, e.g. "S3 Bucket", "IAM Role". */
+function typeLabel(ptype: string): string {
+  const { service, kind } = parseType(ptype)
+  const sl = SERVICE_LABELS[service] ?? (service ? service.toUpperCase() : 'AWS')
+  return `${sl} ${kind}`
 }
 
-function groupOpacity(col: 0 | 1, status: StackStatus): number {
-  if (status === 'pending') return 0.4
-  if (status === 'deploying' && col === 1) return 0.7
-  if (status === 'failed') return 0.75
-  return 1
+function iconForType(ptype: string): IconKey {
+  const { service, kind } = parseType(ptype)
+  const k = kind.toLowerCase()
+  if (service === 's3') return k.includes('object') ? 'cube' : 'bucket'
+  if (service === 'iam') {
+    if (k.includes('user')) return 'user'
+    if (k.includes('role')) return 'shield'
+    if (k.includes('accesskey') || k.includes('key')) return 'key'
+    if (k.includes('attach')) return 'link'
+    if (k.includes('policy')) return 'doc'
+    return 'doc'
+  }
+  if (service === 'lambda') return 'gear'
+  return 'cube'
 }
 
-function edgeStroke(srcId: string, tgtId: string, selectedId: string | null): string {
-  if (srcId === selectedId || tgtId === selectedId) return 'rgba(72,232,200,0.5)'
-  return 'rgba(255,255,255,0.1)'
-}
+// ── Icon glyphs (drawn inside a 16×16 box, stroked in currentColor) ───────────
 
-// ── Bezier path between two nodes ────────────────────────────────────────────
-
-function bezierPath(src: GraphNode, tgt: GraphNode): string {
-  const sx = COL_X[src.col] + NW / 2
-  const sy = ry(src.row) + NH / 2
-  const tx = COL_X[tgt.col] - NW / 2
-  const ty = ry(tgt.row) + NH / 2
-  const cp = 65
-  return `M ${sx} ${sy} C ${sx + cp} ${sy}, ${tx - cp} ${ty}, ${tx} ${ty}`
-}
-
-// ── Per-node detail data ──────────────────────────────────────────────────────
-
-function nodeDetails(
-  node: GraphNode,
-  stack: Stack,
-): Array<{ key: string; value: string }> {
-  const n = stack.name
-  const o = stack.outputs
-
-  switch (node.id) {
-    case 'iam_user':
-      return [
-        { key: 'Name',         value: `mayatrail-user-${n}` },
-        { key: 'Path',         value: '/' },
-        { key: 'Force Destroy', value: 'Enabled' },
-        { key: 'Access Key ID', value: String(o.username ?? '—') },
-        { key: 'Tags',         value: 'test-key: test-value' },
-        { key: 'Managed By',   value: 'Pulumi' },
-      ]
-    case 'iam_role':
-      return [
-        { key: 'Name',           value: `mayatrail-role-${n}` },
-        { key: 'ARN',            value: String(o.role_arn ?? '(deploying…)') },
-        { key: 'Max Session',    value: '3600 s (1 hour)' },
-        { key: 'Trust Principal', value: `mayatrail-user-${n}` },
-        { key: 'Trust Action',   value: 'sts:AssumeRole' },
-        { key: 'Managed By',    value: 'Pulumi' },
-      ]
-    case 'access_key':
-      return [
-        { key: 'Access Key ID', value: String(o.username ?? '—') },
-        { key: 'Status',        value: 'Active' },
-        { key: 'Attached User', value: `mayatrail-user-${n}` },
-        { key: 'Secret Key',    value: '(encrypted by Pulumi)' },
-      ]
-    case 'login_cleanup':
-      return [
-        { key: 'Type',        value: 'Custom (Dynamic Resource)' },
-        { key: 'Purpose',     value: 'Deletes login profile before IAM user on destroy' },
-        { key: 'Username',    value: `mayatrail-user-${n}` },
-        { key: 'Runs On',     value: 'pulumi destroy' },
-        { key: 'Provider',    value: 'pulumi.dynamic.ResourceProvider' },
-      ]
-    case 'user_policy':
-      return [
-        { key: 'Policy Name', value: 'mayatrail-user-policy' },
-        { key: 'Permission 1', value: 'iam:* on *' },
-        { key: 'Permission 2', value: `sts:AssumeRole on mayatrail-role-${n}` },
-        { key: 'Attached To', value: `mayatrail-user-${n}` },
-      ]
-    case 'role_policy':
-      return [
-        { key: 'Policy Name',  value: 'mayatrail-role-policy' },
-        { key: 'Permission',   value: 'iam:AttachRolePolicy on *' },
-        { key: 'Attached To',  value: `mayatrail-role-${n}` },
-        { key: 'Purpose',      value: 'Allows role to escalate privileges via policy attachment' },
-      ]
-    case 'user_attachment':
-      return [
-        { key: 'Type',    value: 'IAM User Policy Attachment' },
-        { key: 'User',    value: `mayatrail-user-${n}` },
-        { key: 'Policy',  value: 'mayatrail-user-policy' },
-        { key: 'Effect',  value: 'Binds policy permissions to user identity' },
-      ]
-    case 'role_attachment':
-      return [
-        { key: 'Type',   value: 'IAM Role Policy Attachment' },
-        { key: 'Role',   value: `mayatrail-role-${n}` },
-        { key: 'Policy', value: 'mayatrail-role-policy' },
-        { key: 'Effect', value: 'Binds policy permissions to assumed role' },
-      ]
-    case 's3_bucket':
-      return [
-        { key: 'Bucket Name',  value: `mayatrail-step1-bucket-${n}` },
-        { key: 'Region',       value: stack.region },
-        { key: 'Type',         value: 'General Purpose' },
-        { key: 'Public Access', value: 'Blocked (default)' },
-        { key: 'Object URL',   value: String(o.object_url ?? '(deploying…)') },
-      ]
-    case 's3_object':
-      return [
-        { key: 'Object Key',  value: 'dummy-text-file1' },
-        { key: 'Bucket',      value: `mayatrail-step1-bucket-${n}` },
-        { key: 'Content',     value: 'Sample text file uploaded by Pulumi' },
-        { key: 'Object URL',  value: String(o.object_url ?? '(deploying…)') },
-      ]
-    default:
-      return []
+function IconGlyph({ icon }: { icon: IconKey }) {
+  const common = { stroke: 'currentColor', strokeWidth: 1.3, fill: 'none', strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
+  switch (icon) {
+    case 'user':   return <g {...common}><circle cx="8" cy="5.5" r="2.6" /><path d="M3.5 13c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4" /></g>
+    case 'key':    return <g {...common}><circle cx="5.5" cy="6" r="2.5" /><path d="M7.5 7.5L13 13M11 11l1.5-1.5M9.5 9.5l1.5-1.5" /></g>
+    case 'doc':    return <g {...common}><path d="M4 2.5h5l3 3V13.5H4z" /><path d="M9 2.5v3h3M6 8.5h4M6 10.5h4" /></g>
+    case 'shield': return <g {...common}><path d="M8 2.5l4.5 1.8v3.4c0 2.7-1.9 4.6-4.5 5.8-2.6-1.2-4.5-3.1-4.5-5.8V4.3z" /></g>
+    case 'link':   return <g {...common}><path d="M6.5 9.5l3-3M6 6.5L4.5 8a2.1 2.1 0 003 3l1-1M10 9.5L11.5 8a2.1 2.1 0 00-3-3l-1 1" /></g>
+    case 'bucket': return <g {...common}><path d="M3.5 4.5h9l-1 8.5a.8.8 0 01-.8.7H5.3a.8.8 0 01-.8-.7z" /><ellipse cx="8" cy="4.5" rx="4.5" ry="1.6" /></g>
+    case 'cube':   return <g {...common}><path d="M8 2.5l4.5 2.5v6L8 13.5 3.5 11V5z" /><path d="M3.5 5L8 7.5 12.5 5M8 7.5v6" /></g>
+    case 'gear':   return <g {...common}><circle cx="8" cy="8" r="2.2" /><path d="M8 2.5v1.6M8 11.9v1.6M2.5 8h1.6M11.9 8h1.6M4 4l1.1 1.1M10.9 10.9L12 12M12 4l-1.1 1.1M5.1 10.9L4 12" /></g>
   }
 }
 
-// ── Sub-components ───────────────────────────────────────────────────────────
+// ── Layout ────────────────────────────────────────────────────────────────────
 
-/** Single node rendered as an SVG group. */
+interface LayoutNode {
+  urn: string
+  name: string
+  type: string
+  x: number  // center
+  y: number  // center
+}
+
+interface LayoutEdge {
+  from: string
+  to: string
+  path: string
+}
+
+interface Layout {
+  nodes: LayoutNode[]
+  edges: LayoutEdge[]
+  width: number
+  height: number
+}
+
+function pointsToPath(points: Array<{ x: number; y: number }>): string {
+  if (points.length === 0) return ''
+  return points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
+}
+
+/** Run dagre over the persisted resources + edges. */
+function computeLayout(summary: StackResourceSummary): Layout {
+  const g = new dagre.graphlib.Graph()
+  g.setGraph({ rankdir: 'LR', nodesep: 26, ranksep: 90, marginx: 24, marginy: 24 })
+  g.setDefaultEdgeLabel(() => ({}))
+
+  // Coalesce — stacks deployed before M2 have resources but no `edges` key.
+  const srcResources = summary.resources ?? []
+  const srcEdges = summary.edges ?? []
+
+  const urns = new Set(srcResources.map((r) => r.urn))
+  srcResources.forEach((r) => g.setNode(r.urn, { width: NW, height: NH }))
+  srcEdges.forEach((e) => {
+    if (urns.has(e.from) && urns.has(e.to)) g.setEdge(e.from, e.to)
+  })
+
+  dagre.layout(g)
+
+  const nodes: LayoutNode[] = srcResources.map((r) => {
+    const n = g.node(r.urn)
+    return { urn: r.urn, name: r.name, type: r.type, x: n.x, y: n.y }
+  })
+  const edges: LayoutEdge[] = []
+  srcEdges.forEach((e) => {
+    if (!urns.has(e.from) || !urns.has(e.to)) return
+    const ge = g.edge(e.from, e.to)
+    edges.push({ from: e.from, to: e.to, path: pointsToPath(ge?.points ?? []) })
+  })
+
+  const graph = g.graph()
+  return { nodes, edges, width: graph.width ?? 100, height: graph.height ?? 100 }
+}
+
+// ── SVG node card ─────────────────────────────────────────────────────────────
+
 function SvgNode({
-  node,
-  status,
-  selected,
-  onClick,
+  node, state, selected, onClick,
 }: {
-  node: GraphNode
-  status: StackStatus
+  node: LayoutNode
+  state: NodeState
   selected: boolean
   onClick: () => void
 }) {
-  const x = COL_X[node.col] - NW / 2
-  const y = ry(node.row)
-  const cx = COL_X[node.col]
-  const cy = y + NH / 2
-  const svc = SVC_BADGE[node.service]
-  const isDeploying = status === 'deploying'
-  const isSingleLine = node.lines.length === 1
+  const x = node.x - NW / 2
+  const y = node.y - NH / 2
+  const color = STATE_COLOR[state]
+  const stroke = selected ? ACCENT : color
+  const icon = iconForType(node.type)
+  const title = typeLabel(node.type)
+  const isAnimated = state === 'deploying'
 
   return (
-    <g
-      onClick={onClick}
-      style={{
-        opacity: groupOpacity(node.col, status),
-        cursor: 'pointer',
-        animation: isDeploying
-          ? `pulse 2s cubic-bezier(0.4,0,0.6,1) infinite ${node.col === 1 ? '0.6s' : '0s'}`
-          : 'none',
-      }}
-    >
-      {/* Node body */}
-      <rect
-        x={x}
-        y={y}
-        width={NW}
-        height={NH}
-        rx={NRX}
-        fill={nodeFill(node.service, status, selected)}
-        stroke={nodeStroke(node.service, status, selected)}
-        strokeWidth={selected ? 1.5 : 1}
-      />
-
-      {/* Selection glow */}
+    <g onClick={onClick} style={{ cursor: 'pointer' }}>
       {selected && (
-        <rect
-          x={x - 2}
-          y={y - 2}
-          width={NW + 4}
-          height={NH + 4}
-          rx={NRX + 2}
-          fill="none"
-          stroke="rgba(72,232,200,0.2)"
-          strokeWidth={2}
-        />
+        <rect x={x - 3} y={y - 3} width={NW + 6} height={NH + 6} rx={NRX + 3}
+          fill="none" stroke={ACCENT} strokeOpacity={0.25} strokeWidth={2} />
       )}
+      <rect x={x} y={y} width={NW} height={NH} rx={NRX}
+        fill="#101111" stroke={stroke} strokeOpacity={selected ? 1 : 0.55} strokeWidth={selected ? 1.5 : 1} />
 
-      {/* Service badge — top-left corner */}
-      <rect
-        x={x + 7}
-        y={y + 6}
-        width={node.service === 'iam' ? 24 : 18}
-        height={14}
-        rx={3}
-        fill={svc.bg}
-      />
-      <text
-        x={x + 7 + (node.service === 'iam' ? 12 : 9)}
-        y={y + 16}
-        textAnchor="middle"
-        dominantBaseline="middle"
-        fill={svc.text}
-        fontSize={8}
-        fontFamily="GeistMono, ui-monospace, monospace"
-        fontWeight={600}
-        letterSpacing={0.3}
-      >
-        {node.service.toUpperCase()}
+      {/* Icon chip */}
+      <rect x={x + 10} y={y + NH / 2 - 13} width={26} height={26} rx={7} fill={color} fillOpacity={0.12} />
+      <g transform={`translate(${x + 15}, ${y + NH / 2 - 8})`} style={{ color }}>
+        <IconGlyph icon={icon} />
+      </g>
+
+      {/* Title + subtitle */}
+      <text x={x + 46} y={y + NH / 2 - 3} fill="#f9f9f9" fontSize={11} fontFamily="Inter, sans-serif" fontWeight={600} letterSpacing={0.1}>
+        {title.length > 20 ? `${title.slice(0, 19)}…` : title}
+      </text>
+      <text x={x + 46} y={y + NH / 2 + 11} fill="#9c9c9d" fontSize={8.5} fontFamily="Geist Mono, monospace" letterSpacing={0.2}>
+        {node.name.length > 22 ? `${node.name.slice(0, 21)}…` : node.name}
       </text>
 
-      {/* Node label */}
-      {isSingleLine ? (
-        <text
-          x={cx}
-          y={cy + 5}
-          textAnchor="middle"
-          dominantBaseline="middle"
-          fill="#f9f9f9"
-          fontSize={11.5}
-          fontFamily="Inter, sans-serif"
-          fontWeight={500}
-          letterSpacing={0.2}
-        >
-          {node.lines[0]}
-        </text>
-      ) : (
-        <text
-          x={cx}
-          textAnchor="middle"
-          fill="#f9f9f9"
-          fontSize={11}
-          fontFamily="Inter, sans-serif"
-          fontWeight={500}
-          letterSpacing={0.2}
-        >
-          <tspan x={cx} y={cy + 1}>{node.lines[0]}</tspan>
-          <tspan x={cx} dy={14} fill="#9c9c9d" fontSize={10}>{node.lines[1]}</tspan>
-        </text>
-      )}
+      {/* Status dot */}
+      <circle cx={x + NW - 13} cy={y + 13} r={3.2} fill={color}>
+        {isAnimated && <animate attributeName="opacity" values="1;0.3;1" dur="1.6s" repeatCount="indefinite" />}
+      </circle>
     </g>
   )
 }
 
-/** Detail panel shown to the right of the SVG when a node is selected. */
+// ── Detail panel ──────────────────────────────────────────────────────────────
+
 function DetailPanel({
-  node,
-  stack,
-  onClose,
+  node, stack, state, nodeByUrn, edges, onSelect, onClose,
 }: {
-  node: GraphNode
+  node: LayoutNode
   stack: Stack
+  state: NodeState
+  nodeByUrn: Record<string, LayoutNode>
+  edges: Array<{ from: string; to: string }>
+  onSelect: (urn: string) => void
   onClose: () => void
 }) {
-  const details = nodeDetails(node, stack)
-  const svc = SVC_BADGE[node.service]
+  const color = STATE_COLOR[state]
+  const icon = iconForType(node.type)
+  const title = typeLabel(node.type)
+  const healthMeta = STACK_HEALTH[deriveHealth(stack)]
+
+  const dependsOn = edges.filter((e) => e.to === node.urn).map((e) => nodeByUrn[e.from]).filter(Boolean) as LayoutNode[]
+  const usedBy = edges.filter((e) => e.from === node.urn).map((e) => nodeByUrn[e.to]).filter(Boolean) as LayoutNode[]
 
   return (
-    <div
-      className="w-[270px] shrink-0 bg-[#0d0e0f] border border-[rgba(255,255,255,0.08)] rounded-[10px] p-4 animate-slideUp"
-      style={{ boxShadow: 'rgb(27,28,30) 0px 0px 0px 1px, rgb(7,8,10) 0px 0px 0px 1px inset' }}
-    >
-      {/* Header */}
+    <div className="w-[280px] shrink-0 bg-surface-card border border-border rounded-card p-4 animate-slideUp shadow-ring">
       <div className="flex items-start justify-between gap-2 mb-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <span
-              className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded-[3px] uppercase tracking-[0.4px]"
-              style={{ background: svc.bg, color: svc.text }}
-            >
-              {node.service.toUpperCase()}
-            </span>
-          </div>
-          <div className="font-display text-[0.85rem] font-bold text-content-primary leading-tight">
-            {node.lines.join(' ')}
-          </div>
-          <div className="font-mono text-[9px] text-content-dim mt-0.5 truncate">
-            {node.resourceType}
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className="w-9 h-9 rounded-btn flex items-center justify-center shrink-0" style={{ background: `${color}1f`, color }}>
+            <svg width="18" height="18" viewBox="0 0 16 16"><IconGlyph icon={icon} /></svg>
+          </span>
+          <div className="min-w-0">
+            <div className="font-display text-[0.9rem] font-bold text-content-primary leading-tight truncate">{title}</div>
+            <div className="font-mono text-[10px] text-content-dim truncate">{node.name}</div>
           </div>
         </div>
-        <button
-          onClick={onClose}
-          className="text-content-dim hover:text-content-primary transition-opacity hover:opacity-60
-            bg-transparent border-none cursor-pointer text-[14px] leading-none shrink-0 mt-0.5"
-        >
+        <button onClick={onClose} aria-label="Close"
+          className="text-content-dim hover:text-content-primary transition-opacity hover:opacity-60 bg-transparent border-none cursor-pointer text-[14px] leading-none shrink-0">
           &#10005;
         </button>
       </div>
 
-      {/* Divider */}
-      <div className="h-px bg-[rgba(255,255,255,0.06)] mb-3" />
+      <div className="mb-3">
+        <Badge tone={healthMeta.tone} mono dot pulse={healthMeta.pulse}>{healthMeta.label}</Badge>
+      </div>
 
-      {/* Detail rows */}
-      <div className="flex flex-col gap-2.5">
-        {details.map(({ key, value }) => (
-          <div key={key}>
-            <div className="font-mono text-[8.5px] text-content-dim uppercase tracking-[1px] mb-0.5">
-              {key}
-            </div>
-            <div
-              className="font-mono text-[10px] text-content-secondary break-all leading-[1.5]"
-              style={{ letterSpacing: '0.2px' }}
-            >
-              {value}
-            </div>
-          </div>
-        ))}
+      <div className="h-px bg-border mb-3" />
+
+      <PanelRow label="Type" value={node.type} />
+      <PanelRow label="Name" value={node.name} />
+
+      <Relationship label="Depends On" nodes={dependsOn} onSelect={onSelect} />
+      <Relationship label="Used By" nodes={usedBy} onSelect={onSelect} />
+    </div>
+  )
+}
+
+function PanelRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="mb-2.5">
+      <div className="font-mono text-[8.5px] text-content-dim uppercase tracking-[1px] mb-0.5">{label}</div>
+      <div className="font-mono text-[10px] text-content-secondary break-all leading-[1.5]" style={{ letterSpacing: '0.2px' }}>{value}</div>
+    </div>
+  )
+}
+
+function Relationship({
+  label, nodes, onSelect,
+}: {
+  label: string
+  nodes: LayoutNode[]
+  onSelect: (urn: string) => void
+}) {
+  return (
+    <div className="mt-3">
+      <div className="font-mono text-[8.5px] text-content-dim uppercase tracking-[1px] mb-1.5">
+        {label} {nodes.length > 0 && `(${nodes.length})`}
+      </div>
+      {nodes.length === 0 ? (
+        <div className="font-mono text-[10px] text-content-dim">— None —</div>
+      ) : (
+        <div className="flex flex-col gap-1">
+          {nodes.map((n) => (
+            <button key={n.urn} onClick={() => onSelect(n.urn)}
+              className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-btn border border-border
+                bg-surface-base text-left transition-colors hover:border-accent-blue/40 cursor-pointer group">
+              <span className="font-mono text-[10px] text-content-secondary truncate">
+                {typeLabel(n.type)} <span className="text-content-dim">{n.name}</span>
+              </span>
+              <span className="text-content-dim group-hover:text-accent-blue transition-colors shrink-0">&rsaquo;</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Empty state ───────────────────────────────────────────────────────────────
+
+function GraphEmptyState() {
+  return (
+    <div className="rounded-card border border-border bg-surface-deep px-6 py-12 text-center">
+      <div className="font-body text-[0.95rem] text-content-secondary mb-1">No resource graph yet</div>
+      <div className="font-mono text-[11px] text-content-dim leading-[1.6] max-w-[360px] mx-auto">
+        Deploy or refresh this stack to capture its resources and dependencies from
+        Pulumi state. The graph appears here once an inventory has been recorded.
       </div>
     </div>
   )
 }
 
-// ── Main component ───────────────────────────────────────────────────────────
+// ── Main component ────────────────────────────────────────────────────────────
 
 export function InfraGraphView({ stack }: { stack: Stack }) {
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedUrn, setSelectedUrn] = useState<string | null>(null)
+  const summary = stack.resource_summary
+  const state = stackNodeState(stack.status)
 
-  const selectedNode: GraphNode | null = selectedId ? (NODE_BY_ID[selectedId] ?? null) : null
+  const layout = useMemo<Layout | null>(() => {
+    if (!summary || !summary.resources || summary.resources.length === 0) return null
+    return computeLayout(summary)
+  }, [summary])
 
-  function handleNodeClick(id: string) {
-    setSelectedId((prev) => (prev === id ? null : id))
-  }
+  if (!layout) return <GraphEmptyState />
 
-  const isLive = ['ready', 'ready_for_attack', 'attacking', 'attack_complete'].includes(stack.status)
+  const nodeByUrn = Object.fromEntries(layout.nodes.map((n) => [n.urn, n])) as Record<string, LayoutNode>
+  const selectedNode = selectedUrn ? (nodeByUrn[selectedUrn] ?? null) : null
+  const edgeList = summary?.edges ?? []
 
   return (
-    <div className="flex flex-col gap-2">
-      {/* Legend + status */}
+    <div className="flex flex-col gap-2.5">
+      {/* Header line */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <LegendDot color="#fbbf24" label="IAM" />
-          <LegendDot color="#5fc992" label="S3" />
-          <LegendDot color="#48e8c8" label="Selected" />
+        <div className="font-mono text-[10px] text-content-dim uppercase tracking-[1px]">
+          {layout.nodes.length} resources &middot; {layout.edges.length} dependencies
         </div>
-        <div className="font-mono text-[9px] text-content-dim uppercase tracking-[1px]">
-          {NODES.length} resources · {EDGES.length} dependencies · click a node for details
-        </div>
+        <div className="font-mono text-[9px] text-content-dim">click a node for details</div>
       </div>
 
       {/* Canvas + detail panel */}
       <div className="flex gap-3 items-start">
-        {/* SVG canvas */}
-        <div
-          className="flex-1 min-w-0 rounded-[8px] border border-[rgba(255,255,255,0.06)] overflow-hidden"
-          style={{ background: '#07080a' }}
-        >
-          <svg
-            viewBox={`0 0 ${CW} ${CH}`}
-            width="100%"
-            preserveAspectRatio="xMidYMid meet"
-            style={{ display: 'block' }}
-          >
+        <div className="flex-1 min-w-0 rounded-card border border-border overflow-hidden bg-surface-deep">
+          <svg viewBox={`0 0 ${layout.width} ${layout.height}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: 'block' }}>
             <defs>
-              {/* Arrowhead marker for default edges */}
-              <marker
-                id={`arrow-${stack.id}`}
-                markerWidth={8}
-                markerHeight={8}
-                refX={7}
-                refY={3.5}
-                orient="auto"
-              >
-                <path d="M 0 1 L 7 3.5 L 0 6 Z" fill="rgba(255,255,255,0.18)" />
+              <marker id={`arrow-${stack.id}`} markerWidth={8} markerHeight={8} refX={7} refY={3.5} orient="auto">
+                <path d="M 0 1 L 7 3.5 L 0 6 Z" fill="rgba(255,255,255,0.22)" />
               </marker>
-              {/* Arrowhead marker for highlighted edges */}
-              <marker
-                id={`arrow-hl-${stack.id}`}
-                markerWidth={8}
-                markerHeight={8}
-                refX={7}
-                refY={3.5}
-                orient="auto"
-              >
-                <path d="M 0 1 L 7 3.5 L 0 6 Z" fill="rgba(72,232,200,0.7)" />
+              <marker id={`arrow-hl-${stack.id}`} markerWidth={8} markerHeight={8} refX={7} refY={3.5} orient="auto">
+                <path d="M 0 1 L 7 3.5 L 0 6 Z" fill={ACCENT} />
               </marker>
             </defs>
 
-            {/* Column labels */}
-            <text
-              x={COL_X[0]}
-              y={14}
-              textAnchor="middle"
-              fill="rgba(255,255,255,0.2)"
-              fontSize={9}
-              fontFamily="GeistMono, monospace"
-              letterSpacing={1}
-            >
-              ROOT RESOURCES
-            </text>
-            <text
-              x={COL_X[1]}
-              y={14}
-              textAnchor="middle"
-              fill="rgba(255,255,255,0.2)"
-              fontSize={9}
-              fontFamily="GeistMono, monospace"
-              letterSpacing={1}
-            >
-              DEPENDENTS
-            </text>
-
-            {/* Column separator line */}
-            <line
-              x1={(COL_X[0] + COL_X[1]) / 2}
-              y1={22}
-              x2={(COL_X[0] + COL_X[1]) / 2}
-              y2={CH - 10}
-              stroke="rgba(255,255,255,0.04)"
-              strokeWidth={1}
-              strokeDasharray="4 4"
-            />
-
             {/* Edges */}
-            {EDGES.map(({ from, to }) => {
-              // Non-null assertions are safe — EDGES only references IDs that exist in NODES.
-              const src = NODE_BY_ID[from]!
-              const tgt = NODE_BY_ID[to]!
-              const highlighted = from === selectedId || to === selectedId
-              const stroke = edgeStroke(from, to, selectedId)
-              const markerId = highlighted
-                ? `arrow-hl-${stack.id}`
-                : `arrow-${stack.id}`
+            {layout.edges.map((e) => {
+              const highlighted = e.from === selectedUrn || e.to === selectedUrn
               return (
                 <path
-                  key={`${from}-${to}`}
-                  d={bezierPath(src, tgt)}
+                  key={`${e.from}->${e.to}`}
+                  d={e.path}
                   fill="none"
-                  stroke={stroke}
-                  strokeWidth={highlighted ? 1.5 : 1}
-                  markerEnd={`url(#${markerId})`}
-                  style={{ transition: 'stroke 0.2s ease, stroke-width 0.2s ease' }}
+                  stroke={highlighted ? ACCENT : 'rgba(255,255,255,0.12)'}
+                  strokeOpacity={highlighted ? 0.6 : 1}
+                  strokeWidth={highlighted ? 1.6 : 1}
+                  markerEnd={`url(#${highlighted ? `arrow-hl-${stack.id}` : `arrow-${stack.id}`})`}
+                  style={{ transition: 'stroke 0.2s ease' }}
                 />
               )
             })}
 
             {/* Nodes */}
-            {NODES.map((node) => (
+            {layout.nodes.map((node) => (
               <SvgNode
-                key={node.id}
+                key={node.urn}
                 node={node}
-                status={stack.status}
-                selected={selectedId === node.id}
-                onClick={() => handleNodeClick(node.id)}
+                state={state}
+                selected={selectedUrn === node.urn}
+                onClick={() => setSelectedUrn((prev) => (prev === node.urn ? null : node.urn))}
               />
             ))}
-
-            {/* "Live" pulse rings on ready stacks */}
-            {isLive && NODES.filter((n) => n.col === 0).map((node) => {
-              const cx = COL_X[node.col]
-              const cy = ry(node.row) + NH / 2
-              const color = SVC_LIVE[node.service]
-              return (
-                <circle
-                  key={`pulse-${node.id}`}
-                  cx={cx}
-                  cy={cy}
-                  r={NW / 2 - 2}
-                  fill="none"
-                  stroke={color}
-                  strokeWidth={1}
-                  opacity={0}
-                  style={{
-                    animation: `pingRing 2.5s ease-out infinite ${node.row * 0.3}s`,
-                  }}
-                />
-              )
-            })}
           </svg>
-
-          {/* Keyframe styles — injected inline since Tailwind has no ping-ring utility */}
-          <style>{`
-            @keyframes pingRing {
-              0%   { r: ${NW / 2 - 4}; opacity: 0.4; }
-              100% { r: ${NW / 2 + 14}; opacity: 0; }
-            }
-            @keyframes pulse {
-              0%, 100% { opacity: 1; }
-              50%       { opacity: 0.45; }
-            }
-          `}</style>
         </div>
 
-        {/* Node detail panel */}
         {selectedNode && (
           <DetailPanel
             node={selectedNode}
             stack={stack}
-            onClose={() => setSelectedId(null)}
+            state={state}
+            nodeByUrn={nodeByUrn}
+            edges={edgeList}
+            onSelect={setSelectedUrn}
+            onClose={() => setSelectedUrn(null)}
           />
         )}
+      </div>
+
+      {/* Legend */}
+      <div className="flex items-center gap-4 pt-0.5">
+        <LegendDot color={STATE_COLOR.healthy} label="Healthy" />
+        <LegendDot color={STATE_COLOR.deploying} label="Deploying" />
+        <LegendDot color={STATE_COLOR.failed} label="Failed" />
+        <LegendDot color={STATE_COLOR.destroyed} label="Destroyed" />
       </div>
     </div>
   )
 }
 
-// ── Legend dot ────────────────────────────────────────────────────────────────
-
 function LegendDot({ color, label }: { color: string; label: string }) {
   return (
     <div className="flex items-center gap-1.5">
-      <div className="w-2 h-2 rounded-full" style={{ background: color }} />
+      <span className="w-2 h-2 rounded-full" style={{ background: color }} />
       <span className="font-mono text-[9px] text-content-dim uppercase tracking-[0.8px]">{label}</span>
     </div>
   )

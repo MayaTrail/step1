@@ -27,6 +27,7 @@ import os
 import shutil
 import tempfile
 from collections.abc import Callable
+from datetime import datetime, timezone
 
 import boto3
 from botocore.exceptions import ClientError
@@ -48,6 +49,33 @@ STATE_BUCKET = os.environ.get("STATE_BUCKET", "mayatrail-state-bucket")
 # query parameter so Pulumi uses this region for S3 access independently of the
 # stack's deployment region (which may differ).
 STATE_BUCKET_REGION = os.environ.get("STATE_BUCKET_REGION", "ap-south-1")
+
+# Maximum number of captured Pulumi output lines persisted on the Stack record.
+# Pulumi runs can emit thousands of lines; we keep only the tail so the JSON
+# column stays small while still covering the end of a run (where failures show).
+MAX_LOG_LINES = 300
+
+# Maximum length of the persisted failure reason.  Pulumi CommandError messages
+# can be very large; the full detail lives in last_logs.
+MAX_ERROR_CHARS = 2000
+
+# Friendly display labels for common AWS service tokens parsed from Pulumi types.
+# Anything not listed falls back to the upper-cased service token.
+_SERVICE_LABELS: dict[str, str] = {
+    "s3": "S3",
+    "iam": "IAM",
+    "lambda": "Lambda",
+    "ec2": "EC2",
+    "dynamodb": "DynamoDB",
+    "cloudtrail": "CloudTrail",
+    "secretsmanager": "Secrets Manager",
+    "kms": "KMS",
+    "cloudwatch": "CloudWatch",
+    "guardduty": "GuardDuty",
+    "rds": "RDS",
+    "sns": "SNS",
+    "sqs": "SQS",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -257,45 +285,167 @@ def _get_pulumi_stack(
     return stack
 
 
-def _make_log_handler(label: str) -> tuple[list[str], Callable[[str], None]]:
+def _make_log_handler(label: str) -> tuple[list[dict], Callable[[str], None]]:
     """
-    Return a (lines_list, on_output) pair for capturing Pulumi output in real time.
+    Return an (entries_list, on_output) pair for capturing Pulumi output in real time.
 
-    Each line is forwarded to the Python logger immediately so it appears in
-    the worker log stream without waiting for the operation to complete.
+    Each line is forwarded to the Python logger immediately so it appears in the
+    worker log stream, and is also appended as a timestamped entry so it can be
+    persisted on the Stack record for the deployment-logs view.
 
     Args:
         label: Stack name used as context in log messages.
 
     Returns:
-        Tuple of (accumulated_lines, on_output_callback).
-        The callback appends to accumulated_lines and logs each line.
+        Tuple of (entries, on_output_callback).  Each entry is a dict
+        {"t": ISO-8601 UTC timestamp, "line": str}.
     """
-    lines: list[str] = []
+    entries: list[dict] = []
 
     def on_output(msg: str) -> None:
         stripped = msg.rstrip()
         logger.info("[pulumi/%s] %s", label, stripped)
-        lines.append(stripped)
+        entries.append({
+            "t": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "line": stripped,
+        })
 
-    return lines, on_output
+    return entries, on_output
 
 
-def _mark_failed(stack_id: str) -> None:
+def _trim_logs(entries: list[dict]) -> list[dict]:
+    """Return only the most recent MAX_LOG_LINES entries (the run's tail)."""
+    return entries[-MAX_LOG_LINES:]
+
+
+def _extract_error(exc: Exception) -> str:
     """
-    Best-effort: mark a Stack record as FAILED.
+    Build a concise failure reason from an exception, truncated for storage.
+
+    The full Pulumi output is retained separately in last_logs; this is the short
+    summary shown on the stack's failure node and logs header.
+
+    Args:
+        exc: The exception raised by the Pulumi operation.
+
+    Returns:
+        A trimmed single-string error message.
+    """
+    msg = str(exc).strip()
+    if len(msg) > MAX_ERROR_CHARS:
+        msg = msg[:MAX_ERROR_CHARS] + "… (truncated)"
+    return msg
+
+
+def _service_label(pulumi_type: str) -> str | None:
+    """
+    Derive a friendly AWS service label from a Pulumi resource type token.
+
+    Pulumi types look like "aws:s3/bucket:Bucket".  Only "aws:"-prefixed types
+    are counted; provider/stack pseudo-resources return None and are skipped.
+
+    Args:
+        pulumi_type: Pulumi type token from the exported state.
+
+    Returns:
+        A display label such as "S3" / "IAM", or None for non-AWS resources.
+    """
+    if not pulumi_type.startswith("aws:"):
+        return None
+    # "aws:s3/bucket:Bucket" -> module "s3/bucket" -> service "s3".
+    parts = pulumi_type.split(":")
+    if len(parts) < 2:
+        return None
+    service = parts[1].split("/")[0]
+    return _SERVICE_LABELS.get(service, service.upper())
+
+
+def _summarize_resources(pulumi_stack: "auto.Stack") -> dict:
+    """
+    Build an actual-resource inventory from the stack's exported Pulumi state.
+
+    Best-effort: any failure returns an empty summary rather than raising, so a
+    summary problem never fails an otherwise successful deploy.
+
+    Args:
+        pulumi_stack: The Automation API Stack whose state to export.
+
+    Returns:
+        Dict with keys:
+            total      — count of AWS resources
+            by_type    — {service_label: count}
+            resources  — [{"urn": str, "name": logical_name, "type": pulumi_type}]
+            edges      — [{"from": dependency_urn, "to": dependent_urn}]
+
+        The `urn` is the stable node id used by the resource graph; `edges` are
+        built from each resource's Pulumi `dependencies` (Milestone 2). Only
+        edges whose endpoints are both included AWS resources are kept, so links
+        to providers / the stack pseudo-resource are dropped.
+    """
+    try:
+        deployment = pulumi_stack.export_stack()
+        data = getattr(deployment, "deployment", None) or {}
+        raw = data.get("resources", []) or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not export stack state for resource summary: %s", exc)
+        return {}
+
+    by_type: dict[str, int] = {}
+    resources: list[dict] = []
+    included_urns: set[str] = set()
+    # (dependent_urn, [dependency_urns]) captured for a second pass, since an
+    # edge is only kept once both endpoints are known to be included resources.
+    dep_pairs: list[tuple[str, list]] = []
+
+    for res in raw:
+        ptype = res.get("type", "")
+        label = _service_label(ptype)
+        if label is None:
+            continue  # skip pulumi:providers:*, pulumi:pulumi:Stack, etc.
+        urn = res.get("urn", "")
+        name = urn.split("::")[-1] if "::" in urn else ptype
+        by_type[label] = by_type.get(label, 0) + 1
+        resources.append({"urn": urn, "name": name, "type": ptype})
+        included_urns.add(urn)
+        dep_pairs.append((urn, res.get("dependencies", []) or []))
+
+    # Build dependency edges (from = depended-upon, to = dependent), keeping only
+    # edges where both endpoints are included AWS resources. Deduplicated.
+    edges: list[dict] = []
+    seen_edges: set[tuple[str, str]] = set()
+    for to_urn, deps in dep_pairs:
+        for from_urn in deps:
+            if from_urn in included_urns and (from_urn, to_urn) not in seen_edges:
+                edges.append({"from": from_urn, "to": to_urn})
+                seen_edges.add((from_urn, to_urn))
+
+    return {
+        "total": len(resources),
+        "by_type": by_type,
+        "resources": resources,
+        "edges": edges,
+    }
+
+
+def _persist_failure(stack_id: str, entries: list[dict], exc: Exception) -> None:
+    """
+    Best-effort: mark a Stack FAILED and persist its logs + failure reason.
 
     Intentionally swallows all exceptions so it never masks the original error
     that triggered the failure path.
 
     Args:
         stack_id: UUID string of the Stack record.
+        entries:  Captured Pulumi output entries (may be empty).
+        exc:      The exception that caused the failure.
     """
     try:
         Stack = apps.get_model("infrastructure", "Stack")
         record = Stack.objects.get(id=stack_id)
         record.status = Stack.Status.FAILED
-        record.save(update_fields=["status", "updated_at"])
+        record.last_logs = _trim_logs(entries)
+        record.last_error = _extract_error(exc)
+        record.save(update_fields=["status", "last_logs", "last_error", "updated_at"])
     except Exception:
         pass
 
@@ -325,11 +475,11 @@ def deploy_stack(self, stack_id: str) -> dict:
     Stack = apps.get_model("infrastructure", "Stack")
 
     record = _get_stack_record(stack_id)
+    entries, on_output = _make_log_handler(record.name)
     tmp_dir = _prepare_work_dir(_resolve_work_dir(record.emulation_type))
     try:
         aws_creds = _get_aws_credentials(record)
         pulumi_stack = _get_pulumi_stack(record.name, record.region, aws_creds, work_dir=tmp_dir)
-        _, on_output = _make_log_handler(record.name)
 
         logger.info(
             "Starting deploy: stack=%s region=%s user=%s emulation=%s",
@@ -342,14 +492,20 @@ def deploy_stack(self, stack_id: str) -> dict:
 
         record.status = Stack.Status.READY
         record.outputs = outputs
-        record.save(update_fields=["status", "outputs", "updated_at"])
+        record.resource_summary = _summarize_resources(pulumi_stack)
+        record.last_logs = _trim_logs(entries)
+        record.last_error = ""
+        record.save(update_fields=[
+            "status", "outputs", "resource_summary",
+            "last_logs", "last_error", "updated_at",
+        ])
 
         logger.info("Deploy complete: stack=%s outputs_keys=%s", record.name, list(outputs))
         return {"stack_id": stack_id, "status": record.status}
 
     except Exception as exc:
         logger.error("Deploy failed: stack_id=%s error=%s", stack_id, exc, exc_info=True)
-        _mark_failed(stack_id)
+        _persist_failure(stack_id, entries, exc)
         raise self.retry(exc=exc, max_retries=0) from exc
 
     finally:
@@ -374,22 +530,23 @@ def destroy_stack(self, stack_id: str) -> dict:
     Stack = apps.get_model("infrastructure", "Stack")
 
     record = _get_stack_record(stack_id)
+    entries, on_output = _make_log_handler(record.name)
     tmp_dir = _prepare_work_dir(_resolve_work_dir(record.emulation_type))
     try:
         aws_creds = _get_aws_credentials(record)
         pulumi_stack = _get_pulumi_stack(record.name, record.region, aws_creds, work_dir=tmp_dir)
-        _, on_output = _make_log_handler(record.name)
 
         logger.info("Starting destroy: stack=%s region=%s emulation=%s", record.name, record.region, record.emulation_type)
         pulumi_stack.destroy(on_output=on_output)
 
+        # Success removes the DB record entirely — no logs to retain.
         record.delete()
         logger.info("Destroy complete: stack_id=%s — DB record deleted", stack_id)
         return {"stack_id": stack_id, "status": "destroyed"}
 
     except Exception as exc:
         logger.error("Destroy failed: stack_id=%s error=%s", stack_id, exc, exc_info=True)
-        _mark_failed(stack_id)
+        _persist_failure(stack_id, entries, exc)
         raise self.retry(exc=exc, max_retries=0) from exc
 
     finally:
@@ -414,24 +571,30 @@ def refresh_stack(self, stack_id: str) -> dict:
     Stack = apps.get_model("infrastructure", "Stack")
 
     record = _get_stack_record(stack_id)
+    entries, on_output = _make_log_handler(record.name)
     tmp_dir = _prepare_work_dir(_resolve_work_dir(record.emulation_type))
     try:
         aws_creds = _get_aws_credentials(record)
         pulumi_stack = _get_pulumi_stack(record.name, record.region, aws_creds, work_dir=tmp_dir)
-        _, on_output = _make_log_handler(record.name)
 
         logger.info("Starting refresh: stack=%s region=%s emulation=%s", record.name, record.region, record.emulation_type)
         pulumi_stack.refresh(on_output=on_output)
 
+        # Refresh re-syncs state with the cloud, so the inventory may have changed.
         record.status = Stack.Status.READY
-        record.save(update_fields=["status", "updated_at"])
+        record.resource_summary = _summarize_resources(pulumi_stack)
+        record.last_logs = _trim_logs(entries)
+        record.last_error = ""
+        record.save(update_fields=[
+            "status", "resource_summary", "last_logs", "last_error", "updated_at",
+        ])
 
         logger.info("Refresh complete: stack=%s", record.name)
         return {"stack_id": stack_id, "status": record.status}
 
     except Exception as exc:
         logger.error("Refresh failed: stack_id=%s error=%s", stack_id, exc, exc_info=True)
-        _mark_failed(stack_id)
+        _persist_failure(stack_id, entries, exc)
         raise self.retry(exc=exc, max_retries=0) from exc
 
     finally:

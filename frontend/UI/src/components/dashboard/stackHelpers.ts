@@ -36,6 +36,76 @@ export const STACK_STATUS: Record<StackStatus, StatusMeta> = {
     failed:           { label: 'Failed',     tone: 'red',     pulse: false, active: false },
 }
 
+/* ── Stack health labels (Milestone 1) ──────────────────────────────────────
+ *
+ * The backend carries 11 fine-grained lifecycle statuses. Operators, however,
+ * only need to answer "is this stack OK, working, broken, or gone?" at a glance.
+ * `deriveHealth` collapses the 11 statuses into the 6 PRD health labels.
+ *
+ * `Stale` has no backing status — it is derived: a stack that is past its
+ * auto-destroy TTL (`expires_at`) but has not yet been torn down. That is the
+ * one health state the raw status field cannot express.
+ */
+
+export type StackHealth =
+    | 'active'
+    | 'deploying'
+    | 'failed'
+    | 'stale'
+    | 'destroying'
+    | 'destroyed'
+
+interface HealthMeta {
+    /** Uppercase label shown on the badge. */
+    label: string
+    /** Badge tone (maps to the shared Badge component palette). */
+    tone: StatusTone
+    /** Pulse the badge dot — in-flight states only. */
+    pulse: boolean
+}
+
+export const STACK_HEALTH: Record<StackHealth, HealthMeta> = {
+    active:     { label: 'ACTIVE',     tone: 'green',   pulse: false },
+    deploying:  { label: 'DEPLOYING',  tone: 'blue',    pulse: true },
+    failed:     { label: 'FAILED',     tone: 'red',     pulse: false },
+    stale:      { label: 'STALE',      tone: 'yellow',  pulse: false },
+    destroying: { label: 'DESTROYING', tone: 'red',     pulse: true },
+    destroyed:  { label: 'DESTROYED',  tone: 'neutral', pulse: false },
+}
+
+/** Live statuses that represent a successfully deployed, running stack. */
+const ACTIVE_STATUSES = new Set<StackStatus>([
+    'ready',
+    'ready_for_attack',
+    'attacking',
+    'attack_complete',
+])
+
+/**
+ * True when a stack has blown past its auto-destroy deadline but is still alive.
+ *
+ * Only meaningful for enterprise stacks (demo stacks have no `expires_at` and so
+ * are never considered stale). Destroyed / destroying / failed stacks are
+ * excluded — they are already terminal or being cleaned up.
+ */
+export function isTtlExpired(stack: Stack): boolean {
+    if (!stack.expires_at) return false
+    if (['destroyed', 'destroying', 'failed'].includes(stack.status)) return false
+    return new Date(stack.expires_at).getTime() < Date.now()
+}
+
+/** Collapse a stack's fine-grained status into one of the 6 health labels. */
+export function deriveHealth(stack: Stack): StackHealth {
+    const { status } = stack
+    if (status === 'destroyed') return 'destroyed'
+    if (status === 'destroying') return 'destroying'
+    if (status === 'failed') return 'failed'
+    if (isTtlExpired(stack)) return 'stale'
+    if (ACTIVE_STATUSES.has(status)) return 'active'
+    // pending / deploying / ec2_booting / refreshing — all in-progress.
+    return 'deploying'
+}
+
 /** Telemetry counts derived from a stack list. */
 export interface Telemetry {
     active: number

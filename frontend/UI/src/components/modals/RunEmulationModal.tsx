@@ -275,20 +275,23 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
                 ) : estimate ? (
                   <div className="bg-surface-base border border-border rounded-[8px] p-4">
                     <div className="grid grid-cols-2 gap-2 mb-3">
-                      {estimate.resources.map((r, i) => (
-                        <div key={i} className="flex justify-between font-mono text-[11px]">
-                          <span className="text-content-dim">{r.name} x{r.count}</span>
-                          <span className="text-content-secondary">
-                            {r.cost_per_hour_usd === 0 ? 'Free' : `$${r.cost_per_hour_usd.toFixed(4)}/hr`}
-                          </span>
-                        </div>
-                      ))}
+                      {(estimate.resources ?? []).map((r, i) => {
+                        const cost = r.cost_per_hour_usd ?? 0
+                        return (
+                          <div key={i} className="flex justify-between font-mono text-[11px]">
+                            <span className="text-content-dim">{r.name} x{r.count}</span>
+                            <span className="text-content-secondary">
+                              {cost === 0 ? 'Free' : `$${cost.toFixed(4)}/hr`}
+                            </span>
+                          </div>
+                        )
+                      })}
                     </div>
                     <div className="border-t border-border pt-2 flex justify-between font-mono text-[12px]">
                       <span className="text-content-secondary font-medium">
                         Est. total ({estimate.defaultTtlHours}h TTL)
                       </span>
-                      <span className="text-accent-blue font-bold">${estimate.estimatedTotalUsd.toFixed(4)}</span>
+                      <span className="text-accent-blue font-bold">${(estimate.estimatedTotalUsd ?? 0).toFixed(4)}</span>
                     </div>
                     <div className="mt-2 font-mono text-[10px] text-content-dim">{estimate.note}</div>
                   </div>
