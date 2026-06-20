@@ -1,8 +1,0 @@
-$kind: collection
-description: |-
-  Read-only stack state endpoints used during the emulation lifecycle.
-
-  All write operations (deploy, destroy, refresh, preview) are routed through the Emulations folder — POST /api/emulations/deploy/ creates and deploys an emulation stack in one step, and POST /api/emulations/{id}/destroy/ tears it down. The legacy write actions on /api/stacks/{id}/* require an `emulation_type` that cannot be set via the create endpoint, so they are not exposed here.
-
-  Keep this folder open while running the emulation flow to poll status and progress.
-order: 2000

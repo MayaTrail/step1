@@ -226,8 +226,11 @@ DESIGN.md
 CLAUDE.md
 # Local superpowers specs/playbooks (working artifacts, not product code)
 docs/superpowers/
-# Local Postman app state (collections live in postman/ and backend/*.postman_collection.json)
+# Local Postman app state (collection lives in backend/*.postman_collection.json)
 .postman/
 
 # Local scratch/experimental work (not part of the test suite)
 tests/
+
+# Design reference screenshots (not part of the application)
+frontend/screens/

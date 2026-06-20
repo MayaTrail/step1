@@ -1,19 +1,22 @@
 """
 MANIFEST for the SCARLETEEL 2.0 enterprise emulation.
 
-schema_version 1 — first versioned format.  Increment this when adding fields
-that older registry or view code cannot safely ignore.
+schema_version 2 — adds the dashboard contract fields consumed by the metrics
+app (apps/metrics/contracts.py): a top-level `platform` identifier and an
+optional `added` month.  Increment this when adding fields that older registry
+or view code cannot safely ignore.
 
 All cost values are static estimates authored here — no AWS Pricing API calls
 are made.  The estimate endpoint reads resource_costs directly.
 
 UI metadata fields (origin, attack_path, mitre_mappings, references, etc.) are
 consumed by EmulationListView which serialises them to camelCase for the
-frontend.
+frontend.  The dashboard derives coverage metrics from `platform` and
+`mitre_mappings`.
 """
 
 MANIFEST = {
-    "schema_version": 1,
+    "schema_version": 2,
 
     # ── Identity ─────────────────────────────────────────────────────────────
     "name": "scarleteel",
@@ -27,6 +30,14 @@ MANIFEST = {
 
     # Readiness: explicit default, identical to the legacy ec2_http behavior.
     "readiness": {"type": "ec2_http", "ip_output": "vuln_instance_ip", "port": 8080, "path": "/health"},
+
+    # Primary platform this emulation targets — drives the Platform Coverage
+    # widget.  One of: aws, azure, gcp, k8s, ai (see SUPPORTED_PLATFORMS).
+    "platform": "aws",
+
+    # Month this emulation was added ("YYYY-MM").  Optional; reserved for the
+    # future Coverage Trend section.  Not yet consumed by any endpoint.
+    "added": "2023-07",
 
     # ── UI catalogue metadata ─────────────────────────────────────────────────
     "origin": "unknown",

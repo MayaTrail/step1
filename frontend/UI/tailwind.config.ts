@@ -62,6 +62,27 @@ export default {
         green:  'var(--green)',
         yellow: 'var(--yellow)',
         blue:   'var(--blue)',
+
+        // Dark foreground for buttons on light/translucent surfaces (DESIGN.md "Button Foreground")
+        'button-fg': '#18191a',
+      },
+
+      fontSize: {
+        // Micro mono labels (account ID caption, connection-mode eyebrow) — 10px
+        '2xs': ['10px', { lineHeight: '1.4' }],
+      },
+
+      letterSpacing: {
+        // px-based tracking scale from DESIGN.md typography rules
+        body:  '0.2px',  // body baseline
+        btn:   '0.3px',  // buttons, nav links
+        caps:  '0.5px',  // small uppercase tags
+        label: '1px',    // uppercase mono section labels
+      },
+
+      backgroundImage: {
+        // Keyboard key-cap gradient (DESIGN.md gradient system) — used on the avatar tile
+        key: 'linear-gradient(180deg, #121212 0%, #0d0d0d 100%)',
       },
 
       fontFamily: {

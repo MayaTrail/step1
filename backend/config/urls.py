@@ -15,4 +15,5 @@ urlpatterns = [
     path("api/stacks/", include("apps.infrastructure.urls")),
     path("api/emulations/", include("apps.emulations.urls")),
     path("api/logs/", include("apps.logs.urls")),
+    path("api/metrics/", include("apps.metrics.urls")),
 ]
