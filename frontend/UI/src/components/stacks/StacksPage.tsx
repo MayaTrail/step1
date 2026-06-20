@@ -40,6 +40,15 @@ import { EmptyState } from '@/components/ui/EmptyState'
 
 const BUSY_STATUSES = new Set<StackStatus>(['deploying', 'destroying', 'refreshing'])
 
+// Statuses where a stack is mid-operation — while any stack is in one of these,
+// the page live-polls so status, lifecycle, resource summary and the graph
+// update on their own (incl. deploys started from the emulations page), without
+// a manual refresh. Polling stops once every stack has settled.
+const LIVE_POLL_STATUSES = new Set<StackStatus>([
+    'pending', 'deploying', 'ec2_booting', 'refreshing', 'attacking', 'destroying',
+])
+const LIVE_POLL_INTERVAL_MS = 4000
+
 export function StacksPage() {
     const [stacks, setStacks] = useState<Stack[]>([])
     const [loading, setLoading] = useState(true)
@@ -80,6 +89,25 @@ export function StacksPage() {
     useEffect(() => () => { abortRefs.current.forEach((c) => c.abort()) }, [])
 
     const filtered = useMemo(() => filterStacks(stacks, filters), [stacks, filters])
+
+    // ── Live refresh while any stack is mid-operation ──
+    // Depends on the boolean (not the array) so the interval is set up once when
+    // work begins and torn down when everything settles — not re-created on
+    // every poll. Each tick replaces the list with authoritative server state,
+    // so the card, lifecycle and resource graph update in real time.
+    const hasLiveStack = useMemo(() => stacks.some((s) => LIVE_POLL_STATUSES.has(s.status)), [stacks])
+
+    useEffect(() => {
+        if (!hasLiveStack) return
+        const id = setInterval(async () => {
+            try {
+                setStacks(await listStacks())
+            } catch {
+                // Transient failure — the next tick retries.
+            }
+        }, LIVE_POLL_INTERVAL_MS)
+        return () => clearInterval(id)
+    }, [hasLiveStack])
 
     // ── Stack action (deploy/destroy/refresh/preview) ──
     const handleAction = useCallback(async (

@@ -20,6 +20,7 @@ const LIVE_STATUSES = new Set<StackStatus>([
     'deploying',
     'ec2_booting',
     'refreshing',
+    'destroying',
 ])
 
 const POLL_INTERVAL_MS = 3000

@@ -47,6 +47,7 @@ from apps.emulations.registry import get_emulation
 # duplicating the logic. (infrastructure.tasks does not import this module, so
 # there is no circular import.)
 from apps.infrastructure.tasks import (
+    _make_stream_handler,
     _persist_failure,
     _summarize_resources,
     _trim_logs,
@@ -567,7 +568,9 @@ def destroy_emulation_stack(self, stack_id: str) -> dict:
     try:
         stack = _get_stack(stack_id)
         stack.status = Stack.Status.DESTROYING
-        stack.save(update_fields=["status", "updated_at"])
+        # Store the destroy task id so /progress/ can stream live teardown logs.
+        stack.task_id = self.request.id
+        stack.save(update_fields=["status", "task_id", "updated_at"])
 
         aws_creds = _assume_user_role(stack.owner)
         source_dir = _emulation_work_dir(stack.emulation_type)
@@ -580,7 +583,7 @@ def destroy_emulation_stack(self, stack_id: str) -> dict:
                 work_dir=tmp_dir,
                 aws_creds=aws_creds,
             )
-            entries, on_output = _make_log_handler(stack.name)
+            entries, on_output = _make_stream_handler(self, self.request.id, stack.name)
 
             logger.info(
                 "Destroying emulation stack: name=%s type=%s region=%s",

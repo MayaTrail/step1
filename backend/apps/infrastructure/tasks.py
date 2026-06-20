@@ -313,6 +313,54 @@ def _make_log_handler(label: str) -> tuple[list[dict], Callable[[str], None]]:
     return entries, on_output
 
 
+def _make_stream_handler(
+    task_instance, task_id: str, label: str,
+) -> tuple[list[dict], Callable[[str], None]]:
+    """
+    Return an (entries, on_output) pair that streams Pulumi output to the Celery
+    result backend in real time, so the deployment-logs view can show a long
+    operation (e.g. a destroy) live via the /progress/ endpoint's recent_logs.
+
+    Each line is logged and captured as a timestamped entry; every couple of
+    lines the most recent lines are flushed to Redis via update_state(PROGRESS).
+
+    IMPORTANT: Pulumi calls on_output from a dedicated output-consumer thread,
+    where self.request.id is empty — so the task id must be captured in the main
+    thread and passed in explicitly. Reporting failures are swallowed so they can
+    never break the underlying operation.
+
+    Args:
+        task_instance: The bound Celery task (self), for update_state.
+        task_id:       Task id captured in the main thread (self.request.id).
+        label:         Stack name used as log context.
+
+    Returns:
+        Tuple of (entries, on_output_callback).
+    """
+    entries: list[dict] = []
+    state = {"n": 0}
+
+    def on_output(msg: str) -> None:
+        stripped = msg.rstrip()
+        logger.info("[pulumi/%s] %s", label, stripped)
+        entries.append({
+            "t": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "line": stripped,
+        })
+        state["n"] += 1
+        if state["n"] % 2 == 0:
+            try:
+                task_instance.update_state(
+                    task_id=task_id,
+                    state="PROGRESS",
+                    meta={"recent_logs": [e["line"] for e in entries[-12:]]},
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("stream update_state failed (non-fatal): %s", exc)
+
+    return entries, on_output
+
+
 def _trim_logs(entries: list[dict]) -> list[dict]:
     """Return only the most recent MAX_LOG_LINES entries (the run's tail)."""
     return entries[-MAX_LOG_LINES:]
@@ -530,7 +578,10 @@ def destroy_stack(self, stack_id: str) -> dict:
     Stack = apps.get_model("infrastructure", "Stack")
 
     record = _get_stack_record(stack_id)
-    entries, on_output = _make_log_handler(record.name)
+    # Store the destroy task id so the /progress/ endpoint can stream live logs.
+    record.task_id = self.request.id
+    record.save(update_fields=["task_id", "updated_at"])
+    entries, on_output = _make_stream_handler(self, self.request.id, record.name)
     tmp_dir = _prepare_work_dir(_resolve_work_dir(record.emulation_type))
     try:
         aws_creds = _get_aws_credentials(record)
