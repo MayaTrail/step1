@@ -220,6 +220,7 @@ node_modules/
 CLAUDE.md
 .gemini/
 step1-plans/
+changelog.md
 
 # Documentations
 DESIGN.md
