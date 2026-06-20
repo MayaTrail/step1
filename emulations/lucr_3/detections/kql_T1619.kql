@@ -1,0 +1,24 @@
+// T1619 - Cloud Storage Object Discovery
+// Detects bulk S3 listing operations from non-service principals - LUCR-3 pre-exfil recon
+// Log source: AWSCloudTrail table in Microsoft Sentinel
+AWSCloudTrail
+| where EventSource == "s3.amazonaws.com"
+| where EventName in ("ListBuckets", "ListObjects", "ListObjectsV2")
+| where not(UserAgent has_any ("aws-sdk", "Terraform", "S3-Console", "aws-backup"))
+| summarize
+    ListOps         = count(),
+    ListTypes       = make_set(EventName),
+    BucketsAccessed = make_set(tostring(parse_json(RequestParameters).bucketName)),
+    SourceIPs       = make_set(SourceIpAddress)
+    by bin(TimeGenerated, 10m), UserIdentityArn
+| where ListOps > 5
+| extend UniqueBuckets = array_length(BucketsAccessed)
+| project
+    TimeGenerated,
+    UserIdentityArn,
+    ListOps,
+    UniqueBuckets,
+    ListTypes,
+    BucketsAccessed,
+    SourceIPs
+| sort by ListOps desc

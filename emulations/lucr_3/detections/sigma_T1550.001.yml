@@ -1,0 +1,37 @@
+title: LUCR-3 Stolen GitHub PAT Usage from Anomalous IP
+id: b2e9f6a4-4c1d-4b8e-a3f7-7c0a4e2b6f9d
+status: experimental
+description: >
+  Detects GitHub API authentication attempts via personal access token from IP
+  addresses not associated with known CI/CD runners or developer networks.
+  LUCR-3 harvests GitHub PATs from AWS SecretsManager and uses them to
+  enumerate and clone source code repositories for IP theft.
+references:
+    - https://attack.mitre.org/techniques/T1550/001/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1550.001
+    - lucr3
+    - scattered_spider
+logsource:
+    product: github
+    service: audit
+detection:
+    selection:
+        action:
+            - 'personal_access_token.create'
+            - 'personal_access_token.access_created'
+    filter_known_actors:
+        actor|contains:
+            - 'bot'
+            - '[bot]'
+    filter_known_ip:
+        actor_location.country_code:
+            - 'US'
+    condition: selection and not filter_known_actors
+falsepositives:
+    - Legitimate developers creating new PATs from home networks
+    - CI/CD system creating machine PATs from cloud runner IPs
+level: medium

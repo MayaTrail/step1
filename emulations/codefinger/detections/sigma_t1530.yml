@@ -1,0 +1,49 @@
+title: Codefinger - High-Volume S3 Object Enumeration Before Encryption
+id: c4e9a2d7-15f3-4b8c-b1e0-7a3d5c0f2b8e
+status: experimental
+description: |
+  Detects the pre-encryption reconnaissance phase of the Codefinger S3 ransomware campaign.
+  The actor uses a stolen IAM key to perform high-volume ListObjectsV2 and HeadObject calls
+  across multiple S3 prefixes in rapid succession, building an inventory of objects to encrypt.
+  This pattern -- bulk metadata collection spanning multiple prefixes from a single IAM identity
+  in a short window -- is strongly indicative of automated tooling staging an encryption run.
+  The technique maps to T1530 (Data from Cloud Storage) used as a precursor to T1486.
+references:
+    - https://attack.mitre.org/techniques/T1530/
+    - https://halcyon.ai/blog/codefinger
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.collection
+    - attack.t1530
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_list:
+        eventSource: 's3.amazonaws.com'
+        eventName:
+            - 'ListObjects'
+            - 'ListObjectsV2'
+        userIdentity.type: 'IAMUser'
+    selection_head:
+        eventSource: 's3.amazonaws.com'
+        eventName: 'HeadObject'
+        userIdentity.type: 'IAMUser'
+    filter_backup_agents:
+        userAgent|contains:
+            - 'aws-backup'
+            - 'aws-replication'
+            - 'S3BatchOperations'
+            - 'CloudFormation'
+    filter_service_accounts:
+        userIdentity.principalId|contains:
+            - 'svc-backup'
+            - 'svc-replication'
+    condition: (selection_list or selection_head) and not (filter_backup_agents or filter_service_accounts)
+falsepositives:
+    - AWS Backup or third-party backup agents performing scheduled inventory
+    - S3 batch operations listing objects before processing
+    - Security scanning tools (Macie, Prowler) running data classification jobs
+    - Data migration workflows performing pre-migration inventory
+level: medium

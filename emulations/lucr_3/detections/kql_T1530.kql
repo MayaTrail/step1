@@ -1,0 +1,28 @@
+// T1530 - Data from Cloud Storage (S3 Exfiltration)
+// NOTE: CloudTrail is stopped before exfiltration. Use S3 server access logs or
+// the CloudTrail event stream gap as the primary signal. This query detects pre-stop
+// ListObjects and any post-stop GetObject events visible in S3 server access logs
+// ingested independently into Sentinel.
+// Log source: AWSCloudTrail (pre-stop) + AWSVPCFlow or custom S3ServerAccessLog_CL
+AWSCloudTrail
+| where EventSource == "s3.amazonaws.com"
+| where EventName in ("GetObject", "ListObjects", "ListObjectsV2")
+| where UserIdentityType == "IAMUser"
+| where not(UserIdentityArn has_any ("BackupRole", "S3ReplicationRole", "backup-", "macie"))
+| summarize
+    OpCount         = count(),
+    BucketsAccessed = make_set(tostring(parse_json(RequestParameters).bucketName)),
+    SourceIPs       = make_set(SourceIpAddress),
+    Operations      = make_set(EventName)
+    by bin(TimeGenerated, 10m), UserIdentityArn
+| where OpCount > 100
+| extend UniqueBuckets = array_length(BucketsAccessed)
+| project
+    TimeGenerated,
+    UserIdentityArn,
+    OpCount,
+    UniqueBuckets,
+    BucketsAccessed,
+    SourceIPs,
+    Operations
+| sort by OpCount desc

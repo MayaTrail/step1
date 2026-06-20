@@ -1,0 +1,133 @@
+// FILE: kql_t1490.kql
+// T1490 Inhibit System Recovery - Codefinger Versioning Suspension + Version Purge
+// Detects versioning disabled and bulk DeleteObjectVersion to block S3 recovery
+// Platform: AWS CloudTrail -> Microsoft Sentinel AWSCloudTrail table
+
+// --- Query 1: PutBucketVersioning transitioning to Suspended ---
+AWSCloudTrail
+| where EventName == "PutBucketVersioning"
+| where EventSource == "s3.amazonaws.com"
+// Target Suspended state (Enabled->Suspended is the attack; Enabled->MfaDelete is expected)
+| where RequestParameters contains "Suspended"
+| where UserIdentityType != "AWSService"
+| where UserAgent !contains "terraform"
+| where UserAgent !contains "pulumi"
+| where UserAgent !contains "cloudformation"
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityUserName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    RequestParameters,
+    AwsRegion,
+    ErrorCode
+| sort by TimeGenerated desc
+
+
+// --- Query 2: Bulk DeleteObjectVersion calls from IAM users ---
+AWSCloudTrail
+| where EventName in ("DeleteObjectVersion", "DeleteObjects")
+| where EventSource == "s3.amazonaws.com"
+| where UserIdentityType == "IAMUser"
+// DeleteObjects with versionId set = explicit version purge
+| where RequestParameters contains "versionId"
+| summarize
+    VersionDeleteCount = count(),
+    FirstDelete = min(TimeGenerated),
+    LastDelete = max(TimeGenerated)
+    by bin(TimeGenerated, 10m), UserIdentityUserName, UserIdentityArn, SourceIpAddress
+| where VersionDeleteCount >= 3
+| extend DeleteWindowSeconds = datetime_diff("second", LastDelete, FirstDelete)
+| project
+    WindowStart = TimeGenerated,
+    UserIdentityUserName,
+    UserIdentityArn,
+    SourceIpAddress,
+    VersionDeleteCount,
+    FirstDelete,
+    LastDelete,
+    DeleteWindowSeconds
+| sort by VersionDeleteCount desc
+
+
+// --- Query 3: Versioning suspension followed by version purge same principal ---
+let SuspendEvents = AWSCloudTrail
+    | where EventName == "PutBucketVersioning"
+    | where RequestParameters contains "Suspended"
+    | where UserIdentityType != "AWSService"
+    | project SuspendTime = TimeGenerated, Principal = UserIdentityArn, SuspendIP = SourceIpAddress;
+let PurgeEvents = AWSCloudTrail
+    | where EventName in ("DeleteObjectVersion", "DeleteObjects")
+    | where RequestParameters contains "versionId"
+    | where UserIdentityType == "IAMUser"
+    | summarize PurgeCount = count(), PurgeTime = min(TimeGenerated) by UserIdentityArn;
+SuspendEvents
+| join kind=inner PurgeEvents on $left.Principal == $right.UserIdentityArn
+| where PurgeTime > SuspendTime and PurgeTime < SuspendTime + 60m
+| project
+    Principal,
+    SuspendIP,
+    SuspendTime,
+    PurgeTime,
+    PurgeCount,
+    DelayMinutes = datetime_diff("minute", PurgeTime, SuspendTime)
+| sort by SuspendTime desc
+
+
+// --- Query 4: Complete Codefinger kill chain signature in a single IAM session ---
+// SSE-C PutObject + Lifecycle + Versioning Suspend + DeleteObjectVersion
+// Any 3 of 4 signals from same principal within 2 hours = high-confidence match
+let Principal_SSECEncrypt = AWSCloudTrail
+    | where EventName == "PutObject" and RequestParameters contains "x-amz-server-side-encryption-customer-algorithm"
+    | where UserIdentityType == "IAMUser"
+    | distinct UserIdentityArn, EncryptTime = TimeGenerated;
+let Principal_Lifecycle = AWSCloudTrail
+    | where EventName == "PutBucketLifecycleConfiguration"
+    | where UserIdentityType == "IAMUser"
+    | distinct UserIdentityArn, LifecycleTime = TimeGenerated;
+let Principal_VersionSuspend = AWSCloudTrail
+    | where EventName == "PutBucketVersioning" and RequestParameters contains "Suspended"
+    | where UserIdentityType != "AWSService"
+    | distinct UserIdentityArn, SuspendTime = TimeGenerated;
+let Principal_VersionPurge = AWSCloudTrail
+    | where EventName in ("DeleteObjectVersion", "DeleteObjects") and RequestParameters contains "versionId"
+    | where UserIdentityType == "IAMUser"
+    | distinct UserIdentityArn, PurgeTime = TimeGenerated;
+Principal_SSECEncrypt
+| join kind=inner Principal_Lifecycle on UserIdentityArn
+| join kind=inner Principal_VersionSuspend on UserIdentityArn
+| join kind=leftouter Principal_VersionPurge on UserIdentityArn
+| where abs(datetime_diff("hour", LifecycleTime, EncryptTime)) <= 2
+| where abs(datetime_diff("hour", SuspendTime, EncryptTime)) <= 2
+| project
+    UserIdentityArn,
+    EncryptTime,
+    LifecycleTime,
+    SuspendTime,
+    PurgeTime,
+    KillChainSignalsPresent = case(
+        isnotempty(PurgeTime), "SSE-C Encrypt + Lifecycle + Version Suspend + Version Purge (FULL CHAIN)",
+        "SSE-C Encrypt + Lifecycle + Version Suspend (3/4 signals)"
+    )
+| sort by EncryptTime desc
+
+
+// --- Query 5: EventBridge-compatible alert anchor - versioning disabled on any bucket ---
+// Use this as the trigger condition for automated response (e.g., SNS notification, Lambda remediation)
+AWSCloudTrail
+| where EventName == "PutBucketVersioning"
+| where EventSource == "s3.amazonaws.com"
+| where RequestParameters contains "Suspended"
+| where UserIdentityType == "IAMUser"
+| project
+    AlertTime = TimeGenerated,
+    Severity = "CRITICAL",
+    Description = "S3 versioning suspended by IAM user - potential ransomware recovery inhibition",
+    Principal = UserIdentityArn,
+    SourceIP = SourceIpAddress,
+    Region = AwsRegion,
+    RequestDetail = RequestParameters
+| sort by AlertTime desc

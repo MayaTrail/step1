@@ -1,0 +1,26 @@
+// T1578.002 - Modify Cloud Compute Infrastructure: Create Cloud Instance
+// Detects RunInstances by IAM user outside deployment pipelines - LUCR-3 staging host
+// Log source: AWSCloudTrail table in Microsoft Sentinel
+AWSCloudTrail
+| where EventName == "RunInstances"
+| where EventSource == "ec2.amazonaws.com"
+| where UserIdentityType == "IAMUser"
+| where not(UserAgent has_any ("CodePipeline", "codedeploy", "terraform", "packer", "aws-cdk"))
+| where not(UserIdentityArn has_any ("CodePipeline", "CodeDeploy"))
+| extend
+    Actor           = UserIdentityArn,
+    InstanceCount   = toint(parse_json(RequestParameters).maxCount),
+    ImageId         = tostring(parse_json(RequestParameters).instanceType),
+    SubnetId        = tostring(parse_json(RequestParameters).subnetId),
+    Region          = AWSRegion
+| project
+    TimeGenerated,
+    Actor,
+    SourceIpAddress,
+    InstanceCount,
+    ImageId,
+    SubnetId,
+    Region,
+    UserAgent,
+    ErrorCode
+| sort by TimeGenerated desc

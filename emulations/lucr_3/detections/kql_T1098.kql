@@ -1,0 +1,23 @@
+// T1098 - Account Manipulation (AdministratorAccess attached to IAM user)
+// High-confidence LUCR-3 indicator: broad policy grant to new backdoor user
+// Log source: AWSCloudTrail table in Microsoft Sentinel
+AWSCloudTrail
+| where EventName == "AttachUserPolicy"
+| where EventSource == "iam.amazonaws.com"
+| where tostring(parse_json(RequestParameters).policyArn) == "arn:aws:iam::aws:policy/AdministratorAccess"
+| where not(UserIdentityArn has_any ("BreakGlass", "break-glass", "emergency"))
+| extend
+    Actor           = UserIdentityArn,
+    TargetUser      = tostring(parse_json(RequestParameters).userName),
+    PolicyAttached  = tostring(parse_json(RequestParameters).policyArn),
+    Region          = AWSRegion
+| project
+    TimeGenerated,
+    Actor,
+    TargetUser,
+    PolicyAttached,
+    SourceIpAddress,
+    UserAgent,
+    Region,
+    ErrorCode
+| sort by TimeGenerated desc

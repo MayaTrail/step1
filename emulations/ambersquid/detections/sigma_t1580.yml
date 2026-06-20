@@ -1,0 +1,68 @@
+# FILE: sigma_t1580.yml
+title: AMBERSQUID - Cloud Infrastructure Discovery with Canary Credential Access
+id: e6b2d9f4-1a7c-3e8b-d2f6-7a9c4b1e8d3f
+status: experimental
+description: >
+  Detects AMBERSQUID's discovery phase: broad AWS infrastructure enumeration
+  (DescribeRegions, GetAccountSummary, ListRoles, ListUsers, ListBuckets) followed
+  by targeted access to high-value artifacts — S3 GetObject on terraform.tfstate
+  (canary trigger) and SecretsManager GetSecretValue on database credential secrets.
+  Two high-fidelity sub-patterns: (1) ListBuckets immediately followed by GetObject
+  on a key containing "terraform.tfstate" or "tfstate" — attacker pivoting from
+  bucket enumeration to Terraform state theft; (2) GetSecretValue on secrets not
+  used by application code (canary secrets).
+references:
+    - https://attack.mitre.org/techniques/T1580/
+    - https://unit42.paloaltonetworks.com/ambersquid/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1580
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_tfstate:
+        eventSource: s3.amazonaws.com
+        eventName: GetObject
+        requestParameters.key|contains:
+            - 'terraform.tfstate'
+            - '.tfstate'
+    selection_canary_secret:
+        eventSource: secretsmanager.amazonaws.com
+        eventName: GetSecretValue
+        requestParameters.secretId|contains:
+            - 'prod/database'
+            - 'master_credentials'
+            - 'rds/admin'
+            - 'prod/rds'
+    selection_iam_mass_enum:
+        eventSource: iam.amazonaws.com
+        eventName:
+            - GetAccountSummary
+            - ListRoles
+            - ListUsers
+        userIdentity.type: IAMUser
+    filter_console:
+        userAgent|contains:
+            - 'console.aws.amazon.com'
+    filter_terraform_runner:
+        userAgent|contains:
+            - 'terraform'
+            - 'HashiCorp'
+    filter_secret_rotation:
+        userIdentity.invokedBy: secretsmanager.amazonaws.com
+    condition: >
+      (selection_tfstate or selection_canary_secret or selection_iam_mass_enum)
+      and not filter_console and not filter_terraform_runner and not filter_secret_rotation
+falsepositives:
+    - Terraform CI/CD pipelines reading their own state files from S3 remote backends
+    - Application code reading RDS credentials from SecretsManager at startup
+    - Security audit tools (AWS Config, Prowler, Steampipe) performing IAM enumeration
+level: high
+# Canary-specific: GetObject on S3 bucket with "terraform-state" in bucket name
+# from a session that performed ListBuckets within the preceding 60 seconds is
+# a definitive indicator of terraform.tfstate credential theft (prod-deploy-svc AKIA key).
+# GetSecretValue on prod/database/master_credentials with non-application userAgent
+# (no 'aws-sdk' prefix in expected app UA pattern) is a hard canary trigger.

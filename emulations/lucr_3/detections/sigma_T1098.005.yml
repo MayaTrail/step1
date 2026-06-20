@@ -1,0 +1,35 @@
+title: LUCR-3 Attacker Device Enrollment - New MFA Factor Activated Outside Corporate Network
+id: d2b8f6c4-1e5a-4d9b-c3f7-4b9e2a5c8d1f
+status: experimental
+description: >
+  Detects user.mfa.factor.activate events originating from IPs outside corporate
+  address space. LUCR-3 enrolls attacker-controlled TOTP devices after gaining
+  an Okta session, creating persistent re-authentication that survives a victim
+  password reset. Factor enrollment outside business hours amplifies severity.
+references:
+    - https://attack.mitre.org/techniques/T1098/005/
+    - https://www.cisa.gov/sites/default/files/2023-11/aa23-320a_scattered_spider.pdf
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.persistence
+    - attack.t1098.005
+    - lucr3
+    - scattered_spider
+logsource:
+    product: okta
+    service: okta
+detection:
+    selection:
+        eventType: 'user.mfa.factor.activate'
+        outcome.result: 'SUCCESS'
+    filter_known_ip:
+        client.ipAddress|cidr:
+            - '10.0.0.0/8'
+            - '172.16.0.0/12'
+            - '192.168.0.0/16'
+    condition: selection and not filter_known_ip
+falsepositives:
+    - Remote employees enrolling new authenticator apps from home networks
+    - IT-initiated factor enrollment during onboarding via remote session
+level: high

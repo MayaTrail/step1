@@ -1,0 +1,130 @@
+// FILE: kql_t1486.kql
+// T1486 Data Encrypted for Impact - Codefinger SSE-C S3 Ransomware Encryption
+// Detects SSE-C PutObject burst replacing plaintext objects with encrypted copies
+// Platform: AWS CloudTrail -> Microsoft Sentinel AWSCloudTrail table
+
+// --- Query 1: SSE-C PutObject calls - any use of customer-provided encryption ---
+AWSCloudTrail
+| where EventName == "PutObject"
+| where EventSource == "s3.amazonaws.com"
+// SSE-C usage is surfaced in RequestParameters
+| where RequestParameters contains "x-amz-server-side-encryption-customer-algorithm"
+| where UserIdentityType != "AWSService"
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityUserName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    RequestParameters,
+    AwsRegion,
+    ErrorCode
+| sort by TimeGenerated desc
+
+
+// --- Query 2: SSE-C PutObject burst - high-volume in-place overwrite pattern ---
+AWSCloudTrail
+| where EventName == "PutObject"
+| where EventSource == "s3.amazonaws.com"
+| where RequestParameters contains "x-amz-server-side-encryption-customer-algorithm"
+| where UserIdentityType != "AWSService"
+| summarize
+    SSECPutCount = count(),
+    DistinctKeys = dcount(RequestParameters),
+    FirstEncryption = min(TimeGenerated),
+    LastEncryption = max(TimeGenerated)
+    by bin(TimeGenerated, 15m), UserIdentityUserName, UserIdentityArn, SourceIpAddress
+// Flag: >5 SSE-C puts in 15 min from same principal (tune threshold to org baseline)
+| where SSECPutCount > 5
+| extend EncryptionWindowSeconds = datetime_diff("second", LastEncryption, FirstEncryption)
+| project
+    WindowStart = TimeGenerated,
+    UserIdentityUserName,
+    UserIdentityArn,
+    SourceIpAddress,
+    SSECPutCount,
+    DistinctKeys,
+    FirstEncryption,
+    LastEncryption,
+    EncryptionWindowSeconds
+| sort by SSECPutCount desc
+
+
+// --- Query 3: In-place overwrite detection - GetObject then PutObject same key ---
+// Detects the read-then-reencrypt pattern: attacker reads plaintext, writes back encrypted
+let Reads = AWSCloudTrail
+    | where EventName == "GetObject"
+    | where EventSource == "s3.amazonaws.com"
+    | where UserIdentityType == "IAMUser"
+    | extend ObjectKey = tostring(parse_json(RequestParameters).key)
+    | project ReadTime = TimeGenerated, ReadPrincipal = UserIdentityArn, ReadKey = ObjectKey, ReadIP = SourceIpAddress;
+let Writes = AWSCloudTrail
+    | where EventName == "PutObject"
+    | where EventSource == "s3.amazonaws.com"
+    | where RequestParameters contains "x-amz-server-side-encryption-customer-algorithm"
+    | extend ObjectKey = tostring(parse_json(RequestParameters).key)
+    | project WriteTime = TimeGenerated, WritePrincipal = UserIdentityArn, WriteKey = ObjectKey, WriteIP = SourceIpAddress;
+Reads
+| join kind=inner Writes on $left.ReadPrincipal == $right.WritePrincipal, $left.ReadKey == $right.WriteKey
+| where WriteTime > ReadTime and WriteTime < ReadTime + 5m
+| project
+    ReadTime,
+    WriteTime,
+    ReadPrincipal,
+    ReadKey,
+    ReadIP,
+    WriteIP,
+    OverwriteDelaySeconds = datetime_diff("second", WriteTime, ReadTime)
+| sort by ReadTime desc
+
+
+// --- Query 4: Ransom note deposition - README.txt appearing in multiple prefixes ---
+AWSCloudTrail
+| where EventName == "PutObject"
+| where EventSource == "s3.amazonaws.com"
+| where RequestParameters contains "README.txt"
+| extend ObjectKey = tostring(parse_json(RequestParameters).key)
+| extend Prefix = tostring(split(ObjectKey, "/")[0])
+| summarize
+    NoteCount = count(),
+    DistinctPrefixes = dcount(Prefix),
+    PrefixList = make_set(Prefix, 20),
+    FirstNote = min(TimeGenerated),
+    LastNote = max(TimeGenerated)
+    by UserIdentityUserName, UserIdentityArn, SourceIpAddress
+| where DistinctPrefixes >= 2
+| project
+    UserIdentityUserName,
+    UserIdentityArn,
+    SourceIpAddress,
+    NoteCount,
+    DistinctPrefixes,
+    PrefixList,
+    FirstNote,
+    LastNote
+| sort by DistinctPrefixes desc
+
+
+// --- Query 5: Full encryption kill chain - recon + SSE-C writes + ransom note in one session ---
+let EncryptionActivity = AWSCloudTrail
+    | where EventName == "PutObject"
+    | where EventSource == "s3.amazonaws.com"
+    | where RequestParameters contains "x-amz-server-side-encryption-customer-algorithm"
+    | summarize SSECCount = count(), EncryptStart = min(TimeGenerated) by UserIdentityArn, SourceIpAddress;
+let RansomNotes = AWSCloudTrail
+    | where EventName == "PutObject"
+    | where RequestParameters contains "README.txt"
+    | summarize NoteCount = count(), NoteTime = min(TimeGenerated) by UserIdentityArn;
+EncryptionActivity
+| join kind=inner RansomNotes on UserIdentityArn
+| project
+    UserIdentityArn,
+    SourceIpAddress,
+    SSECCount,
+    NoteCount,
+    EncryptStart,
+    NoteTime,
+    OverallWindowMinutes = datetime_diff("minute", NoteTime, EncryptStart)
+| sort by EncryptStart desc

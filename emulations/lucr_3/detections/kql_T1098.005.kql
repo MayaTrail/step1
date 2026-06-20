@@ -1,0 +1,27 @@
+// T1098.005 - Account Manipulation: Device Registration
+// Detects new MFA factor enrollment from non-corporate IP - LUCR-3 TOTP persistence
+// Log source: Okta_CL (Okta Data Connector for Microsoft Sentinel)
+Okta_CL
+| where eventType_s == "user.mfa.factor.activate"
+| where outcome_result_s == "SUCCESS"
+| where isnotempty(client_ipAddress_s)
+| where not(ipv4_is_private(client_ipAddress_s))
+| extend
+    Actor           = actor_alternateId_s,
+    ActorName       = actor_displayName_s,
+    FactorType      = tostring(parse_json(debugContext_debugData_factor_s)),
+    SourceIP        = client_ipAddress_s,
+    Country         = client_geographicalContext_country_s,
+    City            = client_geographicalContext_city_s,
+    HourOfDay       = hourofday(TimeGenerated)
+| extend OutsideBusinessHours = iff(HourOfDay < 8 or HourOfDay > 18, true, false)
+| project
+    TimeGenerated,
+    Actor,
+    ActorName,
+    FactorType,
+    SourceIP,
+    Country,
+    City,
+    OutsideBusinessHours
+| sort by TimeGenerated desc

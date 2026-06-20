@@ -1,0 +1,41 @@
+title: LUCR-3 AWS Network and SSM Topology Discovery
+id: b3d9a5c1-7f2e-4b6d-a8c4-9f1e3b7d5a0c
+status: experimental
+description: >
+  Detects enumeration of VPC topology (DescribeVpcs, DescribeSubnets,
+  DescribeKeyPairs) combined with SSM instance inventory (DescribeInstanceInformation)
+  from a non-service-role principal. LUCR-3 performs this to identify SSM-connected
+  EC2 instances for subsequent lateral movement without requiring exposed SSH ports.
+references:
+    - https://attack.mitre.org/techniques/T1082/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1082
+    - lucr3
+    - scattered_spider
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName:
+            - 'DescribeVpcs'
+            - 'DescribeSubnets'
+            - 'DescribeKeyPairs'
+            - 'DescribeInstanceInformation'
+        userIdentity.type:
+            - 'AssumedRole'
+            - 'IAMUser'
+    filter_automation:
+        userIdentity.arn|contains:
+            - ':role/aws-service-role/'
+            - ':role/AWSServiceRole'
+    timeframe: 5m
+    condition: selection and not filter_automation | count() by userIdentity.arn > 3
+falsepositives:
+    - Terraform plan/apply runs that enumerate VPC state before modifications
+    - SSM patch compliance assessment tools
+    - Network monitoring or asset management solutions
+level: medium

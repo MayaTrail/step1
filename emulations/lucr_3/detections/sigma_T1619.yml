@@ -1,0 +1,41 @@
+title: LUCR-3 S3 Bucket Enumeration - Bulk ListBuckets and ListObjects
+id: a1c7e9f3-5b2d-4a8e-c6f0-7e3b1d5a9c2f
+status: experimental
+description: >
+  Detects ListBuckets followed by multi-bucket ListObjects from the same principal
+  within a short window. LUCR-3 uses S3 Browser 10.9.9 and AWS CloudShell to
+  enumerate all S3 buckets and scan for terraform.tfstate, credential files, and
+  other high-value exfiltration targets before disabling GuardDuty.
+references:
+    - https://attack.mitre.org/techniques/T1619/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1619
+    - lucr3
+    - scattered_spider
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_list_buckets:
+        eventName: 'ListBuckets'
+        eventSource: 's3.amazonaws.com'
+    selection_list_objects:
+        eventName:
+            - 'ListObjects'
+            - 'ListObjectsV2'
+        eventSource: 's3.amazonaws.com'
+    filter_automation:
+        userAgent|contains:
+            - 'aws-sdk'
+            - 'Terraform'
+            - 'S3-Console'
+    timeframe: 10m
+    condition: (selection_list_buckets or selection_list_objects) and not filter_automation | count() by userIdentity.arn > 5
+falsepositives:
+    - Backup solutions enumerating all S3 buckets for snapshot policies
+    - CSPM tools performing S3 inventory
+    - AWS Macie data discovery scans
+level: medium

@@ -1,0 +1,49 @@
+// FILE: kql_t1078.004.kql
+// T1078.004 Valid Accounts: Cloud Accounts - AMBERSQUID Credential Validation
+// Detects rapid IAM credential recon burst (GetCallerIdentity -> GetUser ->
+// ListAttachedUserPolicies) from non-console IAMUser session within a 2-minute window.
+// Elevated confidence when source IP has no prior console activity on that day.
+
+let LookbackWindow = 2m;
+let ReconEvents = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource in ("sts.amazonaws.com", "iam.amazonaws.com")
+| where EventName in ("GetCallerIdentity", "GetUser", "ListAttachedUserPolicies", "GetAccountSummary")
+| where UserIdentityType == "IAMUser"
+| where UserAgent !contains "console.aws.amazon.com"
+| where UserAgent !contains "signin.aws.amazon.com"
+| where UserAgent !contains "AWSConsole"
+| project TimeGenerated, EventName, EventSource, SourceIpAddress, UserIdentityArn, UserAgent, AWSRegion, RecipientAccountId;
+// Find sessions where 3+ distinct recon calls arrive within 2 minutes
+ReconEvents
+| summarize
+    EventCount = count(),
+    DistinctEvents = dcount(EventName),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated),
+    EventNames = make_set(EventName),
+    UserAgent = any(UserAgent),
+    AWSRegion = any(AWSRegion)
+  by SourceIpAddress, UserIdentityArn, bin(TimeGenerated, LookbackWindow), RecipientAccountId
+| where DistinctEvents >= 2
+| where EventCount >= 2
+| extend DwellSeconds = datetime_diff('second', LastSeen, FirstSeen)
+| extend RiskScore = case(
+    DistinctEvents >= 3, "HIGH",
+    DistinctEvents == 2 and EventNames has "GetCallerIdentity", "MEDIUM",
+    "LOW"
+  )
+| project
+    FirstSeen,
+    LastSeen,
+    DwellSeconds,
+    RiskScore,
+    UserIdentityArn,
+    SourceIpAddress,
+    EventNames,
+    EventCount,
+    DistinctEvents,
+    UserAgent,
+    AWSRegion,
+    RecipientAccountId
+| sort by FirstSeen desc

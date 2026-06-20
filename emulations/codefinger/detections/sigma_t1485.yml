@@ -1,0 +1,83 @@
+title: Codefinger - S3 Lifecycle Policy Created with Short Expiry (Ransomware TTL)
+id: f7b2d5a0-48c6-4e1f-e4b3-0d6a8f3c5e1b
+status: experimental
+description: |
+  Detects the creation of an S3 lifecycle policy with a very short expiry (<=7 days)
+  immediately following high-volume PutObject (SSE-C) activity in the same session.
+  This is the Codefinger data-destruction mechanism: after encrypting objects with an
+  attacker-held key, the actor sets an automated deletion timer to pressure victims into
+  paying ransom before data is permanently destroyed. PutBucketLifecycleConfiguration on
+  a bucket that previously had no lifecycle policy, combined with an expiry measured in
+  days rather than months, is a critical high-fidelity detection signal for this technique
+  (T1485 -- Data Destruction).
+references:
+    - https://attack.mitre.org/techniques/T1485/
+    - https://halcyon.ai/blog/codefinger
+    - https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1485
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_lifecycle_create:
+        eventSource: 's3.amazonaws.com'
+        eventName: 'PutBucketLifecycleConfiguration'
+    filter_infrastructure_as_code:
+        userAgent|contains:
+            - 'terraform'
+            - 'pulumi'
+            - 'cloudformation'
+            - 'aws-cdk'
+    filter_service_accounts:
+        userIdentity.principalId|contains:
+            - 'svc-lifecycle'
+            - 'svc-data-governance'
+    condition: selection_lifecycle_create and not (filter_infrastructure_as_code or filter_service_accounts)
+falsepositives:
+    - Data retention automation (IaC pipelines applying legitimate lifecycle policies)
+    - Storage cost optimization tools that programmatically manage object transitions
+    - Compliance archiving workflows that rotate objects to Glacier
+level: high
+
+---
+title: Codefinger - Bulk S3 DeleteObject Following SSE-C Encryption Activity
+id: a1c3e6b0-59d7-4f2a-f5c4-1e7b9a4d6f2c
+status: experimental
+description: |
+  Detects bulk S3 DeleteObject API calls immediately following a burst of SSE-C PutObject
+  calls from the same IAM principal. In the Codefinger kill chain, the actor re-encrypts
+  objects in-place (PutObject with SSE-C), then deletes the originals to ensure the only
+  remaining copy is attacker-encrypted. The temporal proximity of bulk deletions after bulk
+  SSE-C writes is the defining behavioral signature of this ransomware technique.
+references:
+    - https://attack.mitre.org/techniques/T1485/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1485
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_bulk_delete:
+        eventSource: 's3.amazonaws.com'
+        eventName:
+            - 'DeleteObject'
+            - 'DeleteObjects'
+        userIdentity.type: 'IAMUser'
+    filter_automated_cleanup:
+        userAgent|contains:
+            - 'aws-backup'
+            - 'lifecycle'
+            - 's3-object-lambda'
+    condition: selection_bulk_delete and not filter_automated_cleanup
+falsepositives:
+    - Authorized data purge operations by data governance teams
+    - S3 lifecycle expiration events (these appear as service-initiated deletions, not IAMUser)
+    - Application cleanup jobs that delete temporary objects after processing
+level: medium

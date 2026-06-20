@@ -1,0 +1,79 @@
+title: Codefinger - Stolen IAM Key Reconnaissance (GetCallerIdentity + ListBuckets)
+id: a3f7c1e2-84b0-4d5a-9e6f-2c1b3a8d0f4e
+status: experimental
+description: |
+  Detects the initial authentication and reconnaissance phase of the Codefinger ransomware
+  kill chain. An attacker using a stolen long-term IAM access key first calls GetCallerIdentity
+  to validate the credential, then immediately calls ListBuckets to enumerate accessible
+  storage. GetCallerIdentity is a high-fidelity attacker signal because legitimate applications
+  rarely need to self-probe their identity; the combination with ListBuckets in rapid succession
+  from an anomalous source IP is a near-conclusive indicator of credential theft and initial
+  environment survey (T1078.004).
+references:
+    - https://attack.mitre.org/techniques/T1078/004/
+    - https://halcyon.ai/blog/codefinger
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.initial_access
+    - attack.t1078.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_getcalleridentity:
+        eventSource: 'sts.amazonaws.com'
+        eventName: 'GetCallerIdentity'
+    selection_listbuckets:
+        eventSource: 's3.amazonaws.com'
+        eventName: 'ListBuckets'
+    filter_automation:
+        userIdentity.type:
+            - 'AssumedRole'
+        userIdentity.sessionContext.sessionIssuer.type: 'Service'
+    filter_internal_services:
+        userAgent|contains:
+            - 'aws-sdk-java'
+            - 'aws-lambda'
+            - 'elasticmapreduce'
+    condition: (selection_getcalleridentity or selection_listbuckets) and not (filter_automation or filter_internal_services)
+falsepositives:
+    - Legitimate SDK health-check scripts that call GetCallerIdentity to confirm credential validity
+    - Developers testing newly created IAM users from a new IP address
+    - CI/CD pipelines running from dynamic cloud build agents with novel IPs
+level: medium
+---
+# Companion rule: high-confidence correlation (GetCallerIdentity AND ListBuckets same principal within 5 minutes)
+title: Codefinger - Stolen IAM Key Credential Validation Followed by Bucket Enumeration
+id: b8d2e5f1-93c4-4e7b-af80-5d2c4b9e1a6f
+status: experimental
+description: |
+  Correlates GetCallerIdentity immediately followed by ListBuckets from the same IAM principal
+  within a 5-minute window. This two-event sequence is the canonical opener of cloud ransomware
+  campaigns: the actor validates the stolen key works, then maps the attack surface. Flag when
+  the source IP has no prior CloudTrail history for that principal (new geography / ASN).
+references:
+    - https://attack.mitre.org/techniques/T1078/004/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.initial_access
+    - attack.t1078.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_probe:
+        eventSource: 'sts.amazonaws.com'
+        eventName: 'GetCallerIdentity'
+        userIdentity.type: 'IAMUser'
+    # NOTE: Full temporal correlation requires SIEM aggregation logic (e.g. Splunk transaction,
+    # Sentinel join, or Elastic EQL sequence); this selection targets the probe event as the
+    # anchor. Pair with the ListBuckets selection in a sequence rule in your SIEM.
+    filter_service_roles:
+        userIdentity.type: 'AssumedRole'
+    condition: selection_probe and not filter_service_roles
+falsepositives:
+    - Security scanning tools (ScoutSuite, Prowler, Steampipe) that open every assessment with GetCallerIdentity
+    - New developer onboarding workflows that test credentials from personal machines
+level: high

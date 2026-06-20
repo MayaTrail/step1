@@ -1,0 +1,35 @@
+title: LUCR-3 SharePoint Bulk File Access via Federated Identity
+id: e5c1a9d7-2f4b-4e6c-d8a2-5c0f3b7e9a2d
+status: experimental
+description: >
+  Detects high-volume FileAccessed events in the M365 Unified Audit Log from
+  federated principals (sign-in via SAML/OAuth from an external IDP such as
+  Okta). LUCR-3 federates into Azure AD via Okta SAML to collect sensitive
+  SharePoint documents. Bulk access from an anomalous IP is a strong indicator.
+references:
+    - https://attack.mitre.org/techniques/T1213/002/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.collection
+    - attack.t1213.002
+    - lucr3
+    - scattered_spider
+logsource:
+    product: m365
+    service: audit
+detection:
+    selection:
+        Operation: 'FileAccessed'
+        Workload: 'SharePoint'
+    filter_legitimate_sync:
+        UserAgent|contains:
+            - 'OneDriveMpc'
+            - 'Microsoft SkyDriveSync'
+    timeframe: 10m
+    condition: selection and not filter_legitimate_sync | count() by UserId > 50
+falsepositives:
+    - Bulk SharePoint backup or migration jobs run by IT
+    - Legitimate data loss prevention (DLP) scanning services
+    - Power Automate flows that enumerate document libraries
+level: high

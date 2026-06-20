@@ -1,0 +1,24 @@
+// T1082 - System Information Discovery (AWS VPC + SSM topology)
+// Detects VPC/SSM enumeration from non-service principals - LUCR-3 lateral movement prep
+// Log source: AWSCloudTrail table in Microsoft Sentinel
+let TopologyEvents = dynamic([
+    "DescribeVpcs", "DescribeSubnets", "DescribeKeyPairs",
+    "DescribeInstanceInformation"
+]);
+AWSCloudTrail
+| where EventName in (TopologyEvents)
+| where UserIdentityType in ("AssumedRole", "IAMUser")
+| where not(UserIdentityArn has_any (":role/aws-service-role/", ":role/AWSServiceRole"))
+| summarize
+    EventCount  = count(),
+    EventTypes  = make_set(EventName),
+    SourceIPs   = make_set(SourceIpAddress)
+    by bin(TimeGenerated, 5m), UserIdentityArn
+| where EventCount >= 3
+| project
+    TimeGenerated,
+    UserIdentityArn,
+    EventCount,
+    EventTypes,
+    SourceIPs
+| sort by EventCount desc

@@ -1,0 +1,26 @@
+// T1213.003 - Data from Information Repositories: Code Repositories
+// Detects GitHub repo clone from anomalous actor - LUCR-3 source code IP theft
+// Log source: GitHubAuditLogPolling_CL (GitHub Advanced Security Connector for Sentinel)
+GitHubAuditLogPolling_CL
+| where action_s in ("git.clone", "repository.download", "repo.download")
+| where not(actor_s has_any ("github-actions[bot]", "dependabot[bot]", "renovate[bot]"))
+| extend
+    Actor           = actor_s,
+    Organization    = org_s,
+    Repository      = repo_s,
+    ProtocolUsed    = transport_protocol_s,
+    ActorCountry    = actor_location_country_code_s
+| summarize
+    CloneCount      = count(),
+    Repos           = make_set(Repository),
+    Countries       = make_set(ActorCountry)
+    by bin(TimeGenerated, 1h), Actor, Organization
+| where CloneCount >= 1
+| project
+    TimeGenerated,
+    Actor,
+    Organization,
+    CloneCount,
+    Repos,
+    Countries
+| sort by CloneCount desc
