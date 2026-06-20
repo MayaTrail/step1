@@ -117,6 +117,35 @@ class Stack(models.Model):
         ),
     )
 
+    # Operational visibility fields (Stacks Milestone 1, Phase 2)
+    last_logs = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=(
+            "Captured Pulumi output for the most recent deploy/destroy/refresh, "
+            "as a list of {'t': ISO-8601 timestamp, 'line': str}. Only the most "
+            "recent run is retained; overwritten on each operation."
+        ),
+    )
+    last_error = models.TextField(
+        blank=True,
+        default="",
+        help_text=(
+            "Failure reason from the most recent operation (truncated). "
+            "Empty when the last operation succeeded."
+        ),
+    )
+    resource_summary = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "Actual deployed-resource inventory derived from the Pulumi state on "
+            "the last successful deploy/refresh. Shape: "
+            "{'total': int, 'by_type': {<service>: count}, "
+            "'resources': [{'name': str, 'type': str}]}. Empty before first deploy."
+        ),
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

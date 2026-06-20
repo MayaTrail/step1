@@ -11,7 +11,7 @@
  */
 
 import api from './api'
-import type { Stack, CreateStackRequest, StackActionResponse } from '@/types'
+import type { Stack, CreateStackRequest, StackActionResponse, StackProgress } from '@/types'
 
 /** List all stacks owned by the authenticated user. */
 export async function listStacks(): Promise<Stack[]> {
@@ -60,6 +60,20 @@ export async function previewStack(stackId: string): Promise<StackActionResponse
 /** Delete a stack record. */
 export async function deleteStack(stackId: string): Promise<void> {
   await api.delete(`/stacks/${stackId}/`)
+}
+
+/**
+ * Fetch live deployment progress for a stack.
+ *
+ * Reads the deploy task's PROGRESS state (resource counts, percentage, recent
+ * Pulumi log lines) from the backend. Safe to poll while a deploy is in flight;
+ * returns percentage 100 / 0 for terminal stacks.
+ *
+ * @param stackId - UUID of the stack to query.
+ */
+export async function getStackProgress(stackId: string): Promise<StackProgress> {
+  const { data } = await api.get<StackProgress>(`/stacks/${stackId}/progress/`)
+  return data
 }
 
 /**

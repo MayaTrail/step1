@@ -118,6 +118,31 @@ export type StackStatus =
   | 'attack_complete'
   | 'destroyed'
 
+/** One captured Pulumi output line with the time it was emitted. */
+export interface StackLogEntry {
+  /** ISO-8601 UTC timestamp. */
+  t: string
+  line: string
+}
+
+/**
+ * Actual deployed-resource inventory derived from Pulumi state on the last
+ * successful deploy/refresh. `by_type` powers the card's resource counts;
+ * `resources` powers resource-name search.
+ */
+export interface StackResourceSummary {
+  total: number
+  by_type: Record<string, number>
+  /** Graph nodes. `urn` is the stable id used for edges. */
+  resources: Array<{ urn: string; name: string; type: string }>
+  /**
+   * Dependency edges (from = depended-upon, to = dependent).
+   * Optional: stacks deployed before M2 have a resource_summary with no edges
+   * key, so consumers must treat this as possibly undefined.
+   */
+  edges?: Array<{ from: string; to: string }>
+}
+
 export interface Stack {
   id: string
   name: string
@@ -127,6 +152,12 @@ export interface Stack {
   owner: string
   emulation_type?: string
   expires_at?: string | null
+  /** Persisted log of the most recent operation (Milestone 1 Phase 2). */
+  last_logs?: StackLogEntry[]
+  /** Failure reason from the most recent operation; empty on success. */
+  last_error?: string
+  /** Actual deployed-resource inventory; empty before first deploy. */
+  resource_summary?: StackResourceSummary
   created_at: string
   updated_at: string
 }
@@ -139,6 +170,23 @@ export interface CreateStackRequest {
 export interface StackActionResponse {
   stack: Stack
   task_id: string
+}
+
+/**
+ * Live deployment progress for a stack, returned by GET /api/stacks/{id}/progress/.
+ *
+ * Backed by the Celery task's PROGRESS state in Redis, so values stay current
+ * within a few seconds while a deploy is running. `recent_logs` is ephemeral
+ * (it disappears once the task result expires) — persisted deployment logs
+ * arrive in Milestone 1 Phase 2.
+ */
+export interface StackProgress {
+  stack_id: string
+  status: StackStatus
+  resources_created: number
+  total_resources: number
+  percentage: number
+  recent_logs: string[]
 }
 
 /* ── Enterprise EmulationRun (mirrors backend EmulationRun model) ── */
