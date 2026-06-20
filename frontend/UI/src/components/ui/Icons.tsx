@@ -123,3 +123,40 @@ export const IconLayers = (p: IconProps) => (
 export const IconActivity = (p: IconProps) => (
     <Icon {...p}><path d="M3 12h4l3 8 4-16 3 8h4" /></Icon>
 )
+
+export const IconHome = (p: IconProps) => (
+    <Icon {...p}>
+        <path d="m3 10 9-7 9 7" />
+        <path d="M5 9v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9" />
+        <path d="M9 21v-6h6v6" />
+    </Icon>
+)
+
+export const IconSearch = (p: IconProps) => (
+    <Icon {...p}>
+        <circle cx="11" cy="11" r="7" />
+        <path d="m21 21-4.3-4.3" />
+    </Icon>
+)
+
+export const IconClipboard = (p: IconProps) => (
+    <Icon {...p}>
+        <rect x="6" y="4" width="12" height="17" rx="2" />
+        <path d="M9 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1" />
+        <path d="M9 11h6M9 15h4" />
+    </Icon>
+)
+
+export const IconBook = (p: IconProps) => (
+    <Icon {...p}>
+        <path d="M5 4a2 2 0 0 1 2-2h12v15H7a2 2 0 0 0-2 2V4Z" />
+        <path d="M5 19a2 2 0 0 1 2-2h12v4H7a2 2 0 0 1-2-2Z" />
+    </Icon>
+)
+
+export const IconBarChart = (p: IconProps) => (
+    <Icon {...p}>
+        <path d="M3 21h18" />
+        <path d="M6 21V11M12 21V5M18 21v-8" />
+    </Icon>
+)

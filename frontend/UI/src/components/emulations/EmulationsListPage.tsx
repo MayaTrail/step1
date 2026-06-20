@@ -132,7 +132,7 @@ function FilterChip({ label, active, onClick }: { label: string; active: boolean
   )
 }
 
-function EmulationCard({ emulation: em, platformId, onRun }: { emulation: Emulation; platformId: PlatformId; onRun: () => void }) {
+export function EmulationCard({ emulation: em, platformId, onRun }: { emulation: Emulation; platformId: PlatformId; onRun: () => void }) {
   return (
     <Link
       to={`/${platformId}/emulations/${em.id}`}
