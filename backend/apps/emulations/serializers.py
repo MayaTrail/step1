@@ -38,6 +38,59 @@ class EmulationRunSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class EmulationRunListSerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for the runs list (Active Runs / Results pages).
+
+    Omits the heavy stdout/stderr fields (those live on the per-run detail
+    endpoint) and enriches each row with data the table needs but the model
+    doesn't store directly:
+
+      * emulation_name — friendly display name from the registry MANIFEST.
+      * platform       — derived from the run's emulation_type via the registry
+                         (defaults to "aws"); EmulationRun stores no platform.
+      * stack_name     — the associated stack's human-readable name.
+    """
+
+    emulation_name = serializers.SerializerMethodField()
+    platform = serializers.SerializerMethodField()
+    stack_name = serializers.CharField(source="stack.name", read_only=True)
+
+    class Meta:
+        model = EmulationRun
+        fields = [
+            "id",
+            "stack",
+            "stack_name",
+            "emulation_type",
+            "emulation_name",
+            "platform",
+            "status",
+            "phase_current",
+            "phase_total",
+            "triggered_by",
+            "started_at",
+            "completed_at",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def _entry(self, obj: EmulationRun) -> dict | None:
+        """Look up the registry MANIFEST entry for this run's emulation type."""
+        from apps.emulations.registry import get_emulation  # noqa: PLC0415
+        return get_emulation(obj.emulation_type)
+
+    def get_emulation_name(self, obj: EmulationRun) -> str:
+        """Return the friendly display name, falling back to the raw type."""
+        entry = self._entry(obj)
+        return entry.get("display_name", obj.emulation_type) if entry else obj.emulation_type
+
+    def get_platform(self, obj: EmulationRun) -> str:
+        """Return the emulation's platform, defaulting to 'aws'."""
+        entry = self._entry(obj)
+        return entry.get("platform", "aws") if entry else "aws"
+
+
 class DeployEmulationSerializer(serializers.Serializer):
     """
     Validates the request body for POST /api/emulations/deploy/.

@@ -10,7 +10,7 @@ import { Card } from './Card'
  * uppercase mono label, an accent icon chip, and an optional sub-caption.
  */
 
-type MetricAccent = 'red' | 'blue' | 'green' | 'amber'
+type MetricAccent = 'red' | 'blue' | 'green' | 'amber' | 'neutral'
 
 interface MetricCardProps {
     value: ReactNode
@@ -29,6 +29,7 @@ const chipClass: Record<MetricAccent, string> = {
     blue: 'bg-accent-blue/10 border-accent-blue/20 text-accent-blue',
     green: 'bg-safe-dim border-safe/20 text-safe',
     amber: 'bg-warning-dim border-warning/20 text-warning',
+    neutral: 'bg-surface-elevated border-border text-content-dim',
 }
 
 export function MetricCard({
@@ -41,7 +42,7 @@ export function MetricCard({
     onClick,
 }: MetricCardProps) {
     return (
-        <Card accent={accent} interactive={!!onClick} onClick={onClick} className="p-5 flex flex-col gap-1.5">
+        <Card accent={accent === 'neutral' ? null : accent} interactive={!!onClick} onClick={onClick} className="p-5 flex flex-col gap-1.5">
             <span className={`inline-flex items-center justify-center w-7 h-7 rounded-btn border mb-1 ${chipClass[accent]}`}>
                 {icon ?? <span className="w-2 h-2 rounded-full bg-current" />}
             </span>

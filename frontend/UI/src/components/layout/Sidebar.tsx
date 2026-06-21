@@ -1,41 +1,35 @@
-import { useState, useCallback } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { platformRegistry } from '@/data'
-import type { PlatformId } from '@/types'
+import type { ReactNode } from 'react'
+import { platformRegistry, platformShortLabel } from '@/data'
 import { PlatformIcon } from '@/components/ui/PlatformIcons'
-
-/** Sub-nav items for each platform */
-const subNavItems = [
-  { key: 'emulations', label: 'APT Emulations', icon: '\uD83C\uDFAF' },
-  { key: 'playbooks', label: 'Playbooks', icon: '\uD83D\uDCCB' },
-  { key: 'detections', label: 'Detections', icon: '\uD83D\uDD0D' },
-  { key: 'guardrails', label: 'Guardrails', icon: '\uD83D\uDEE1' },
-] as const
+import {
+  IconHome,
+  IconLayers,
+  IconActivity,
+  IconClock,
+  IconFlask,
+  IconSearch,
+  IconClipboard,
+  IconShield,
+  IconBarChart,
+  IconGear,
+  IconBook,
+} from '@/components/ui/Icons'
 
 interface SidebarProps {
   isOpen: boolean
   onClose: () => void
 }
 
+/**
+ * Workflow-first navigation sidebar.
+ *
+ * Replaces the previous platform-first accordion (AWS > Emulations/Playbooks/…)
+ * with content hubs grouped by user goal: Operations, Security Content,
+ * Platforms, and Administration. Each content type now lives in exactly one
+ * place; platforms become discovery entry points rather than containers.
+ */
 export function Sidebar({ isOpen }: SidebarProps) {
-  const location = useLocation()
-  const [expanded, setExpanded] = useState<Set<PlatformId>>(() => {
-    // Auto-expand the platform that matches the current URL
-    const match = location.pathname.match(/^\/(aws|azure|gcp|ai|k8s)/)
-    return match ? new Set([match[1] as PlatformId]) : new Set()
-  })
-
-  const togglePlatform = useCallback((id: PlatformId) => {
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }, [])
-
-  const isActivePlatform = (route: string) => location.pathname.startsWith(`/${route}`)
-
   return (
     <aside className={`
       w-[240px] bg-surface-base border-r border-border overflow-y-auto shrink-0 py-4
@@ -44,127 +38,105 @@ export function Sidebar({ isOpen }: SidebarProps) {
       ${isOpen ? 'translate-x-0' : '-translate-x-full'}
     `}>
 
-      {/* ── Dashboard Section ── */}
+      {/* ── Dashboard ── */}
       <SectionLabel>Dashboard</SectionLabel>
-      <Link
-        to="/"
-        className={`flex items-center gap-2.5 px-4 py-2.5 cursor-pointer transition-all duration-150
-          border-l-2 text-sm font-semibold no-underline
-          ${location.pathname === '/'
-            ? 'text-danger border-l-danger bg-danger/[0.06]'
-            : 'text-content-secondary border-l-transparent hover:bg-surface-card hover:text-content-primary'
-          }`}
-      >
-        &#127968; Home
-      </Link>
-      <Link
-        to="/stacks"
-        className={`flex items-center gap-2.5 px-4 py-2.5 cursor-pointer transition-all duration-150
-          border-l-2 text-sm font-semibold no-underline
-          ${location.pathname === '/stacks'
-            ? 'text-accent-cyan border-l-accent-cyan bg-accent-cyan/[0.06]'
-            : 'text-content-secondary border-l-transparent hover:bg-surface-card hover:text-content-primary'
-          }`}
-      >
-        &#9881;&#65039; Stacks
-      </Link>
+      <NavItem to="/" exact icon={<IconHome size={17} />} label="Dashboard" />
+      <NavItem to="/stacks" icon={<IconLayers size={17} />} label="Stacks" />
 
-      <div className="h-3" />
+      <Spacer />
 
-      {/* ── Platforms Section ── */}
+      {/* ── Operations ── */}
+      <SectionLabel>Operations</SectionLabel>
+      <NavItem to="/runs" icon={<IconActivity size={17} />} label="Active Runs" />
+      <NavItem to="/results" icon={<IconClock size={17} />} label="Results" />
+
+      <Spacer />
+
+      {/* ── Security Content ── */}
+      <SectionLabel>Security Content</SectionLabel>
+      <NavItem to="/emulations" icon={<IconFlask size={17} />} label="Emulations" />
+      <NavItem to="/detections" icon={<IconSearch size={17} />} label="Detections" />
+      <NavItem to="/playbooks" icon={<IconClipboard size={17} />} label="Playbooks" />
+      <NavItem to="/guardrails" icon={<IconShield size={17} />} label="Guardrails" />
+
+      <Spacer />
+
+      {/* ── Platforms ── */}
       <SectionLabel>Platforms</SectionLabel>
+      {platformRegistry.map((platform) => (
+        <NavItem
+          key={platform.id}
+          to={`/platforms/${platform.route}`}
+          icon={<PlatformIcon platformId={platform.id} size={17} className="shrink-0" />}
+          label={platformShortLabel(platform.id)}
+          badge={platform.badgeCount}
+        />
+      ))}
 
-      {platformRegistry.map((platform) => {
-        const isActive = isActivePlatform(platform.route)
-        const isOpen = expanded.has(platform.id)
+      <Spacer />
 
-        return (
-          <div key={platform.id}>
-            {/* Platform toggle */}
-            <button
-              onClick={() => togglePlatform(platform.id)}
-              className={`w-full flex items-center gap-2.5 px-4 py-2.5 cursor-pointer transition-all duration-150
-                border-l-2 text-[13px] font-semibold text-left
-                ${isActive
-                  ? 'text-danger border-l-danger bg-danger/[0.06]'
-                  : 'text-content-secondary border-l-transparent hover:bg-surface-card hover:text-content-primary'
-                }`}
-            >
-              <PlatformIcon platformId={platform.id} size={18} className="shrink-0" />
-              <span>{platform.label.split(' ')[0] === 'Amazon' ? 'AWS'
-                : platform.label.split(' ')[0] === 'Google' ? 'GCP'
-                  : platform.label.split(' ')[0] === 'Microsoft' ? 'Azure'
-                    : platform.label.includes('AI') ? 'AI'
-                      : platform.label}</span>
-              <span className="ml-auto bg-surface-elevated rounded-[3px] px-[5px] py-px font-mono text-[9px] text-content-dim">
-                {platform.badgeCount}
-              </span>
-              <span
-                className={`text-[10px] transition-transform duration-200 ${isOpen ? 'rotate-90' : ''}`}
-              >
-                &#9654;
-              </span>
-            </button>
-
-            {/* Sub-items */}
-            {isOpen && (
-              <div className="bg-black/20 border-l border-border ml-6">
-                {subNavItems.map((item) => {
-                  // Build the sub-item path
-                  // Playbooks and Detections are per-emulation — link to the
-                  // emulations list so the user picks an emulation first.
-                  const path = (item.key === 'playbooks' || item.key === 'detections')
-                    ? `/${platform.route}/emulations`
-                    : `/${platform.route}/${item.key}`
-                  const isSubActive = location.pathname.startsWith(`/${platform.route}/${item.key}`)
-
-                  return (
-                    <Link
-                      key={item.key}
-                      to={path}
-                      className={`flex items-center gap-2 px-4 py-2 cursor-pointer text-xs font-medium no-underline
-                        transition-all duration-150
-                        ${isSubActive
-                          ? 'text-accent-blue bg-accent-blue/[0.06]'
-                          : 'text-content-dim hover:text-content-secondary hover:bg-white/[0.02]'
-                        }`}
-                    >
-                      <span>{item.icon}</span>
-                      {item.label}
-                    </Link>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-        )
-      })}
-
-      <div className="h-4" />
-
-      {/* ── System Section ── */}
-      <SectionLabel>System</SectionLabel>
-      <SystemItem icon="&#128202;" label="Reports" />
-      <SystemItem icon="&#9881;&#65039;" label="Settings" />
-      <SystemItem icon="&#128214;" label="Documentation" />
+      {/* ── Administration ── */}
+      <SectionLabel>Administration</SectionLabel>
+      <NavItem to="/reports" icon={<IconBarChart size={17} />} label="Reports" />
+      <NavItem to="/settings" icon={<IconGear size={17} />} label="Settings" />
+      <NavItem to="/docs" icon={<IconBook size={17} />} label="Documentation" />
     </aside>
   )
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
+function Spacer() {
+  return <div className="h-3" />
+}
+
+function SectionLabel({ children }: { children: ReactNode }) {
   return (
-    <div className="font-mono text-[9px] font-bold tracking-[2px] text-content-dim px-5 pb-2 uppercase">
+    <div className="font-mono text-[9px] font-bold tracking-[2px] text-content-dim px-5 pb-2 pt-1 uppercase">
       {children}
     </div>
   )
 }
 
-function SystemItem({ icon, label }: { icon: string; label: string }) {
+interface NavItemProps {
+  to: string
+  icon: ReactNode
+  label: string
+  /** Match only on exact pathname (used for the "/" dashboard route). */
+  exact?: boolean
+  /** Override the active-match prefix (e.g. a platform route covering nested pages). */
+  matchPrefix?: string
+  /** Optional right-aligned count badge. */
+  badge?: number
+}
+
+/**
+ * A single sidebar link with a consistent active treatment: a left accent rail
+ * in Raycast Blue (the design system's "selected item" color) plus a faint
+ * blue surface tint. Hover uses the standard card surface, never a color swap.
+ */
+function NavItem({ to, icon, label, exact, matchPrefix, badge }: NavItemProps) {
+  const location = useLocation()
+  const prefix = matchPrefix ?? to
+  const active = exact
+    ? location.pathname === to
+    : location.pathname === prefix || location.pathname.startsWith(`${prefix}/`)
+
   return (
-    <div className="flex items-center gap-2.5 px-4 py-2.5 cursor-pointer text-content-dim text-xs
-      transition-colors hover:text-content-secondary hover:bg-surface-card">
-      <span>{icon}</span>
-      {label}
-    </div>
+    <Link
+      to={to}
+      className={`flex items-center gap-2.5 px-4 py-2 cursor-pointer transition-all duration-150
+        border-l-2 text-[13px] font-medium no-underline
+        ${active
+          ? 'text-content-primary border-l-accent-blue bg-accent-blue/[0.06]'
+          : 'text-content-secondary border-l-transparent hover:bg-surface-card hover:text-content-primary'
+        }`}
+    >
+      <span className={active ? 'text-accent-blue' : 'text-content-dim'}>{icon}</span>
+      <span>{label}</span>
+      {badge != null && (
+        <span className="ml-auto bg-surface-elevated rounded-[3px] px-[5px] py-px font-mono text-[9px] text-content-dim">
+          {badge}
+        </span>
+      )}
+    </Link>
   )
 }

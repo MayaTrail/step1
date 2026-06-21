@@ -1,1 +1,8 @@
-export { platformRegistry, getPlatformData, getPlatformMeta, awsData } from './platforms'
+export {
+  platformRegistry,
+  getPlatformData,
+  getPlatformMeta,
+  awsData,
+  PLATFORM_SHORT_LABEL,
+  platformShortLabel,
+} from './platforms'

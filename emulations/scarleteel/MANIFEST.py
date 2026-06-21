@@ -1,7 +1,9 @@
 """
 MANIFEST for the SCARLETEEL 2.0 enterprise emulation.
 
-schema_version 2 — adds the dashboard contract fields consumed by the metrics
+schema_version 3 — adds a `services` list (the cloud services this emulation
+exercises) consumed by the Platform Overview "Attack Surface Coverage" section.
+schema_version 2 added the dashboard contract fields consumed by the metrics
 app (apps/metrics/contracts.py): a top-level `platform` identifier and an
 optional `added` month.  Increment this when adding fields that older registry
 or view code cannot safely ignore.
@@ -16,7 +18,7 @@ frontend.  The dashboard derives coverage metrics from `platform` and
 """
 
 MANIFEST = {
-    "schema_version": 2,
+    "schema_version": 3,
 
     # ── Identity ─────────────────────────────────────────────────────────────
     "name": "scarleteel",
@@ -32,9 +34,15 @@ MANIFEST = {
     # widget.  One of: aws, azure, gcp, k8s, ai (see SUPPORTED_PLATFORMS).
     "platform": "aws",
 
-    # Month this emulation was added ("YYYY-MM").  Optional; reserved for the
-    # future Coverage Trend section.  Not yet consumed by any endpoint.
+    # Month this emulation was added ("YYYY-MM").  Drives the Platform Overview
+    # "Recently Added Emulations" ordering.
     "added": "2023-07",
+
+    # Cloud services this emulation exercises.  Drives the Platform Overview
+    # "Attack Surface Coverage" section, which buckets these into categories via
+    # the frontend service taxonomy (src/data/attackSurface.ts).  Use canonical
+    # short names, e.g. "IAM", "EC2", "S3".
+    "services": ["IAM", "STS", "EC2", "Lambda", "S3", "Secrets Manager", "ECS", "CloudTrail"],
 
     # ── UI catalogue metadata ─────────────────────────────────────────────────
     "origin": "unknown",

@@ -11,6 +11,7 @@ GET  /api/emulations/<emulation_type>/techniques/        EmulationTechniquesView
 GET  /api/emulations/<emulation_type>/detections/        EmulationDetectionsView
 GET  /api/emulations/<emulation_type>/playbook/          EmulationPlaybookView
 POST /api/emulations/deploy/                             EmulationDeployView
+GET  /api/emulations/runs/?status=<csv>                  EmulationRunListView
 GET  /api/emulations/<run_id>/                           EmulationRunDetailView
 POST /api/emulations/<stack_id>/attack/                  EmulationAttackView
 POST /api/emulations/<stack_id>/destroy/                 EmulationDestroyView
@@ -31,12 +32,15 @@ from .views import (
     EmulationListView,
     EmulationPlaybookView,
     EmulationRunDetailView,
+    EmulationRunListView,
     EmulationTechniquesView,
 )
 
 urlpatterns = [
     path("", EmulationListView.as_view(), name="emulation-list"),
     path("deploy/", EmulationDeployView.as_view(), name="emulation-deploy"),
+    # Literal "runs/" must precede the <uuid:run_id>/ route below.
+    path("runs/", EmulationRunListView.as_view(), name="emulation-run-list"),
     # String-param read-only routes — must appear before UUID routes.
     path("<str:emulation_type>/estimate/", EmulationEstimateView.as_view(), name="emulation-estimate"),
     path("<str:emulation_type>/techniques/", EmulationTechniquesView.as_view(), name="emulation-techniques"),

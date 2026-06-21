@@ -35,6 +35,14 @@ export interface Reference {
 export interface Emulation {
   id: string
   name: string
+  /** Short summary from the MANIFEST; shown on library cards. */
+  description?: string
+  /** Owning platform, derived from the MANIFEST (defaults to 'aws'). */
+  platform: PlatformId
+  /** Month the emulation was added ("YYYY-MM"); drives "Recently Added" ordering. */
+  added?: string
+  /** Cloud services this emulation exercises; drives Attack Surface Coverage. */
+  services?: string[]
   origin: ThreatOrigin
   originLabel: string
   tags: string[]
@@ -203,6 +211,29 @@ export interface EmulationRunRecord {
   stdout: string
   stderr: string
   triggered_by: string
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+}
+
+/**
+ * One row in the Operations runs list (Active Runs / Results pages).
+ *
+ * Lighter than EmulationRunRecord: omits stdout/stderr (those load on the
+ * per-run detail view) and adds display fields the table needs —
+ * emulation_name, platform (derived from the registry), and stack_name.
+ */
+export interface EmulationRunListItem {
+  id: string
+  stack: string
+  stack_name: string
+  emulation_type: string
+  emulation_name: string
+  platform: PlatformId
+  status: EmulationRunStatus
+  phase_current: number
+  phase_total: number
+  triggered_by: string | null
   started_at: string | null
   completed_at: string | null
   created_at: string
