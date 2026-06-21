@@ -21,6 +21,7 @@ from pathlib import Path
 
 from django.utils import timezone
 from rest_framework import status
+from rest_framework.generics import ListAPIView
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -30,7 +31,11 @@ from apps.infrastructure.permissions import IsEnterpriseUser
 
 from .models import EmulationRun
 from .registry import get_emulation, list_emulations
-from .serializers import DeployEmulationSerializer, EmulationRunSerializer
+from .serializers import (
+    DeployEmulationSerializer,
+    EmulationRunListSerializer,
+    EmulationRunSerializer,
+)
 from .tasks import destroy_emulation_stack, run_emulation_attack
 
 logger = logging.getLogger(__name__)
@@ -72,6 +77,9 @@ def _manifest_to_api(entry: dict) -> dict:
         "id": entry.get("name"),
         "name": entry.get("display_name"),
         "description": entry.get("description"),
+        "platform": entry.get("platform", "aws"),
+        "added": entry.get("added"),
+        "services": entry.get("services", []),
         "tier": entry.get("tier"),
         "origin": entry.get("origin", "unknown"),
         "originLabel": entry.get("origin_label", ""),
@@ -494,6 +502,50 @@ class EmulationDeployView(APIView):
             {"stackId": str(stack.id), "stackName": stack.name},
             status=status.HTTP_202_ACCEPTED,
         )
+
+
+class EmulationRunListView(ListAPIView):
+    """
+    List the requesting user's emulation runs, newest first.
+
+    GET /api/emulations/runs/?status=running,pending
+
+    Powers the Operations pages: Active Runs requests the non-terminal statuses
+    (running, pending) and Results requests the terminal ones (completed,
+    failed). The optional `status` query param accepts a comma-separated list
+    and filters status__in; unknown values are ignored. Results are always
+    scoped to request.user so one user cannot see another user's runs.
+    """
+
+    permission_classes = [IsEnterpriseUser]
+    serializer_class = EmulationRunListSerializer
+
+    def get_queryset(self):
+        """
+        Return the user's runs, optionally narrowed by a status filter.
+
+        Returns:
+            EmulationRun queryset filtered to the requesting user (and to the
+            requested statuses when a valid `status` param is supplied),
+            ordered by the model default (-created_at).
+        """
+        queryset = (
+            EmulationRun.objects
+            .select_related("stack")
+            .filter(triggered_by=self.request.user)
+        )
+
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            valid = {choice[0] for choice in EmulationRun.Status.choices}
+            statuses = [
+                s.strip() for s in status_param.split(",")
+                if s.strip() in valid
+            ]
+            if statuses:
+                queryset = queryset.filter(status__in=statuses)
+
+        return queryset
 
 
 class EmulationRunDetailView(APIView):

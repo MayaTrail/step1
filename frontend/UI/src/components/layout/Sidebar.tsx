@@ -1,7 +1,6 @@
 import { Link, useLocation } from 'react-router-dom'
 import type { ReactNode } from 'react'
-import { platformRegistry } from '@/data'
-import type { PlatformId } from '@/types'
+import { platformRegistry, platformShortLabel } from '@/data'
 import { PlatformIcon } from '@/components/ui/PlatformIcons'
 import {
   IconHome,
@@ -20,15 +19,6 @@ import {
 interface SidebarProps {
   isOpen: boolean
   onClose: () => void
-}
-
-/** Short, recognizable label per platform for the Platforms group. */
-const PLATFORM_SHORT: Record<PlatformId, string> = {
-  aws: 'AWS',
-  gcp: 'GCP',
-  azure: 'Azure',
-  k8s: 'Kubernetes',
-  ai: 'AI',
 }
 
 /**
@@ -76,10 +66,9 @@ export function Sidebar({ isOpen }: SidebarProps) {
       {platformRegistry.map((platform) => (
         <NavItem
           key={platform.id}
-          to={`/${platform.route}/emulations`}
-          matchPrefix={`/${platform.route}`}
+          to={`/platforms/${platform.route}`}
           icon={<PlatformIcon platformId={platform.id} size={17} className="shrink-0" />}
-          label={PLATFORM_SHORT[platform.id]}
+          label={platformShortLabel(platform.id)}
           badge={platform.badgeCount}
         />
       ))}

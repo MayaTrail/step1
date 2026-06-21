@@ -1,15 +1,20 @@
 import { useEmulations } from '@/hooks/usePlatformData'
-import { ContentIndexRow } from '@/components/common/ContentIndexRow'
+import { LibraryCard } from '@/components/common/LibraryCard'
+import { LibraryToolbar } from '@/components/common/LibraryToolbar'
+import { useLibraryFilter, emulationTactics } from '@/components/common/useLibraryFilter'
+import { LibraryEmpty } from '@/components/emulations/EmulationsHub'
+import { IconSearch } from '@/components/ui/Icons'
 
 /**
- * Detections content hub — detection-engineering discovery layer.
+ * Detections content hub — detection-engineering discovery library.
  *
- * Detection rules (SIGMA + KQL) are authored per emulation, so this hub lists
- * the emulations that ship detections and links into each one's existing
- * scoped detections page. No rule data is duplicated here.
+ * Detection rules (SIGMA + KQL) are authored per emulation, so each card
+ * represents an emulation and links into its existing scoped detections page.
+ * No rule data is duplicated here.
  */
 export function DetectionsHub() {
   const { data: emulations, loading } = useEmulations('aws')
+  const { filtered, toolbar } = useLibraryFilter(emulations ?? [])
 
   return (
     <div>
@@ -25,17 +30,30 @@ export function DetectionsHub() {
         </div>
       </div>
 
+      <LibraryToolbar {...toolbar} searchPlaceholder="Search detections..." />
+
       {loading ? (
         <div className="text-center py-16 text-content-dim font-mono text-sm">Loading detections...</div>
+      ) : filtered.length === 0 ? (
+        <LibraryEmpty noun="detections" />
       ) : (
-        <div className="flex flex-col gap-2.5">
-          {(emulations ?? []).map((em) => (
-            <ContentIndexRow
+        <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(320px,1fr))]">
+          {filtered.map((em) => (
+            <LibraryCard
               key={em.id}
-              to={`/aws/emulations/${em.id}/detections`}
-              title={em.name}
-              subtitle={em.tags.join(' · ')}
-              badge="SIGMA + KQL"
+              name={em.name}
+              eyebrow="SIGMA + KQL · Detections"
+              severity={em.severity}
+              description={em.description}
+              tactics={emulationTactics(em)}
+              actions={[
+                {
+                  label: 'View Detections',
+                  icon: <IconSearch size={14} />,
+                  to: `/aws/emulations/${em.id}/detections`,
+                  variant: 'secondary',
+                },
+              ]}
             />
           ))}
         </div>

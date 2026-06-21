@@ -1,36 +1,25 @@
 import { useState } from 'react'
 import { useEmulations } from '@/hooks/usePlatformData'
-import { platformRegistry } from '@/data'
-import type { PlatformId, Emulation } from '@/types'
-import { EmulationCard } from '@/components/emulations/EmulationsListPage'
+import type { Emulation } from '@/types'
+import { LibraryCard } from '@/components/common/LibraryCard'
+import { LibraryToolbar } from '@/components/common/LibraryToolbar'
+import { useLibraryFilter, emulationTactics } from '@/components/common/useLibraryFilter'
+import { platformShortLabel } from '@/data'
 import { RunEmulationModal } from '@/components/modals/RunEmulationModal'
-import { PlatformIcon } from '@/components/ui/PlatformIcons'
-
-/** Short sidebar/chip label for each platform id. */
-const SHORT_LABEL: Record<PlatformId, string> = {
-  aws: 'AWS',
-  gcp: 'GCP',
-  azure: 'Azure',
-  k8s: 'Kubernetes',
-  ai: 'AI',
-}
+import { IconLaunch } from '@/components/ui/Icons'
 
 /**
- * Emulations content hub — a single, cross-platform library of every emulation
- * the platform supports, replacing the per-platform APT Emulations sub-pages.
+ * Emulations content hub — a cross-platform card library of every emulation
+ * the platform supports. Each card runs its emulation via the existing modal.
  *
- * The backend emulation catalogue is AWS-only today (fetchEmulations returns
- * the full list regardless of platform), so the platform filter shows real
- * content for AWS and an honest "coming soon" state for the others.
+ * The backend catalogue is AWS-only today (fetchEmulations returns the whole
+ * list regardless of platform), so the Platform filter shows real content for
+ * AWS and an empty result for the others.
  */
 export function EmulationsHub() {
-  // The catalogue endpoint ignores the platform argument and returns every
-  // emulation; we pass 'aws' simply to satisfy the hook signature.
   const { data: emulations, loading } = useEmulations('aws')
-  const [platform, setPlatform] = useState<PlatformId>('aws')
+  const { filtered, toolbar } = useLibraryFilter(emulations ?? [])
   const [runTarget, setRunTarget] = useState<Emulation | null>(null)
-
-  const list = platform === 'aws' ? (emulations ?? []) : []
 
   return (
     <div>
@@ -47,49 +36,31 @@ export function EmulationsHub() {
         </div>
       </div>
 
-      {/* Platform filter chips */}
-      <div className="flex gap-2.5 mb-5 items-center flex-wrap">
-        <span className="font-mono text-[10px] text-content-dim tracking-[1px]">PLATFORM:</span>
-        {platformRegistry.map((p) => {
-          const active = platform === p.id
-          return (
-            <button
-              key={p.id}
-              onClick={() => setPlatform(p.id)}
-              className={`inline-flex items-center gap-1.5 border rounded-full px-3.5 py-[5px] text-[0.7rem] font-mono cursor-pointer transition-all font-medium
-                ${active
-                  ? 'bg-accent-blue/[0.15] border-accent-blue/30 text-accent-blue'
-                  : 'bg-surface-elevated border-border text-content-secondary hover:border-border-active hover:text-content-primary'
-                }`}
-            >
-              <PlatformIcon platformId={p.id} size={13} />
-              {SHORT_LABEL[p.id]}
-            </button>
-          )
-        })}
-      </div>
+      <LibraryToolbar {...toolbar} searchPlaceholder="Search emulations..." />
 
-      {/* Content */}
       {loading ? (
         <div className="text-center py-16 text-content-dim font-mono text-sm">Loading emulations...</div>
-      ) : list.length === 0 ? (
-        <div className="text-center py-16 text-content-dim">
-          <div className="font-display text-base text-content-primary mb-1.5">
-            {SHORT_LABEL[platform]} emulations coming soon
-          </div>
-          <div className="text-[0.9rem] text-content-secondary">
-            Emulation coverage for this platform is on the roadmap.
-          </div>
-        </div>
+      ) : filtered.length === 0 ? (
+        <LibraryEmpty noun="emulations" />
       ) : (
-        <div className="flex flex-col gap-2.5">
-          {list.map((em) => (
-            <EmulationCard key={em.id} emulation={em} platformId="aws" onRun={() => setRunTarget(em)} />
+        <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(320px,1fr))]">
+          {filtered.map((em) => (
+            <LibraryCard
+              key={em.id}
+              name={em.name}
+              eyebrow={`${em.originLabel || 'Emulation'} · ${platformShortLabel(em.platform)}`}
+              severity={em.severity}
+              description={em.description}
+              tactics={emulationTactics(em)}
+              actions={[
+                { label: 'View Emulation', to: `/aws/emulations/${em.id}`, variant: 'secondary' },
+                { label: 'Run', icon: <IconLaunch size={14} />, onClick: () => setRunTarget(em), variant: 'primary' },
+              ]}
+            />
           ))}
         </div>
       )}
 
-      {/* Run Emulation Modal */}
       {runTarget && (
         <RunEmulationModal
           emulationId={runTarget.id}
@@ -97,6 +68,16 @@ export function EmulationsHub() {
           onClose={() => setRunTarget(null)}
         />
       )}
+    </div>
+  )
+}
+
+/** Shared "no results" state for the library hubs. */
+export function LibraryEmpty({ noun }: { noun: string }) {
+  return (
+    <div className="text-center py-16">
+      <div className="font-display text-base text-content-primary mb-1.5">No {noun} match your filters</div>
+      <div className="text-[0.9rem] text-content-secondary">Try clearing the search or filters.</div>
     </div>
   )
 }

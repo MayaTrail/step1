@@ -20,7 +20,10 @@ import { DetectionsHub } from './components/detections/DetectionsHub'
 import { PlaybooksHub } from './components/playbooks/PlaybooksHub'
 import { GuardrailsHub } from './components/guardrails/GuardrailsHub'
 import { ComingSoon } from './components/common/ComingSoon'
-import { IconActivity, IconClock, IconBarChart, IconBook } from './components/ui/Icons'
+import { ActiveRunsPage } from './components/operations/ActiveRunsPage'
+import { ResultsPage } from './components/operations/ResultsPage'
+import { PlatformOverviewPage } from './components/platforms/PlatformOverviewPage'
+import { IconBarChart, IconBook } from './components/ui/Icons'
 
 export default function App() {
   return (
@@ -38,20 +41,11 @@ export default function App() {
                 <Route path="stacks" element={<StacksPage />} />
 
                 {/* Operations */}
-                <Route path="runs" element={
-                  <ComingSoon
-                    icon={<IconActivity size={32} />}
-                    title="Active Runs coming soon"
-                    body="Live execution monitoring will list in-flight emulation runs here once the run-history endpoint is available."
-                  />
-                } />
-                <Route path="results" element={
-                  <ComingSoon
-                    icon={<IconClock size={32} />}
-                    title="Results coming soon"
-                    body="Completed attack results and their outcomes will be browsable here once the run-history endpoint is available."
-                  />
-                } />
+                <Route path="runs" element={<ActiveRunsPage />} />
+                <Route path="results" element={<ResultsPage />} />
+
+                {/* Platform overview (discovery entry point) */}
+                <Route path="platforms/:platformId" element={<PlatformOverviewPage />} />
 
                 {/* Security Content hubs (cross-platform) */}
                 <Route path="emulations" element={<EmulationsHub />} />

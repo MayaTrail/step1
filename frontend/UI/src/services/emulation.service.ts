@@ -18,6 +18,7 @@ import type {
   Emulation,
   EmulationEstimate,
   EmulationRunRecord,
+  EmulationRunListItem,
   EmulationRunStatus,
   DeployEmulationResponse,
   TriggerAttackResponse,
@@ -84,6 +85,22 @@ export async function deployEmulationStack(
     emulation_type: emulationType,
     stack_name: stackName,
   })
+  return data
+}
+
+/**
+ * List the current user's emulation runs for the Operations pages.
+ *
+ * @param statuses - Optional status filter; when provided, only runs whose
+ *                   status is in this list are returned (server-side
+ *                   status__in). Active Runs passes ['running','pending'];
+ *                   Results passes ['completed','failed'].
+ */
+export async function listEmulationRuns(
+  statuses?: EmulationRunStatus[],
+): Promise<EmulationRunListItem[]> {
+  const params = statuses && statuses.length ? { status: statuses.join(',') } : undefined
+  const { data } = await api.get<EmulationRunListItem[]>('/emulations/runs/', { params })
   return data
 }
 
