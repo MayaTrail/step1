@@ -1,0 +1,43 @@
+title: DangerDev — AdministratorAccess Attached to Role + Cross-Account AssumeRole Verification
+id: c9d0e1f2-a3b4-4678-cdef-678900000008
+status: experimental
+description: >
+  Detects AttachRolePolicy granting AdministratorAccess to an IAM role from a non-approved
+  escalation principal, or AssumeRole calls targeting DangerDev masquerade role names
+  (AWSeservedSSO_*, AWSLanding-Zones-ConfigRecorder*). DangerDev's backdoor pattern:
+  masquerade roles with external account trust policies are elevated to AdministratorAccess,
+  surviving IAM user deletion. AssumeRole events are logged even when they return
+  AccessDenied — the failed attempt is forensic evidence of trust verification.
+references:
+    - https://attack.mitre.org/techniques/T1199/
+    - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.initial_access
+    - attack.t1199
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_attach:
+        eventSource: iam.amazonaws.com
+        eventName: AttachRolePolicy
+        requestParameters.policyArn: 'arn:aws:iam::aws:policy/AdministratorAccess'
+    selection_assume:
+        eventSource: sts.amazonaws.com
+        eventName: AssumeRole
+        requestParameters.roleArn|contains:
+            - 'AWSeservedSSO'
+            - 'AWSLanding-Zones-ConfigRecorder'
+    filter_approved:
+        userIdentity.arn|contains:
+            - ':assumed-role/BreakGlassAdmin'
+            - ':assumed-role/IAMAdminRole'
+            - ':assumed-role/OrganizationAccountAccessRole'
+    condition: (selection_attach or selection_assume) and not filter_approved
+falsepositives:
+    - Legitimate IAM administrator granting AdministratorAccess to an approved service role
+    - Cross-account access setup for authorized third-party vendor (should use specific role names)
+    - Security tooling testing AssumeRole permissions
+level: critical

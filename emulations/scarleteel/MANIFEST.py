@@ -44,6 +44,20 @@ MANIFEST = {
     # short names, e.g. "IAM", "EC2", "S3".
     "services": ["IAM", "STS", "EC2", "Lambda", "S3", "Secrets Manager", "ECS", "CloudTrail"],
 
+    # ── Readiness (compatibility-critical) ───────────────────────────────────
+    # The attack does container RCE against the vulnerable web app on the EC2
+    # instance, so the backend must wait for that service to answer before the
+    # attack phase.  ip_output names the Pulumi export carrying the instance IP
+    # (see infra/__main__.py: pulumi.export("vuln_instance_ip", ...)); port/path
+    # are the static address of the in-instance health endpoint.  Consumed by
+    # apps/emulations/readiness.py and validated in CI.
+    "readiness": {
+        "type": "ec2_http",
+        "ip_output": "vuln_instance_ip",
+        "port": 8080,
+        "path": "/health",
+    },
+
     # ── UI catalogue metadata ─────────────────────────────────────────────────
     "origin": "unknown",
     "origin_label": "APT EMULATION",

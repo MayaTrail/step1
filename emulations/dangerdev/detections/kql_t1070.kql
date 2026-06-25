@@ -1,0 +1,45 @@
+// T1070 Indicator Removal — IAM Deletion Burst (DangerDev Self-Cleanup)
+// DangerDev deleted: ses (UpdateAccessKey + DeleteAccessKey + DeleteUser),
+// then DangerDev@protonmail.me (DetachUserPolicy + DeleteAccessKey + DeleteLoginProfile + DeleteUser).
+// ≥4 events in 120s = burst threshold. CloudTrail fully logs deletions — cover-up fails.
+
+let burst_window = 120s;
+
+AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName in (
+    "DeleteUser", "DeleteAccessKey", "DetachUserPolicy",
+    "DeleteLoginProfile", "UpdateAccessKey", "DetachRolePolicy"
+  )
+| where UserIdentityArn !contains "HRProvisioningRole"
+| where UserIdentityArn !contains "IdentitySync"
+| project TimeGenerated, EventName, UserIdentityArn, UserIdentityUserName,
+          TargetEntity = coalesce(
+            tostring(parse_json(RequestParameters).userName),
+            tostring(parse_json(RequestParameters).roleName),
+            ""
+          ),
+          SourceIpAddress
+| summarize
+    DeletionEvents = make_set(EventName),
+    TargetEntities = make_set(TargetEntity),
+    EventCount     = count(),
+    FirstEvent     = min(TimeGenerated),
+    LastEvent      = max(TimeGenerated),
+    SourceIPs      = make_set(SourceIpAddress)
+    by UserIdentityArn, UserIdentityUserName, bin(TimeGenerated, burst_window)
+| where EventCount >= 4
+| extend DurationSeconds = datetime_diff('second', LastEvent, FirstEvent)
+| extend UniqueTargets   = array_length(TargetEntities)
+| extend Severity = case(
+    EventCount >= 6 and UniqueTargets >= 2, "Critical",
+    EventCount >= 4,                        "High",
+    "Medium"
+  )
+| extend AlertTitle = strcat("IAM Deletion Burst: ", EventCount, " events in ",
+    DurationSeconds, "s — Indicator Removal (Cover-Up Attempt)")
+| project FirstEvent, LastEvent, Severity, AlertTitle,
+          UserIdentityUserName, UserIdentityArn, EventCount, DurationSeconds,
+          UniqueTargets, DeletionEvents, TargetEntities, SourceIPs
+| sort by FirstEvent desc

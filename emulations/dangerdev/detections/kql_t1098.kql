@@ -1,0 +1,27 @@
+// T1098 Account Manipulation — Cross-User IAM Credential Manipulation
+// DangerDev: CreateAccessKey + UpdateLoginProfile on alice.chen using DangerDev@protonmail.me.
+// Key signal: actor username != requestParameters.userName (cross-user manipulation).
+// alice.chen ended up with 2 active keys — Security Hub IAM.3 violation.
+
+AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName in ("CreateAccessKey", "UpdateLoginProfile")
+| extend TargetUser = tostring(parse_json(RequestParameters).userName)
+| where isnotempty(TargetUser)
+| where UserIdentityUserName != TargetUser
+| where UserIdentityArn !contains "HRProvisioningRole"
+| where UserIdentityArn !contains "IdentitySync"
+| where UserIdentityArn !contains ":root"
+| extend ManipulationType = case(
+    EventName == "CreateAccessKey",    "Second access key created on victim account",
+    EventName == "UpdateLoginProfile", "Console password reset on victim account",
+    "Unknown"
+  )
+| extend AlertSeverity = "High"
+| extend AlertTitle = strcat("Cross-User IAM Credential Manipulation: ",
+    UserIdentityUserName, " → ", TargetUser)
+| project TimeGenerated, AlertSeverity, AlertTitle, ManipulationType,
+          ActorArn = UserIdentityArn, ActorUser = UserIdentityUserName,
+          TargetUser, SourceIpAddress, UserAgent, AwsRegion
+| sort by TimeGenerated desc
