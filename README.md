@@ -176,6 +176,24 @@ bundles everything needed to run and learn from the attack:
 - `detections/` — Sigma and KQL detection rules, one set per technique
 - `PLAYBOOK.md` — an incident-response playbook for the campaign
 
+> [!IMPORTANT]
+> **Writing or migrating an emulation? Start with the authoring knowledge base.**
+> The authoring guide, the copy-paste package template, and the per-emulation migration records live in a
+> **private submodule** at `emulations/_kb/` (repo `MayaTrail/emulations-authoring` — access required). It is the
+> source of truth for the contracts every emulation must satisfy (MANIFEST/dashboard, readiness, naming,
+> secrets), the validation gates, and the gotchas — follow it and a new package "lights up" the platform with
+> no backend changes.
+>
+> ```bash
+> git submodule update --init emulations/_kb     # populate it (needs access to the private repo)
+> #  then read   emulations/_kb/AUTHORING.md
+> #  start new   cp -r emulations/_kb/_TEMPLATE emulations/<name>
+> #  migration   emulations/_kb/migrations/<name>.md  (from MIGRATION_TEMPLATE.md)
+> ```
+>
+> Without submodule access `emulations/_kb/` stays empty — the public emulation packages still build and run;
+> only the authoring methodology is gated.
+
 ### SCARLETEEL 2.0
 
 A 6-phase APT emulation based on the real-world SCARLETEEL campaign documented by the Sysdig
@@ -258,11 +276,15 @@ Good entry points for understanding the codebase:
 
 - `docker-compose.yml` — the full service topology and how the pieces connect
 - `emulations/scarleteel/` — a complete emulation package (manifest, attack, infra, detections, playbook)
+- `emulations/_kb/AUTHORING.md` — **the authoring/migration knowledge base (private submodule); read it before
+  writing or migrating an emulation** (see the [Emulations](#emulations) callout to initialise it)
 - `frontend/UI/DESIGN.md` — the frontend design system; read it before any UI change
 
-Adding a new emulation is the most common contribution: create a package under `emulations/`
-with a `MANIFEST.py` and an `attack.py` exposing `run(outputs)`, and the registry will discover
-it automatically.
+Adding or migrating an emulation is the most common contribution. **Read `emulations/_kb/AUTHORING.md` first**,
+then copy `emulations/_kb/_TEMPLATE/` to a new `emulations/<name>/`, fill in the `MANIFEST.py` and an `attack.py`
+exposing `run(outputs, region)` — the registry discovers it automatically — and record the work in
+`emulations/_kb/migrations/<name>.md`. The KB defines the contracts CI enforces, so following it keeps your
+package from failing the build.
 
 ---
 
