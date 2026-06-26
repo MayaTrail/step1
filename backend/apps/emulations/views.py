@@ -142,6 +142,51 @@ class EmulationListView(APIView):
         return Response(emulations)
 
 
+def _aggregate_breakdown(breakdown: list[dict]) -> list[dict]:
+    """
+    Collapse a per-resource cost breakdown into named, counted line items.
+
+    The live cost estimator returns one entry per provisioned resource
+    ({resource, type, detail, hourlyUsd}), which is too granular and noisy for
+    the modal (dozens of mostly-free rows render as blank "x / Free" lines
+    because that shape does not match the frontend EmulationEstimate contract).
+    This folds them into the contract shape ({name, count, cost_per_hour_usd}):
+
+      * each priced service (hourly > 0) is grouped by its human label and
+        counted, and
+      * all zero-cost resources are collapsed into a single
+        "Other resources (free)" row.
+
+    Args:
+        breakdown: List of per-resource dicts from cost_estimator.
+
+    Returns:
+        List of {name, count, cost_per_hour_usd} dicts — priced rows first
+        (highest hourly cost first), with the free bucket last.
+    """
+    priced: dict[str, dict] = {}
+    free_count = 0
+    for item in breakdown:
+        hourly = item.get("hourlyUsd", 0) or 0
+        if hourly > 0:
+            label = item.get("detail") or item.get("type", "resource")
+            row = priced.setdefault(
+                label, {"name": label, "count": 0, "cost_per_hour_usd": hourly}
+            )
+            row["count"] += 1
+        else:
+            free_count += 1
+
+    rows = sorted(priced.values(), key=lambda r: r["cost_per_hour_usd"], reverse=True)
+    if free_count:
+        rows.append({
+            "name": "Other resources (free)",
+            "count": free_count,
+            "cost_per_hour_usd": 0.0,
+        })
+    return rows
+
+
 class EmulationEstimateView(APIView):
     """
     Return a pre-deployment cost breakdown for a given emulation type.
@@ -192,7 +237,7 @@ class EmulationEstimateView(APIView):
                 "displayName": manifest.get("display_name", emulation_type),
                 "region": region,
                 "source": "live-preview",
-                "resources": live["breakdown"],
+                "resources": _aggregate_breakdown(live["breakdown"]),
                 "costDrivers": live["costDrivers"],
                 "warnings": live["warnings"],
                 "resourceCount": live["resourceCount"],

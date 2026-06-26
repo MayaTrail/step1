@@ -15,7 +15,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import type { EmulationRunRecord, EmulationEstimate, StackStatus } from '@/types'
+import type { EmulationRunRecord, EmulationEstimate, StackStatus, Stack } from '@/types'
 import {
   getEmulationEstimate,
   deployEmulationStack,
@@ -23,7 +23,7 @@ import {
   pollEmulationRunUntilDone,
   destroyEmulationStack,
 } from '@/services/emulation.service'
-import { getStack } from '@/services/stack.service'
+import { getStack, listStacks } from '@/services/stack.service'
 
 /* ── Props ── */
 interface RunEmulationModalProps {
@@ -55,6 +55,10 @@ const STACK_STATUS_LABELS: Partial<Record<StackStatus, string>> = {
 /* ── Component ── */
 export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEmulationModalProps) {
   const [phase, setPhase] = useState<ModalPhase>('form')
+  // Form sub-mode: deploy a brand-new stack, or run against an existing ready one.
+  const [formMode, setFormMode] = useState<'new' | 'existing'>('new')
+  const [readyStacks, setReadyStacks] = useState<Stack[]>([])
+  const [selectedStackId, setSelectedStackId] = useState<string>('')
   const [estimate, setEstimate] = useState<EmulationEstimate | null>(null)
   const [estimateLoading, setEstimateLoading] = useState(true)
   const [stackName, setStackName] = useState(`${emulationId}-run`)
@@ -83,6 +87,23 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
       .finally(() => {
         if (!cancelled) setEstimateLoading(false)
       })
+    return () => { cancelled = true }
+  }, [emulationId])
+
+  // Fetch the user's existing stacks for this emulation that are ready to attack,
+  // so the user can run against one instead of deploying a fresh stack.
+  useEffect(() => {
+    let cancelled = false
+    listStacks()
+      .then((stacks) => {
+        if (cancelled) return
+        setReadyStacks(
+          stacks.filter(
+            (s) => s.emulation_type === emulationId && s.status === 'ready_for_attack',
+          ),
+        )
+      })
+      .catch(() => { /* non-fatal: existing-stack selection just stays empty */ })
     return () => { cancelled = true }
   }, [emulationId])
 
@@ -149,14 +170,16 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
     }
   }, [emulationId, stackName])
 
-  const handleAttack = useCallback(async () => {
-    if (!deployedStackId) return
+  const handleAttack = useCallback(async (stackIdArg?: string) => {
+    const targetStackId = stackIdArg || deployedStackId
+    if (!targetStackId) return
+    setDeployedStackId(targetStackId)
     setError(null)
     setPhase('attacking')
     setStatusMsg('Attack in progress...')
 
     try {
-      const { runId } = await triggerEmulationAttack(deployedStackId)
+      const { runId } = await triggerEmulationAttack(targetStackId)
 
       const controller = new AbortController()
       abortRef.current = controller
@@ -262,59 +285,128 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
           {/* ── Form ── */}
           {phase === 'form' && (
             <div className="flex flex-col gap-5">
-              {/* Cost estimate */}
-              <div>
-                <label className="font-mono text-[10px] uppercase tracking-[1.5px] text-content-dim block mb-2">
-                  Estimated Cost
-                </label>
-                {estimateLoading ? (
-                  <div className="flex items-center gap-2 text-content-dim text-sm py-2">
-                    <span className="inline-block w-3 h-3 border-2 border-accent-blue border-t-transparent rounded-full animate-spin" />
-                    Loading estimate...
-                  </div>
-                ) : estimate ? (
-                  <div className="bg-surface-base border border-border rounded-[8px] p-4">
-                    <div className="grid grid-cols-2 gap-2 mb-3">
-                      {(estimate.resources ?? []).map((r, i) => {
-                        const cost = r.cost_per_hour_usd ?? 0
-                        return (
-                          <div key={i} className="flex justify-between font-mono text-[11px]">
-                            <span className="text-content-dim">{r.name} x{r.count}</span>
-                            <span className="text-content-secondary">
-                              {cost === 0 ? 'Free' : `$${cost.toFixed(4)}/hr`}
-                            </span>
-                          </div>
-                        )
-                      })}
-                    </div>
-                    <div className="border-t border-border pt-2 flex justify-between font-mono text-[12px]">
-                      <span className="text-content-secondary font-medium">
-                        Est. total ({estimate.defaultTtlHours}h TTL)
-                      </span>
-                      <span className="text-accent-blue font-bold">${(estimate.estimatedTotalUsd ?? 0).toFixed(4)}</span>
-                    </div>
-                    <div className="mt-2 font-mono text-[10px] text-content-dim">{estimate.note}</div>
-                  </div>
-                ) : null}
+              {/* Mode toggle: deploy a new stack vs. run against an existing ready one */}
+              <div className="flex gap-1 p-1 bg-surface-base border border-border rounded-[8px]">
+                <button
+                  type="button"
+                  onClick={() => setFormMode('new')}
+                  className={`flex-1 px-3 py-1.5 rounded-[6px] font-mono text-[10px] uppercase tracking-[1.5px] transition-all ${
+                    formMode === 'new'
+                      ? 'bg-[rgba(255,255,255,0.06)] text-content-primary'
+                      : 'text-content-dim hover:text-content-secondary'
+                  }`}
+                >
+                  Deploy New
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFormMode('existing')}
+                  className={`flex-1 px-3 py-1.5 rounded-[6px] font-mono text-[10px] uppercase tracking-[1.5px] transition-all ${
+                    formMode === 'existing'
+                      ? 'bg-[rgba(255,255,255,0.06)] text-content-primary'
+                      : 'text-content-dim hover:text-content-secondary'
+                  }`}
+                >
+                  Use Existing{readyStacks.length ? ` (${readyStacks.length})` : ''}
+                </button>
               </div>
 
-              {/* Stack name */}
-              <div>
-                <label className="font-mono text-[10px] uppercase tracking-[1.5px] text-content-dim block mb-1.5">
-                  Stack Name <span className="text-danger">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={stackName}
-                  onChange={(e) => setStackName(e.target.value)}
-                  placeholder={`${emulationId}-yourname`}
-                  className="w-full font-mono text-sm text-content-primary bg-[#0a0a0f] border border-border rounded-[6px] px-3 py-2
-                    placeholder:text-content-dim/50 focus:outline-none focus:border-accent-blue transition-colors"
-                />
-                <div className="font-mono text-[10px] text-content-dim mt-0.5">
-                  Pulumi stack name — convention: {emulationId}-&lt;username&gt;
+              {/* ── Deploy-new mode ── */}
+              {formMode === 'new' && (
+                <>
+                  {/* Cost estimate */}
+                  <div>
+                    <label className="font-mono text-[10px] uppercase tracking-[1.5px] text-content-dim block mb-2">
+                      Estimated Cost
+                    </label>
+                    {estimateLoading ? (
+                      <div className="flex items-center gap-2 text-content-dim text-sm py-2">
+                        <span className="inline-block w-3 h-3 border-2 border-accent-blue border-t-transparent rounded-full animate-spin" />
+                        Loading estimate...
+                      </div>
+                    ) : estimate ? (
+                      <div className="bg-surface-base border border-border rounded-[8px] p-4">
+                        <div className="flex flex-col gap-1.5 mb-3 max-h-[200px] overflow-y-auto">
+                          {(estimate.resources ?? []).map((r, i) => {
+                            const cost = r.cost_per_hour_usd ?? 0
+                            return (
+                              <div key={i} className="flex justify-between items-baseline gap-3 font-mono text-[11px]">
+                                <span className="text-content-dim truncate" title={r.name}>
+                                  {r.name}{r.count ? ` x${r.count}` : ''}
+                                </span>
+                                <span className="text-content-secondary shrink-0">
+                                  {cost === 0 ? 'Free' : cost < 0.0001 ? '<$0.0001/hr' : `$${cost.toFixed(4)}/hr`}
+                                </span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                        <div className="border-t border-border pt-2 flex justify-between font-mono text-[12px]">
+                          <span className="text-content-secondary font-medium">
+                            Est. total ({estimate.defaultTtlHours}h TTL)
+                          </span>
+                          <span className="text-accent-blue font-bold">${(estimate.estimatedTotalUsd ?? 0).toFixed(4)}</span>
+                        </div>
+                        <div className="mt-2 font-mono text-[10px] text-content-dim">{estimate.note}</div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* Stack name */}
+                  <div>
+                    <label className="font-mono text-[10px] uppercase tracking-[1.5px] text-content-dim block mb-1.5">
+                      Stack Name <span className="text-danger">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={stackName}
+                      onChange={(e) => setStackName(e.target.value)}
+                      placeholder={`${emulationId}-yourname`}
+                      className="w-full font-mono text-sm text-content-primary bg-[#0a0a0f] border border-border rounded-[6px] px-3 py-2
+                        placeholder:text-content-dim/50 focus:outline-none focus:border-accent-blue transition-colors"
+                    />
+                    <div className="font-mono text-[10px] text-content-dim mt-0.5">
+                      Pulumi stack name — convention: {emulationId}-&lt;username&gt;
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* ── Use-existing mode ── */}
+              {formMode === 'existing' && (
+                <div>
+                  <label className="font-mono text-[10px] uppercase tracking-[1.5px] text-content-dim block mb-2">
+                    Ready Stacks
+                  </label>
+                  {readyStacks.length === 0 ? (
+                    <div className="bg-surface-base border border-border rounded-[8px] px-4 py-6 text-center font-mono text-[11px] text-content-dim leading-[1.7]">
+                      No ready stacks for this emulation.
+                      <br />Switch to &ldquo;Deploy New&rdquo; to provision one.
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-1.5 max-h-[260px] overflow-y-auto">
+                      {readyStacks.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => setSelectedStackId(s.id)}
+                          className={`flex items-center justify-between gap-3 px-3 py-2.5 rounded-[6px] border text-left transition-all ${
+                            selectedStackId === s.id
+                              ? 'border-accent-blue bg-accent-blue/[0.08]'
+                              : 'border-border hover:border-border-active'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="w-2 h-2 rounded-full bg-safe shrink-0" />
+                            <span className="font-mono text-[12px] text-content-primary truncate">{s.name}</span>
+                          </div>
+                          <span className="font-mono text-[10px] text-content-dim shrink-0">{s.region}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
+              )}
 
               {error && (
                 <div className="bg-danger/[0.08] border border-danger/20 rounded-[6px] px-4 py-3 font-mono text-xs text-danger">
@@ -422,25 +514,36 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
         {/* Footer */}
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border shrink-0">
           {phase === 'form' && (
-            <>
-              <button
-                onClick={handleClose}
-                className="px-5 py-2.5 rounded-btn font-body text-[0.85rem] font-medium cursor-pointer
-                  bg-transparent border border-[rgba(255,255,255,0.15)] text-content-primary transition-all
-                  hover:bg-[rgba(255,255,255,0.05)] hover:border-border-active"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDeploy}
-                disabled={!stackName.trim() || estimateLoading}
-                className="px-5 py-2.5 rounded-btn font-body text-[0.85rem] font-semibold cursor-pointer border-none
-                  bg-accent-blue text-white transition-all hover:-translate-y-px hover:shadow-[0_8px_40px_rgba(0,180,216,0.3)]
-                  disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none"
-              >
-                Deploy Stack
-              </button>
-            </>
+            <button
+              onClick={handleClose}
+              className="px-5 py-2.5 rounded-btn font-body text-[0.85rem] font-medium cursor-pointer
+                bg-transparent border border-[rgba(255,255,255,0.15)] text-content-primary transition-all
+                hover:bg-[rgba(255,255,255,0.05)] hover:border-border-active"
+            >
+              Cancel
+            </button>
+          )}
+          {phase === 'form' && formMode === 'new' && (
+            <button
+              onClick={handleDeploy}
+              disabled={!stackName.trim() || estimateLoading}
+              className="px-5 py-2.5 rounded-btn font-body text-[0.85rem] font-semibold cursor-pointer border-none
+                bg-accent-blue text-white transition-all hover:-translate-y-px hover:shadow-[0_8px_40px_rgba(0,180,216,0.3)]
+                disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none"
+            >
+              Deploy Stack
+            </button>
+          )}
+          {phase === 'form' && formMode === 'existing' && (
+            <button
+              onClick={() => handleAttack(selectedStackId)}
+              disabled={!selectedStackId}
+              className="px-5 py-2.5 rounded-btn font-body text-[0.85rem] font-semibold cursor-pointer border-none
+                bg-danger text-white transition-all hover:-translate-y-px hover:shadow-[0_8px_40px_rgba(255,34,68,0.4)]
+                disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none"
+            >
+              &#9654; Run Attack
+            </button>
           )}
           {phase === 'deploying' && (
             <button
@@ -463,7 +566,7 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
                 Abort &amp; Destroy
               </button>
               <button
-                onClick={handleAttack}
+                onClick={() => handleAttack()}
                 className="px-5 py-2.5 rounded-btn font-body text-[0.85rem] font-semibold cursor-pointer border-none
                   bg-danger text-white transition-all hover:-translate-y-px hover:shadow-[0_8px_40px_rgba(255,34,68,0.4)]"
               >
