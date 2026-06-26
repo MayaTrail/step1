@@ -14,7 +14,7 @@
  * inventory. Phase 1 does not fabricate counts.
  */
 
-import { useState, lazy, Suspense } from 'react'
+import { useState } from 'react'
 import type { Stack, StackStatus } from '@/types'
 import { Badge } from '@/components/ui/Badge'
 import {
@@ -28,12 +28,7 @@ import {
 import { DeploymentProgress } from './DeploymentProgress'
 import { LifecycleTimeline } from './LifecycleTimeline'
 import { SecurityContextTab } from './SecurityContextTab'
-
-// Lazy-loaded so the dagre layout library (graphlib + lodash) is code-split
-// into its own chunk and only fetched when a user opens the Resource Graph tab.
-const InfraGraphView = lazy(() =>
-    import('./InfraGraphView').then((m) => ({ default: m.InfraGraphView })),
-)
+import { ResourceMapModal } from '@/components/modals/ResourceMapModal'
 
 export type StackDetailView = 'details' | 'lifecycle' | 'security' | 'graph'
 
@@ -76,6 +71,7 @@ export function StackCard({
 }: StackCardProps) {
     const [confirmDelete, setConfirmDelete] = useState(false)
     const [confirmForceDestroy, setConfirmForceDestroy] = useState(false)
+    const [mapOpen, setMapOpen] = useState(false)
 
     const health = deriveHealth(stack)
     const meta = STACK_HEALTH[health]
@@ -286,17 +282,27 @@ export function StackCard({
                     {detailView === 'security' && <SecurityContextTab emulationType={stack.emulation_type} />}
 
                     {detailView === 'graph' && (
-                        <Suspense fallback={
-                            <div className="flex items-center gap-2 text-content-dim font-mono text-xs py-8 justify-center">
-                                <span className="inline-block w-3 h-3 border-2 border-accent-blue border-t-transparent rounded-full animate-spin" />
-                                Loading graph…
+                        <div className="flex flex-col items-center gap-3 py-8 text-center">
+                            <div className="font-mono text-[11px] text-content-dim leading-[1.7] max-w-[340px]">
+                                {(stack.resource_summary?.resources?.length ?? 0) > 0
+                                    ? `${stack.resource_summary?.resources?.length} resources provisioned. Open the interactive map to explore them and their dependencies.`
+                                    : 'No resource inventory yet — deploy the stack to populate its resource map.'}
                             </div>
-                        }>
-                            <InfraGraphView stack={stack} />
-                        </Suspense>
+                            <button
+                                onClick={() => setMapOpen(true)}
+                                disabled={!stack.resource_summary?.resources?.length}
+                                className="px-5 py-2.5 rounded-btn font-body text-[0.85rem] font-semibold cursor-pointer border-none
+                                    bg-accent-blue text-white transition-all hover:-translate-y-px hover:shadow-[0_8px_40px_rgba(0,180,216,0.3)]
+                                    disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none"
+                            >
+                                &#10138; Open Resource Map
+                            </button>
+                        </div>
                     )}
                 </div>
             )}
+
+            {mapOpen && <ResourceMapModal stack={stack} onClose={() => setMapOpen(false)} />}
         </div>
     )
 }

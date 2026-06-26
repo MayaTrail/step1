@@ -1,0 +1,47 @@
+title: DangerDev — GuardDuty Accessed with Anomalous User-Agent + SimulatePrincipalPolicy Probe
+id: f2a3b4c5-d6e7-4901-f012-900000000011
+status: experimental
+description: >
+  Detects two DangerDev pre-cleanup intelligence patterns: (1) GuardDuty ListFindings /
+  GetFindings accessed via RDS console user-agent from a non-security principal — DangerDev
+  used the RDS console to access GuardDuty to evade UA-based detection rules tuned to the
+  GuardDuty console UA; (2) iam:SimulatePrincipalPolicy targeting SSM and Secrets Manager
+  actions — probes permissions without generating telemetry in SSM or SecretsManager's
+  own log sources. Both patterns indicate pre-evasion scope-checking.
+references:
+    - https://attack.mitre.org/techniques/T1518/001/
+    - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1518.001
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_gd_rds_ua:
+        eventSource: guardduty.amazonaws.com
+        eventName:
+            - ListDetectors
+            - ListFindings
+            - GetFindings
+        userAgent|contains: 'Amazon Relational Database Service'
+    selection_simulate:
+        eventSource: iam.amazonaws.com
+        eventName: SimulatePrincipalPolicy
+        requestParameters.actionNames|contains:
+            - 'ssm:'
+            - 'secretsmanager:'
+    filter_security_roles:
+        userIdentity.arn|contains:
+            - ':assumed-role/SecurityAudit'
+            - ':assumed-role/GuardDutyAdmin'
+            - ':assumed-role/SOCAnalyst'
+            - 'soc-automation'
+    condition: (selection_gd_rds_ua or selection_simulate) and not filter_security_roles
+falsepositives:
+    - Security engineers using non-standard CLI paths or custom tooling with alternate UAs
+    - Authorized IAM policy testing tools using SimulatePrincipalPolicy for audits
+    - Custom SIEM integrations with non-standard user-agents querying GuardDuty
+level: high

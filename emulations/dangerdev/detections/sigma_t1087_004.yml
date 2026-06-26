@@ -1,0 +1,40 @@
+title: DangerDev — IAM User Enumeration to Map Accounts for Targeting
+id: c3d4e5f6-a7b8-4012-cdef-012345678902
+status: experimental
+description: >
+  Detects iam:ListUsers called from an IAM user principal outside of known admin
+  automation contexts. DangerDev called ListUsers to map all existing accounts,
+  identify ses-smtp-user.* naming patterns for masquerade design, and select
+  alice.chen for credential hijacking. Non-console, non-service-role calls with
+  automated user-agent cadence are the distinguishing characteristic.
+references:
+    - https://attack.mitre.org/techniques/T1087/004/
+    - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1087.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: iam.amazonaws.com
+        eventName: ListUsers
+        userIdentity.type: IAMUser
+    filter_console:
+        sessionCredentialFromConsole: 'true'
+    filter_admin_roles:
+        userIdentity.arn|contains:
+            - ':assumed-role/IAMAdminRole'
+            - ':assumed-role/SecurityAudit'
+            - ':assumed-role/ReadOnlyAccess'
+            - 'compliance'
+            - ':root'
+    condition: selection and not (filter_console or filter_admin_roles)
+falsepositives:
+    - Security audit automation running IAM inventory scans (non-interactive)
+    - AWS Config rules performing IAM compliance checks
+    - CI/CD pipelines listing users for dynamic permission checks
+level: low

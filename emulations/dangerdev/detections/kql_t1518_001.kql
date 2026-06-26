@@ -1,0 +1,44 @@
+// T1518.001 Security Software Discovery — GuardDuty via RDS UA + SimulatePrincipalPolicy
+// DangerDev fingerprints:
+//   (1) GuardDuty findings reviewed via RDS console user-agent (cross-service anomaly)
+//   (2) SimulatePrincipalPolicy probing ssm:/secretsmanager: without calling those services
+// Correlation: both from same actor within 10m = Critical (pre-evasion intelligence gathering)
+
+let probe_window = 10m;
+
+let gd_anomalous = AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "guardduty.amazonaws.com"
+| where EventName in ("ListDetectors", "ListFindings", "GetFindings")
+| where UserAgent contains "Relational Database Service"
+    or (not (UserAgent contains "guardduty" or UserAgent contains "console.aws"))
+| where UserIdentityArn !contains "SecurityAudit"
+| where UserIdentityArn !contains "GuardDutyAdmin"
+| project GDTime = TimeGenerated, GDEvent = EventName, UserIdentityArn,
+          UserIdentityUserName, UserAgent, SourceIpAddress;
+
+let simulate_probe = AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName == "SimulatePrincipalPolicy"
+| where RequestParameters has "ssm:" or RequestParameters has "secretsmanager:"
+| project SimTime = TimeGenerated, UserIdentityArn, RequestParameters;
+
+// Standalone GuardDuty anomalous UA — High
+gd_anomalous
+| extend Severity = "High"
+| extend AlertTitle = "GuardDuty Accessed with Anomalous User-Agent (RDS Console)"
+| project GDTime, Severity, AlertTitle, UserIdentityUserName, UserIdentityArn,
+          GDEvent, UserAgent, SourceIpAddress
+| union (
+// Composite: GuardDuty + SimulatePrincipalPolicy within 10m — Critical
+    gd_anomalous
+    | join kind=inner (simulate_probe) on UserIdentityArn
+    | where SimTime between (GDTime .. (GDTime + probe_window))
+        or GDTime between (SimTime .. (SimTime + probe_window))
+    | extend Severity = "Critical"
+    | extend AlertTitle = "CRITICAL: GuardDuty Review + SSM/Secrets Probe — DangerDev Pre-Cleanup Pattern"
+    | project GDTime, Severity, AlertTitle, UserIdentityUserName, UserIdentityArn,
+              GDEvent, UserAgent, SourceIpAddress
+)
+| sort by GDTime desc

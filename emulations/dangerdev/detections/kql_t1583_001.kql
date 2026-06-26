@@ -1,0 +1,33 @@
+// T1583.001 Acquire Infrastructure: Domains — Route53 Domain Registration
+// DangerDev: registered 4 PayPal-mimicking domains via alice.chen hijacked session.
+// Enrichment: brand-impersonation keyword check on DomainName escalates to Critical.
+// Correlate with preceding T1098 (alice.chen key creation) for confirmed hijack-to-infra chain.
+
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "route53domains.amazonaws.com"
+| where EventName == "RegisterDomain"
+| extend DomainName       = tostring(parse_json(RequestParameters).domainName)
+| extend DurationYears    = toint(parse_json(RequestParameters).durationInYears)
+| extend PrivacyProtected = tobool(parse_json(RequestParameters).privacyProtectRegistrantContact)
+| extend ImpersonationRisk = case(
+    DomainName matches regex @"(paypal|microsoft|amazon|apple|google|chase|wellsfargo|bankof|dropbox|netflix)",
+        "BrandImpersonation-Critical",
+    DomainName matches regex @"(login|secure|verify|account|update|confirm|reset|auth)",
+        "PhishingKeywords-High",
+    "None"
+  )
+| extend Severity = case(
+    ImpersonationRisk contains "BrandImpersonation", "Critical",
+    ImpersonationRisk contains "PhishingKeywords",   "High",
+    UserIdentityArn !contains "DomainRegistration",  "High",
+    "Medium"
+  )
+| extend AlertTitle = strcat(
+    "Route53 Domain Registration from Anomalous Principal: ", DomainName,
+    iff(ImpersonationRisk != "None", strcat(" [", ImpersonationRisk, "]"), "")
+  )
+| project TimeGenerated, Severity, AlertTitle, DomainName, ImpersonationRisk,
+          DurationYears, PrivacyProtected, UserIdentityUserName, UserIdentityArn,
+          SourceIpAddress, UserAgent, AwsRegion
+| sort by TimeGenerated desc

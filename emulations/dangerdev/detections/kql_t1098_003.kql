@@ -1,0 +1,32 @@
+// T1098.003 Account Manipulation: Additional Cloud Roles — AdministratorAccess on IAM User
+// DangerDev: used AWS-managed AdministratorAccess to avoid custom policy artifacts.
+// Correlate with CreateUser within 24h on same TargetUser for critical DangerDev chain signal.
+
+let new_users = AWSCloudTrail
+| where TimeGenerated > ago(2d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName == "CreateUser"
+| extend NewUserName = tostring(parse_json(RequestParameters).userName)
+| project UserCreateTime = TimeGenerated, NewUserName, CreatorArn = UserIdentityArn;
+
+AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName == "AttachUserPolicy"
+| extend PolicyArn  = tostring(parse_json(RequestParameters).policyArn)
+| extend TargetUser = tostring(parse_json(RequestParameters).userName)
+| where PolicyArn == "arn:aws:iam::aws:policy/AdministratorAccess"
+| join kind=leftouter (new_users) on $left.TargetUser == $right.NewUserName
+| extend HoursAfterCreation   = datetime_diff('hour', TimeGenerated, UserCreateTime)
+| extend NewlyCreatedUser      = isnotempty(UserCreateTime) and HoursAfterCreation <= 24
+| extend DangerDevFingerprint  = TargetUser contains "@"
+| extend Severity = case(
+    DangerDevFingerprint and NewlyCreatedUser, "Critical",
+    NewlyCreatedUser, "Critical",
+    "High"
+  )
+| extend AlertTitle = "AdministratorAccess Granted to IAM User — DangerDev Privilege Escalation"
+| project TimeGenerated, Severity, AlertTitle, DangerDevFingerprint, NewlyCreatedUser,
+          ActorArn = UserIdentityArn, ActorUser = UserIdentityUserName,
+          TargetUser, PolicyArn, HoursAfterCreation, SourceIpAddress, AwsRegion
+| sort by TimeGenerated desc

@@ -1,0 +1,3 @@
+name: mayatrail-dangerdev
+runtime: python
+description: DangerDev APT emulation — AWS IAM abuse, cryptomining recon, phishing infra.

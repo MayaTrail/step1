@@ -1,0 +1,39 @@
+title: DangerDev — Leaked IAM Long-Term Key Used Without GetCallerIdentity
+id: a1b2c3d4-e5f6-4890-abcd-ef1234567890
+status: experimental
+description: >
+  Detects IAM GetUser + ListAttachedUserPolicies issued without a preceding
+  GetCallerIdentity in the same session. DangerDev deliberately avoided
+  GetCallerIdentity to bypass detection rules that treat it as a session-start
+  signal. Both events together from a non-service IAMUser principal originating
+  from a non-corporate IP indicate leaked-credential validation.
+references:
+    - https://attack.mitre.org/techniques/T1078/004/
+    - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.initial_access
+    - attack.t1078.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: iam.amazonaws.com
+        eventName:
+            - GetUser
+            - ListAttachedUserPolicies
+        userIdentity.type: IAMUser
+    filter_automation:
+        userIdentity.arn|contains:
+            - ':assumed-role/AWSServiceRole'
+            - ':assumed-role/OrganizationAccountAccessRole'
+            - 'securityaudit'
+            - 'compliance-scanner'
+    condition: selection and not filter_automation
+falsepositives:
+    - IAM administrators running permission audits from corporate IPs
+    - Automated compliance scanning tools (AWS Config, Prisma Cloud, Security Hub)
+    - CI/CD pipelines verifying their own permissions before deployment
+level: medium

@@ -412,8 +412,11 @@ export function InfraGraphView({ stack }: { stack: Stack }) {
 
       {/* Canvas + panel */}
       <div className="flex gap-3 items-start">
-        <div className="flex-1 min-w-0 rounded-card border border-border overflow-hidden bg-surface-deep">
-          <svg viewBox={`0 0 ${layout.width} ${layout.height}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: 'block', maxHeight: '70vh' }}>
+        <div className="flex-1 min-w-0 rounded-card border border-border overflow-auto bg-surface-deep" style={{ maxHeight: '74vh' }}>
+          {/* Render the SVG at its natural pixel size so nodes stay readable; the
+              container scrolls (left-right and up-down) for large topologies
+              instead of shrinking the whole map to fit. */}
+          <svg viewBox={`0 0 ${layout.width} ${layout.height}`} width={layout.width} height={layout.height} preserveAspectRatio="xMinYMin meet" style={{ display: 'block' }}>
             <defs>
               <marker id={`ar-${stack.id}`} markerWidth={8} markerHeight={8} refX={7} refY={3.5} orient="auto"><path d="M0 1L7 3.5L0 6z" fill="rgba(255,255,255,0.28)" /></marker>
               <marker id={`arh-${stack.id}`} markerWidth={8} markerHeight={8} refX={7} refY={3.5} orient="auto"><path d="M0 1L7 3.5L0 6z" fill={ACCENT} /></marker>

@@ -41,6 +41,7 @@ from django.utils import timezone
 from pulumi import automation as auto
 
 from apps.emulations.registry import get_emulation
+from apps.emulations.readiness import requires_http_probe, resolve_readiness
 
 # Reuse the infrastructure app's persistence helpers so emulation stacks get the
 # same logs / failure reason / resource inventory as generic stacks, without
@@ -329,6 +330,42 @@ def _emulation_work_dir(emulation_type: str) -> str:
     return infra_dir
 
 
+def _live_stack_outputs(stack) -> dict:
+    """
+    Read a stack's full outputs (secret values decrypted) live from Pulumi state.
+
+    Secret outputs are deliberately NOT persisted to Stack.outputs (see
+    deploy_emulation_stack), so the attack phase reads them fresh from the Pulumi
+    state backend at run time instead.  This keeps leaked credentials and private
+    keys out of the database while still making them available to the attack that
+    needs them.
+
+    Reuses the same workspace machinery as deploy/destroy: assume the owner's
+    role, select the stack, and return its outputs.  Non-secret outputs are
+    included too, so the result is a complete superset of the persisted copy and
+    can be passed to attack.run() directly.
+
+    Args:
+        stack: The Stack model instance whose outputs to read.
+
+    Returns:
+        Dict of {output_name: value} including decrypted secret values.
+    """
+    aws_creds = _assume_user_role(stack.owner)
+    source_dir = _emulation_work_dir(stack.emulation_type)
+    tmp_dir = _prepare_work_dir(source_dir)
+    try:
+        pulumi_stack = _get_pulumi_stack(
+            stack_name=stack.name,
+            region=stack.region,
+            work_dir=tmp_dir,
+            aws_creds=aws_creds,
+        )
+        return {key: out.value for key, out in pulumi_stack.outputs().items()}
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 # ---------------------------------------------------------------------------
 # Enterprise emulation tasks
 # ---------------------------------------------------------------------------
@@ -383,8 +420,21 @@ def deploy_emulation_stack(self, stack_id: str) -> dict:
             )
             result = pulumi_stack.up(on_output=on_output)
 
-            stack.outputs = {key: val.value for key, val in result.outputs.items()}
-            stack.status = Stack.Status.EC2_BOOTING
+            # Persist only NON-secret outputs.  Secret outputs (e.g. the leaked
+            # access key secret, alice's key, the EC2 private-key PEM) must never
+            # land in the Stack.outputs DB column in plaintext; the attack reads
+            # them live from Pulumi state at run time via _live_stack_outputs().
+            stack.outputs = {
+                key: val.value
+                for key, val in result.outputs.items()
+                if not val.secret
+            }
+            readiness = resolve_readiness(manifest)
+            if requires_http_probe(readiness):
+                stack.status = Stack.Status.EC2_BOOTING
+            else:
+                # No vulnerable web service — ready for attack immediately.
+                stack.status = Stack.Status.READY_FOR_ATTACK
             stack.resource_summary = _summarize_resources(pulumi_stack)
             stack.last_logs = _trim_logs(entries)
             stack.last_error = ""
@@ -395,10 +445,13 @@ def deploy_emulation_stack(self, stack_id: str) -> dict:
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-        # Begin non-blocking EC2 readiness polling.
-        poll_ec2_readiness.apply_async(args=[stack_id], queue="enterprise")
-
-        logger.info("Emulation stack deployed: name=%s → EC2_BOOTING", stack.name)
+        # Begin non-blocking readiness polling only when the emulation declares
+        # an HTTP probe; "none"-readiness stacks are already READY_FOR_ATTACK.
+        if requires_http_probe(readiness):
+            poll_ec2_readiness.apply_async(args=[stack_id], queue="enterprise")
+            logger.info("Emulation stack deployed: name=%s → EC2_BOOTING", stack.name)
+        else:
+            logger.info("Emulation stack deployed: name=%s → READY_FOR_ATTACK (no probe)", stack.name)
         return {"stack_id": stack_id, "status": stack.status}
 
     except Exception as exc:
@@ -432,18 +485,24 @@ def poll_ec2_readiness(self, stack_id: str) -> None:
     Stack = apps.get_model("infrastructure", "Stack")
 
     stack = _get_stack(stack_id)
-    ip = stack.outputs.get("vuln_instance_ip")
+    entry = get_emulation(stack.emulation_type)
+    manifest = entry.get("manifest", entry) if entry else {}
+    readiness = resolve_readiness(manifest)
+    ip = stack.outputs.get(readiness["ip_output"])
 
     if not ip:
         logger.error(
-            "poll_ec2_readiness: no vuln_instance_ip in outputs for stack=%s", stack_id,
+            "poll_ec2_readiness: no %s in outputs for stack=%s",
+            readiness["ip_output"], stack_id,
         )
         stack.status = Stack.Status.FAILED
         stack.save(update_fields=["status", "updated_at"])
         return
 
     try:
-        resp = http_requests.get(f"http://{ip}:8080/health", timeout=5)
+        resp = http_requests.get(
+            f"http://{ip}:{readiness['port']}{readiness['path']}", timeout=5,
+        )
         if resp.status_code == 200:
             stack.status = Stack.Status.READY_FOR_ATTACK
             stack.save(update_fields=["status", "updated_at"])
@@ -516,8 +575,12 @@ def run_emulation_attack(self, run_id: str) -> dict:
         run.phase_total = phase_total
         run.save(update_fields=["phase_total"])
 
+        # Secret outputs are not persisted to the DB, so fetch the full output
+        # set (including decrypted secrets) live from Pulumi state for the attack.
+        attack_outputs = _live_stack_outputs(stack)
+
         with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
-            mod.run(stack.outputs, region=stack.region)
+            mod.run(attack_outputs, region=stack.region)
 
         run.status = EmulationRun.Status.COMPLETED
         stack.status = Stack.Status.ATTACK_COMPLETE

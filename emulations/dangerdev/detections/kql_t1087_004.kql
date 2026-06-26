@@ -1,0 +1,34 @@
+// T1087.004 Account Discovery: Cloud Account — IAM User Enumeration
+// DangerDev: ListUsers to find ses-smtp-user.* patterns and identify alice.chen for hijacking.
+// Correlate with preceding GetUser/ListAttachedUserPolicies to surface the full recon cluster.
+
+AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName == "ListUsers"
+| where UserIdentityType == "IAMUser"
+| where SessionCredentialFromConsole != "true"
+| where UserIdentityArn !contains "IAMAdminRole"
+| where UserIdentityArn !contains "SecurityAudit"
+| where UserIdentityArn !contains ":root"
+// Join preceding recon events from same principal to surface the DangerDev chain
+| join kind=leftouter (
+    AWSCloudTrail
+    | where TimeGenerated > ago(1d)
+    | where EventSource == "iam.amazonaws.com"
+    | where EventName in ("GetUser", "ListAttachedUserPolicies")
+    | where UserIdentityType == "IAMUser"
+    | project PrecedingEvent = EventName, UserIdentityArn, PrecedingTime = TimeGenerated
+) on UserIdentityArn
+| where isempty(PrecedingTime) or PrecedingTime <= TimeGenerated
+| summarize
+    PrecedingCalls = make_set(PrecedingEvent),
+    FirstSeen      = min(TimeGenerated),
+    SourceIPs      = make_set(SourceIpAddress),
+    UserAgents     = make_set(UserAgent)
+    by UserIdentityUserName, UserIdentityArn, AwsRegion
+| extend Severity = iff(array_length(PrecedingCalls) > 0, "High", "Medium")
+| extend AlertTitle = "IAM User Enumeration — DangerDev Discovery Pattern"
+| project FirstSeen, Severity, AlertTitle, UserIdentityUserName, UserIdentityArn,
+          PrecedingCalls, SourceIPs, UserAgents, AwsRegion
+| sort by FirstSeen desc

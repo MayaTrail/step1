@@ -1,0 +1,37 @@
+// T1036.005 Masquerading — IAM Resource Name Typosquatting AWS Reserved Conventions
+// DangerDev fingerprints:
+//   'ses' username — blends with ses-smtp-user.* auto-generated accounts
+//   'AWSeservedSSO_AdminAccess' — lowercase 'e' vs legitimate 'AWSReservedSSO_*'
+//   'AWSLanding-Zones-ConfigRecorderRoles' — wrong policy (AdministratorAccess) for Config role
+
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName in ("CreateUser", "CreateRole")
+| extend ResourceName = coalesce(
+    tostring(parse_json(RequestParameters).userName),
+    tostring(parse_json(RequestParameters).roleName)
+  )
+| extend MasqueradeType = case(
+    EventName == "CreateUser"
+        and ResourceName matches regex @"^(ses|sts|iam|ec2|s3|rds|sns|sqs|ssm|kms|sso)$",
+        "ServiceName-Username",
+    ResourceName startswith "AWSeservedSSO",
+        "AWSReservedSSO-Typosquat (lowercase e)",
+    ResourceName startswith "AWSLanding-Zones-ConfigRecorder",
+        "AWSConfig-RoleName-Masquerade",
+    ResourceName startswith "AWS" and UserIdentityType == "IAMUser",
+        "AWS-Prefix-Role-from-IAMUser",
+    ""
+  )
+| where isnotempty(MasqueradeType)
+| where UserIdentityArn !contains "AWSServiceRole"
+| extend Severity = case(
+    MasqueradeType contains "Typosquat", "Critical",
+    MasqueradeType contains "Masquerade", "Critical",
+    "High"
+  )
+| extend AlertTitle = strcat("IAM Masquerading: ", MasqueradeType)
+| project TimeGenerated, Severity, AlertTitle, MasqueradeType, EventName,
+          ResourceName, UserIdentityUserName, UserIdentityArn, SourceIpAddress, AwsRegion
+| sort by TimeGenerated desc

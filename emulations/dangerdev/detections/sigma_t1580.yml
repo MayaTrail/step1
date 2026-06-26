@@ -1,0 +1,48 @@
+title: DangerDev — EC2 Infrastructure Enumeration Burst with GPU Instance Filter
+id: f6a7b8c9-d0e1-4345-f012-345678900005
+status: experimental
+description: >
+  Detects a burst of EC2 Describe* API calls including DescribeInstanceTypes filtered
+  for GPU instance families (p3.*, p4d.*, g4dn.*). This filter pattern is the DangerDev
+  pre-mining reconnaissance signature: enumerating compute capacity before deploying
+  cryptomining infrastructure. The burst was executed using DangerDev@protonmail.me
+  credentials within a single session immediately after privilege escalation.
+references:
+    - https://attack.mitre.org/techniques/T1580/
+    - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1580
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_gpu_filter:
+        eventSource: ec2.amazonaws.com
+        eventName: DescribeInstanceTypes
+        requestParameters|contains:
+            - 'p3.'
+            - 'p4d.'
+            - 'g4dn.'
+    selection_broad:
+        eventSource: ec2.amazonaws.com
+        eventName:
+            - DescribeInstances
+            - DescribeSecurityGroups
+            - DescribeVpcs
+            - DescribeRegions
+            - DescribeAvailabilityZones
+    filter_infra_roles:
+        userIdentity.arn|contains:
+            - ':assumed-role/InfraAdmin'
+            - ':assumed-role/EC2Admin'
+            - ':assumed-role/CapacityPlanning'
+            - ':assumed-role/AWSServiceRole'
+    condition: selection_gpu_filter and not filter_infra_roles
+falsepositives:
+    - ML/data-science teams legitimately requesting GPU capacity information
+    - Cloud governance tools running infrastructure inventory scans
+    - AWS Trusted Advisor and Cost Explorer automated checks
+level: high
