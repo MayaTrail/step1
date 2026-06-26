@@ -1,0 +1,3 @@
+[submodule "emulations/_kb"]
+	path = emulations/_kb
+	url = https://github.com/MayaTrail/emulations-authoring.git
