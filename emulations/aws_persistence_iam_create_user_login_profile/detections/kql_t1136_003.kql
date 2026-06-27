@@ -1,0 +1,7 @@
+// Create IAM User with Console Access (T1136.003) — eventName(s) auto-derived; verify casing.
+// Signal: iam:CreateUser followed by iam:CreateLoginProfile — new console-enabled user created outside normal IAM provisioning pipeline
+AWSCloudTrail
+| where EventSource in ("iam.amazonaws.com")
+| where EventName in ("CreateUser", "CreateLoginProfile", "DeleteLoginProfile", "DeleteUser")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

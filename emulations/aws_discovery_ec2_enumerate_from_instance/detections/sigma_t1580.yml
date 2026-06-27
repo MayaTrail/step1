@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Enumerate AWS Environment from EC2 Instance (T1580)
+id: 4c050717-8cdd-5510-a485-0a44b5665c41
+status: experimental
+description: Rapid ec2:Describe*, s3:ListBuckets, iam:ListUsers called from an EC2 instance role — especially if the instance is not a known bastion or operations server
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.discovery.ec2-enumerate-from-instance/
+tags:
+  - attack.discovery
+  - attack.t1580
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName: ['DescribeInstanceInformation', 'SendCommand', 'GetCommandInvocation']
+  condition: selection
+level: medium

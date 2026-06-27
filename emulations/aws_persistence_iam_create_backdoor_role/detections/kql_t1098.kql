@@ -1,0 +1,7 @@
+// Create IAM Backdoor Role with Admin Access (T1098) — eventName(s) auto-derived; verify casing.
+// Signal: iam:CreateRole with a cross-account trust principal followed by iam:AttachRolePolicy attaching AdministratorAccess or broad managed policies
+AWSCloudTrail
+| where EventSource in ("iam.amazonaws.com")
+| where EventName in ("CreateRole", "AttachRolePolicy", "DetachRolePolicy", "DeleteRole")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

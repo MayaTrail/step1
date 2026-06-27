@@ -1,0 +1,3 @@
+name: mayatrail-aws-discovery-ses-enumerate
+runtime: python
+description: Infrastructure for the aws_discovery_ses_enumerate atomic emulation.

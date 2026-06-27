@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Backdoor Lambda Function via Resource Policy (T1098)
+id: b68838dd-b750-5e00-95b5-51109d2ecedc
+status: experimental
+description: lambda:AddPermission granting cross-account or wildcard invoke access to a Lambda function
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.lambda-backdoor-function/
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName: ['AddPermission', 'RemovePermission']
+  condition: selection
+level: medium

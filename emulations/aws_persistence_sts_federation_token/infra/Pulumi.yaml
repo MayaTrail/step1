@@ -1,0 +1,3 @@
+name: mayatrail-aws-persistence-sts-federation-token
+runtime: python
+description: Infrastructure for the aws_persistence_sts_federation_token atomic emulation.

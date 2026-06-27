@@ -1,0 +1,10 @@
+// AWS Console login without MFA (T1078.004) — canonical ConsoleLogin signal.
+// Signal: ConsoleLogin event with additionalEventData.MFAUsed=No.
+AWSCloudTrail
+| where EventSource == "signin.amazonaws.com"
+| where EventName == "ConsoleLogin"
+| extend MFAUsed = tostring(parse_json(AdditionalEventData).MFAUsed)
+| extend LoginResult = tostring(parse_json(ResponseElements).ConsoleLogin)
+| where MFAUsed == "No" and LoginResult == "Success"
+| project TimeGenerated, UserIdentityArn, SourceIpAddress, MFAUsed
+| order by TimeGenerated desc

@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Backdoor IAM User with Federated Token (T1550.001)
+id: fc51777c-ee50-5d9f-bb4f-0abea1490706
+status: experimental
+description: sts:GetFederationToken called with a permissive inline policy or from an unexpected principal; federated sessions appear in CloudTrail with token source info
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.sts-federation-token/
+tags:
+  - attack.persistence
+  - attack.t1550.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sts.amazonaws.com'
+    eventName: ['GetFederationToken', 'GetCallerIdentity']
+  condition: selection
+level: medium

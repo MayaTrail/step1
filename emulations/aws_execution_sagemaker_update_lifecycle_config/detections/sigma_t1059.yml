@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Malicious Script Execution via SageMaker Lifecycle Config (T1059)
+id: 6a679be3-52fe-5cfb-a8b2-a9bd7ad7ea48
+status: experimental
+description: CloudTrail sagemaker:UpdateNotebookInstanceLifecycleConfig with a base64-encoded OnStart script from an unexpected principal
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.sagemaker-update-lifecycle-config/
+tags:
+  - attack.execution
+  - attack.t1059
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sagemaker.amazonaws.com'
+    eventName: ['UpdateNotebookInstanceLifecycleConfig', 'DescribeNotebookInstanceLifecycleConfig']
+  condition: selection
+level: medium

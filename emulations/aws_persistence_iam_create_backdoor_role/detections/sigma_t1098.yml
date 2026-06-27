@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Create IAM Backdoor Role with Admin Access (T1098)
+id: a93c79c1-1109-50d5-96c6-939c06cf0a78
+status: experimental
+description: iam:CreateRole with a cross-account trust principal followed by iam:AttachRolePolicy attaching AdministratorAccess or broad managed policies
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-backdoor-role/
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: ['CreateRole', 'AttachRolePolicy', 'DetachRolePolicy', 'DeleteRole']
+  condition: selection
+level: medium

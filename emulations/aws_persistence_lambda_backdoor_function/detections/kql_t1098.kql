@@ -1,0 +1,7 @@
+// Backdoor Lambda Function via Resource Policy (T1098) — eventName(s) auto-derived; verify casing.
+// Signal: lambda:AddPermission granting cross-account or wildcard invoke access to a Lambda function
+AWSCloudTrail
+| where EventSource in ("lambda.amazonaws.com")
+| where EventName in ("AddPermission", "RemovePermission")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

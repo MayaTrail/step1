@@ -252,7 +252,7 @@ export function PlatformThreatCoverage() {
                                     No emulations available yet.
                                 </div>
                             ) : (
-                                <div className="flex flex-col gap-4">
+                                <div className="flex flex-col gap-4 max-h-[300px] overflow-y-auto pr-1">
                                     {sortedActors.map((actor) => {
                                         const c = actor.coverageByContent[content]
                                         return (

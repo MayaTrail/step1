@@ -1,0 +1,3 @@
+name: mayatrail-aws-execution-sagemaker-update-lifecycle-config
+runtime: python
+description: Infrastructure for the aws_execution_sagemaker_update_lifecycle_config atomic emulation.

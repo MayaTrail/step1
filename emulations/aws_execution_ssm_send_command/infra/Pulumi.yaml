@@ -1,0 +1,3 @@
+name: mayatrail-aws-execution-ssm-send-command
+runtime: python
+description: Infrastructure for the aws_execution_ssm_send_command atomic emulation.

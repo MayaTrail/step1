@@ -1,0 +1,7 @@
+// Launch Unusual EC2 Instance Types for Cryptomining (T1204.003) — eventName(s) auto-derived; verify casing.
+// Signal: ec2:RunInstances with unusual instance types (GPU, high-compute) not in baseline; GuardDuty CryptoCurrency:EC2/BitcoinTool.B if mining traffic detected
+AWSCloudTrail
+| where EventSource in ("ec2.amazonaws.com")
+| where EventName in ("DescribeImages", "RunInstances", "TerminateInstances")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

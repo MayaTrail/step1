@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Create an IAM User with an Inline Admin Policy (T1136.003)
+id: f741faca-9d6c-59ea-8a9d-a37d0398398c
+status: experimental
+description: iam:CreateUser followed immediately by iam:AttachUserPolicy with AdministratorAccess in CloudTrail
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-admin-user/
+tags:
+  - attack.persistence
+  - attack.t1136.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: ['CreateUser', 'AttachUserPolicy', 'CreateAccessKey', 'ListAccessKeys', 'DeleteAccessKey', 'DetachUserPolicy', 'DeleteUser']
+  condition: selection
+level: medium

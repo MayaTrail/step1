@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Execute Malicious Code via EC2 User Data (T1059)
+id: 222ab6b0-63a5-5177-88fc-aa43018fb567
+status: experimental
+description: ec2:ModifyInstanceAttribute with attribute=userData on a stopped instance, especially when followed by ec2:StartInstances
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ec2-user-data/
+tags:
+  - attack.execution
+  - attack.t1059
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: ['StopInstances', 'ModifyInstanceAttribute', 'StartInstances']
+  condition: selection
+level: medium

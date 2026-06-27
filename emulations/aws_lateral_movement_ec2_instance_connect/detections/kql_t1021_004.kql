@@ -1,0 +1,6 @@
+// Usage of EC2 Instance Connect on Multiple Instances (T1021.004) — eventName(s) auto-derived; verify casing.
+// Signal: CloudTrail ec2-instance-connect:SendSSHPublicKey from an unexpected principal or source IP address
+AWSCloudTrail
+| where EventName in ("SendSSHPublicKey")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

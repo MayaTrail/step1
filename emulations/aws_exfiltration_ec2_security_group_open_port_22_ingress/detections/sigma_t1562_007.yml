@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Open Ingress Port 22 on Security Group (T1562.007)
+id: 37fcd7ea-dafe-5822-ae79-7b3b9e794a89
+status: experimental
+description: ec2:AuthorizeSecurityGroupIngress with CidrIp=0.0.0.0/0 or CidrIpv6=::/0 on port 22 — indicates deliberate exposure of SSH access
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.exfiltration.ec2-security-group-open-port-22-ingress/
+tags:
+  - attack.exfiltration
+  - attack.t1562.007
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: ['AuthorizeSecurityGroupIngress', 'RevokeSecurityGroupIngress']
+  condition: selection
+level: medium

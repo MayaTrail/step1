@@ -1,0 +1,6 @@
+// Usage of EC2 Serial Console to Push an SSH Public Key (T1021.004) — eventName(s) auto-derived; verify casing.
+// Signal: CloudTrail ec2-instance-connect:SendSerialConsoleSSHPublicKey — a niche API almost never called in normal operations
+AWSCloudTrail
+| where EventName in ("SendSerialConsoleSSHPublicKey")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

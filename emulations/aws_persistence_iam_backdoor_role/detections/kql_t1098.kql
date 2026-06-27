@@ -1,0 +1,7 @@
+// Backdoor IAM Role Trust Policy (T1098) — eventName(s) auto-derived; verify casing.
+// Signal: iam:UpdateAssumeRolePolicy with an external account principal added to an existing role's trust policy
+AWSCloudTrail
+| where EventSource in ("iam.amazonaws.com")
+| where EventName in ("GetRole", "UpdateAssumeRolePolicy")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

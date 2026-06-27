@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Download EC2 Instance User Data (T1552.001)
+id: 4cdc9a3a-45c3-52f9-af5d-e61931ca8854
+status: experimental
+description: ec2:DescribeInstanceAttribute with Attribute=userData called on multiple instances in rapid succession from a principal without normal operational need
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.discovery.ec2-download-user-data/
+tags:
+  - attack.discovery
+  - attack.t1552.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: ['DescribeInstances', 'DescribeInstanceAttribute']
+  condition: selection
+level: medium

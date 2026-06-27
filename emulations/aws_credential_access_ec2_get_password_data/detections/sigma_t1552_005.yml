@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Retrieve EC2 Windows Password Data (T1552.005)
+id: 62d0ec7a-4fb4-527d-ac80-deeddb5616e9
+status: experimental
+description: ec2:GetPasswordData called in rapid succession, especially with nonexistent or unexpected instance IDs
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.ec2-get-password-data/
+tags:
+  - attack.credential_access
+  - attack.t1552.005
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: ['GetPasswordData']
+  condition: selection
+level: medium

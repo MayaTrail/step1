@@ -1,0 +1,7 @@
+// Execute Malicious Code via EC2 User Data (T1059) — eventName(s) auto-derived; verify casing.
+// Signal: ec2:ModifyInstanceAttribute with attribute=userData on a stopped instance, especially when followed by ec2:StartInstances
+AWSCloudTrail
+| where EventSource in ("ec2.amazonaws.com")
+| where EventName in ("StopInstances", "ModifyInstanceAttribute", "StartInstances")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

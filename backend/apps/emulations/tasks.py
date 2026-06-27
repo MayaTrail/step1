@@ -579,6 +579,16 @@ def run_emulation_attack(self, run_id: str) -> dict:
         # set (including decrypted secrets) live from Pulumi state for the attack.
         attack_outputs = _live_stack_outputs(stack)
 
+        # Option-C credential model (atomic emulations): the worker assumes the
+        # stack owner's role and hands the short-lived (1h, auto-expiring) creds
+        # to the attack IN-MEMORY via the outputs dict — never via os.environ — so
+        # an attack that calls boto3 directly runs in the user's account without a
+        # process-global credential. Attacks that bootstrap from their own
+        # provisioned outputs (scarleteel, dangerdev) simply ignore this key.
+        # (Two STS assumptions per attack — here and in _live_stack_outputs; an
+        # acceptable cost, optimisable later by assuming once and threading creds.)
+        attack_outputs["_aws_credentials"] = _assume_user_role(stack.owner)
+
         with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
             mod.run(attack_outputs, region=stack.region)
 

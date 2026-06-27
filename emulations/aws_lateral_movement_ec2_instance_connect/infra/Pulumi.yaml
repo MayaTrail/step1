@@ -1,0 +1,3 @@
+name: mayatrail-aws-lateral-movement-ec2-instance-connect
+runtime: python
+description: Infrastructure for the aws_lateral_movement_ec2_instance_connect atomic emulation.

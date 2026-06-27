@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Backdoor IAM Role Trust Policy (T1098)
+id: bf91c492-44ed-5179-bd62-c8b2b03efb3b
+status: experimental
+description: iam:UpdateAssumeRolePolicy with an external account principal added to an existing role's trust policy
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-backdoor-role/
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: ['GetRole', 'UpdateAssumeRolePolicy']
+  condition: selection
+level: medium

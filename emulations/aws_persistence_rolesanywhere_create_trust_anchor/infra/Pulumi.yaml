@@ -1,0 +1,3 @@
+name: mayatrail-aws-persistence-rolesanywhere-create-trust-anchor
+runtime: python
+description: Infrastructure for the aws_persistence_rolesanywhere_create_trust_anchor atomic emulation.

@@ -1,0 +1,3 @@
+name: mayatrail-aws-persistence-lambda-backdoor-function
+runtime: python
+description: Infrastructure for the aws_persistence_lambda_backdoor_function atomic emulation.

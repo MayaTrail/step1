@@ -1,0 +1,3 @@
+name: mayatrail-aws-discovery-ec2-download-user-data
+runtime: python
+description: Infrastructure for the aws_discovery_ec2_download_user_data atomic emulation.

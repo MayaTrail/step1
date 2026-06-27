@@ -1,0 +1,7 @@
+// Execute Commands on EC2 Instances via SSM (T1651) — eventName(s) auto-derived; verify casing.
+// Signal: ssm:SendCommand in CloudTrail, especially with AWS-RunShellScript document targeting multiple instances
+AWSCloudTrail
+| where EventSource in ("ssm.amazonaws.com")
+| where EventName in ("DescribeInstanceInformation", "SendCommand", "GetCommandInvocation")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

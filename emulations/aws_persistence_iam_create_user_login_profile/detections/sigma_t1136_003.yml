@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Create IAM User with Console Access (T1136.003)
+id: 4e03ddd5-625b-5d09-bd70-5e1c81c9f465
+status: experimental
+description: iam:CreateUser followed by iam:CreateLoginProfile — new console-enabled user created outside normal IAM provisioning pipeline
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-user-login-profile/
+tags:
+  - attack.persistence
+  - attack.t1136.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: ['CreateUser', 'CreateLoginProfile', 'DeleteLoginProfile', 'DeleteUser']
+  condition: selection
+level: medium

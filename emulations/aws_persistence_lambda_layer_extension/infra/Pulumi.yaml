@@ -1,0 +1,3 @@
+name: mayatrail-aws-persistence-lambda-layer-extension
+runtime: python
+description: Infrastructure for the aws_persistence_lambda_layer_extension atomic emulation.

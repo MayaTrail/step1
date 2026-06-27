@@ -1,0 +1,7 @@
+// Open Ingress Port 22 on Security Group (T1562.007) — eventName(s) auto-derived; verify casing.
+// Signal: ec2:AuthorizeSecurityGroupIngress with CidrIp=0.0.0.0/0 or CidrIpv6=::/0 on port 22 — indicates deliberate exposure of SSH access
+AWSCloudTrail
+| where EventSource in ("ec2.amazonaws.com")
+| where EventName in ("AuthorizeSecurityGroupIngress", "RevokeSecurityGroupIngress")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

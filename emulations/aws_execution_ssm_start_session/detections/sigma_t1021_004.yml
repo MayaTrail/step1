@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Open SSM Sessions to Multiple EC2 Instances (T1021.004)
+id: 14024d53-fcd4-5c5e-9cd4-635af4ae836b
+status: experimental
+description: ssm:StartSession called on multiple instances in rapid succession from unexpected principals — especially combined with ssm:TerminateSession
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ssm-start-session/
+tags:
+  - attack.execution
+  - attack.t1021.004
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName: ['DescribeInstanceInformation', 'StartSession', 'TerminateSession']
+  condition: selection
+level: medium

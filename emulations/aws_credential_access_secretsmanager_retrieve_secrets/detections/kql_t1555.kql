@@ -1,0 +1,7 @@
+// Retrieve a High Number of Secrets Manager Secrets (T1555) — eventName(s) auto-derived; verify casing.
+// Signal: High volume of secretsmanager:GetSecretValue from single principal in short window
+AWSCloudTrail
+| where EventSource in ("secretsmanager.amazonaws.com")
+| where EventName in ("ListSecrets", "GetSecretValue")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

@@ -1,0 +1,3 @@
+name: mayatrail-aws-initial-access-console-login-without-mfa
+runtime: python
+description: Infrastructure for the aws_initial_access_console_login_without_mfa atomic emulation.

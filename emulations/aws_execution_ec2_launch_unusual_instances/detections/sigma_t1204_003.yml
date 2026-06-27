@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Launch Unusual EC2 Instance Types for Cryptomining (T1204.003)
+id: 515804bd-cb0b-50a6-ae23-04c8bda79eda
+status: experimental
+description: ec2:RunInstances with unusual instance types (GPU, high-compute) not in baseline; GuardDuty CryptoCurrency:EC2/BitcoinTool.B if mining traffic detected
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ec2-launch-unusual-instances/
+tags:
+  - attack.execution
+  - attack.t1204.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: ['DescribeImages', 'RunInstances', 'TerminateInstances']
+  condition: selection
+level: medium

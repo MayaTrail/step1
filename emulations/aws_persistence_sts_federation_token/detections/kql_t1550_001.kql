@@ -1,0 +1,7 @@
+// Backdoor IAM User with Federated Token (T1550.001) — eventName(s) auto-derived; verify casing.
+// Signal: sts:GetFederationToken called with a permissive inline policy or from an unexpected principal; federated sessions appear in CloudTrail with token source info
+AWSCloudTrail
+| where EventSource in ("sts.amazonaws.com")
+| where EventName in ("GetFederationToken", "GetCallerIdentity")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

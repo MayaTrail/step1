@@ -1,0 +1,7 @@
+// Open SSM Sessions to Multiple EC2 Instances (T1021.004) — eventName(s) auto-derived; verify casing.
+// Signal: ssm:StartSession called on multiple instances in rapid succession from unexpected principals — especially combined with ssm:TerminateSession
+AWSCloudTrail
+| where EventSource in ("ssm.amazonaws.com")
+| where EventName in ("DescribeInstanceInformation", "StartSession", "TerminateSession")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

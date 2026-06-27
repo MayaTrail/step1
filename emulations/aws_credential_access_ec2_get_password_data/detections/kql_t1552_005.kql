@@ -1,0 +1,7 @@
+// Retrieve EC2 Windows Password Data (T1552.005) — eventName(s) auto-derived; verify casing.
+// Signal: ec2:GetPasswordData called in rapid succession, especially with nonexistent or unexpected instance IDs
+AWSCloudTrail
+| where EventSource in ("ec2.amazonaws.com")
+| where EventName in ("GetPasswordData")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc
