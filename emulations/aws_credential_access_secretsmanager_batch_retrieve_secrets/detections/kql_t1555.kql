@@ -1,0 +1,7 @@
+// Retrieve a High Number of Secrets Manager Secrets via Batch (T1555) — eventName(s) auto-derived; verify casing.
+// Signal: secretsmanager:BatchGetSecretValue from a single principal — distinct from individual GetSecretValue pattern
+AWSCloudTrail
+| where EventSource in ("secretsmanager.amazonaws.com")
+| where EventName in ("ListSecrets", "BatchGetSecretValue")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

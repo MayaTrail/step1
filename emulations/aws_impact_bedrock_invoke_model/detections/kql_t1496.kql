@@ -1,0 +1,6 @@
+// Invoke Bedrock Model for Resource Exhaustion (T1496) — eventName(s) auto-derived; verify casing.
+// Signal: bedrock:InvokeModel called at high volume or from an unexpected principal; sudden spike in Bedrock spend in cost explorer
+AWSCloudTrail
+| where EventName in ("InvokeModel")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

@@ -1,0 +1,3 @@
+name: mayatrail-aws-persistence-iam-backdoor-user
+runtime: python
+description: Infrastructure for the aws_persistence_iam_backdoor_user atomic emulation.

@@ -1,0 +1,7 @@
+// Create IAM Roles Anywhere Trust Anchor (T1550.001) — eventName(s) auto-derived; verify casing.
+// Signal: rolesanywhere:CreateTrustAnchor — rare API call almost never made outside initial IAM Roles Anywhere setup; warrants immediate investigation
+AWSCloudTrail
+| where EventSource in ("rolesanywhere.amazonaws.com")
+| where EventName in ("CreateTrustAnchor", "DisableTrustAnchor", "DeleteTrustAnchor")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

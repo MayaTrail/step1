@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Enumerate SES for Phishing Capability (T1087)
+id: 4bf4dd44-67a3-5810-8022-f448c9ed8657
+status: experimental
+description: Multiple SES read APIs (ses:GetAccountSendingEnabled, ses:GetSendQuota, ses:ListIdentities, ses:GetIdentityVerificationAttributes) called in rapid succession from unexpected principals
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.discovery.ses-enumerate/
+tags:
+  - attack.discovery
+  - attack.t1087
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ses.amazonaws.com'
+    eventName: ['ListIdentities', 'GetAccountSendingEnabled', 'GetSendQuota', 'GetIdentityVerificationAttributes']
+  condition: selection
+level: medium

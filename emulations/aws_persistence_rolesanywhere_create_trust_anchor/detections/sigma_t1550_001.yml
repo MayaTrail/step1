@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Create IAM Roles Anywhere Trust Anchor (T1550.001)
+id: 3d37c32d-30a8-58c7-a9f5-5d3227fb1b0c
+status: experimental
+description: rolesanywhere:CreateTrustAnchor — rare API call almost never made outside initial IAM Roles Anywhere setup; warrants immediate investigation
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.rolesanywhere-create-trust-anchor/
+tags:
+  - attack.persistence
+  - attack.t1550.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'rolesanywhere.amazonaws.com'
+    eventName: ['CreateTrustAnchor', 'DisableTrustAnchor', 'DeleteTrustAnchor']
+  condition: selection
+level: medium

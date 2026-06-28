@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Backdoor IAM User Console Login via UpdateLoginProfile (T1098.001)
+id: 65378d45-993b-54a4-ad10-1dc7cabca464
+status: experimental
+description: iam:UpdateLoginProfile in CloudTrail where the caller is not an expected administrator or password-reset automation
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.privilege-escalation.iam-update-user-login-profile/
+tags:
+  - attack.privilege_escalation
+  - attack.t1098.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: ['GetLoginProfile', 'UpdateLoginProfile']
+  condition: selection
+level: medium

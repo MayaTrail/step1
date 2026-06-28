@@ -1,0 +1,3 @@
+name: mayatrail-aws-credential-access-ec2-get-password-data
+runtime: python
+description: Infrastructure for the aws_credential_access_ec2_get_password_data atomic emulation.

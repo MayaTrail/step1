@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Steal EC2 Instance Credentials via IMDS (T1552.005)
+id: 8133764f-a9ee-56ef-9579-38555b5f7ea3
+status: experimental
+description: ssm:SendCommand executing IMDS queries; sts:GetCallerIdentity or ec2:DescribeInstances called with instance-profile credentials from an IP not associated with the instance
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.ec2-steal-instance-credentials/
+tags:
+  - attack.credential_access
+  - attack.t1552.005
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: ['ssm.amazonaws.com', 'sts.amazonaws.com']
+    eventName: ['DescribeInstanceInformation', 'SendCommand', 'GetCommandInvocation', 'GetCallerIdentity']
+  condition: selection
+level: medium

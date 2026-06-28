@@ -157,10 +157,10 @@ MANIFEST = {
 
     # ── References (frontend references) ──────────────────────────────────────
     "references": [
-        {"icon": ">", "title": "The Curious Case of DangerDev@protonmail.me", "source": "Invictus IR · invictus-ir.com", "type": "REPORT", "color": "cyan"},
-        {"icon": "#", "title": "MITRE ATT&CK — T1136.003: Create Account: Cloud Account", "source": "MITRE ATT&CK · mitre.org", "type": "MITRE", "color": "purple"},
-        {"icon": "#", "title": "MITRE ATT&CK — T1199: Trusted Relationship", "source": "MITRE ATT&CK · mitre.org", "type": "MITRE", "color": "purple"},
-        {"icon": "~", "title": "AWS Security Best Practices: Rotate and Restrict Long-Term Access Keys", "source": "AWS Security Blog", "type": "DOCUMENTATION", "color": "orange"},
+        {"icon": ">", "title": "The Curious Case of DangerDev@protonmail.me", "source": "Invictus IR · invictus-ir.com", "type": "REPORT", "color": "cyan", "url": "https://www.invictus-ir.com/nieuws/the-curious-case-of-dangerdev-protonmail-me"},
+        {"icon": "#", "title": "MITRE ATT&CK — T1136.003: Create Account: Cloud Account", "source": "MITRE ATT&CK · mitre.org", "type": "MITRE", "color": "purple", "url": "https://attack.mitre.org/techniques/T1136/003/"},
+        {"icon": "#", "title": "MITRE ATT&CK — T1199: Trusted Relationship", "source": "MITRE ATT&CK · mitre.org", "type": "MITRE", "color": "purple", "url": "https://attack.mitre.org/techniques/T1199/"},
+        {"icon": "~", "title": "AWS Security Best Practices: Rotate and Restrict Long-Term Access Keys", "source": "AWS Security Blog · aws.amazon.com", "type": "DOCUMENTATION", "color": "orange", "url": "https://aws.amazon.com/blogs/security/how-to-rotate-access-keys-for-iam-users/"},
     ],
 
     # ── Infrastructure and cost metadata ──────────────────────────────────────

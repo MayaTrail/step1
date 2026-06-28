@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useCachedResource } from '@/hooks/useCachedResource'
 import { Card } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { IconActivity } from '@/components/ui/Icons'
@@ -97,20 +97,9 @@ function FeedRow({ entry }: { entry: LogEntry }) {
 }
 
 export function ActivityFeed() {
-    const [entries, setEntries] = useState<LogEntry[]>([])
-    const [loading, setLoading] = useState(true)
-    const [failed, setFailed] = useState(false)
-
-    useEffect(() => {
-        let active = true
-        listLogs()
-            .then((data) => active && setEntries(data))
-            .catch(() => active && setFailed(true))
-            .finally(() => active && setLoading(false))
-        return () => {
-            active = false
-        }
-    }, [])
+    // Stale-while-revalidate: seeds from cache on revisit (no flash), never blanks.
+    const { data, loading, failed } = useCachedResource('activity-logs', listLogs)
+    const entries = data ?? []
 
     return (
         <Card className="flex flex-col">

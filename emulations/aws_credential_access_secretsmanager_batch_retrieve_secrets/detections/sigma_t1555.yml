@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Retrieve a High Number of Secrets Manager Secrets via Batch (T1555)
+id: c3bfc5fd-78ed-5ce0-88a7-c387726aeba5
+status: experimental
+description: secretsmanager:BatchGetSecretValue from a single principal — distinct from individual GetSecretValue pattern
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.secretsmanager-batch-retrieve-secrets/
+tags:
+  - attack.credential_access
+  - attack.t1555
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'secretsmanager.amazonaws.com'
+    eventName: ['ListSecrets', 'BatchGetSecretValue']
+  condition: selection
+level: medium

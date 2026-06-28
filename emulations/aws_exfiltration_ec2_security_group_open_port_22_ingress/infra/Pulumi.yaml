@@ -1,0 +1,3 @@
+name: mayatrail-aws-exfiltration-ec2-security-group-open-port-22-ingress
+runtime: python
+description: Infrastructure for the aws_exfiltration_ec2_security_group_open_port_22_ingress atomic emulation.

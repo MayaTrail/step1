@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Retrieve SSM Parameters from the Parameter Store (T1552.007)
+id: b2293d06-1c00-52f0-b25a-0afabc786283
+status: experimental
+description: ssm:GetParameters with withDecryption=true for large number of parameters from single principal
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.ssm-retrieve-securestring-parameters/
+tags:
+  - attack.credential_access
+  - attack.t1552.007
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName: ['DescribeParameters', 'GetParameters']
+  condition: selection
+level: medium

@@ -1,0 +1,3 @@
+name: mayatrail-aws-persistence-iam-create-backdoor-role
+runtime: python
+description: Infrastructure for the aws_persistence_iam_create_backdoor_role atomic emulation.

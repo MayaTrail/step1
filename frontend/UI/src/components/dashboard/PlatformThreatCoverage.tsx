@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
 import { Card } from '@/components/ui/Card'
 import { IconInfo } from '@/components/ui/Icons'
 import { PlatformIcon } from '@/components/ui/PlatformIcons'
 import { getPlatformCoverage, getThreatCoverage } from '@/services/metrics.service'
+import { useCachedResource } from '@/hooks/useCachedResource'
 import type { PlatformId } from '@/types'
 import type { ContentType, PlatformCoverageRow, ThreatActor } from '@/types/metrics'
 
@@ -70,25 +71,16 @@ function SectionLabel({ children, hint }: { children: string; hint: string }) {
 
 export function PlatformThreatCoverage() {
     const [content, setContent] = useState<ContentType>('detections')
-    const [platforms, setPlatforms] = useState<PlatformCoverageRow[]>([])
-    const [actors, setActors] = useState<ThreatActor[]>([])
-    const [loading, setLoading] = useState(true)
-    const [failed, setFailed] = useState(false)
 
-    useEffect(() => {
-        let active = true
-        Promise.all([getPlatformCoverage(), getThreatCoverage()])
-            .then(([platformData, threatData]) => {
-                if (!active) return
-                setPlatforms(platformData.platforms)
-                setActors(threatData.actors)
-            })
-            .catch(() => active && setFailed(true))
-            .finally(() => active && setLoading(false))
-        return () => {
-            active = false
-        }
-    }, [])
+    // Stale-while-revalidate: seeds from cache across navigation (no flash) and
+    // never blanks the card on a background refresh. The content dropdown filters
+    // already-loaded data client-side, so it never refetches.
+    const { data, loading, failed } = useCachedResource(
+        'platform-threat-coverage',
+        () => Promise.all([getPlatformCoverage(), getThreatCoverage()]),
+    )
+    const platforms: PlatformCoverageRow[] = data?.[0].platforms ?? []
+    const actors: ThreatActor[] = data?.[1].actors ?? []
 
     const byId = useMemo(
         () => new Map(platforms.map((p) => [p.platform, p])),
@@ -252,7 +244,7 @@ export function PlatformThreatCoverage() {
                                     No emulations available yet.
                                 </div>
                             ) : (
-                                <div className="flex flex-col gap-4">
+                                <div className="flex flex-col gap-4 max-h-[300px] overflow-y-auto pr-1">
                                     {sortedActors.map((actor) => {
                                         const c = actor.coverageByContent[content]
                                         return (

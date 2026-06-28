@@ -1,8 +1,8 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import { getCoverageSummary } from '@/services/metrics.service'
-import type { CoverageSummary } from '@/types/metrics'
+import { useCachedResource } from '@/hooks/useCachedResource'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { MetricCard } from '@/components/ui/MetricCard'
@@ -50,19 +50,8 @@ export function DashboardPage() {
     const navigate = useNavigate()
     const { user } = useAuth()
 
-    const [summary, setSummary] = useState<CoverageSummary | null>(null)
-    const [loading, setLoading] = useState(true)
-
-    useEffect(() => {
-        let active = true
-        getCoverageSummary()
-            .then((d) => active && setSummary(d))
-            .catch(() => active && setSummary(null))
-            .finally(() => active && setLoading(false))
-        return () => {
-            active = false
-        }
-    }, [])
+    // Stale-while-revalidate: seeds from cache on revisit (no flash), never blanks.
+    const { data: summary, loading } = useCachedResource('coverage-summary', getCoverageSummary)
 
     const hour = new Date().getHours()
     const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'

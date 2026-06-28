@@ -1,0 +1,3 @@
+name: mayatrail-aws-persistence-iam-create-admin-user
+runtime: python
+description: Infrastructure for the aws_persistence_iam_create_admin_user atomic emulation.

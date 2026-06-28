@@ -1,0 +1,7 @@
+// Backdoor IAM User with Additional Access Key (T1098.001) — eventName(s) auto-derived; verify casing.
+// Signal: iam:CreateAccessKey on an existing user where the requesting principal is NOT the user themselves — indicates an external actor creating credentials
+AWSCloudTrail
+| where EventSource in ("iam.amazonaws.com")
+| where EventName in ("CreateAccessKey", "DeleteAccessKey")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

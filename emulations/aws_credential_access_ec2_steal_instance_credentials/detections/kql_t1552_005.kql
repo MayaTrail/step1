@@ -1,0 +1,7 @@
+// Steal EC2 Instance Credentials via IMDS (T1552.005) — eventName(s) auto-derived; verify casing.
+// Signal: ssm:SendCommand executing IMDS queries; sts:GetCallerIdentity or ec2:DescribeInstances called with instance-profile credentials from an IP not associated with the instance
+AWSCloudTrail
+| where EventSource in ("ssm.amazonaws.com", "sts.amazonaws.com")
+| where EventName in ("DescribeInstanceInformation", "SendCommand", "GetCommandInvocation", "GetCallerIdentity")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

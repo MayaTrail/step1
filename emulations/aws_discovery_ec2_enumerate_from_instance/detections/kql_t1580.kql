@@ -1,0 +1,7 @@
+// Enumerate AWS Environment from EC2 Instance (T1580) — eventName(s) auto-derived; verify casing.
+// Signal: Rapid ec2:Describe*, s3:ListBuckets, iam:ListUsers called from an EC2 instance role — especially if the instance is not a known bastion or operations server
+AWSCloudTrail
+| where EventSource in ("ssm.amazonaws.com")
+| where EventName in ("DescribeInstanceInformation", "SendCommand", "GetCommandInvocation")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

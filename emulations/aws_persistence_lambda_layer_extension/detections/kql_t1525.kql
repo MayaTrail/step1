@@ -1,0 +1,7 @@
+// Persist via Lambda Layer (T1525) — eventName(s) auto-derived; verify casing.
+// Signal: lambda:PublishLayerVersion followed by lambda:UpdateFunctionConfiguration adding an unexpected layer — especially a newly created layer from an unknown principal
+AWSCloudTrail
+| where EventSource in ("lambda.amazonaws.com")
+| where EventName in ("PublishLayerVersion", "UpdateFunctionConfiguration", "DeleteLayerVersion")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

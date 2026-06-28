@@ -1,0 +1,18 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Usage of EC2 Instance Connect on Multiple Instances (T1021.004)
+id: 7f96b467-df80-5c3b-b473-20becf024b5f
+status: experimental
+description: CloudTrail ec2-instance-connect:SendSSHPublicKey from an unexpected principal or source IP address
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.lateral-movement.ec2-instance-connect/
+tags:
+  - attack.lateral_movement
+  - attack.t1021.004
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventName: ['SendSSHPublicKey']
+  condition: selection
+level: medium

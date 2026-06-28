@@ -214,41 +214,73 @@ MANIFEST = {
     ],
 
     # ── References (maps to frontend references) ──────────────────────────────
+    # Curated, link-verified sources (checked 2026-06).  Each entry carries an
+    # explicit `url` so the References tab renders a working outbound link; the
+    # `type` drives the tab's purpose grouping.
     "references": [
         {
             "icon": ">",
             "title": "SCARLETEEL: Operation Leveraging Terraform, Kubernetes, and AWS for Data Theft",
             "source": "Sysdig TRT · sysdig.com · Feb 2023",
+            "url": "https://www.sysdig.com/blog/cloud-breach-terraform-data-theft",
             "type": "REPORT",
             "color": "cyan",
         },
         {
             "icon": ">",
-            "title": "SCARLETEEL 2.0: Fargate, IAM, and Crypto Under the Covers",
+            "title": "SCARLETEEL 2.0: Fargate, Kubernetes, and Crypto Under the Covers",
             "source": "Sysdig TRT · sysdig.com · Jul 2023",
+            "url": "https://www.sysdig.com/blog/scarleteel-2-0",
             "type": "REPORT",
             "color": "cyan",
         },
         {
+            "icon": ">",
+            "title": "How to Detect SCARLETEEL with Sysdig Secure",
+            "source": "Sysdig · sysdig.com · 2023",
+            "url": "https://www.sysdig.com/blog/detect-scarleteel-sysdig-secure",
+            "type": "DETECTION",
+            "color": "green",
+        },
+        {
+            "icon": "#",
+            "title": "SCARLETEEL 2.0 and the MITRE ATT&CK Framework",
+            "source": "Sysdig · sysdig.com · 2023",
+            "url": "https://www.sysdig.com/blog/scarleteel-mitre-attack",
+            "type": "MITRE",
+            "color": "purple",
+        },
+        {
             "icon": "#",
             "title": "MITRE ATT&CK — T1552.005: Cloud Instance Metadata API",
-            "source": "MITRE ATT&CK · mitre.org",
+            "source": "MITRE ATT&CK · attack.mitre.org",
+            "url": "https://attack.mitre.org/techniques/T1552/005/",
             "type": "MITRE",
             "color": "purple",
         },
         {
             "icon": "#",
             "title": "MITRE ATT&CK — T1562.008: Disable Cloud Logs",
-            "source": "MITRE ATT&CK · mitre.org",
+            "source": "MITRE ATT&CK · attack.mitre.org",
+            "url": "https://attack.mitre.org/techniques/T1562/008/",
             "type": "MITRE",
             "color": "purple",
         },
         {
-            "icon": "~",
-            "title": "AWS Security Best Practices: Require IMDSv2 on All EC2 Instances",
-            "source": "AWS Security Blog · 2024",
-            "type": "DOCUMENTATION",
+            "icon": "▶",
+            "title": "SCARLETEEL: A Highly Sophisticated Data Theft Attack",
+            "source": "YouTube · conference talk",
+            "url": "https://www.youtube.com/watch?v=swx-Kwyz410",
+            "type": "VIDEO",
             "color": "orange",
+        },
+        {
+            "icon": "~",
+            "title": "Get the Full Benefits of IMDSv2 and Disable IMDSv1 Across Your AWS Infrastructure",
+            "source": "AWS Security Blog · aws.amazon.com · Sep 2023",
+            "url": "https://aws.amazon.com/blogs/security/get-the-full-benefits-of-imdsv2-and-disable-imdsv1-across-your-aws-infrastructure/",
+            "type": "DOCUMENTATION",
+            "color": "blue",
         },
     ],
 

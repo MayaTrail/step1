@@ -1,0 +1,3 @@
+name: mayatrail-aws-discovery-ec2-enumerate-from-instance
+runtime: python
+description: Infrastructure for the aws_discovery_ec2_enumerate_from_instance atomic emulation.

@@ -1,0 +1,7 @@
+// Create an IAM User with an Inline Admin Policy (T1136.003) — eventName(s) auto-derived; verify casing.
+// Signal: iam:CreateUser followed immediately by iam:AttachUserPolicy with AdministratorAccess in CloudTrail
+AWSCloudTrail
+| where EventSource in ("iam.amazonaws.com")
+| where EventName in ("CreateUser", "AttachUserPolicy", "CreateAccessKey", "ListAccessKeys", "DeleteAccessKey", "DetachUserPolicy", "DeleteUser")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

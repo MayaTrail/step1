@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Backdoor IAM User with Additional Access Key (T1098.001)
+id: d0c9c024-a07e-51cf-9a04-9a3196cfc77c
+status: experimental
+description: iam:CreateAccessKey on an existing user where the requesting principal is NOT the user themselves — indicates an external actor creating credentials
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-backdoor-user/
+tags:
+  - attack.persistence
+  - attack.t1098.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: ['CreateAccessKey', 'DeleteAccessKey']
+  condition: selection
+level: medium

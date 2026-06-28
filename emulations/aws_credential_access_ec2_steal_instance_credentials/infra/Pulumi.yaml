@@ -1,0 +1,3 @@
+name: mayatrail-aws-credential-access-ec2-steal-instance-credentials
+runtime: python
+description: Infrastructure for the aws_credential_access_ec2_steal_instance_credentials atomic emulation.

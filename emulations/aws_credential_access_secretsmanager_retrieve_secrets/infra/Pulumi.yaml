@@ -1,0 +1,3 @@
+name: mayatrail-aws-credential-access-secretsmanager-retrieve-secrets
+runtime: python
+description: Infrastructure for the aws_credential_access_secretsmanager_retrieve_secrets atomic emulation.

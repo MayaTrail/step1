@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Persist via Lambda Layer (T1525)
+id: eba83563-85c2-5fe1-a2d3-143478ea6587
+status: experimental
+description: lambda:PublishLayerVersion followed by lambda:UpdateFunctionConfiguration adding an unexpected layer — especially a newly created layer from an unknown principal
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.lambda-layer-extension/
+tags:
+  - attack.persistence
+  - attack.t1525
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName: ['PublishLayerVersion', 'UpdateFunctionConfiguration', 'DeleteLayerVersion']
+  condition: selection
+level: medium

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Card } from '@/components/ui/Card'
 import { IconLaunch, IconLayers } from '@/components/ui/Icons'
 import {
@@ -6,13 +6,12 @@ import {
     getNavigatorLayer,
     getTacticDetail,
 } from '@/services/metrics.service'
+import { useCachedResource } from '@/hooks/useCachedResource'
 import type {
     CoverageDistribution,
     CoverageFilterOptions,
     CoverageFilters,
     FilterOption,
-    MitreCoverage,
-    TacticDetail,
     TacticHighlight,
 } from '@/types/metrics'
 import { CoverageGauge } from './CoverageGauge'
@@ -128,47 +127,26 @@ const EMPTY_FILTERS: CoverageFilterOptions = { platforms: [], actors: [], emulat
 
 export function MitreCoverageSection() {
     const [filters, setFilters] = useState<CoverageFilters>({})
-    const [data, setData] = useState<MitreCoverage | null>(null)
-    const [loading, setLoading] = useState(true)
-    const [failed, setFailed] = useState(false)
+    // Stale-while-revalidate: keeps the current coverage on screen during a
+    // filter-driven refetch (no blank/flicker) and seeds from cache across
+    // navigation. Root-cause fix for the dashboard flicker.
+    const { data, loading, failed } = useCachedResource(
+        `mitre-coverage:${JSON.stringify(filters)}`,
+        () => getMitreCoverage(filters),
+    )
 
     const [selected, setSelected] = useState<string | null>(null)
-    const [detail, setDetail] = useState<TacticDetail | null>(null)
-    const [detailLoading, setDetailLoading] = useState(false)
-
     const [sortMode, setSortMode] = useState<SortMode>('gaps')
     const [exporting, setExporting] = useState(false)
 
-    // Re-fetch coverage whenever the filters change.
-    useEffect(() => {
-        let active = true
-        setLoading(true)
-        setFailed(false)
-        getMitreCoverage(filters)
-            .then((d) => active && setData(d))
-            .catch(() => active && setFailed(true))
-            .finally(() => active && setLoading(false))
-        return () => {
-            active = false
-        }
-    }, [filters])
-
-    // Re-fetch the drill-down when the selected tactic or filters change.
-    useEffect(() => {
-        if (!selected) {
-            setDetail(null)
-            return
-        }
-        let active = true
-        setDetailLoading(true)
-        getTacticDetail(selected, filters)
-            .then((d) => active && setDetail(d))
-            .catch(() => active && setDetail(null))
-            .finally(() => active && setDetailLoading(false))
-        return () => {
-            active = false
-        }
-    }, [selected, filters])
+    // Drill-down: same stale-while-revalidate — switching tactic cards keeps the
+    // current detail on screen until the new one loads (no flicker below). A null
+    // key (nothing selected) skips the fetch.
+    const { data: detailData, loading: detailLoading } = useCachedResource(
+        selected ? `tactic:${selected}:${JSON.stringify(filters)}` : null,
+        () => getTacticDetail(selected as string, filters),
+    )
+    const detail = detailData ?? null
 
     const sortedTactics = useMemo(() => {
         if (!data) return []

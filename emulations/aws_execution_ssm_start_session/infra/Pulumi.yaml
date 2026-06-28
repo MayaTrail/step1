@@ -1,0 +1,3 @@
+name: mayatrail-aws-execution-ssm-start-session
+runtime: python
+description: Infrastructure for the aws_execution_ssm_start_session atomic emulation.

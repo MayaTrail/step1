@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Overwrite Lambda Function Code (T1525)
+id: 274eb866-eafc-55a7-b8e4-462aed6dd025
+status: experimental
+description: lambda:UpdateFunctionCode from an unexpected principal or at an unusual time — especially if the update replaces legitimate code
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.lambda-overwrite-code/
+tags:
+  - attack.persistence
+  - attack.t1525
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName: ['GetFunction', 'UpdateFunctionCode']
+  condition: selection
+level: medium

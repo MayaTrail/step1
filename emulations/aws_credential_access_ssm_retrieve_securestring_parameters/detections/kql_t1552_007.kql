@@ -1,0 +1,7 @@
+// Retrieve SSM Parameters from the Parameter Store (T1552.007) — eventName(s) auto-derived; verify casing.
+// Signal: ssm:GetParameters with withDecryption=true for large number of parameters from single principal
+AWSCloudTrail
+| where EventSource in ("ssm.amazonaws.com")
+| where EventName in ("DescribeParameters", "GetParameters")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

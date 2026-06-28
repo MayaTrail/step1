@@ -1,0 +1,7 @@
+// Download EC2 Instance User Data (T1552.001) — eventName(s) auto-derived; verify casing.
+// Signal: ec2:DescribeInstanceAttribute with Attribute=userData called on multiple instances in rapid succession from a principal without normal operational need
+AWSCloudTrail
+| where EventSource in ("ec2.amazonaws.com")
+| where EventName in ("DescribeInstances", "DescribeInstanceAttribute")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

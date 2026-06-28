@@ -1,0 +1,7 @@
+// Overwrite Lambda Function Code (T1525) — eventName(s) auto-derived; verify casing.
+// Signal: lambda:UpdateFunctionCode from an unexpected principal or at an unusual time — especially if the update replaces legitimate code
+AWSCloudTrail
+| where EventSource in ("lambda.amazonaws.com")
+| where EventName in ("GetFunction", "UpdateFunctionCode")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

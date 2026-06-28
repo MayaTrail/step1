@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Retrieve a High Number of Secrets Manager Secrets (T1555)
+id: 7c91b6ef-a04a-5e70-8022-c38561d369f6
+status: experimental
+description: High volume of secretsmanager:GetSecretValue from single principal in short window
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.secretsmanager-retrieve-secrets/
+tags:
+  - attack.credential_access
+  - attack.t1555
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'secretsmanager.amazonaws.com'
+    eventName: ['ListSecrets', 'GetSecretValue']
+  condition: selection
+level: medium

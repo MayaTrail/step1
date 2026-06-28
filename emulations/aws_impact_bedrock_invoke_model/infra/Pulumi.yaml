@@ -1,0 +1,3 @@
+name: mayatrail-aws-impact-bedrock-invoke-model
+runtime: python
+description: Infrastructure for the aws_impact_bedrock_invoke_model atomic emulation.

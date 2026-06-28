@@ -1,0 +1,3 @@
+name: mayatrail-aws-execution-ec2-user-data
+runtime: python
+description: Infrastructure for the aws_execution_ec2_user_data atomic emulation.

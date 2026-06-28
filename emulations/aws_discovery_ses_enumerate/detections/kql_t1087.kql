@@ -1,0 +1,7 @@
+// Enumerate SES for Phishing Capability (T1087) — eventName(s) auto-derived; verify casing.
+// Signal: Multiple SES read APIs (ses:GetAccountSendingEnabled, ses:GetSendQuota, ses:ListIdentities, ses:GetIdentityVerificationAttributes) called in rapid succession from unexpected principals
+AWSCloudTrail
+| where EventSource in ("ses.amazonaws.com")
+| where EventName in ("ListIdentities", "GetAccountSendingEnabled", "GetSendQuota", "GetIdentityVerificationAttributes")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

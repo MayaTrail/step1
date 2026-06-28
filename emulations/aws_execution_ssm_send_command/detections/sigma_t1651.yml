@@ -1,0 +1,19 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Execute Commands on EC2 Instances via SSM (T1651)
+id: 2e7a461b-0588-594c-ad91-df8ea34085a5
+status: experimental
+description: ssm:SendCommand in CloudTrail, especially with AWS-RunShellScript document targeting multiple instances
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ssm-send-command/
+tags:
+  - attack.execution
+  - attack.t1651
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName: ['DescribeInstanceInformation', 'SendCommand', 'GetCommandInvocation']
+  condition: selection
+level: medium

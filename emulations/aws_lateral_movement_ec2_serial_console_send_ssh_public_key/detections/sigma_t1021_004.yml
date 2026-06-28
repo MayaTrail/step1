@@ -1,0 +1,18 @@
+# eventName(s) auto-derived from attack.py — verify acronym casing.
+title: Usage of EC2 Serial Console to Push an SSH Public Key (T1021.004)
+id: 2749b7b2-2969-58a2-a47d-8e2b86c38fc9
+status: experimental
+description: CloudTrail ec2-instance-connect:SendSerialConsoleSSHPublicKey — a niche API almost never called in normal operations
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.lateral-movement.ec2-serial-console-send-ssh-public-key/
+tags:
+  - attack.lateral_movement
+  - attack.t1021.004
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventName: ['SendSerialConsoleSSHPublicKey']
+  condition: selection
+level: medium

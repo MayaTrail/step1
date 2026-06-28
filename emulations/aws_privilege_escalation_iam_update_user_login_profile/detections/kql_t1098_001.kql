@@ -1,0 +1,7 @@
+// Backdoor IAM User Console Login via UpdateLoginProfile (T1098.001) — eventName(s) auto-derived; verify casing.
+// Signal: iam:UpdateLoginProfile in CloudTrail where the caller is not an expected administrator or password-reset automation
+AWSCloudTrail
+| where EventSource in ("iam.amazonaws.com")
+| where EventName in ("GetLoginProfile", "UpdateLoginProfile")
+| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| order by TimeGenerated desc

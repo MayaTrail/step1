@@ -1,0 +1,27 @@
+# Targets the canonical ConsoleLogin signal (not the script's IAM recon calls).
+title: AWS Console Login Without MFA (T1078.004)
+id: 561a4908-847c-58cd-94db-27320778dcc1
+status: experimental
+description: >
+  Detects an AWS console sign-in where MFA was not used — valid-account access
+  without MFA (Stratus aws.initial-access.console-login-without-mfa).
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.initial-access.console-login-without-mfa/
+  - https://attack.mitre.org/techniques/T1078/004/
+tags:
+  - attack.initial_access
+  - attack.t1078.004
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'signin.amazonaws.com'
+    eventName: 'ConsoleLogin'
+    additionalEventData.MFAUsed: 'No'
+  success:
+    responseElements.ConsoleLogin: 'Success'
+  condition: selection and success
+falsepositives:
+  - Users legitimately exempt from MFA (should be rare and reviewed)
+level: medium
