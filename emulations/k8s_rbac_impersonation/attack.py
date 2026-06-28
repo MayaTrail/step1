@@ -1,6 +1,5 @@
 import time
 import requests
-import json
 
 def _wait_for_simulator(url: str, timeout: int = 300) -> None:
     print("[*] Waiting for simulator to become ready...")
