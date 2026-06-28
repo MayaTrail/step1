@@ -1,0 +1,28 @@
+// k8s_writable_log_escape — T1611: Escape to Host
+// Detects access to the Kubelet log proxy endpoint on a node. When a pod
+// has mounted host /var/log and created a symlink to /etc/shadow or similar,
+// this endpoint traverses the symlink and returns sensitive host file contents
+// to any caller with nodes/proxy get rights.
+//
+// References:
+//   https://attack.mitre.org/techniques/T1611/
+
+KubernetesAuditLogs
+| where TimeGenerated > ago(1h)
+| extend log = parse_json(AuditLog)
+| where tostring(log.verb) == "get"
+| where tostring(log.objectRef.resource) == "nodes"
+| where tostring(log.objectRef.subresource) == "proxy"
+| where tostring(log.requestURI) contains "/proxy/logs"
+| extend RequestedPath = extract(@"path=([^&]+)", 1, tostring(log.requestURI))
+| project
+    TimeGenerated,
+    CallerUser    = tostring(log.user.username),
+    TargetNode    = tostring(log.objectRef.name),
+    RequestedPath,
+    RequestURI    = tostring(log.requestURI),
+    SourceIP      = tostring(log.sourceIPs[0]),
+    ResponseCode  = toint(log.responseStatus.code),
+    AuditID       = tostring(log.auditID)
+| extend AlertTitle = "Kubernetes: Kubelet log proxy access — potential host escape via symlink"
+| order by TimeGenerated desc

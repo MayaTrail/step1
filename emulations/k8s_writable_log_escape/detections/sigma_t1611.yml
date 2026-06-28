@@ -1,0 +1,33 @@
+title: Kubernetes Kubelet Log Proxy Access — Potential Host File Exfiltration
+id: d4e5f6a7-4444-4ddd-b444-dddddddddddd
+status: experimental
+description: |
+  Detects GET requests to the Kubernetes node proxy logs endpoint
+  (/api/v1/nodes/{node}/proxy/logs). If a container has mounted the host
+  /var/log directory and created a symlink to a sensitive file, a caller with
+  get rights on the nodes/proxy subresource can read arbitrary host filesystem
+  content through this endpoint.
+  Emulated by MayaTrail k8s_writable_log_escape (Phase 2).
+references:
+  - https://attack.mitre.org/techniques/T1611/
+  - https://sysdig.com/blog/how-to-detect-kubernetes-vulnerability-cve-2021-25741/
+author: MayaTrail Security Research
+date: 2026/06/28
+tags:
+  - attack.privilege_escalation
+  - attack.t1611
+  - kubernetes
+logsource:
+  product: kubernetes
+  service: audit
+detection:
+  selection:
+    verb: get
+    objectRef.resource: nodes
+    objectRef.subresource: proxy
+    requestURI|contains: '/proxy/logs'
+  condition: selection
+falsepositives:
+  - Legitimate log collection agents that use the Kubelet log API
+  - Cluster monitoring tools reading container stdout logs via node proxy
+level: high
