@@ -1,0 +1,35 @@
+title: Kubernetes API Request with User Impersonation Headers
+id: b2c3d4e5-2222-4bbb-b222-bbbbbbbbbbbb
+status: experimental
+description: |
+  Detects Kubernetes API requests where the caller uses the Impersonate-User
+  or Impersonate-Group HTTP headers to assume a higher-privileged identity at
+  request time. Unlike RoleBinding changes, impersonation leaves no RBAC
+  configuration trace — the original caller is recorded only in the
+  impersonatedUser field of the audit log.
+  Emulated by MayaTrail k8s_rbac_impersonation (Phase 2).
+references:
+  - https://attack.mitre.org/techniques/T1548/
+  - https://kubernetes.io/docs/reference/access-authn-authz/authentication/#user-impersonation
+author: MayaTrail Security Research
+date: 2026/06/28
+tags:
+  - attack.privilege_escalation
+  - attack.t1548
+  - kubernetes
+logsource:
+  product: kubernetes
+  service: audit
+detection:
+  selection:
+    impersonatedUser.username|exists: true
+    responseStatus.code:
+      - 200
+      - 201
+  filter_system:
+    impersonatedUser.username|startswith: 'system:'
+  condition: selection and not filter_system
+falsepositives:
+  - Cluster operators legitimately using kubectl --as for administrative tasks
+  - CI/CD systems that use service account impersonation for multi-tenant deployments
+level: high
