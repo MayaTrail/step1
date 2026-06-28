@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Card } from '@/components/ui/Card'
 import { listStacks } from '@/services/stack.service'
+import { useCachedResource } from '@/hooks/useCachedResource'
 import type { Stack } from '@/types'
 import { deriveTelemetry, formatAge } from './stackHelpers'
 
@@ -39,19 +39,9 @@ function StatCell({ stat }: { stat: HealthStat }) {
 
 export function PlatformHealth() {
     const navigate = useNavigate()
-    const [stacks, setStacks] = useState<Stack[]>([])
-    const [loading, setLoading] = useState(true)
-
-    useEffect(() => {
-        let active = true
-        listStacks()
-            .then((data) => active && setStacks(data))
-            .catch(() => active && setStacks([]))
-            .finally(() => active && setLoading(false))
-        return () => {
-            active = false
-        }
-    }, [])
+    // Stale-while-revalidate: seeds from cache on revisit (no flash), never blanks.
+    const { data, loading } = useCachedResource('platform-health-stacks', listStacks)
+    const stacks = data ?? []
 
     const telemetry = deriveTelemetry(stacks)
     const healthy = stacks.filter((s) => HEALTHY_STATUSES.has(s.status)).length
