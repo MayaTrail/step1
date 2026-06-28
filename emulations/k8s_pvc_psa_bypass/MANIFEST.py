@@ -31,6 +31,11 @@ MANIFEST = {
             "phase": 2,
             "name": "Host Filesystem Read from Pod",
             "techniques": [{"id": "T1611", "name": "Escape to Host"}],
+        },
+        {
+            "phase": 3,
+            "name": "Host Filesystem Read from Pod",
+            "techniques": [{"id": "T1611", "name": "Escape to Host"}],
         }
     ],
     "mitre_mappings": [
@@ -52,7 +57,7 @@ MANIFEST = {
     "references": [
         {"icon": "#", "title": "Bypassing PSA via Storage", "source": "Kubernetes Docs", "type": "DOCUMENTATION", "color": "purple"}
     ],
-    "phase_count": 2,
+    "phase_count": 3,
     "estimated_duration_minutes": 10,
     "estimated_cost_per_hour_usd": 0.015,
     "default_ttl_hours": 2,
