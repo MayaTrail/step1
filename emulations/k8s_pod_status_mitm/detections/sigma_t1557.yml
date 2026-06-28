@@ -1,0 +1,39 @@
+title: Kubernetes pods/status Subresource Patched — Pod IP Spoofing
+id: b8c9d0e1-8888-4bbb-b888-888888888888
+status: experimental
+description: |
+  Detects patch or update operations on the pods/status subresource. The status
+  subresource controls the authoritative endpoint data for a pod, including its
+  IP address. An attacker with patch rights on pods/status can change a pod's
+  reported podIP to their own container's IP, causing service endpoint controllers
+  to redirect traffic for the victim pod to the attacker.
+  Emulated by MayaTrail k8s_pod_status_mitm (Phase 1).
+references:
+  - https://attack.mitre.org/techniques/T1557/
+  - https://kubernetes.io/docs/reference/access-authn-authz/rbac/#referring-to-resources
+author: MayaTrail Security Research
+date: 2026/06/28
+tags:
+  - attack.credential_access
+  - attack.collection
+  - attack.t1557
+  - kubernetes
+logsource:
+  product: kubernetes
+  service: audit
+detection:
+  selection:
+    verb:
+      - patch
+      - update
+    objectRef.resource: pods
+    objectRef.subresource: status
+  filter_controllers:
+    user.username|startswith:
+      - 'system:node:'
+      - 'system:serviceaccount:kube-system:'
+  condition: selection and not filter_controllers
+falsepositives:
+  - Legitimate Kubernetes controllers (node controller, kubelet) updating pod status
+  - Custom operators that manage pod lifecycle and write status updates
+level: high
