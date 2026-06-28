@@ -26,7 +26,10 @@ export interface MitreMapping {
 export interface Reference {
   icon: string
   title: string
+  /** Human-readable publisher/date line, e.g. "Sysdig TRT · sysdig.com · Feb 2023". */
   source: string
+  /** Canonical link to the source; when present the card opens it in a new tab. */
+  url?: string
   type: string
   color: string
 }

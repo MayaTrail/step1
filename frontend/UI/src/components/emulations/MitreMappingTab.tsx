@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import type { Emulation } from '@/types'
 import { useDetections } from '@/hooks/usePlatformData'
 import { Card } from '@/components/ui/Card'
@@ -103,9 +103,8 @@ export function MitreMappingTab({ emulation: em, platformLabel }: MitreMappingTa
                 const ph = phaseByTech.get(mt.id)
                 const open = openId === mt.id
                 return (
-                  <>
+                  <Fragment key={mt.id}>
                     <tr
-                      key={mt.id}
                       onClick={() => setOpenId(open ? null : mt.id)}
                       className="cursor-pointer transition-colors hover:bg-white/[0.02] align-top"
                     >
@@ -145,7 +144,7 @@ export function MitreMappingTab({ emulation: em, platformLabel }: MitreMappingTa
                       </td>
                     </tr>
                     {open && (
-                      <tr key={`${mt.id}-exp`}>
+                      <tr>
                         <td colSpan={6} className="border-b border-border bg-surface-base px-4 py-4">
                           <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
                             {ph && (
@@ -172,7 +171,7 @@ export function MitreMappingTab({ emulation: em, platformLabel }: MitreMappingTa
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 )
               })}
             </tbody>

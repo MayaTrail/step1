@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Emulation, MitreMapping } from '@/types'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -26,6 +26,19 @@ interface AttackPathTabProps {
 export function AttackPathTab({ emulation: em }: AttackPathTabProps) {
   const phases = em.attackPath
   const [active, setActive] = useState(0)
+
+  // Keep the selected phase visible when the timeline overflows horizontally
+  // (long kill chains scroll rather than grow). Skip the initial mount so the
+  // page does not jump on first render.
+  const activeBtnRef = useRef<HTMLButtonElement | null>(null)
+  const firstRender = useRef(true)
+  useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false
+      return
+    }
+    activeBtnRef.current?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' })
+  }, [active])
 
   if (phases.length === 0) {
     return (
@@ -56,6 +69,7 @@ export function AttackPathTab({ emulation: em }: AttackPathTabProps) {
             return (
               <div key={p.phase} className="flex items-center">
                 <button
+                  ref={selected ? activeBtnRef : undefined}
                   onClick={() => setActive(i)}
                   className={`flex-1 min-w-[150px] text-left rounded-[10px] px-4 py-3 cursor-pointer transition-all
                     border bg-surface-base hover:border-border-active hover:-translate-y-0.5

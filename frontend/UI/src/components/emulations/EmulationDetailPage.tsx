@@ -2,14 +2,16 @@ import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useEmulations } from '@/hooks/usePlatformData'
 import { getPlatformMeta } from '@/data'
-import type { PlatformId, Emulation } from '@/types'
+import type { PlatformId } from '@/types'
 import { Breadcrumb } from '@/components/ui/Breadcrumb'
 import { ThreatOriginBadge } from '@/components/ui/ThreatOriginBadge'
-import { TacticBadge } from '@/components/ui/TacticBadge'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { RunEmulationModal } from '@/components/modals/RunEmulationModal'
 import { OverviewTab } from './OverviewTab'
 import { AttackPathTab } from './AttackPathTab'
+import { MitreMappingTab } from './MitreMappingTab'
+import { ReferencesTab } from './ReferencesTab'
+import { PastFindingsTab } from './PastFindingsTab'
 
 type DetailTab = 'overview' | 'path' | 'mitre' | 'refs' | 'findings'
 
@@ -114,87 +116,12 @@ export function EmulationDetailPage() {
         />
       )}
       {activeTab === 'path' && <AttackPathTab emulation={em} />}
-      {activeTab === 'mitre' && <MitreTab emulation={em} platformLabel={platformLabel} />}
+      {activeTab === 'mitre' && <MitreMappingTab emulation={em} platformLabel={platformLabel} />}
       {activeTab === 'refs' && <ReferencesTab emulation={em} />}
       {activeTab === 'findings' && (
-        <EmptyState
-          icon="&#128202;"
-          title="No previous runs found"
-          body="Run this emulation to generate findings and track your security posture over time.<br>Findings will appear here after each execution."
-        />
+        <PastFindingsTab emulation={em} onRun={() => setShowRunModal(true)} />
       )}
     </div>
   )
 }
 
-/* ── MITRE Mapping Tab ── */
-function MitreTab({ emulation: em, platformLabel }: { emulation: Emulation; platformLabel: string }) {
-  return (
-    <div className="bg-surface-card border border-border rounded-card p-5">
-      <SectionTitle>MITRE ATT&CK Mapping &mdash; {platformLabel}</SectionTitle>
-      <table className="w-full border-collapse">
-        <thead>
-          <tr>
-            {['Technique ID', 'Technique Name', 'Tactic', 'Platform', 'Description'].map((h) => (
-              <th key={h} className="text-left px-3 py-2 font-mono text-[9px] tracking-[1px] text-content-dim uppercase border-b border-border">
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {em.mitreMappings.map((mt) => (
-            <tr key={mt.id} className="hover:bg-white/[0.02]">
-              <td className="px-3 py-2.5 text-xs border-b border-border/40">
-                <span className="font-mono text-[10px] text-danger bg-danger/[0.06] border border-danger/15 rounded-[3px] px-[7px] py-0.5">
-                  {mt.id}
-                </span>
-              </td>
-              <td className="px-3 py-2.5 text-xs border-b border-border/40 text-content-primary">{mt.name}</td>
-              <td className="px-3 py-2.5 text-xs border-b border-border/40">
-                <TacticBadge tactic={mt.tactic} />
-              </td>
-              <td className="px-3 py-2.5 text-xs border-b border-border/40 text-content-secondary">{mt.platform}</td>
-              <td className="px-3 py-2.5 text-xs border-b border-border/40 font-mono text-[11px] text-content-dim">{mt.description}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-/* ── References Tab ── */
-function ReferencesTab({ emulation: em }: { emulation: Emulation }) {
-  return (
-    <div className="bg-surface-card border border-border rounded-card p-5">
-      <SectionTitle>APT Advisories & Intelligence Reports</SectionTitle>
-      <div className="flex flex-col gap-2">
-        {em.references.map((ref, i) => (
-          <div key={i} className="flex items-center gap-3 bg-surface-base border border-border rounded-[7px] px-4 py-3
-            cursor-pointer transition-all hover:border-border-active">
-            <div className="text-base shrink-0">{ref.icon}</div>
-            <div className="flex-1">
-              <div className="text-[13px] font-semibold text-content-primary mb-[3px]">{ref.title}</div>
-              <div className="font-mono text-[10px] text-content-dim">{ref.source}</div>
-            </div>
-            <span className="font-mono text-[9px] px-[7px] py-0.5 rounded-[3px] border"
-              style={{ borderColor: ref.color, color: ref.color }}>
-              {ref.type}
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-/* ── Shared small components ── */
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="font-mono text-[10px] tracking-[1.5px] text-content-dim uppercase mb-3.5 flex items-center gap-2">
-      {children}
-      <div className="flex-1 h-px bg-border" />
-    </div>
-  )
-}
