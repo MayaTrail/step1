@@ -1,0 +1,30 @@
+// k8s_external_ips_mitm — T1557: Adversary-in-the-Middle (CVE-2020-8554)
+// Detects Services created or modified with a non-empty externalIPs field.
+// kube-proxy programs iptables rules for each externalIP, redirecting matching
+// traffic to the service's endpoints — allowing an attacker to intercept traffic
+// to arbitrary public IPs from within the cluster network.
+//
+// References:
+//   https://attack.mitre.org/techniques/T1557/
+//   https://nvd.nist.gov/vuln/detail/CVE-2020-8554
+
+KubernetesAuditLogs
+| where TimeGenerated > ago(1h)
+| extend log = parse_json(AuditLog)
+| where tostring(log.verb) in ("create", "update", "patch")
+| where tostring(log.objectRef.resource) == "services"
+| extend requestObj   = parse_json(tostring(log.requestObject))
+| extend ExternalIPs  = tostring(requestObj.spec.externalIPs)
+| where isnotempty(ExternalIPs) and ExternalIPs != "[]"
+| project
+    TimeGenerated,
+    CallerUser   = tostring(log.user.username),
+    Namespace    = tostring(log.objectRef.namespace),
+    ServiceName  = tostring(log.objectRef.name),
+    ExternalIPs,
+    Verb         = tostring(log.verb),
+    SourceIP     = tostring(log.sourceIPs[0]),
+    ResponseCode = toint(log.responseStatus.code),
+    AuditID      = tostring(log.auditID)
+| extend AlertTitle = "Kubernetes: Service with externalIPs — potential CVE-2020-8554 traffic interception"
+| order by TimeGenerated desc

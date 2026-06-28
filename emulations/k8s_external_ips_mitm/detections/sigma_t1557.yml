@@ -1,0 +1,38 @@
+title: Kubernetes Service Created with ExternalIPs — CVE-2020-8554 Traffic Interception
+id: a7b8c9d0-7777-4aaa-b777-777777777777
+status: experimental
+description: |
+  Detects creation or update of a Kubernetes Service resource that includes a
+  non-empty externalIPs list. An attacker can set externalIPs to any public IP
+  address, causing kube-proxy to redirect cluster-internal traffic destined for
+  that IP to the attacker's pod (CVE-2020-8554). This enables interception of
+  DNS responses, database credentials, and API tokens flowing to external services.
+  Emulated by MayaTrail k8s_external_ips_mitm (Phase 1).
+references:
+  - https://attack.mitre.org/techniques/T1557/
+  - https://nvd.nist.gov/vuln/detail/CVE-2020-8554
+  - https://kubernetes.io/docs/concepts/services-networking/service/#external-ips
+author: MayaTrail Security Research
+date: 2026/06/28
+tags:
+  - attack.credential_access
+  - attack.collection
+  - attack.t1557
+  - kubernetes
+  - cve-2020-8554
+logsource:
+  product: kubernetes
+  service: audit
+detection:
+  selection:
+    verb:
+      - create
+      - update
+      - patch
+    objectRef.resource: services
+    requestObject.spec.externalIPs|exists: true
+  condition: selection
+falsepositives:
+  - Clusters that legitimately use externalIPs for LoadBalancer services on bare-metal
+  - MetalLB or similar controllers that assign externalIPs automatically
+level: high
