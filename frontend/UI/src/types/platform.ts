@@ -57,6 +57,22 @@ export interface Emulation {
   mitreMappings: MitreMapping[]
   references: Reference[]
   phaseCount?: number
+  /** Authored static estimate of attack runtime in minutes (Overview key metric). */
+  estimatedDurationMinutes?: number
+  /** Authored static hourly cost of the deployed stack; combined with TTL for a per-run figure. */
+  estimatedCostPerHourUsd?: number
+  /** Hours before the stack auto-destroys; drives Prerequisites + Safety copy. */
+  defaultTtlHours?: number
+  /** Total AWS resources the emulation provisions (0 for self-cleaning atomics). */
+  totalResources?: number
+  /** Coarse resource footprint from the MANIFEST (EC2 count, instance types, feature flags). */
+  resources?: {
+    ec2_count?: number
+    instance_types?: string[]
+    uses_lambda?: boolean
+    uses_secrets_manager?: boolean
+    uses_cloudtrail?: boolean
+  }
   schemaVersion?: number
 }
 

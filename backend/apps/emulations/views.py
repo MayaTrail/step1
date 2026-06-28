@@ -95,6 +95,15 @@ def _manifest_to_api(entry: dict) -> dict:
         "mitreMappings": entry.get("mitre_mappings", []),
         "references": entry.get("references", []),
         "phaseCount": entry.get("phase_count", 0),
+        # Cost / runtime / footprint metadata — authored statically in each
+        # MANIFEST and consumed by the Emulation Details "Overview" tab (key
+        # metrics, prerequisites, safety). Present in both enterprise and atomic
+        # MANIFESTs; defaulted defensively so older packages still serialise.
+        "estimatedDurationMinutes": entry.get("estimated_duration_minutes"),
+        "estimatedCostPerHourUsd": entry.get("estimated_cost_per_hour_usd"),
+        "defaultTtlHours": entry.get("default_ttl_hours"),
+        "totalResources": entry.get("total_resources"),
+        "resources": entry.get("resources", {}),
         "schemaVersion": entry.get("schema_version"),
     }
 
