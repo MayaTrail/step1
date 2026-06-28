@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTheme } from '@/context/ThemeContext'
+import { AIAssistantTab } from './AIAssistantTab'
 
-type SettingsTab = 'general' | 'appearance' | 'account'
+type SettingsTab = 'general' | 'appearance' | 'ai' | 'account'
 
 const NAV_ITEMS: { id: SettingsTab; label: string; icon: JSX.Element }[] = [
     {
@@ -20,6 +21,16 @@ const NAV_ITEMS: { id: SettingsTab; label: string; icon: JSX.Element }[] = [
         icon: (
             <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                 <path d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
+            </svg>
+        ),
+    },
+    {
+        id: 'ai',
+        label: 'AI Assistant',
+        icon: (
+            <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3z" />
+                <path d="M19 14l.7 1.9L21.5 16.6 19.7 17.3 19 19.2 18.3 17.3 16.5 16.6 18.3 15.9 19 14z" />
             </svg>
         ),
     },
@@ -99,6 +110,7 @@ export function SettingsPage() {
             {/* ── Main Content ── */}
             <main className="flex-1 overflow-y-auto w-full max-w-4xl mx-auto px-6 md:px-10 py-8 md:py-12">
                 {activeTab === 'appearance' && <AppearanceTab />}
+                {activeTab === 'ai' && <AIAssistantTab />}
                 {activeTab === 'general' && <PlaceholderTab title="General" />}
                 {activeTab === 'account' && <PlaceholderTab title="Account" />}
             </main>
