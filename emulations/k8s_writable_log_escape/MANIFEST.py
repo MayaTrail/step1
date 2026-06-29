@@ -1,6 +1,6 @@
 """MANIFEST for k8s_writable_log_escape."""
 MANIFEST = {
-    "schema_version": 2,
+    "schema_version": 3,
     "name": "k8s_writable_log_escape",
     "display_name": "K8s Writable /var/log Host Escape",
     "description": (
@@ -10,6 +10,8 @@ MANIFEST = {
     "tier": "enterprise",
     "platform": "k8s",
     "added": "2026-06",
+    "services": ["Kubelet", "Container Runtime"],
+    "readiness": {"type": "none"},
     "origin": "unknown",
     "origin_label": "K8S EMULATION",
     "tags": ["Kubernetes", "Host Escape", "Symlink Abuse", "Writable Mount"],
@@ -49,7 +51,30 @@ MANIFEST = {
         }
     ],
     "references": [
-        {"icon": "#", "title": "Writable /var/log Host Escape", "source": "Sysdig Threat Research", "type": "DOCUMENTATION", "color": "orange"}
+        {
+            "icon": ">",
+            "title": "How to mitigate kubelet's CVE-2021-25741: Symlink exchange can allow host filesystem access",
+            "source": "Sysdig · sysdig.com",
+            "type": "REPORT",
+            "color": "orange",
+            "url": "https://sysdig.com/blog/cve-2021-25741-kubelet-falco/",
+        },
+        {
+            "icon": "#",
+            "title": "MITRE ATT&CK — T1609: Container Administration Command",
+            "source": "MITRE ATT&CK · mitre.org",
+            "type": "MITRE",
+            "color": "purple",
+            "url": "https://attack.mitre.org/techniques/T1609/",
+        },
+        {
+            "icon": "#",
+            "title": "MITRE ATT&CK — T1611: Escape to Host",
+            "source": "MITRE ATT&CK · mitre.org",
+            "type": "MITRE",
+            "color": "purple",
+            "url": "https://attack.mitre.org/techniques/T1611/",
+        },
     ],
     "phase_count": 2,
     "estimated_duration_minutes": 10,

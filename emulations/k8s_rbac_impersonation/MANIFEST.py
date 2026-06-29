@@ -1,6 +1,6 @@
 """MANIFEST for k8s_rbac_impersonation."""
 MANIFEST = {
-    "schema_version": 2,
+    "schema_version": 3,
     "name": "k8s_rbac_impersonation",
     "display_name": "K8s RBAC Impersonation Privilege Escalation",
     "description": (
@@ -10,6 +10,8 @@ MANIFEST = {
     "tier": "enterprise",
     "platform": "k8s",
     "added": "2026-06",
+    "services": ["Kubernetes RBAC", "Kubernetes API"],
+    "readiness": {"type": "none"},
     "origin": "unknown",
     "origin_label": "K8S EMULATION",
     "tags": ["Kubernetes", "RBAC", "Impersonation", "Privilege Escalation"],
@@ -49,7 +51,30 @@ MANIFEST = {
         }
     ],
     "references": [
-        {"icon": "#", "title": "K8s User Impersonation Docs", "source": "Kubernetes", "type": "DOCUMENTATION", "color": "blue"}
+        {
+            "icon": "~",
+            "title": "User Impersonation",
+            "source": "Kubernetes · kubernetes.io",
+            "type": "DOCUMENTATION",
+            "color": "blue",
+            "url": "https://kubernetes.io/docs/reference/access-authn-authz/user-impersonation/",
+        },
+        {
+            "icon": "#",
+            "title": "MITRE ATT&CK — T1069: Permission Groups Discovery",
+            "source": "MITRE ATT&CK · mitre.org",
+            "type": "MITRE",
+            "color": "purple",
+            "url": "https://attack.mitre.org/techniques/T1069/",
+        },
+        {
+            "icon": "#",
+            "title": "MITRE ATT&CK — T1548: Abuse Elevation Control Mechanism",
+            "source": "MITRE ATT&CK · mitre.org",
+            "type": "MITRE",
+            "color": "purple",
+            "url": "https://attack.mitre.org/techniques/T1548/",
+        },
     ],
     "phase_count": 2,
     "estimated_duration_minutes": 10,

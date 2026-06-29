@@ -1,6 +1,6 @@
 """MANIFEST for k8s_pvc_psa_bypass."""
 MANIFEST = {
-    "schema_version": 2,
+    "schema_version": 3,
     "name": "k8s_pvc_psa_bypass",
     "display_name": "K8s PSA Bypass via PV Abuse",
     "description": (
@@ -11,6 +11,8 @@ MANIFEST = {
     "tier": "enterprise",
     "platform": "k8s",
     "added": "2026-06",
+    "services": ["Pod Security Admission", "PersistentVolume"],
+    "readiness": {"type": "none"},
     "origin": "unknown",
     "origin_label": "K8S EMULATION",
     "tags": ["Kubernetes", "Pod Security Admission", "Bypass", "PersistentVolume", "Host Escape"],
@@ -55,7 +57,30 @@ MANIFEST = {
         }
     ],
     "references": [
-        {"icon": "#", "title": "Bypassing PSA via Storage", "source": "Kubernetes Docs", "type": "DOCUMENTATION", "color": "purple"}
+        {
+            "icon": "~",
+            "title": "Pod Security Admission",
+            "source": "Kubernetes · kubernetes.io",
+            "type": "DOCUMENTATION",
+            "color": "purple",
+            "url": "https://kubernetes.io/docs/concepts/security/pod-security-admission/",
+        },
+        {
+            "icon": "#",
+            "title": "MITRE ATT&CK — T1211: Exploitation for Defense Evasion",
+            "source": "MITRE ATT&CK · mitre.org",
+            "type": "MITRE",
+            "color": "purple",
+            "url": "https://attack.mitre.org/techniques/T1211/",
+        },
+        {
+            "icon": "#",
+            "title": "MITRE ATT&CK — T1611: Escape to Host",
+            "source": "MITRE ATT&CK · mitre.org",
+            "type": "MITRE",
+            "color": "purple",
+            "url": "https://attack.mitre.org/techniques/T1611/",
+        },
     ],
     "phase_count": 3,
     "estimated_duration_minutes": 10,

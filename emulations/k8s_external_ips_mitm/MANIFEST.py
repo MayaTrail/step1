@@ -1,6 +1,6 @@
 """MANIFEST for k8s_external_ips_mitm."""
 MANIFEST = {
-    "schema_version": 2,
+    "schema_version": 3,
     "name": "k8s_external_ips_mitm",
     "display_name": "K8s External IPs Hijacking (CVE-2020-8554)",
     "description": (
@@ -11,6 +11,8 @@ MANIFEST = {
     "tier": "enterprise",
     "platform": "k8s",
     "added": "2026-06",
+    "services": ["Kubernetes API", "kube-proxy"],
+    "readiness": {"type": "none"},
     "origin": "unknown",
     "origin_label": "K8S EMULATION",
     "tags": ["Kubernetes", "Adversary-in-the-Middle", "External IPs", "Vulnerability"],
@@ -43,7 +45,22 @@ MANIFEST = {
         }
     ],
     "references": [
-        {"icon": "#", "title": "CVE-2020-8554 Announcement", "source": "Kubernetes", "type": "DOCUMENTATION", "color": "red"}
+        {
+            "icon": "#",
+            "title": "CVE-2020-8554: Man in the middle using LoadBalancer or ExternalIPs",
+            "source": "Kubernetes · github.com",
+            "type": "ADVISORY",
+            "color": "red",
+            "url": "https://github.com/kubernetes/kubernetes/issues/97076",
+        },
+        {
+            "icon": "#",
+            "title": "MITRE ATT&CK — T1557: Adversary-in-the-Middle",
+            "source": "MITRE ATT&CK · mitre.org",
+            "type": "MITRE",
+            "color": "purple",
+            "url": "https://attack.mitre.org/techniques/T1557/",
+        },
     ],
     "phase_count": 2,
     "estimated_duration_minutes": 8,

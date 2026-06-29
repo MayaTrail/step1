@@ -1,6 +1,6 @@
 """MANIFEST for k8s_pod_status_mitm."""
 MANIFEST = {
-    "schema_version": 2,
+    "schema_version": 3,
     "name": "k8s_pod_status_mitm",
     "display_name": "K8s MITM via Pod status.podIP Mutation",
     "description": (
@@ -10,6 +10,8 @@ MANIFEST = {
     "tier": "enterprise",
     "platform": "k8s",
     "added": "2026-06",
+    "services": ["Kubernetes API", "Kubernetes RBAC"],
+    "readiness": {"type": "none"},
     "origin": "unknown",
     "origin_label": "K8S EMULATION",
     "tags": ["Kubernetes", "Adversary-in-the-Middle", "Status Subresource", "RBAC Abuse"],
@@ -42,7 +44,22 @@ MANIFEST = {
         }
     ],
     "references": [
-        {"icon": "#", "title": "Kubernetes Pod status subresource", "source": "Kubernetes", "type": "DOCUMENTATION", "color": "yellow"}
+        {
+            "icon": "~",
+            "title": "Pod API Reference — status subresource",
+            "source": "Kubernetes · kubernetes.io",
+            "type": "DOCUMENTATION",
+            "color": "yellow",
+            "url": "https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/",
+        },
+        {
+            "icon": "#",
+            "title": "MITRE ATT&CK — T1557: Adversary-in-the-Middle",
+            "source": "MITRE ATT&CK · mitre.org",
+            "type": "MITRE",
+            "color": "purple",
+            "url": "https://attack.mitre.org/techniques/T1557/",
+        },
     ],
     "phase_count": 2,
     "estimated_duration_minutes": 8,
