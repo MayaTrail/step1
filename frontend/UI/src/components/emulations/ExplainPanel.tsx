@@ -52,7 +52,14 @@ export function ExplainPanel({ emulation }: { emulation: Emulation }) {
             try {
                 const connector = await getLLMConnector()
                 if (cancelled) return
-                setHasConnector(Boolean(connector.has_key) && connector.enabled)
+                // Bedrock authenticates via the assumed AWS role and stores no
+                // key, so has_key is always false for it; treat a saved, enabled
+                // Bedrock connector as connected just like a key-based one.
+                const configured =
+                    connector.provider === 'bedrock'
+                        ? Boolean(connector.region)
+                        : Boolean(connector.has_key)
+                setHasConnector(configured && connector.enabled)
                 setProvider(connector.provider)
                 const convos = await listConversations(emulation.id)
                 if (cancelled) return

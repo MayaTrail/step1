@@ -29,8 +29,10 @@ export interface SaveLLMConnectorPayload {
   provider: LLMProvider
   model: string
   enabled?: boolean
-  /** Plaintext key; required on first create, optional on update. */
+  /** Plaintext key; required on first create for key providers, optional on update. */
   api_key?: string
+  /** AWS region; required for the bedrock provider. */
+  region?: string
 }
 
 /** Create or update the connector. */
@@ -51,7 +53,7 @@ export async function deleteLLMConnector(): Promise<void> {
  * argument to test the stored connector.
  */
 export async function testLLMConnector(
-  payload?: { provider: LLMProvider; api_key: string },
+  payload?: { provider: LLMProvider; api_key?: string; region?: string },
 ): Promise<LLMConnectorTestResult> {
   const { data } = await api.post<LLMConnectorTestResult>('/ai/connector/test/', payload ?? {})
   return data
@@ -61,6 +63,11 @@ export async function testLLMConnector(
 export const SUGGESTED_MODELS: Record<LLMProvider, string[]> = {
   openai: ['gpt-4o', 'gpt-4o-mini', 'o4-mini'],
   anthropic: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+  bedrock: [
+    'us.anthropic.claude-sonnet-4-6',
+    'us.anthropic.claude-opus-4-8',
+    'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+  ],
 }
 
 /* ── Multi-turn chat (M3) ── */

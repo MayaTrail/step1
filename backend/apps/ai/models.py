@@ -27,6 +27,7 @@ class LLMConnector(models.Model):
 
         OPENAI = "openai", "OpenAI"
         ANTHROPIC = "anthropic", "Anthropic"
+        BEDROCK = "bedrock", "Amazon Bedrock"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(
@@ -41,10 +42,28 @@ class LLMConnector(models.Model):
     )
     model = models.CharField(
         max_length=128,
-        help_text="Provider model id, e.g. 'gpt-4o' or 'claude-sonnet-4-6'.",
+        help_text=(
+            "Provider model id, e.g. 'gpt-4o', 'claude-sonnet-4-6', or a Bedrock "
+            "inference-profile id like 'us.anthropic.claude-3-5-sonnet-20241022-v2:0'."
+        ),
+    )
+    region = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        help_text=(
+            "AWS region for Amazon Bedrock (e.g. 'us-east-1'). Required for the "
+            "bedrock provider; unused by key-based providers."
+        ),
     )
     api_key_encrypted = models.BinaryField(
-        help_text="Fernet-encrypted provider API key. Never stored or returned in plaintext.",
+        null=True,
+        blank=True,
+        help_text=(
+            "Fernet-encrypted provider API key. Never stored or returned in "
+            "plaintext. Null for the bedrock provider, which authenticates via "
+            "the user's assumed AWS role instead of a stored key."
+        ),
     )
     key_hint = models.CharField(
         max_length=4,

@@ -14,6 +14,8 @@ POST   /api/ai/conversations/<id>/messages/   ConversationMessagesView streaming
 
 import logging
 
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 from cryptography.fernet import InvalidToken
 from django.http import StreamingHttpResponse
 from django.shortcuts import get_object_or_404
@@ -44,6 +46,61 @@ logger = logging.getLogger(__name__)
 CHAT_MAX_TOKENS = 1024
 CHAT_HISTORY_TURNS = 12
 
+# Lifetime of the temporary credentials minted for a Bedrock call. 900s is the
+# STS minimum and comfortably outlives a single streamed completion.
+BEDROCK_SESSION_SECONDS = 900
+
+
+def build_credentials(user, connector: LLMConnector) -> tuple[dict | None, str | None]:
+    """
+    Resolve the provider credentials for a stored connector.
+
+    Key-based providers decrypt their stored key. Bedrock instead assumes the
+    user's verified AWS role (the same STS trust path as the connectors app) and
+    returns short-lived credentials used in-memory only. Returns (creds, None)
+    on success or (None, error_detail) on a recoverable failure.
+    """
+    if connector.provider == LLMConnector.Provider.BEDROCK:
+        return _bedrock_credentials(user, connector.region)
+    try:
+        return {"api_key": crypto.decrypt(connector.api_key_encrypted)}, None
+    except (InvalidToken, EncryptionNotConfigured):
+        return None, "Stored key could not be decrypted."
+
+
+def _bedrock_credentials(user, region: str) -> tuple[dict | None, str | None]:
+    """
+    Assume the user's AWS role and return temporary Bedrock credentials.
+
+    Reuses the connectors app's STS AssumeRole trust path: the backend assumes
+    the role ARN the user verified, and the short-lived credentials are used
+    in-memory only (never stored). Inference billed under this role lands on the
+    user's own AWS account, which the Settings UI discloses before connecting.
+    """
+    role_arn = getattr(user, "aws_role_arn", "")
+    if not role_arn:
+        return None, "Connect an AWS account first (no verified role on your profile)."
+    if not region:
+        return None, "An AWS region is required for Bedrock."
+    try:
+        resp = boto3.client("sts").assume_role(
+            RoleArn=role_arn,
+            RoleSessionName="mayatrail-bedrock",
+            DurationSeconds=BEDROCK_SESSION_SECONDS,
+        )
+        creds = resp["Credentials"]
+    except (ClientError, BotoCoreError) as exc:
+        message = str(exc)
+        if isinstance(exc, ClientError):
+            message = exc.response.get("Error", {}).get("Message", message)
+        return None, f"Could not assume AWS role: {message}"
+    return {
+        "region": region,
+        "access_key_id": creds["AccessKeyId"],
+        "secret_access_key": creds["SecretAccessKey"],
+        "session_token": creds["SessionToken"],
+    }, None
+
 
 class LLMConnectorView(APIView):
     """Manage the requesting user's LLM connector (one per user)."""
@@ -54,7 +111,13 @@ class LLMConnectorView(APIView):
         """Return the current connector (masked), or an empty shape if none."""
         connector = LLMConnector.objects.filter(user=request.user).first()
         if connector is None:
-            return Response({"has_key": False, "provider": None, "model": None, "enabled": False})
+            return Response({
+                "has_key": False,
+                "provider": None,
+                "model": None,
+                "region": None,
+                "enabled": False,
+            })
         return Response(LLMConnectorSerializer(connector).data)
 
     def put(self, request: Request) -> Response:
@@ -73,13 +136,21 @@ class LLMConnectorView(APIView):
         data = dict(serializer.validated_data)
 
         api_key = data.pop("api_key", None)
-        if connector is None and not api_key:
+        provider = data.get("provider") or (connector.provider if connector else None)
+        is_bedrock = provider == LLMConnector.Provider.BEDROCK
+
+        # Bedrock authenticates via the assumed AWS role, so it needs no key.
+        if connector is None and not is_bedrock and not api_key:
             return Response(
                 {"api_key": ["An API key is required to create a connector."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if api_key:
+        if is_bedrock:
+            # Keep state honest: a Bedrock connector stores no key/hint.
+            data["api_key_encrypted"] = None
+            data["key_hint"] = ""
+        elif api_key:
             try:
                 data["api_key_encrypted"] = crypto.encrypt(api_key)
             except EncryptionNotConfigured as exc:
@@ -130,24 +201,48 @@ class LLMConnectorTestView(APIView):
     throttle_scope = "ai_test"
 
     def post(self, request: Request) -> Response:
-        """Run the connection test and return {ok, detail}."""
+        """
+        Run the connection test and return {ok, detail}.
+
+        Body may carry {provider, api_key} (key providers) or {provider, region}
+        (Bedrock) to validate before saving; with neither, the stored connector
+        is tested.
+        """
         provider = request.data.get("provider")
         api_key = request.data.get("api_key")
+        region = request.data.get("region")
 
-        if not api_key:
-            connector = LLMConnector.objects.filter(user=request.user).first()
+        connector = LLMConnector.objects.filter(user=request.user).first()
+
+        # Fall back to the stored connector's provider when none is supplied.
+        if not provider:
             if connector is None:
                 return Response(
-                    {"detail": "No connector configured and no api_key provided."},
+                    {"detail": "No connector configured and no provider provided."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             provider = connector.provider
-            try:
-                api_key = crypto.decrypt(connector.api_key_encrypted)
-            except (InvalidToken, EncryptionNotConfigured):
-                return Response({"ok": False, "detail": "Stored key could not be decrypted."})
 
-        ok, detail = test_connection(provider, api_key)
+        if provider == LLMConnector.Provider.BEDROCK:
+            if not region:
+                region = connector.region if connector else ""
+            creds, error = _bedrock_credentials(request.user, region)
+            if error:
+                return Response({"ok": False, "detail": error})
+        else:
+            if not api_key:
+                if connector is None or not connector.api_key_encrypted:
+                    return Response(
+                        {"detail": "No stored key and no api_key provided."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                try:
+                    api_key = crypto.decrypt(connector.api_key_encrypted)
+                except (InvalidToken, EncryptionNotConfigured):
+                    return Response({"ok": False, "detail": "Stored key could not be decrypted."})
+            creds = {"api_key": api_key}
+
+        ok, detail = test_connection(provider, creds)
         return Response({"ok": ok, "detail": detail})
 
 
@@ -245,13 +340,9 @@ class ConversationMessagesView(APIView):
                 {"detail": "No active LLM connector. Connect one in Settings -> AI Assistant."},
                 status=status.HTTP_409_CONFLICT,
             )
-        try:
-            api_key = crypto.decrypt(connector.api_key_encrypted)
-        except (InvalidToken, EncryptionNotConfigured):
-            return Response(
-                {"detail": "Stored key could not be decrypted."},
-                status=status.HTTP_409_CONFLICT,
-            )
+        creds, error = build_credentials(request.user, connector)
+        if error:
+            return Response({"detail": error}, status=status.HTTP_409_CONFLICT)
 
         # Persist the user's turn; seed the title from the first message.
         if not conversation.title:
@@ -274,7 +365,7 @@ class ConversationMessagesView(APIView):
             """Yield response deltas; persist the assistant turn on success."""
             chunks: list[str] = []
             for chunk in stream_chat(
-                provider, api_key, model, system, history, max_tokens=CHAT_MAX_TOKENS
+                provider, creds, model, system, history, max_tokens=CHAT_MAX_TOKENS
             ):
                 if chunk.startswith(STREAM_ERROR_PREFIX):
                     detail = chunk[len(STREAM_ERROR_PREFIX):]

@@ -3,10 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import { getCoverageSummary } from '@/services/metrics.service'
 import { useCachedResource } from '@/hooks/useCachedResource'
-import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { MetricCard } from '@/components/ui/MetricCard'
-import { IconLaunch } from '@/components/ui/Icons'
 import { ActivityFeed } from './ActivityFeed'
 import { PlatformHealth } from './PlatformHealth'
 
@@ -73,9 +71,6 @@ export function DashboardPage() {
                         How much of the threat landscape Mayatrail can emulate and validate.
                     </p>
                 </div>
-                <Button variant="cta" size="lg" onClick={() => navigate('/aws/emulations')} icon={<IconLaunch size={16} />}>
-                    Deploy emulation
-                </Button>
             </div>
 
             {/* ── Band A — KPI cards ── */}

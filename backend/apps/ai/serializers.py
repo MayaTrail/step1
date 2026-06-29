@@ -21,13 +21,26 @@ class LLMConnectorSerializer(serializers.ModelSerializer):
         allow_blank=False,
         trim_whitespace=False,
         min_length=8,
-        help_text="Provider API key. Write-only; stored encrypted, never returned.",
+        help_text=(
+            "Provider API key. Write-only; stored encrypted, never returned. "
+            "Not used by the bedrock provider, which authenticates via the "
+            "user's assumed AWS role."
+        ),
+    )
+    region = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=32,
+        help_text="AWS region for the bedrock provider (e.g. 'us-east-1').",
     )
     has_key = serializers.SerializerMethodField()
 
     class Meta:
         model = LLMConnector
-        fields = ["provider", "model", "enabled", "api_key", "has_key", "key_hint", "updated_at"]
+        fields = [
+            "provider", "model", "region", "enabled",
+            "api_key", "has_key", "key_hint", "updated_at",
+        ]
         read_only_fields = ["has_key", "key_hint", "updated_at"]
 
     def get_has_key(self, obj: LLMConnector) -> bool:
@@ -41,6 +54,17 @@ class LLMConnectorSerializer(serializers.ModelSerializer):
                 f"Unsupported provider. Choose one of: {sorted(SUPPORTED_PROVIDERS)}."
             )
         return value
+
+    def validate(self, attrs: dict) -> dict:
+        """Bedrock requires a region; key-based providers do not use one."""
+        provider = attrs.get("provider") or getattr(self.instance, "provider", None)
+        if provider == LLMConnector.Provider.BEDROCK:
+            region = attrs.get("region") or getattr(self.instance, "region", "")
+            if not region:
+                raise serializers.ValidationError(
+                    {"region": "An AWS region is required for Amazon Bedrock."}
+                )
+        return attrs
 
 
 class MessageSerializer(serializers.ModelSerializer):

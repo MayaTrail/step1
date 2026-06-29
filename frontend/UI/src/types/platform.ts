@@ -81,12 +81,14 @@ export interface Emulation {
 
 /* ── AI assistant connector (mirrors backend apps.ai) ── */
 
-export type LLMProvider = 'openai' | 'anthropic'
+export type LLMProvider = 'openai' | 'anthropic' | 'bedrock'
 
 /** Masked connector shape returned by GET /api/ai/connector/. Never carries the key. */
 export interface LLMConnector {
   provider: LLMProvider | null
   model: string | null
+  /** AWS region for the bedrock provider; empty/null for key-based providers. */
+  region?: string | null
   enabled: boolean
   has_key: boolean
   /** Last 4 chars of the stored key, for masked display. */

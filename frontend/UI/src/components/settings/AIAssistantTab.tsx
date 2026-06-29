@@ -7,30 +7,40 @@ import {
     testLLMConnector,
     SUGGESTED_MODELS,
 } from '@/services/ai.service'
+import { SectionHeader } from './SectionHeader'
 
 /**
  * AI Assistant settings tab — the bring-your-own-key LLM connector.
  *
- * Lets a user store an OpenAI or Anthropic key (encrypted server-side), pick a
- * model, test the connection, and remove it. The key is write-only: the server
- * never returns it, so the input is only for entering a new or replacement key;
- * an existing key is shown as a masked hint.
+ * Key-based providers (OpenAI, Anthropic) store a write-only key, encrypted
+ * server-side; the server never returns it, so the input is only for entering a
+ * new or replacement key, and an existing key shows as a masked hint. Amazon
+ * Bedrock stores no key: it authenticates through the user's connected AWS role
+ * and only needs a region, so its inference is billed to the user's AWS account
+ * (disclosed below).
  */
 
 const PROVIDERS: { id: LLMProvider; label: string }[] = [
     { id: 'openai', label: 'OpenAI' },
     { id: 'anthropic', label: 'Anthropic' },
+    { id: 'bedrock', label: 'Amazon Bedrock' },
 ]
 
 type TestState = { ok: boolean; detail: string } | null
 
+// Module-level cache of the last-loaded connector. Switching Settings tabs
+// remounts this panel; seeding from the cache shows the saved connector
+// immediately and revalidates in the background, instead of flashing "Loading...".
+let _connectorCache: LLMConnector | undefined
+
 export function AIAssistantTab() {
-    const [loading, setLoading] = useState(true)
-    const [connector, setConnector] = useState<LLMConnector | null>(null)
-    const [provider, setProvider] = useState<LLMProvider>('openai')
-    const [model, setModel] = useState<string>(SUGGESTED_MODELS.openai[0]!)
+    const [loading, setLoading] = useState(_connectorCache === undefined)
+    const [connector, setConnector] = useState<LLMConnector | null>(_connectorCache ?? null)
+    const [provider, setProvider] = useState<LLMProvider>(_connectorCache?.provider ?? 'openai')
+    const [model, setModel] = useState<string>(_connectorCache?.model ?? SUGGESTED_MODELS.openai[0]!)
     const [apiKey, setApiKey] = useState('')
-    const [enabled, setEnabled] = useState(true)
+    const [region, setRegion] = useState(_connectorCache?.region ?? '')
+    const [enabled, setEnabled] = useState(_connectorCache?.enabled ?? true)
 
     const [saving, setSaving] = useState(false)
     const [testing, setTesting] = useState(false)
@@ -42,9 +52,11 @@ export function AIAssistantTab() {
         getLLMConnector()
             .then((c) => {
                 if (cancelled) return
+                _connectorCache = c
                 setConnector(c)
                 if (c.provider) setProvider(c.provider)
                 if (c.model) setModel(c.model)
+                if (c.region) setRegion(c.region)
                 setEnabled(c.enabled)
             })
             .catch(() => undefined)
@@ -53,6 +65,14 @@ export function AIAssistantTab() {
             cancelled = true
         }
     }, [])
+
+    const isBedrock = provider === 'bedrock'
+    const hasKey = connector?.has_key ?? false
+    // "Connected" reflects the saved connector: a stored key, or a saved Bedrock
+    // connector (which carries no key, so has_key is always false for it).
+    const connected = connector?.provider === 'bedrock' ? true : hasKey
+    // Bedrock can be tested once a region is set; key providers need a key.
+    const canTest = isBedrock ? !!region.trim() : hasKey || !!apiKey.trim()
 
     // When the provider changes, keep the model valid for that provider.
     function handleProviderChange(next: LLMProvider) {
@@ -63,11 +83,14 @@ export function AIAssistantTab() {
         setTestResult(null)
     }
 
-    const hasKey = connector?.has_key ?? false
-
     async function handleSave() {
         setMessage(null)
-        if (!hasKey && !apiKey.trim()) {
+        if (isBedrock) {
+            if (!region.trim()) {
+                setMessage('An AWS region is required for Amazon Bedrock.')
+                return
+            }
+        } else if (!hasKey && !apiKey.trim()) {
             setMessage('An API key is required to connect.')
             return
         }
@@ -77,13 +100,19 @@ export function AIAssistantTab() {
                 provider,
                 model,
                 enabled,
-                api_key: apiKey.trim() || undefined,
+                api_key: isBedrock ? undefined : apiKey.trim() || undefined,
+                region: isBedrock ? region.trim() : undefined,
             })
+            _connectorCache = saved
             setConnector(saved)
             setApiKey('')
             setMessage('Saved.')
         } catch {
-            setMessage('Could not save the connector. Check the key and try again.')
+            setMessage(
+                isBedrock
+                    ? 'Could not save the connector. Check the region and try again.'
+                    : 'Could not save the connector. Check the key and try again.',
+            )
         } finally {
             setSaving(false)
         }
@@ -93,9 +122,14 @@ export function AIAssistantTab() {
         setTesting(true)
         setTestResult(null)
         try {
-            const result = apiKey.trim()
-                ? await testLLMConnector({ provider, api_key: apiKey.trim() })
-                : await testLLMConnector()
+            let result
+            if (isBedrock) {
+                result = await testLLMConnector({ provider, region: region.trim() || undefined })
+            } else if (apiKey.trim()) {
+                result = await testLLMConnector({ provider, api_key: apiKey.trim() })
+            } else {
+                result = await testLLMConnector()
+            }
             setTestResult(result)
         } catch {
             setTestResult({ ok: false, detail: 'Test request failed.' })
@@ -108,8 +142,11 @@ export function AIAssistantTab() {
         setSaving(true)
         try {
             await deleteLLMConnector()
-            setConnector({ provider: null, model: null, enabled: false, has_key: false })
+            const cleared: LLMConnector = { provider: null, model: null, region: null, enabled: false, has_key: false }
+            _connectorCache = cleared
+            setConnector(cleared)
             setApiKey('')
+            setRegion('')
             setTestResult(null)
             setMessage('Connector removed.')
         } catch {
@@ -121,21 +158,10 @@ export function AIAssistantTab() {
 
     return (
         <>
-            <header className="mb-10">
-                <div
-                    className="h-1 w-16 mb-5 rounded-full opacity-80"
-                    style={{
-                        background: 'repeating-linear-gradient(-45deg, #FF6363, #FF6363 4px, transparent 4px, transparent 8px)',
-                    }}
-                />
-                <h2 className="font-display text-[28px] md:text-[36px] font-bold text-content-primary leading-tight mb-2 tracking-[-0.5px]">
-                    AI Assistant
-                </h2>
-                <p className="text-content-secondary text-sm max-w-2xl leading-relaxed">
-                    Connect your own LLM provider. Your API key is encrypted on the server and never shared.
-                    It powers the upcoming "Explain this emulation" features. You are billed by your provider.
-                </p>
-            </header>
+            <SectionHeader
+                title="AI Assistant"
+                description={'Connect your own LLM provider to power the "Explain this emulation" features. API keys are encrypted on the server and never shared; Amazon Bedrock authenticates through your connected AWS role instead. You are billed by your provider.'}
+            />
 
             {loading ? (
                 <div className="text-content-dim font-mono text-sm">Loading...</div>
@@ -145,11 +171,11 @@ export function AIAssistantTab() {
                         <div className="flex items-center justify-between mb-6">
                             <h3 className="font-display text-lg font-semibold text-content-primary">LLM Connector</h3>
                             <span
-                                className={`font-mono text-[11px] px-2.5 py-1 rounded-full ${hasKey
+                                className={`font-mono text-[11px] px-2.5 py-1 rounded-full ${connected
                                     ? 'text-safe bg-safe-dim'
                                     : 'text-content-dim bg-white/[0.04]'}`}
                             >
-                                {hasKey ? 'Connected' : 'Not connected'}
+                                {connected ? 'Connected' : 'Not connected'}
                             </span>
                         </div>
 
@@ -167,36 +193,101 @@ export function AIAssistantTab() {
                                 </select>
                             </Field>
 
-                            {/* Model */}
+                            {/* Model — a fixed dropdown for key providers; a free-text
+                                field with suggestions for Bedrock, whose valid
+                                inference-profile ids vary by region and account. */}
                             <Field label="Model">
-                                <select
-                                    value={model}
-                                    onChange={(e) => setModel(e.target.value)}
-                                    className="w-full bg-surface-base border border-border rounded-btn px-3 py-2.5 text-sm text-content-primary outline-none focus:border-border-active"
-                                >
-                                    {SUGGESTED_MODELS[provider].map((m) => (
-                                        <option key={m} value={m}>{m}</option>
-                                    ))}
-                                </select>
+                                {isBedrock ? (
+                                    <>
+                                        <input
+                                            type="text"
+                                            list="bedrock-models"
+                                            value={model}
+                                            onChange={(e) => setModel(e.target.value)}
+                                            placeholder="us.anthropic.claude-sonnet-4-6"
+                                            autoComplete="off"
+                                            className="w-full bg-surface-base border border-border rounded-btn px-3 py-2.5 text-sm font-mono text-content-primary placeholder:text-content-dim outline-none focus:border-border-active"
+                                        />
+                                        <datalist id="bedrock-models">
+                                            {SUGGESTED_MODELS.bedrock.map((m) => (
+                                                <option key={m} value={m} />
+                                            ))}
+                                        </datalist>
+                                        <p className="text-content-dim text-xs mt-2">
+                                            Inference-profile id; the prefix must match your region —
+                                            <code className="font-mono text-content-secondary"> us.</code> for US regions,
+                                            <code className="font-mono text-content-secondary"> apac.</code> for ap-south-1,
+                                            <code className="font-mono text-content-secondary"> eu.</code> for EU.
+                                        </p>
+                                    </>
+                                ) : (
+                                    <select
+                                        value={model}
+                                        onChange={(e) => setModel(e.target.value)}
+                                        className="w-full bg-surface-base border border-border rounded-btn px-3 py-2.5 text-sm text-content-primary outline-none focus:border-border-active"
+                                    >
+                                        {SUGGESTED_MODELS[provider].map((m) => (
+                                            <option key={m} value={m}>{m}</option>
+                                        ))}
+                                    </select>
+                                )}
                             </Field>
                         </div>
 
-                        {/* API key */}
-                        <Field label="API Key" className="mt-5">
-                            <input
-                                type="password"
-                                value={apiKey}
-                                onChange={(e) => setApiKey(e.target.value)}
-                                placeholder={hasKey ? `•••• •••• ${connector?.key_hint ?? ''}` : 'sk-... (stored encrypted)'}
-                                autoComplete="off"
-                                className="w-full bg-surface-base border border-border rounded-btn px-3 py-2.5 text-sm font-mono text-content-primary placeholder:text-content-dim outline-none focus:border-border-active"
-                            />
-                            <p className="text-content-dim text-xs mt-2">
-                                {hasKey
-                                    ? 'A key is stored. Enter a new one only to replace it.'
-                                    : 'Your key is encrypted at rest and never returned by the server.'}
-                            </p>
-                        </Field>
+                        {/* Credentials — a key for key providers, a region for Bedrock */}
+                        {isBedrock ? (
+                            <>
+                                <Field label="AWS Region" className="mt-5">
+                                    <input
+                                        type="text"
+                                        value={region}
+                                        onChange={(e) => setRegion(e.target.value)}
+                                        placeholder="us-east-1"
+                                        autoComplete="off"
+                                        className="w-full bg-surface-base border border-border rounded-btn px-3 py-2.5 text-sm font-mono text-content-primary placeholder:text-content-dim outline-none focus:border-border-active"
+                                    />
+                                    <p className="text-content-dim text-xs mt-2">
+                                        Bedrock is region-scoped. Use a region where your models have access enabled.
+                                    </p>
+                                </Field>
+
+                                {/* Cost + IAM disclosure — Bedrock bills the user's own AWS account */}
+                                <div className="mt-5 rounded-btn border border-warning/25 bg-warning-dim p-4">
+                                    <p className="text-warning text-sm font-semibold mb-1.5">Billed to your AWS account</p>
+                                    <p className="text-content-secondary text-xs leading-relaxed">
+                                        Bedrock inference runs under the IAM role MayaTrail assumes, so model usage is
+                                        charged to your connected AWS account — the same one used for simulations.
+                                        Pricing varies by model and region.
+                                    </p>
+                                    <p className="text-content-dim text-xs leading-relaxed mt-2">
+                                        Grant{' '}
+                                        <code className="font-mono text-content-secondary">bedrock:InvokeModelWithResponseStream</code>{' '}
+                                        and{' '}
+                                        <code className="font-mono text-content-secondary">bedrock:ListFoundationModels</code>{' '}
+                                        to the role. Serverless models are enabled by default, but Anthropic Claude needs
+                                        a one-time usage form per AWS account (complete it once in the Bedrock playground)
+                                        before its first use. A passing connection test confirms access to list models,
+                                        not that the chosen model can be invoked.
+                                    </p>
+                                </div>
+                            </>
+                        ) : (
+                            <Field label="API Key" className="mt-5">
+                                <input
+                                    type="password"
+                                    value={apiKey}
+                                    onChange={(e) => setApiKey(e.target.value)}
+                                    placeholder={hasKey ? `•••• •••• ${connector?.key_hint ?? ''}` : 'sk-... (stored encrypted)'}
+                                    autoComplete="off"
+                                    className="w-full bg-surface-base border border-border rounded-btn px-3 py-2.5 text-sm font-mono text-content-primary placeholder:text-content-dim outline-none focus:border-border-active"
+                                />
+                                <p className="text-content-dim text-xs mt-2">
+                                    {hasKey
+                                        ? 'A key is stored. Enter a new one only to replace it.'
+                                        : 'Your key is encrypted at rest and never returned by the server.'}
+                                </p>
+                            </Field>
+                        )}
 
                         {/* Enabled toggle */}
                         <div className="flex items-center justify-between mt-6 pt-6 border-t border-white/[0.05]">
@@ -235,7 +326,7 @@ export function AIAssistantTab() {
                     <div className="flex items-center justify-between gap-4 border-t border-white/[0.05] pt-7">
                         <button
                             onClick={handleRemove}
-                            disabled={!hasKey || saving}
+                            disabled={!connected || saving}
                             className="text-sm font-medium text-danger hover:opacity-70 transition-opacity bg-transparent border-none cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                         >
                             Remove connector
@@ -243,7 +334,7 @@ export function AIAssistantTab() {
                         <div className="flex items-center gap-3">
                             <button
                                 onClick={handleTest}
-                                disabled={testing || (!hasKey && !apiKey.trim())}
+                                disabled={testing || !canTest}
                                 className="px-4 py-2 rounded-btn text-sm font-medium text-content-primary bg-transparent border border-border hover:bg-white/[0.05] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                             >
                                 {testing ? 'Testing...' : 'Test connection'}
