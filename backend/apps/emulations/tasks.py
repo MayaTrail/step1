@@ -94,19 +94,35 @@ def _assume_user_role(user) -> dict[str, str]:
     Credentials are never stored in the database — they are generated per-task
     invocation and discarded once the task completes.
 
+    If aws_role_arn is not set on the user, falls back to the platform-level
+    credentials already present in the environment (dev / direct-cred scenario).
+
     Args:
-        user: Authenticated User instance with a valid aws_role_arn.
+        user: Authenticated User instance with an optional aws_role_arn.
 
     Returns:
-        Dict with keys: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
-        AWS_SESSION_TOKEN.
+        Dict with keys: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and
+        optionally AWS_SESSION_TOKEN.
 
     Raises:
         botocore.exceptions.ClientError if the role cannot be assumed.
     """
+    role_arn = getattr(user, "aws_role_arn", None)
+    if not role_arn:
+        # No role configured — use the platform credentials directly.
+        creds: dict[str, str] = {
+            "AWS_ACCESS_KEY_ID": os.environ.get("AWS_ACCESS_KEY_ID", ""),
+            "AWS_SECRET_ACCESS_KEY": os.environ.get("AWS_SECRET_ACCESS_KEY", ""),
+        }
+        session_token = os.environ.get("AWS_SESSION_TOKEN", "")
+        if session_token:
+            creds["AWS_SESSION_TOKEN"] = session_token
+        logger.info("No aws_role_arn for user %s — using platform credentials", user.id)
+        return creds
+
     sts = boto3.client("sts")
     assumed = sts.assume_role(
-        RoleArn=user.aws_role_arn,
+        RoleArn=role_arn,
         RoleSessionName=f"mayatrail-emulation-{user.id}",
         DurationSeconds=3600,
     )

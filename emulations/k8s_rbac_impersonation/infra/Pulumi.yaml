@@ -1,0 +1,3 @@
+name: k8s_rbac_impersonation-infra
+runtime: python
+description: RBAC Impersonation Emulation Infrastructure

@@ -29,7 +29,7 @@ MANIFEST = {
         },
         {
             "phase": 2,
-            "name": "Host Filesystem Read from Pod",
+            "name": "PersistentVolumeClaim Binding",
             "techniques": [{"id": "T1611", "name": "Escape to Host"}],
         },
         {

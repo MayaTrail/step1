@@ -1,0 +1,3 @@
+name: k8s_writable_log_escape-infra
+runtime: python
+description: Writable Log Escape Emulation Infrastructure
