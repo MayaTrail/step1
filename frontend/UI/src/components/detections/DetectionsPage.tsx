@@ -1,9 +1,7 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useDetections } from '@/hooks/usePlatformData'
-import { getPlatformMeta } from '@/data'
 import type { PlatformId } from '@/types'
-import { Breadcrumb } from '@/components/ui/Breadcrumb'
 import { CodeBlock } from '@/components/ui/CodeBlock'
 import { EmptyState } from '@/components/ui/EmptyState'
 
@@ -12,11 +10,9 @@ type RuleFormat = 'sigma' | 'kql'
 export function DetectionsPage() {
   const { platformId, emulationId } = useParams<{ platformId: string; emulationId: string }>()
   const pid = platformId as PlatformId
-  const meta = getPlatformMeta(pid)
   const { data: detections, loading } = useDetections(emulationId)
   const [activeFormat, setActiveFormat] = useState<RuleFormat>('sigma')
 
-  const platformLabel = meta?.label ?? platformId?.toUpperCase() ?? ''
   const emulationLabel = detections?.displayName ?? emulationId?.toUpperCase() ?? ''
 
   const rules = activeFormat === 'sigma' ? (detections?.sigma ?? []) : (detections?.kql ?? [])
@@ -37,13 +33,6 @@ export function DetectionsPage() {
 
   return (
     <div>
-      <Breadcrumb items={[
-        { label: 'Home', to: '/' },
-        { label: `${platformLabel} · APT Emulations`, to: `/${pid}/emulations` },
-        ...(emulationId ? [{ label: emulationLabel, to: `/${pid}/emulations/${emulationId}` }] : []),
-        { label: 'Detections' },
-      ]} />
-
       {/* Header */}
       <div className="flex items-start justify-between mb-6 gap-4">
         <div>

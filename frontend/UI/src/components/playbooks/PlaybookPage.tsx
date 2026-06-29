@@ -3,7 +3,6 @@ import { useParams, Link } from 'react-router-dom'
 import { usePlaybook } from '@/hooks/usePlatformData'
 import { getPlatformMeta } from '@/data'
 import type { PlatformId } from '@/types'
-import { Breadcrumb } from '@/components/ui/Breadcrumb'
 import { CodeBlock } from '@/components/ui/CodeBlock'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { RunEmulationModal } from '@/components/modals/RunEmulationModal'
@@ -27,13 +26,6 @@ export function PlaybookPage() {
 
   return (
     <div>
-      <Breadcrumb items={[
-        { label: 'Home', to: '/' },
-        { label: `${platformLabel} · APT Emulations`, to: `/${pid}/emulations` },
-        ...(emulationId ? [{ label: emulationLabel, to: `/${pid}/emulations/${emulationId}` }] : []),
-        { label: 'Playbook' },
-      ]} />
-
       {/* Header */}
       <div className="flex items-start justify-between mb-6 gap-4">
         <div>

@@ -12,7 +12,6 @@ import {
     IconShield,
     IconCloud,
     IconCopy,
-    IconPencil,
     IconLogout,
     IconFlask,
     IconClock,
@@ -21,11 +20,11 @@ import {
 } from '@/components/ui/Icons'
 
 /**
- * ProfilePage — operator-console layout.
+ * ProfilePage — single-column centered layout.
  *
- * A sticky identity rail (avatar, name, account ID, sign out) sits beside a
- * scrollable detail column whose hero is the AWS connection state, followed by
- * the identity definition grid and account-access links. Presentation only:
+ * A prominent identity header (avatar, name, status badges) sits above
+ * a vertical stack of information cards: Account Overview, AWS Connection,
+ * Security & Access, and a sign-out danger zone. Presentation only:
  * data comes from fetchProfile + useAuth, demo expiry from useDemoCountdown.
  */
 export function ProfilePage() {
@@ -103,91 +102,148 @@ export function ProfilePage() {
             .join('')
             .toUpperCase()
             .slice(0, 2)
+    const authMethod = profile?.auth_method === 'google_sso' ? 'Google SSO' : 'Credentials'
 
     return (
-        <div className="max-w-6xl mx-auto py-8 px-4 animate-fadeIn">
-            <div className="flex flex-col lg:flex-row gap-6">
-                {/* ── Identity rail ── */}
-                <aside className="lg:w-72 lg:shrink-0 lg:sticky lg:top-6 lg:self-start">
-                    <Card className="flex flex-col p-6">
-                        {/* Avatar */}
-                        <div className="relative self-center mb-5">
-                            <div className="w-24 h-24 rounded-card bg-key shadow-button flex items-center justify-center font-display text-3xl font-semibold text-content-primary">
-                                {initials}
+        <div className="max-w-3xl mx-auto py-8 px-4 animate-fadeIn">
+            <div className="flex flex-col gap-6">
+                {/* ── Profile header hero ── */}
+                <ProfileHeader
+                    initials={initials}
+                    displayName={displayName}
+                    username={username}
+                    memberSince={memberSince}
+                    authMethod={authMethod}
+                    user={user}
+                />
+
+                {/* ── Account overview ── */}
+                <Card className="p-6">
+                    <CardEyebrow>Account overview</CardEyebrow>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+                        {profile?.id && (
+                            <div className="sm:col-span-2">
+                                <AccountId id={String(profile.id)} />
                             </div>
-                            <button
-                                type="button"
-                                aria-label="Edit avatar"
-                                className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full bg-surface-elevated border border-border flex items-center justify-center text-content-secondary transition-opacity hover:opacity-70"
-                            >
-                                <IconPencil size={13} />
-                            </button>
-                        </div>
+                        )}
+                        <Field label="Email address" value={profile?.email ?? '—'} />
+                        <Field label="Username" value={username} />
+                        <Field label="Auth method" value={authMethod} />
+                        <Field label="Member since" value={memberSince} />
+                    </div>
+                </Card>
 
-                        {/* Name + handle */}
-                        <h1 className="text-center font-display text-lg font-semibold text-content-primary leading-tight">
-                            {displayName}
-                        </h1>
-                        <p className="text-center font-mono text-xs text-content-dim mt-1">
-                            @{username}
-                        </p>
+                {/* ── Connection mode ── */}
+                <ConnectionModeCard
+                    user={user}
+                    profile={profile}
+                    onUpgrade={() => navigate('/connector?upgrade=1')}
+                />
 
-                        <div className="h-px bg-border my-5" />
-
-                        {/* Account ID */}
-                        {profile?.id && <AccountId id={String(profile.id)} />}
-
-                        {/* Sign out */}
-                        <Button
-                            variant="danger"
-                            size="md"
-                            onClick={logout}
-                            icon={<IconLogout size={16} />}
-                            className="mt-6 w-full"
-                        >
-                            Sign out
-                        </Button>
-                    </Card>
-                </aside>
-
-                {/* ── Detail column ── */}
-                <div className="flex-1 min-w-0 flex flex-col gap-6">
-                    <ConnectionModeCard
-                        user={user}
-                        profile={profile}
-                        onUpgrade={() => navigate('/connector?upgrade=1')}
+                {/* ── Security & access ── */}
+                <Card className="p-2">
+                    <div className="px-4 pt-3 pb-1">
+                        <CardEyebrow>Security & access</CardEyebrow>
+                    </div>
+                    <AccessRow
+                        icon={<IconGear size={18} />}
+                        label="Account settings"
+                        onClick={() => navigate('/settings')}
                     />
+                    <AccessRow
+                        icon={<IconShield size={18} />}
+                        label="Privacy & security"
+                        onClick={() => navigate('/settings')}
+                    />
+                </Card>
 
-                    {/* Identity */}
-                    <Card className="p-6">
-                        <CardEyebrow>Identity</CardEyebrow>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
-                            <Field label="Full name" value={displayName} />
-                            <Field label="Email address" value={profile?.email ?? '—'} />
-                            <Field label="Username" value={username} />
-                            <Field label="Member since" value={memberSince} />
-                        </div>
-                    </Card>
-
-                    {/* Access */}
-                    <Card className="p-2">
-                        <div className="px-4 pt-3 pb-1">
-                            <CardEyebrow>Access</CardEyebrow>
-                        </div>
-                        <AccessRow
-                            icon={<IconGear size={18} />}
-                            label="Account settings"
-                            onClick={() => navigate('/settings')}
-                        />
-                        <AccessRow
-                            icon={<IconShield size={18} />}
-                            label="Privacy & security"
-                            onClick={() => navigate('/settings')}
-                        />
-                    </Card>
-                </div>
+                {/* ── Danger zone ── */}
+                <Card accent="red" className="p-6">
+                    <CardEyebrow>Danger zone</CardEyebrow>
+                    <p className="text-sm text-content-secondary mb-4">
+                        Sign out of your current session. You will need to log in again to access MayaTrail.
+                    </p>
+                    <Button
+                        variant="danger"
+                        size="md"
+                        onClick={logout}
+                        icon={<IconLogout size={16} />}
+                    >
+                        Sign out
+                    </Button>
+                </Card>
             </div>
         </div>
+    )
+}
+
+/* ── Profile header hero ── */
+function ProfileHeader({
+    initials,
+    displayName,
+    username,
+    memberSince,
+    authMethod,
+    user,
+}: {
+    initials: string
+    displayName: string
+    username: string
+    memberSince: string
+    authMethod: string
+    user: ReturnType<typeof useAuth>['user']
+}) {
+    /** Derive connection badge from user state. */
+    const connectionBadge = (() => {
+        if (!user) return null
+        if (user.isVerified) {
+            return { label: 'AWS Connected', tone: 'green' as const }
+        }
+        if (user.isDemo) {
+            return { label: 'Demo Active', tone: 'yellow' as const }
+        }
+        return { label: 'Not Connected', tone: 'neutral' as const }
+    })()
+
+    return (
+        <Card className="p-8">
+            <div className="flex flex-col items-center text-center">
+                {/* Avatar with warm glow */}
+                <div className="relative mb-5">
+                    <div
+                        className="absolute inset-0 rounded-full opacity-40 blur-2xl"
+                        style={{ background: 'rgba(215, 201, 175, 0.05)', transform: 'scale(1.6)' }}
+                        aria-hidden="true"
+                    />
+                    <div className="relative w-[120px] h-[120px] rounded-full bg-key shadow-button flex items-center justify-center font-display text-4xl font-semibold text-content-primary">
+                        {initials}
+                    </div>
+                </div>
+
+                {/* Name + handle */}
+                <h1 className="font-display text-2xl font-semibold text-content-primary leading-tight">
+                    {displayName}
+                </h1>
+                <p className="font-mono text-xs text-content-dim mt-1">
+                    @{username}
+                </p>
+                <p className="font-mono text-2xs text-content-muted mt-1 tracking-body">
+                    Member since {memberSince}
+                </p>
+
+                {/* Status badges */}
+                <div className="flex items-center gap-2 mt-4">
+                    {connectionBadge && (
+                        <Badge tone={connectionBadge.tone} mono dot>
+                            {connectionBadge.label}
+                        </Badge>
+                    )}
+                    <Badge tone="neutral" mono>
+                        {authMethod}
+                    </Badge>
+                </div>
+            </div>
+        </Card>
     )
 }
 

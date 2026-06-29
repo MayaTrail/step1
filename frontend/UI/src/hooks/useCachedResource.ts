@@ -20,10 +20,18 @@ import { useEffect, useRef, useState } from 'react'
  * @param key     Stable cache key encoding all request params (e.g. the filters),
  *                or `null` to skip fetching (e.g. nothing selected).
  * @param fetcher Returns the resource for the current key.
+ * @param options Optional `{ pollMs }` to silently revalidate on an interval
+ *                (used by live views like Active Runs). Polling never toggles
+ *                `loading`, so the visible content never flashes.
  */
 const _cache = new Map<string, unknown>()
 
-export function useCachedResource<T>(key: string | null, fetcher: () => Promise<T>) {
+export function useCachedResource<T>(
+    key: string | null,
+    fetcher: () => Promise<T>,
+    options?: { pollMs?: number },
+) {
+    const pollMs = options?.pollMs
     const seeded = key !== null && _cache.has(key)
     const [data, setData] = useState<T | undefined>(() => (seeded ? (_cache.get(key as string) as T) : undefined))
     const [loading, setLoading] = useState<boolean>(() => key !== null && !seeded)
@@ -42,22 +50,36 @@ export function useCachedResource<T>(key: string | null, fetcher: () => Promise<
         }
         const k = key  // narrowed to string (null handled above)
         let active = true
+
+        // Revalidate without blanking the screen; loading is cleared on settle.
+        const revalidate = () => {
+            fetcher()
+                .then((d) => {
+                    if (!active) return
+                    _cache.set(k, d)
+                    setData(d)
+                })
+                .catch(() => active && setFailed(true))
+                .finally(() => active && setLoading(false))
+        }
+
         if (dataRef.current === undefined) setLoading(true)
         setFailed(false)
-        fetcher()
-            .then((d) => {
-                if (!active) return
-                _cache.set(k, d)
-                setData(d)
-            })
-            .catch(() => active && setFailed(true))
-            .finally(() => active && setLoading(false))
+        revalidate()
+
+        if (!pollMs) {
+            return () => {
+                active = false
+            }
+        }
+        const id = setInterval(revalidate, pollMs)
         return () => {
             active = false
+            clearInterval(id)
         }
         // fetcher is recreated each render; the key encodes its inputs.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [key])
+    }, [key, pollMs])
 
     return { data, loading, failed }
 }

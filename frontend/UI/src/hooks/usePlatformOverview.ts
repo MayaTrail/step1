@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
 import type { PlatformId } from '@/types'
 import type { PlatformCoverageRow, MitreSummary } from '@/types/metrics'
 import { getPlatformCoverage, getMitreCoverage } from '@/services/metrics.service'
+import { useCachedResource } from './useCachedResource'
 
 interface OverviewState {
   /** Content-depth counts for this platform (emulations/playbooks/detections). */
@@ -16,31 +16,23 @@ interface OverviewState {
  *
  * Combines two existing, platform-aware dashboard endpoints — platform-coverage
  * (content depth) and mitre-coverage (technique coverage) — into a single state.
- * Both already return zero-filled data for platforms without content, so empty
- * platforms render naturally.
+ * Backed by useCachedResource, so switching between platforms shows the last
+ * figures immediately and revalidates in the background instead of flashing a
+ * loading state on every change. Both endpoints already return zero-filled data
+ * for platforms without content, so empty platforms render naturally.
  */
 export function usePlatformOverview(platformId: PlatformId): OverviewState {
-  const [state, setState] = useState<OverviewState>({ coverage: null, mitre: null, loading: true })
+  const { data, loading } = useCachedResource<Omit<OverviewState, 'loading'>>(
+    `platform-overview:${platformId}`,
+    async () => {
+      const [coverage, mitre] = await Promise.all([
+        getPlatformCoverage(platformId),
+        getMitreCoverage({ platform: platformId }),
+      ])
+      const row = coverage.platforms.find((p) => p.platform === platformId) ?? null
+      return { coverage: row, mitre: mitre.summary }
+    },
+  )
 
-  useEffect(() => {
-    let cancelled = false
-    setState((s) => ({ ...s, loading: true }))
-
-    Promise.all([
-      getPlatformCoverage(platformId),
-      getMitreCoverage({ platform: platformId }),
-    ])
-      .then(([coverage, mitre]) => {
-        if (cancelled) return
-        const row = coverage.platforms.find((p) => p.platform === platformId) ?? null
-        setState({ coverage: row, mitre: mitre.summary, loading: false })
-      })
-      .catch(() => {
-        if (!cancelled) setState({ coverage: null, mitre: null, loading: false })
-      })
-
-    return () => { cancelled = true }
-  }, [platformId])
-
-  return state
+  return { coverage: data?.coverage ?? null, mitre: data?.mitre ?? null, loading }
 }

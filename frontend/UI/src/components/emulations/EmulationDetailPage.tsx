@@ -3,17 +3,16 @@ import { useParams, Link } from 'react-router-dom'
 import { useEmulations } from '@/hooks/usePlatformData'
 import { getPlatformMeta } from '@/data'
 import type { PlatformId } from '@/types'
-import { Breadcrumb } from '@/components/ui/Breadcrumb'
 import { ThreatOriginBadge } from '@/components/ui/ThreatOriginBadge'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { RunEmulationModal } from '@/components/modals/RunEmulationModal'
 import { OverviewTab } from './OverviewTab'
 import { AttackPathTab } from './AttackPathTab'
 import { MitreMappingTab } from './MitreMappingTab'
-import { ReferencesTab } from './ReferencesTab'
+import { ExplainPanel } from './ExplainPanel'
 import { PastFindingsTab } from './PastFindingsTab'
 
-type DetailTab = 'overview' | 'path' | 'mitre' | 'refs' | 'findings'
+type DetailTab = 'overview' | 'path' | 'mitre' | 'explain' | 'findings'
 
 export function EmulationDetailPage() {
   const { platformId, emulationId } = useParams<{ platformId: string; emulationId: string }>()
@@ -35,12 +34,6 @@ export function EmulationDetailPage() {
 
   return (
     <div>
-      <Breadcrumb items={[
-        { label: 'Home', to: '/' },
-        { label: `${platformLabel} \u00B7 APT Emulations`, to: `/${pid}/emulations` },
-        { label: em.name },
-      ]} />
-
       {/* Header */}
       <div className="flex items-start justify-between mb-6 gap-4">
         <div>
@@ -89,7 +82,7 @@ export function EmulationDetailPage() {
 
       {/* Tabs */}
       <div className="flex border-b border-border mb-5">
-        {(['overview', 'path', 'mitre', 'refs', 'findings'] as const).map((tab) => (
+        {(['overview', 'path', 'mitre', 'explain', 'findings'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -99,7 +92,7 @@ export function EmulationDetailPage() {
                 : 'text-content-dim border-b-transparent hover:text-content-secondary'
               }`}
           >
-            {tab === 'overview' ? 'Overview' : tab === 'path' ? 'Attack Path' : tab === 'mitre' ? 'MITRE Mapping' : tab === 'refs' ? 'References' : 'Past Findings'}
+            {tab === 'overview' ? 'Overview' : tab === 'path' ? 'Attack Path' : tab === 'mitre' ? 'MITRE Mapping' : tab === 'explain' ? 'Ask AI' : 'Past Findings'}
           </button>
         ))}
       </div>
@@ -111,13 +104,13 @@ export function EmulationDetailPage() {
           platformLabel={platformLabel}
           onRun={() => setShowRunModal(true)}
           onOpenAttackPath={() => setActiveTab('path')}
-          onOpenReferences={() => setActiveTab('refs')}
+          onOpenReferences={() => setActiveTab('explain')}
           playbookHref={`/${pid}/emulations/${em.id}/playbook`}
         />
       )}
       {activeTab === 'path' && <AttackPathTab emulation={em} />}
       {activeTab === 'mitre' && <MitreMappingTab emulation={em} platformLabel={platformLabel} />}
-      {activeTab === 'refs' && <ReferencesTab emulation={em} />}
+      {activeTab === 'explain' && <ExplainPanel emulation={em} />}
       {activeTab === 'findings' && (
         <PastFindingsTab emulation={em} onRun={() => setShowRunModal(true)} />
       )}

@@ -53,6 +53,7 @@ LOCAL_APPS = [
     "apps.emulations",
     "apps.logs",
     "apps.metrics",
+    "apps.ai",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -144,6 +145,13 @@ REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
     ],
+    # Per-scope throttles. 'ai_test' guards the LLM connection-test endpoint so
+    # it cannot be used to probe provider key validity at volume; 'ai_chat'
+    # bounds how often a user can spend their provider key on chat turns.
+    "DEFAULT_THROTTLE_RATES": {
+        "ai_test": "20/min",
+        "ai_chat": "60/min",
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -240,3 +248,13 @@ OTP_MAX_ATTEMPTS = config("OTP_MAX_ATTEMPTS", default=5, cast=int)
 # middleware blocks all protected API calls until the user connects AWS.
 
 DEMO_DURATION_MINUTES = config("DEMO_DURATION_MINUTES", default=5, cast=int)
+
+# ---------------------------------------------------------------------------
+# AI assistant (bring-your-own-key LLM connector)
+# ---------------------------------------------------------------------------
+# Fernet key used to encrypt stored provider API keys at rest. Generate with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Leave empty to disable AI key storage — the connector endpoints then return a
+# clear 503 instead of breaking app startup.
+
+LLM_FERNET_KEY = config("LLM_FERNET_KEY", default="")

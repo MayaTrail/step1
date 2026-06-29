@@ -79,6 +79,48 @@ export interface Emulation {
   schemaVersion?: number
 }
 
+/* ── AI assistant connector (mirrors backend apps.ai) ── */
+
+export type LLMProvider = 'openai' | 'anthropic' | 'bedrock'
+
+/** Masked connector shape returned by GET /api/ai/connector/. Never carries the key. */
+export interface LLMConnector {
+  provider: LLMProvider | null
+  model: string | null
+  /** AWS region for the bedrock provider; empty/null for key-based providers. */
+  region?: string | null
+  enabled: boolean
+  has_key: boolean
+  /** Last 4 chars of the stored key, for masked display. */
+  key_hint?: string
+  updated_at?: string
+}
+
+export interface LLMConnectorTestResult {
+  ok: boolean
+  detail: string
+}
+
+export type ChatRole = 'user' | 'assistant'
+
+export interface ChatMessage {
+  id: string
+  role: ChatRole
+  content: string
+  created_at: string
+}
+
+/** A persisted multi-turn conversation about one emulation (mirrors apps.ai). */
+export interface Conversation {
+  id: string
+  emulation_type: string
+  title: string
+  created_at: string
+  updated_at: string
+  /** Present on the detail fetch; omitted from list responses. */
+  messages?: ChatMessage[]
+}
+
 export interface DetectionRule {
   title: string
   code: string

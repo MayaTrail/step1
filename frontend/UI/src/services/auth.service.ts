@@ -49,6 +49,7 @@ export interface UserProfile {
   demo_activated_at: string | null
   demo_used: boolean
   demo_expires_at: string | null
+  auth_method: string
 }
 
 const TOKEN_KEY = 'mayatrail_token'
