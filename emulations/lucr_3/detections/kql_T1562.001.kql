@@ -1,0 +1,25 @@
+// T1562.001 - Impair Defenses: Disable or Modify Tools (GuardDuty)
+// Detects GuardDuty detector disable - LUCR-3 pre-exfiltration defense evasion
+// Log source: AWSCloudTrail table in Microsoft Sentinel
+AWSCloudTrail
+| where EventSource == "guardduty.amazonaws.com"
+| where EventName in ("UpdateDetector", "DeleteDetector")
+| where EventName != "UpdateDetector" or tostring(parse_json(RequestParameters).enable) == "false"
+| where not(UserIdentityArn has_any (":role/TerraformRole", ":role/InfraDestroyRole"))
+| extend
+    Actor           = UserIdentityArn,
+    DetectorId      = tostring(parse_json(RequestParameters).detectorId),
+    Action          = EventName,
+    EnabledFlag     = tostring(parse_json(RequestParameters).enable),
+    Region          = AWSRegion
+| project
+    TimeGenerated,
+    Actor,
+    Action,
+    DetectorId,
+    EnabledFlag,
+    SourceIpAddress,
+    UserAgent,
+    Region,
+    ErrorCode
+| sort by TimeGenerated desc

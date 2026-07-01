@@ -1,0 +1,21 @@
+// T1070.008 - Indicator Removal: Clear Mailbox Data
+// Detects bulk email deletion via Microsoft Graph - LUCR-3 post-exfil forensic cleanup
+// Log source: OfficeActivity (M365 Unified Audit Log via Microsoft Sentinel connector)
+OfficeActivity
+| where Operation in ("HardDelete", "SoftDelete")
+| where OfficeWorkload == "Exchange"
+| where not(ClientInfoString has_any ("ManagedFolderAssistant", "RetentionPolicy", "eDiscovery"))
+| summarize
+    DeleteCount     = count(),
+    Operations      = make_set(Operation),
+    FolderPaths     = make_set(OfficeObjectId)
+    by bin(TimeGenerated, 5m), UserId, ClientIP
+| where DeleteCount > 10
+| project
+    TimeGenerated,
+    UserId,
+    ClientIP,
+    DeleteCount,
+    Operations,
+    FolderPaths
+| sort by DeleteCount desc

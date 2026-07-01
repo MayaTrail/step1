@@ -1,0 +1,57 @@
+// FILE: kql_t1098.001.kql
+// T1098.001 Account Manipulation: Additional Cloud Credentials - AMBERSQUID Multi-Role Assumption
+// Detects an IAMUser assuming 2+ distinct roles within a 2-minute window (parallel session
+// establishment). Elevates to CRITICAL when an IAMUser assumes a role that is normally
+// assumed only by AWS services (ecsTaskExecutionRole expected assumedBy ecs-tasks.amazonaws.com).
+
+// Rule 1: IAMUser assumes ecsTaskExecutionRole (should only be assumed by ECS service)
+let AbnormalECSRoleAssumption = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "sts.amazonaws.com"
+| where EventName == "AssumeRole"
+| where UserIdentityType == "IAMUser"
+| where RequestParameters contains "ecsTaskExecutionRole"
+| extend RoleArn = tostring(parse_json(RequestParameters).roleArn)
+| extend RoleSessionName = tostring(parse_json(RequestParameters).roleSessionName)
+| project TimeGenerated, EventName, UserIdentityArn, UserIdentityType, RoleArn, RoleSessionName,
+          SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "CRITICAL"
+| extend AlertReason = "IAMUser assumed ecsTaskExecutionRole - expected assumedBy: ecs-tasks.amazonaws.com";
+
+// Rule 2: AssumeRole burst - 2+ distinct roles within 2 minutes from same IAMUser
+let RoleAssumptionBurst = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "sts.amazonaws.com"
+| where EventName == "AssumeRole"
+| where UserIdentityType == "IAMUser"
+| where UserAgent !contains "console.aws.amazon.com"
+| extend RoleArn = tostring(parse_json(RequestParameters).roleArn)
+| summarize
+    RoleCount = dcount(RoleArn),
+    Roles = make_set(RoleArn),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated)
+  by UserIdentityArn, SourceIpAddress, bin(TimeGenerated, 2m), RecipientAccountId, AWSRegion
+| where RoleCount >= 2
+| extend DwellSeconds = datetime_diff('second', LastSeen, FirstSeen)
+| extend Severity = iff(RoleCount >= 3, "HIGH", "MEDIUM")
+| extend AlertReason = strcat("IAMUser assumed ", tostring(RoleCount), " distinct roles within 2 minutes")
+| project FirstSeen, LastSeen, DwellSeconds, Severity, AlertReason, RoleCount, Roles,
+          UserIdentityArn, SourceIpAddress, AWSRegion, RecipientAccountId;
+
+// Rule 3: Known AMBERSQUID IOC role names assumed via STS
+let IOCRoleAssumption = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "sts.amazonaws.com"
+| where EventName == "AssumeRole"
+| where RequestParameters has_any ("AWSCodeCommit-Role", "sugo-role")
+| extend RoleArn = tostring(parse_json(RequestParameters).roleArn)
+| project TimeGenerated, EventName, UserIdentityArn, UserIdentityType, RoleArn,
+          SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "HIGH"
+| extend AlertReason = "AMBERSQUID IOC role name assumed via STS";
+
+// RoleAssumptionBurst included via kind=outer to preserve burst-specific columns
+union kind=outer AbnormalECSRoleAssumption, IOCRoleAssumption, RoleAssumptionBurst
+| extend TimeGenerated = coalesce(TimeGenerated, FirstSeen)
+| sort by TimeGenerated desc

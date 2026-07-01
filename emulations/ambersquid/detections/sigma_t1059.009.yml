@@ -1,0 +1,65 @@
+# FILE: sigma_t1059.009.yml
+title: AMBERSQUID - Multi-Service AWS API Burst for Miner Infrastructure Provisioning
+id: c2f8e4b3-7a1d-9c5f-b8e2-4d7a3c9f1e6b
+status: experimental
+description: >
+  Detects AMBERSQUID's execution phase: using attacker-assumed role sessions to
+  burst-provision miner infrastructure across Amplify, CodeCommit, CodeBuild, ECS,
+  and SageMaker within minutes. Each individual service call is low-signal; the
+  burst across multiple services from assumed role sessions created moments prior
+  is the definitive indicator. Individual high-fidelity signals include SageMaker
+  notebook creation from non-console sessions and Amplify app creation with a
+  CodeCommit source URL.
+  AMBERSQUID scale: 5 Amplify apps per region x 8 regions, 3 CodeBuild projects
+  per region, 8 SageMaker ml.t3.2xlarge notebooks x 4 regions, 30 Fargate tasks
+  x 16 regions.
+references:
+    - https://attack.mitre.org/techniques/T1059/009/
+    - https://unit42.paloaltonetworks.com/ambersquid/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.execution
+    - attack.t1059.009
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_sagemaker:
+        eventSource: sagemaker.amazonaws.com
+        eventName: CreateNotebookInstance
+        userIdentity.type: AssumedRole
+    selection_amplify_codecommit:
+        eventSource: amplify.amazonaws.com
+        eventName: CreateApp
+        requestParameters.repository|contains: 'git-codecommit'
+    selection_codebuild_codecommit:
+        eventSource: codebuild.amazonaws.com
+        eventName: CreateProject
+        requestParameters|contains:
+            - '"type":"CODECOMMIT"'
+            - 'git-codecommit'
+    selection_ecs_cluster:
+        eventSource: ecs.amazonaws.com
+        eventName: CreateCluster
+        userIdentity.type: AssumedRole
+    filter_console:
+        userAgent|contains:
+            - 'console.aws.amazon.com'
+            - 'AWSConsole'
+    filter_sagemaker_service:
+        userIdentity.invokedBy: sagemaker.amazonaws.com
+    condition: >
+      (selection_sagemaker or selection_amplify_codecommit or
+       selection_codebuild_codecommit or selection_ecs_cluster)
+      and not filter_console and not filter_sagemaker_service
+falsepositives:
+    - Data science teams creating SageMaker notebooks via CLI or SDK automation
+    - CI/CD pipelines linking Amplify with CodeCommit for legitimate web app deployments
+    - ECS cluster creation in IaC automation (CDK, Terraform) runs
+level: medium
+# Highest fidelity single-event: CreateNotebookInstance (AssumedRole, non-console)
+# immediately after AssumeRole to sugo-role — near-unique to AMBERSQUID pattern.
+# Time-windowed correlation (5+ services within 10 minutes) escalates to CRITICAL.
+# AMBERSQUID IOC: miner-app (Amplify), miner-build-small (CodeBuild), miner-cluster (ECS),
+# miner-notebook (SageMaker), miner-task (ECS task definition family name).

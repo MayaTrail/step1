@@ -1,0 +1,83 @@
+title: Codefinger - S3 Versioning Suspended to Block Recovery
+id: b2d4f7c1-60e8-4a3b-a6d5-2f8c0b5e7a3d
+status: experimental
+description: |
+  Detects the terminal step of the Codefinger ransomware kill chain: suspending S3 object
+  versioning to eliminate the victim's primary recovery mechanism. After encrypting all
+  objects with an attacker-held SSE-C key and setting an automated deletion lifecycle,
+  the actor calls PutBucketVersioning with Status=Suspended to ensure that version-rollback
+  is no longer possible. This is a critical high-fidelity signal: transitioning a bucket
+  from Enabled to Suspended versioning is rarely performed by legitimate workloads, and
+  NEVER as part of a session that also includes SSE-C PutObject and lifecycle policy
+  creation (T1490 -- Inhibit System Recovery).
+references:
+    - https://attack.mitre.org/techniques/T1490/
+    - https://halcyon.ai/blog/codefinger
+    - https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1490
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_versioning_suspend:
+        eventSource: 's3.amazonaws.com'
+        eventName: 'PutBucketVersioning'
+        requestParameters|contains: 'Suspended'
+    filter_iac:
+        userAgent|contains:
+            - 'terraform'
+            - 'pulumi'
+            - 'cloudformation'
+    filter_service_accounts:
+        userIdentity.principalId|contains:
+            - 'svc-storage-admin'
+            - 'svc-infrastructure'
+    condition: selection_versioning_suspend and not (filter_iac or filter_service_accounts)
+falsepositives:
+    - Infrastructure-as-code pipelines decommissioning versioned buckets as part of approved teardown
+    - Storage cost optimization initiatives disabling versioning on low-value buckets
+    - Mistake by an administrator who intended to enable rather than suspend versioning
+level: critical
+
+---
+title: Codefinger - Bulk DeleteObjectVersion Purging Version History
+id: c3e5a8d2-71f9-4b4c-b7e6-3a9d1c6f8b4e
+status: experimental
+description: |
+  Detects high-volume DeleteObjectVersion (or DeleteObjects with VersionId) calls that
+  permanently remove S3 object versions. In the Codefinger kill chain this follows
+  versioning suspension and is the final act that forecloses all recovery paths: even if
+  an incident responder re-enables versioning, the unencrypted prior versions are gone.
+  Bulk version deletion from a non-native IP using a long-term IAM key, occurring within
+  minutes of versioning suspension, is the definitive terminal signal of this attack chain.
+references:
+    - https://attack.mitre.org/techniques/T1490/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1490
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_delete_version:
+        eventSource: 's3.amazonaws.com'
+        eventName:
+            - 'DeleteObjectVersion'
+            - 'DeleteObjects'
+        requestParameters|contains: 'versionId'
+        userIdentity.type: 'IAMUser'
+    filter_lifecycle_service:
+        # S3 lifecycle-initiated version expiration appears as AWSService, not IAMUser
+        userIdentity.type: 'AWSService'
+    condition: selection_delete_version and not filter_lifecycle_service
+falsepositives:
+    - Authorized data purge workflows that explicitly manage version lifecycle
+    - Object Lock compliance expiration handled by admin scripts
+    - Development environment teardowns removing all object versions as part of cleanup
+level: high

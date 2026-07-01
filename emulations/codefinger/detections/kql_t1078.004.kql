@@ -1,0 +1,72 @@
+// FILE: kql_t1078.004.kql
+// T1078.004 Valid Accounts: Cloud Accounts - Codefinger Credential Validation + Bucket Enumeration
+// Detects stolen IAM key usage: GetCallerIdentity probe followed by ListBuckets recon
+// Platform: AWS CloudTrail -> Microsoft Sentinel AWSCloudTrail table
+
+// --- Query 1: GetCallerIdentity probe by IAM users (high-fidelity attacker signal) ---
+AWSCloudTrail
+| where EventName == "GetCallerIdentity"
+| where EventSource == "sts.amazonaws.com"
+| where UserIdentityType == "IAMUser"
+// Exclude known automation service accounts
+| where UserIdentityUserName !in ("svc-terraform", "svc-cicd", "svc-monitoring")
+| where UserAgent !contains "aws-lambda"
+| where UserAgent !contains "elasticmapreduce"
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityUserName,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    ErrorCode
+| sort by TimeGenerated desc
+
+
+// --- Query 2: ListBuckets from IAM users outside expected business hours ---
+AWSCloudTrail
+| where EventName == "ListBuckets"
+| where EventSource == "s3.amazonaws.com"
+| where UserIdentityType == "IAMUser"
+| where UserIdentityUserName !in ("svc-terraform", "svc-cicd", "svc-backup")
+// Flag calls outside 08:00-18:00 UTC Mon-Fri (adjust to org baseline)
+| extend HourOfDay = datetime_part("Hour", TimeGenerated)
+| extend DayOfWeek = dayofweek(TimeGenerated)
+| where HourOfDay < 8 or HourOfDay > 18 or DayOfWeek == 0d or DayOfWeek == 6d
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityUserName,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    HourOfDay,
+    DayOfWeek
+| sort by TimeGenerated desc
+
+
+// --- Query 3: Correlated kill-chain opener - GetCallerIdentity AND ListBuckets same principal within 10 min ---
+let ProbeEvents = AWSCloudTrail
+    | where EventName == "GetCallerIdentity"
+    | where EventSource == "sts.amazonaws.com"
+    | where UserIdentityType == "IAMUser"
+    | project ProbeTime = TimeGenerated, ProbePrincipal = UserIdentityArn, ProbeIP = SourceIpAddress, ProbeAgent = UserAgent;
+let EnumEvents = AWSCloudTrail
+    | where EventName == "ListBuckets"
+    | where EventSource == "s3.amazonaws.com"
+    | where UserIdentityType == "IAMUser"
+    | project EnumTime = TimeGenerated, EnumPrincipal = UserIdentityArn, EnumIP = SourceIpAddress;
+ProbeEvents
+| join kind=inner EnumEvents on $left.ProbePrincipal == $right.EnumPrincipal
+| where EnumTime > ProbeTime and EnumTime < ProbeTime + 10m
+| project
+    ProbeTime,
+    EnumTime,
+    ProbePrincipal,
+    ProbeIP,
+    EnumIP,
+    ProbeAgent,
+    TimeDeltaSeconds = datetime_diff("second", EnumTime, ProbeTime)
+| sort by ProbeTime desc

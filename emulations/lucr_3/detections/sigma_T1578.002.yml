@@ -1,0 +1,36 @@
+title: LUCR-3 Attacker EC2 Instance Launch Outside Deployment Pipeline
+id: a8d5f1c3-9e7b-4a2d-f0c8-6b4d1e9a3f5c
+status: experimental
+description: >
+  Detects RunInstances events where the launching principal is an IAM user (not a
+  service role) and the launch is not correlated with known deployment pipeline
+  principals. LUCR-3 launches attacker-controlled EC2 instances within victim VPCs
+  as persistent compute footholds and data staging hosts for bulk S3 exfiltration.
+references:
+    - https://attack.mitre.org/techniques/T1578/002/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1578.002
+    - lucr3
+    - scattered_spider
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: 'RunInstances'
+        eventSource: 'ec2.amazonaws.com'
+        userIdentity.type: 'IAMUser'
+    filter_pipeline:
+        userIdentity.arn|contains:
+            - 'CodePipeline'
+            - 'codedeploy'
+            - 'terraform'
+            - 'packer'
+    condition: selection and not filter_pipeline
+falsepositives:
+    - Developers launching ad-hoc instances for testing from their IAM user credentials
+    - Manually triggered launches by ops teams during incident response
+level: high

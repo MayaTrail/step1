@@ -1,0 +1,44 @@
+title: LUCR-3 Cloud Infrastructure Discovery Burst from Federated Credential
+id: f8d4b2e6-3a7c-4f1d-e9b5-6d2a4c8f0b3e
+status: experimental
+description: >
+  Detects rapid multi-service enumeration (STS GetCallerIdentity, IAM ListUsers/
+  ListRoles, EC2 DescribeInstances, DynamoDB ListTables) from a single federated
+  principal within a short window. LUCR-3 performs this burst immediately after
+  pivoting into AWS via SAML to map the blast radius before establishing IAM
+  persistence.
+references:
+    - https://attack.mitre.org/techniques/T1580/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1580
+    - lucr3
+    - scattered_spider
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName:
+            - 'GetCallerIdentity'
+            - 'ListUsers'
+            - 'ListRoles'
+            - 'DescribeInstances'
+            - 'ListTables'
+        userIdentity.type: 'AssumedRole'
+    filter_automation:
+        userIdentity.arn|contains:
+            - ':role/aws-service-role/'
+            - ':role/AWSServiceRole'
+        userAgent|contains:
+            - 'Terraform'
+            - 'aws-cdk'
+    timeframe: 5m
+    condition: selection and not filter_automation | count() by userIdentity.arn > 4
+falsepositives:
+    - Cloud Security Posture Management (CSPM) tools such as Wiz or Orca performing asset discovery
+    - Infrastructure-as-code pipelines running multi-service describe calls
+    - AWS Config recorder events
+level: medium

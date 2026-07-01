@@ -1,0 +1,79 @@
+// FILE: kql_t1580.kql
+// T1580 Cloud Infrastructure Discovery - AMBERSQUID Infrastructure Enumeration and Canary Access
+// Four correlated detection patterns: mass IAM enumeration, Terraform state theft (canary),
+// SecretsManager canary access, and combined cross-service discovery burst.
+
+// Rule 1: Terraform state file access immediately preceded by ListBuckets (canary trigger)
+let ListBuckets = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "s3.amazonaws.com"
+| where EventName == "ListBuckets"
+| where UserAgent !contains "console.aws.amazon.com"
+| project ListBucketsTime = TimeGenerated, UserIdentityArn, SourceIpAddress, RecipientAccountId;
+
+let TfstateAccess = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "s3.amazonaws.com"
+| where EventName == "GetObject"
+| where RequestParameters contains "tfstate"
+| extend BucketName = tostring(parse_json(RequestParameters).bucketName)
+| extend ObjectKey = tostring(parse_json(RequestParameters).key)
+| project TfstateTime = TimeGenerated, UserIdentityArn, SourceIpAddress, RecipientAccountId,
+          BucketName, ObjectKey, UserAgent, AWSRegion;
+
+TfstateAccess
+| join kind=inner (ListBuckets) on UserIdentityArn, SourceIpAddress, RecipientAccountId
+| where TfstateTime > ListBucketsTime
+| where datetime_diff('minute', TfstateTime, ListBucketsTime) <= 5
+| project
+    TfstateTime,
+    AlertReason = "ListBuckets -> GetObject on tfstate within 5 minutes (canary: terraform state theft)",
+    Severity = "CRITICAL",
+    BucketName,
+    ObjectKey,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RecipientAccountId
+| union (
+    // Rule 2: SecretsManager GetSecretValue on canary/prod database secrets
+    AWSCloudTrail
+    | where TimeGenerated > ago(24h)
+    | where EventSource == "secretsmanager.amazonaws.com"
+    | where EventName == "GetSecretValue"
+    | where RequestParameters has_any ("prod/database", "master_credentials", "rds/admin", "prod/rds")
+    | where UserAgent !contains "console.aws.amazon.com"
+    | where UserIdentityArn !contains ":assumed-role/AWSServiceRoleForRDS"
+    | extend SecretId = tostring(parse_json(RequestParameters).secretId)
+    | project TimeGenerated, EventName, SecretId,
+              UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+    | extend Severity = "CRITICAL"
+    | extend AlertReason = "GetSecretValue on canary database credential secret from non-application session"
+    | project TfstateTime = TimeGenerated, AlertReason, Severity, SecretId,
+              UserIdentityArn, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+  )
+| union (
+    // Rule 3: Mass IAM enumeration burst from IAMUser (3+ events within 3 minutes)
+    AWSCloudTrail
+    | where TimeGenerated > ago(24h)
+    | where EventSource in ("iam.amazonaws.com", "ec2.amazonaws.com", "sts.amazonaws.com")
+    | where EventName in ("GetAccountSummary", "ListRoles", "ListUsers", "ListBuckets",
+                          "DescribeRegions", "GetCallerIdentity", "ListSecrets")
+    | where UserIdentityType == "IAMUser"
+    | where UserAgent !contains "console.aws.amazon.com"
+    | summarize
+        EventCount = count(),
+        DistinctEvents = dcount(EventName),
+        EventNames = make_set(EventName),
+        Sources = make_set(EventSource),
+        FirstSeen = min(TimeGenerated),
+        LastSeen = max(TimeGenerated)
+      by UserIdentityArn, SourceIpAddress, bin(TimeGenerated, 3m), RecipientAccountId
+    | where DistinctEvents >= 4
+    | extend Severity = iff(DistinctEvents >= 6, "HIGH", "MEDIUM")
+    | extend AlertReason = strcat("Mass IAM/cloud enumeration: ", tostring(DistinctEvents), " distinct discovery calls in 3 min")
+    | project TfstateTime = FirstSeen, AlertReason, Severity, DistinctEvents, EventNames,
+              UserIdentityArn, SourceIpAddress, RecipientAccountId
+  )
+| sort by TfstateTime desc

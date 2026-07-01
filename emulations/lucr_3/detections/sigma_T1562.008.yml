@@ -1,0 +1,34 @@
+title: LUCR-3 CloudTrail Logging Stopped - Forensic Gap Before Exfiltration
+id: d8b4e2f6-1c9a-4d5e-c7b3-9e1d4b8f2c6a
+status: experimental
+description: >
+  Detects cloudtrail:StopLogging events. LUCR-3 stops CloudTrail immediately before
+  bulk S3 exfiltration to suppress API call records. The StopLogging event itself
+  is the last CloudTrail record before the forensic gap; correlation with subsequent
+  SIEM silence from the account is a strong indicator of active exfiltration.
+references:
+    - https://attack.mitre.org/techniques/T1562/008/
+    - https://www.cisa.gov/sites/default/files/2023-11/aa23-320a_scattered_spider.pdf
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1562.008
+    - lucr3
+    - scattered_spider
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: 'StopLogging'
+        eventSource: 'cloudtrail.amazonaws.com'
+    filter_automation:
+        userIdentity.arn|contains:
+            - ':role/TerraformRole'
+            - ':role/InfraDestroyRole'
+    condition: selection and not filter_automation
+falsepositives:
+    - Authorized trail disabling during account decommission or sandbox cleanup
+    - Terraform destroy runs that tear down multi-account logging trails
+level: critical

@@ -1,0 +1,37 @@
+title: LUCR-3 Bulk Email Deletion via Microsoft Graph - Mailbox Tampering
+id: e3c1d9f7-5a4b-4e8c-d2f6-0b3e7c1d5a9f
+status: experimental
+description: >
+  Detects HardDelete or SoftDelete operations on mailbox items from a federated
+  principal in the M365 Unified Audit Log. LUCR-3 deletes security alert and
+  phishing notification emails post-exfiltration to suppress victim awareness and
+  delay incident response. Bulk deletion from an anomalous IP amplifies confidence.
+references:
+    - https://attack.mitre.org/techniques/T1070/008/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1070.008
+    - lucr3
+    - scattered_spider
+logsource:
+    product: m365
+    service: audit
+detection:
+    selection:
+        Operation:
+            - 'HardDelete'
+            - 'SoftDelete'
+        Workload: 'Exchange'
+    filter_purge_policy:
+        ClientInfoString|contains:
+            - 'ManagedFolderAssistant'
+            - 'RetentionPolicy'
+    timeframe: 5m
+    condition: selection and not filter_purge_policy | count() by UserId > 10
+falsepositives:
+    - Users bulk-deleting junk mail or performing inbox cleanup
+    - Litigation hold exports that trigger deletion markers
+    - Email archive migration scripts
+level: high

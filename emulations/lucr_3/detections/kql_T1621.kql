@@ -1,0 +1,25 @@
+// T1621 - Multi-Factor Authentication Request Generation (MFA Fatigue)
+// Detects >3 MFA challenges per user in a 5-minute window - LUCR-3 MFA flood pattern
+// Log source: Okta_CL (Okta Data Connector for Microsoft Sentinel)
+Okta_CL
+| where eventType_s == "user.authentication.auth_via_mfa"
+| where TimeGenerated > ago(24h)
+| summarize
+    ChallengeCount  = count(),
+    FirstChallenge  = min(TimeGenerated),
+    LastChallenge   = max(TimeGenerated),
+    SourceIPs       = make_set(client_ipAddress_s),
+    MFAFactors      = make_set(debugContext_debugData_factor_s)
+    by bin(TimeGenerated, 5m), Actor = actor_alternateId_s
+| where ChallengeCount > 3
+| extend WindowDurationSeconds = datetime_diff("second", LastChallenge, FirstChallenge)
+| project
+    TimeGenerated,
+    Actor,
+    ChallengeCount,
+    WindowDurationSeconds,
+    SourceIPs,
+    MFAFactors,
+    FirstChallenge,
+    LastChallenge
+| sort by ChallengeCount desc

@@ -1,0 +1,25 @@
+// T1078.004 - Valid Accounts: Cloud Accounts (AWS SAML Federation)
+// Detects AssumeRoleWithSAML from anomalous IPs - LUCR-3 Okta-to-AWS pivot
+// Log source: AWSCloudTrail table in Microsoft Sentinel
+AWSCloudTrail
+| where EventName == "AssumeRoleWithSAML"
+| where EventSource == "sts.amazonaws.com"
+| where isnotempty(SourceIpAddress)
+| where not(ipv4_is_private(SourceIpAddress))
+| where not(UserAgent has_any ("aws-sdk", "Terraform", "aws-cdk"))
+| extend
+    FederatedPrincipal = tostring(parse_json(UserIdentityArn)),
+    RoleAssumed         = tostring(parse_json(RequestParameters).roleArn),
+    SAMLProvider        = tostring(parse_json(RequestParameters).principalArn),
+    Region              = AWSRegion
+| project
+    TimeGenerated,
+    FederatedPrincipal,
+    RoleAssumed,
+    SAMLProvider,
+    SourceIpAddress,
+    UserAgent,
+    Region,
+    ErrorCode,
+    ErrorMessage
+| sort by TimeGenerated desc

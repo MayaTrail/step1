@@ -1,0 +1,64 @@
+# FILE: sigma_t1610.yml
+title: AMBERSQUID - ECS Task Definition Registered with Admin Role as Execution Role
+id: f3c8a5e7-9d2b-7f4c-a1e8-5b3d7f9c2a6e
+status: experimental
+description: >
+  Detects AMBERSQUID's container deployment phase: registering ECS Fargate task
+  definitions that specify an overly permissive IAM role (AdministratorAccess or
+  attacker-created ecsTaskExecutionRole) as the executionRoleArn. The legitimate
+  ECS task execution role requires only minimal permissions (ECR pull, CloudWatch
+  Logs write). An attacker-created role with AdministratorAccess as executionRoleArn
+  grants the container unrestricted AWS API access — a hard indicator of malicious
+  task definition registration. AMBERSQUID scale: miner-fargate-task registered
+  with 1024 CPU, 2048 MB memory, targeting 30 tasks x 16 regions.
+references:
+    - https://attack.mitre.org/techniques/T1610/
+    - https://unit42.paloaltonetworks.com/ambersquid/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1610
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_admin_exec_role:
+        eventSource: ecs.amazonaws.com
+        eventName: RegisterTaskDefinition
+        requestParameters|contains: 'ecsTaskExecutionRole'
+    selection_miner_task_families:
+        eventSource: ecs.amazonaws.com
+        eventName: RegisterTaskDefinition
+        requestParameters|contains:
+            - '"family":"miner'
+            - '"family":"task"'
+            - '"name":"srbminer"'
+            - '"name":"miner"'
+    selection_create_service_fargate:
+        eventSource: ecs.amazonaws.com
+        eventName: CreateService
+        requestParameters|contains: 'FARGATE'
+        userIdentity.type: AssumedRole
+    filter_console:
+        userAgent|contains:
+            - 'console.aws.amazon.com'
+    filter_ecs_service:
+        userIdentity.invokedBy: ecs.amazonaws.com
+    filter_cfn:
+        userIdentity.invokedBy: cloudformation.amazonaws.com
+    condition: >
+      (selection_admin_exec_role or selection_miner_task_families or
+       selection_create_service_fargate)
+      and not filter_console and not filter_ecs_service and not filter_cfn
+falsepositives:
+    - Legitimate ECS task definitions where the executionRole happens to be named ecsTaskExecutionRole
+    - Development environments using broad permissions for debugging ECS tasks
+    - AWS CDK or Terraform creating ECS resources from pipeline assumed roles
+level: high
+# AMBERSQUID IOC task family names: miner-fargate-task, miner-task
+# AMBERSQUID IOC container names: srbminer, miner
+# Critical indicator: executionRoleArn containing "ecsTaskExecutionRole" with
+# AdministratorAccess attached — validate by cross-referencing IAM role policies.
+# RegisterTaskDefinition with POOL, WALLET, ALGO environment variable names is
+# a direct miner configuration indicator visible in requestParameters.

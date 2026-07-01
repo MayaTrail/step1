@@ -1,0 +1,72 @@
+# FILE: sigma_t1525.yml
+title: AMBERSQUID - CodeCommit Repository Write Access from Attacker Assumed Role
+id: d9a4c7e1-3b8f-5d2a-c7e9-1f4b6a8e3c2d
+status: experimental
+description: >
+  Detects AMBERSQUID's internal image implantation technique: CodeCommit repository
+  access and write operations (GetRepository, PutFile, GitPush) from sessions
+  authenticated as the AWSCodeCommit-Role (attacker-created). AMBERSQUID pushes
+  SRBMiner-MULTI and deployment scripts (entrypoint.sh, amplify-role.sh, repo.sh,
+  code.sh, ecs.sh, scale.sh, note.sh, delete.sh) to CodeCommit repos across up to
+  16 regions, implanting the miner build pipeline inside victim-controlled
+  code infrastructure. PutFile and GitPush via CodeCommit generate CloudTrail events
+  only when performed via the AWS API (not standard git over HTTPS with git credentials).
+references:
+    - https://attack.mitre.org/techniques/T1525/
+    - https://unit42.paloaltonetworks.com/ambersquid/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.persistence
+    - attack.t1525
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_codecommit_write:
+        eventSource: codecommit.amazonaws.com
+        eventName:
+            - PutFile
+            - CreateBranch
+            - MergePullRequestByFastForward
+            - MergePullRequestBySquash
+            - MergePullRequestByThreeWay
+        userIdentity.type: AssumedRole
+    selection_codecommit_read_role:
+        eventSource: codecommit.amazonaws.com
+        eventName:
+            - GetRepository
+            - ListRepositories
+            - GetBranch
+        userIdentity.arn|contains: 'AWSCodeCommit-Role'
+    selection_suspicious_filenames:
+        eventSource: codecommit.amazonaws.com
+        eventName: PutFile
+        requestParameters|contains:
+            - 'entrypoint.sh'
+            - 'amplify-role.sh'
+            - 'stoptrigger.sh'
+            - 'SRBMiner'
+            - 'scale.sh'
+    filter_console:
+        userAgent|contains:
+            - 'console.aws.amazon.com'
+    filter_developers:
+        userIdentity.type: IAMUser
+        userIdentity.arn|contains:
+            - ':user/dev-'
+            - ':user/developer-'
+    condition: >
+      (selection_codecommit_write or selection_codecommit_read_role or
+       selection_suspicious_filenames)
+      and not filter_console and not filter_developers
+falsepositives:
+    - Automated deployment pipelines pushing to CodeCommit via assumed IAM roles
+    - Git mirror services synchronizing external repos into CodeCommit
+    - CodePipeline source stages reading CodeCommit repositories
+level: medium
+# Note: Standard git push over HTTPS using git credentials does NOT generate
+# CloudTrail events. Only API-based writes (PutFile, console pushes) are visible.
+# AMBERSQUID IOC filenames in PutFile requestParameters: entrypoint.sh,
+# amplify-role.sh, repo.sh, code.sh, ecs.sh, note.sh, delete.sh, scale.sh,
+# stoptrigger.sh, restart.sh, amplify.yml, index.py

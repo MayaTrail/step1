@@ -1,0 +1,55 @@
+# FILE: sigma_t1136.003.yml
+title: AMBERSQUID - IAM Role Creation with AdministratorAccess from Non-Console Session
+id: a7e3c9d2-5f1b-4a8e-c3d6-9f2e7c4a1b8d
+status: experimental
+description: >
+  Detects AMBERSQUID's persistence mechanism: creation of IAM roles with highly
+  permissive policies (AdministratorAccess, SageMakerFullAccess) using a stolen IAM
+  user key from a non-console session. AMBERSQUID creates three roles with known names:
+  AWSCodeCommit-Role (Amplify+CodeCommit+CloudWatch), sugo-role (SageMaker),
+  and ecsTaskExecutionRole (AdministratorAccess+ECS). The attachment of
+  AdministratorAccess to an attacker-created role is the highest-fidelity single
+  event in this technique.
+references:
+    - https://attack.mitre.org/techniques/T1136/003/
+    - https://unit42.paloaltonetworks.com/ambersquid/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.persistence
+    - attack.t1136.003
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_admin_attach:
+        eventSource: iam.amazonaws.com
+        eventName: AttachRolePolicy
+        requestParameters|contains: 'arn:aws:iam::aws:policy/AdministratorAccess'
+    selection_role_names:
+        eventSource: iam.amazonaws.com
+        eventName:
+            - CreateRole
+            - AttachRolePolicy
+        requestParameters|contains:
+            - 'AWSCodeCommit-Role'
+            - 'sugo-role'
+            - 'ecsTaskExecutionRole'
+    filter_console:
+        userAgent|contains:
+            - 'console.aws.amazon.com'
+            - 'AWSConsole'
+    filter_cfn:
+        userAgent|contains:
+            - 'cloudformation.amazonaws.com'
+        userIdentity.invokedBy: cloudformation.amazonaws.com
+    condition: (selection_admin_attach or selection_role_names) and not filter_console and not filter_cfn
+falsepositives:
+    - Break-glass emergency IAM role creation by authorized administrators
+    - Infrastructure-as-code tools (Terraform, Pulumi) run by authorized pipeline principals
+    - AWS managed service onboarding workflows that create execution roles
+level: high
+# AMBERSQUID IOC role names: AWSCodeCommit-Role, sugo-role, ecsTaskExecutionRole
+# Correlate multiple CreateRole events within 30 seconds from same sourceIPAddress
+# to distinguish AMBERSQUID burst (3 roles) from single legitimate role creation.
+# Critical signal: ecsTaskExecutionRole + AdministratorAccess is never legitimate.

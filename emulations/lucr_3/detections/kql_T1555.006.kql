@@ -1,0 +1,28 @@
+// T1555.006 - Credentials from Password Stores: Cloud Secrets Management Stores
+// Detects bulk SecretsManager harvest - LUCR-3 credential collection via new IAM key
+// Log source: AWSCloudTrail table in Microsoft Sentinel
+AWSCloudTrail
+| where EventSource == "secretsmanager.amazonaws.com"
+| where EventName in ("ListSecrets", "GetSecretValue")
+| where not(UserIdentityArn has_any (
+    ":role/AppRole", ":role/LambdaExecutionRole", ":role/ECSTaskRole",
+    ":role/SecretsRotationRole", "aws-service-role"
+))
+| summarize
+    OpCount         = count(),
+    SecretNames     = make_set(tostring(parse_json(RequestParameters).secretId)),
+    Operations      = make_set(EventName),
+    SourceIPs       = make_set(SourceIpAddress)
+    by bin(TimeGenerated, 10m), UserIdentityArn
+| where OpCount > 5
+| extend
+    UniqueSecrets   = array_length(SecretNames),
+    GetValueCalls   = array_length(array_slice(Operations, 0, -1))
+| project
+    TimeGenerated,
+    UserIdentityArn,
+    OpCount,
+    UniqueSecrets,
+    SecretNames,
+    SourceIPs
+| sort by OpCount desc

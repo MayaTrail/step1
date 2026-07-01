@@ -1,0 +1,38 @@
+title: LUCR-3 Bulk S3 GetObject Exfiltration After CloudTrail Stop
+id: f7e5d3b1-9c2a-4f6e-b4d8-1f3e9b5d7c2a
+status: experimental
+description: >
+  Detects high-volume GetObject events from an IAM user principal in S3 server
+  access logs. Because LUCR-3 stops CloudTrail before S3 exfiltration (T1562.008),
+  S3 server access logs (independent of CloudTrail) are the primary forensic source.
+  Correlation with prior ListBuckets, StopLogging, and UpdateDetector events
+  establishes the full attack chain.
+references:
+    - https://attack.mitre.org/techniques/T1530/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.collection
+    - attack.t1530
+    - lucr3
+    - scattered_spider
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: 'GetObject'
+        eventSource: 's3.amazonaws.com'
+        userIdentity.type: 'IAMUser'
+    filter_backup:
+        userIdentity.arn|contains:
+            - 'BackupRole'
+            - 'S3ReplicationRole'
+            - 'backup-'
+    timeframe: 10m
+    condition: selection and not filter_backup | count() by userIdentity.arn > 100
+falsepositives:
+    - Legitimate S3 backup or replication jobs that retrieve large object counts
+    - Data pipeline processes reading many objects for analytics
+    - AWS Glue crawlers scanning S3 data lakes
+level: high

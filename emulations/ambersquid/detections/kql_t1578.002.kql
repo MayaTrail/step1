@@ -1,0 +1,75 @@
+// FILE: kql_t1578.002.kql
+// T1578.002 Modify Cloud Compute Infrastructure: Create Cloud Instance - AMBERSQUID Compute Scaling
+// Detects AMBERSQUID compute scaling patterns: IOC ASG names, ImageBuilder pipeline abuse,
+// and RunInstances bursts from non-console IAM sessions.
+
+// Rule 1: ASG creation with AMBERSQUID IOC names ("task", "task1")
+let IOCASGNames = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "autoscaling.amazonaws.com"
+| where EventName == "CreateAutoScalingGroup"
+| extend ASGName = tostring(parse_json(RequestParameters).autoScalingGroupName)
+| where ASGName in ("task", "task1") or ASGName startswith "task"
+| extend MinSize = tostring(parse_json(RequestParameters).minSize)
+| extend MaxSize = tostring(parse_json(RequestParameters).maxSize)
+| extend LaunchTemplate = tostring(parse_json(RequestParameters).launchTemplate)
+| project TimeGenerated, EventName, ASGName, MinSize, MaxSize, LaunchTemplate,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "HIGH"
+| extend AlertReason = "Auto Scaling Group created with AMBERSQUID IOC name ('task' or 'task1')";
+
+// Rule 2: ImageBuilder pipeline creation or execution from AssumedRole
+let ImageBuilderAbuse = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "imagebuilder.amazonaws.com"
+| where EventName in ("CreateImagePipeline", "StartImagePipelineExecution", "CreateImageRecipe")
+| where UserIdentityType == "AssumedRole"
+| where UserAgent !contains "console.aws.amazon.com"
+| where UserIdentityArn !contains "AWSServiceRoleForImageBuilder"
+| extend PipelineName = tostring(parse_json(RequestParameters).name)
+| project TimeGenerated, EventName, PipelineName,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "MEDIUM"
+| extend AlertReason = "EC2 ImageBuilder pipeline created or executed from non-standard AssumedRole";
+
+// Rule 3: CloudFormation CreateStack containing ImageBuilder resources
+let CFNImageBuilder = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "cloudformation.amazonaws.com"
+| where EventName == "CreateStack"
+| where RequestParameters has "ImageBuilder"
+| where UserAgent !contains "console.aws.amazon.com"
+| extend StackName = tostring(parse_json(RequestParameters).stackName)
+| project TimeGenerated, EventName, StackName,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "MEDIUM"
+| extend AlertReason = "CloudFormation stack created containing ImageBuilder resources from non-console session";
+
+// Rule 4: Multi-region compute creation burst (AMBERSQUID targets 4-16 regions)
+let MultiRegionComputeBurst = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventName in ("RunInstances", "CreateAutoScalingGroup", "CreateNotebookInstance", "CreateCluster")
+| where EventSource in ("ec2.amazonaws.com", "autoscaling.amazonaws.com",
+                        "sagemaker.amazonaws.com", "ecs.amazonaws.com")
+| where UserIdentityType in ("IAMUser", "AssumedRole")
+| where UserAgent !contains "console.aws.amazon.com"
+| summarize
+    RegionCount = dcount(AWSRegion),
+    Regions = make_set(AWSRegion),
+    EventCount = count(),
+    Services = make_set(EventSource),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated)
+  by UserIdentityArn, SourceIpAddress, bin(TimeGenerated, 15m), RecipientAccountId
+| where RegionCount >= 3
+| extend Severity = case(
+    RegionCount >= 8, "CRITICAL",
+    RegionCount >= 4, "HIGH",
+    "MEDIUM"
+  )
+| extend AlertReason = strcat("Compute provisioning across ", tostring(RegionCount), " regions in 15 minutes (AMBERSQUID multi-region pattern)")
+| project FirstSeen, LastSeen, Severity, AlertReason, RegionCount, Regions,
+          EventCount, Services, UserIdentityArn, SourceIpAddress, RecipientAccountId;
+
+union IOCASGNames, ImageBuilderAbuse, CFNImageBuilder, MultiRegionComputeBurst
+| sort by TimeGenerated desc

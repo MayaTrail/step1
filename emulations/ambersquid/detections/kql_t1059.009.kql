@@ -1,0 +1,83 @@
+// FILE: kql_t1059.009.kql
+// T1059.009 Command and Scripting Interpreter: Cloud API - AMBERSQUID Multi-Service Burst
+// Detects rapid provisioning across 3+ distinct AWS services within a 10-minute window
+// from AssumedRole sessions. Also flags individual high-risk events in isolation.
+
+let ProvisioningEvents = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventName in (
+    "CreateApp",             // Amplify
+    "CreateRepository",      // CodeCommit
+    "CreateProject",         // CodeBuild
+    "StartBuild",            // CodeBuild
+    "CreateNotebookInstance",// SageMaker
+    "CreateCluster",         // ECS
+    "RegisterTaskDefinition" // ECS
+  )
+| where UserAgent !contains "console.aws.amazon.com"
+| where UserAgent !contains "AWSConsole"
+| extend ServiceCategory = case(
+    EventSource == "amplify.amazonaws.com",    "Amplify",
+    EventSource == "codecommit.amazonaws.com", "CodeCommit",
+    EventSource == "codebuild.amazonaws.com",  "CodeBuild",
+    EventSource == "sagemaker.amazonaws.com",  "SageMaker",
+    EventSource == "ecs.amazonaws.com",        "ECS",
+    EventSource
+  );
+
+// Rule 1: Multi-service burst - 3+ distinct services within 10 minutes
+ProvisioningEvents
+| summarize
+    ServiceCount = dcount(ServiceCategory),
+    Services = make_set(ServiceCategory),
+    EventCount = count(),
+    Events = make_set(EventName),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated)
+  by UserIdentityArn, SourceIpAddress, bin(TimeGenerated, 10m), RecipientAccountId
+| where ServiceCount >= 3
+| extend DwellSeconds = datetime_diff('second', LastSeen, FirstSeen)
+| extend Severity = case(
+    ServiceCount >= 5, "CRITICAL",
+    ServiceCount >= 4, "HIGH",
+    "MEDIUM"
+  )
+| extend AlertReason = strcat("Multi-service provisioning burst: ", tostring(ServiceCount), " services in 10 minutes")
+| project FirstSeen, LastSeen, DwellSeconds, Severity, AlertReason, ServiceCount, Services,
+          EventCount, Events, UserIdentityArn, SourceIpAddress, RecipientAccountId
+| sort by ServiceCount desc, FirstSeen desc
+| union (
+    // Rule 2: SageMaker notebook from AssumedRole (isolated high-signal event)
+    AWSCloudTrail
+    | where TimeGenerated > ago(24h)
+    | where EventSource == "sagemaker.amazonaws.com"
+    | where EventName == "CreateNotebookInstance"
+    | where UserIdentityType == "AssumedRole"
+    | where UserAgent !contains "console.aws.amazon.com"
+    | extend InstanceName = tostring(parse_json(RequestParameters).notebookInstanceName)
+    | extend InstanceType = tostring(parse_json(RequestParameters).instanceType)
+    | extend RoleArn = tostring(parse_json(RequestParameters).roleArn)
+    | project TimeGenerated, EventName, InstanceName, InstanceType, RoleArn,
+              UserIdentityArn, UserIdentityType, SourceIpAddress, AWSRegion, RecipientAccountId
+    | extend Severity = "HIGH"
+    | extend AlertReason = "SageMaker notebook created from AssumedRole session (non-console)"
+    | project FirstSeen = TimeGenerated, Severity, AlertReason, InstanceName, InstanceType,
+              RoleArn, UserIdentityArn, SourceIpAddress, AWSRegion, RecipientAccountId
+  )
+| union (
+    // Rule 3: Amplify app with CodeCommit source from non-console
+    AWSCloudTrail
+    | where TimeGenerated > ago(24h)
+    | where EventSource == "amplify.amazonaws.com"
+    | where EventName == "CreateApp"
+    | where RequestParameters contains "git-codecommit"
+    | where UserAgent !contains "console.aws.amazon.com"
+    | extend AppName = tostring(parse_json(RequestParameters).name)
+    | extend RepoUrl = tostring(parse_json(RequestParameters).repository)
+    | project TimeGenerated, EventName, AppName, RepoUrl,
+              UserIdentityArn, UserIdentityType, SourceIpAddress, AWSRegion, RecipientAccountId
+    | extend Severity = "HIGH"
+    | extend AlertReason = "Amplify app created with CodeCommit source from non-console session"
+    | project FirstSeen = TimeGenerated, Severity, AlertReason, AppName, RepoUrl,
+              UserIdentityArn, SourceIpAddress, AWSRegion, RecipientAccountId
+  )
