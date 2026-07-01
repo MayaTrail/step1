@@ -218,6 +218,7 @@ node_modules/
 .claude/
 .pulumi
 CLAUDE.md
+ENGINEERING_GUIDELINES.md
 .gemini/
 step1-plans/
 changelog.md

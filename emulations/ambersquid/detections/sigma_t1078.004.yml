@@ -1,0 +1,57 @@
+# FILE: sigma_t1078.004.yml
+title: AMBERSQUID - Stolen Cloud Credential Validation via Rapid IAM Enumeration
+id: f4a2b8c1-3d7e-4f9a-b2c5-8e1d6f3a7b4c
+status: experimental
+description: >
+  Detects AMBERSQUID's credential validation pattern: rapid IAM enumeration
+  (GetUser, ListAttachedUserPolicies) executed immediately after credential harvest
+  from an ECS container. The pattern is distinguishable by a non-console userAgent
+  (boto3/Python), IAMUser identity type (not AssumedRole or service), and sub-second
+  sequencing across GetCallerIdentity -> GetUser -> ListAttachedUserPolicies.
+  This is the first CloudTrail-visible event in the AMBERSQUID kill chain after
+  T1204.003 container execution and credential injection.
+references:
+    - https://attack.mitre.org/techniques/T1078/004/
+    - https://unit42.paloaltonetworks.com/ambersquid/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1078.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_iam_recon:
+        eventSource: iam.amazonaws.com
+        eventName:
+            - GetUser
+            - ListAttachedUserPolicies
+            - GetAccountSummary
+        userIdentity.type: IAMUser
+    filter_console:
+        userAgent|contains:
+            - 'console.aws.amazon.com'
+            - 'signin.aws.amazon.com'
+            - 'AWSConsole'
+    filter_sso:
+        userAgent|contains:
+            - 'aws-internal'
+            - 'AWS Internal'
+    filter_automation_agents:
+        userAgent|startswith:
+            - 'aws-sdk-java'
+            - 'aws-sdk-go'
+        userIdentity.arn|contains:
+            - 'ci-'
+            - 'deploy-'
+            - 'automation-'
+    condition: selection_iam_recon and not filter_console and not filter_sso and not filter_automation_agents
+falsepositives:
+    - IAM users running automation scripts for legitimate account auditing
+    - Security tooling performing routine permission checks (AWS Access Analyzer, ScoutSuite)
+    - Developers using AWS CLI to inspect their own permissions
+level: low
+# Correlate with T1136.003 CreateRole within 60 seconds from the same sourceIPAddress
+# to elevate severity to HIGH — the combined pattern is near-unique to AMBERSQUID.
+# Key field: userIdentity.type = IAMUser (not AssumedRole) is the primary discriminator.

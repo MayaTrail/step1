@@ -1,0 +1,58 @@
+# FILE: sigma_t1608.001.yml
+title: AMBERSQUID - Malicious Container Image Staged on External Registry (No CloudTrail Event)
+id: c8f3e7a2-1b9d-5c4f-e2a8-7d3b1f9c6e4a
+status: experimental
+description: >
+  T1608.001 (Stage Capabilities: Upload Malware) generates NO CloudTrail events.
+  AMBERSQUID stages a malicious Docker image containing SRBMiner-MULTI (UPX-packed)
+  on an external or attacker-controlled container registry before targeting victim
+  accounts. The image entrypoint reads injected AWS credentials from environment
+  variables and executes miner deployment scripts across multiple AWS services.
+
+  No CloudTrail rule is possible for the staging phase itself. Detection requires:
+    1. ECR image scanning (Amazon Inspector / Trivy) if the image is pulled into
+       victim ECR repositories.
+    2. ECS task definition inspection: RegisterTaskDefinition events referencing
+       ubuntu:22.04 or unrecognized image URIs from non-corporate registries.
+    3. GuardDuty finding: UnauthorizedAccess:IAMUser/MaliciousIPCaller on the
+       account that subsequently uses the staged image.
+    4. VirusTotal / threat intel lookups on Docker image digests for UPX-packed ELFs.
+
+  This rule detects the observable downstream artifact: ECS task definitions referencing
+  images from public registries (not account ECR) registered from non-console sessions.
+references:
+    - https://attack.mitre.org/techniques/T1608/001/
+    - https://unit42.paloaltonetworks.com/ambersquid/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.resource_development
+    - attack.t1608.001
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: ecs.amazonaws.com
+        eventName: RegisterTaskDefinition
+        requestParameters|contains:
+            - '"image":"ubuntu'
+            - '"image":"docker.io'
+            - '"image":"public.ecr.aws'
+    filter_console:
+        userAgent|contains:
+            - 'console.aws.amazon.com'
+    filter_devops:
+        userIdentity.arn|contains:
+            - ':assumed-role/AWSServiceRoleForECS'
+    condition: selection and not filter_console and not filter_devops
+falsepositives:
+    - Legitimate ECS task definitions using public Docker Hub base images
+    - Development and test environments pulling ubuntu base images
+    - AWS-managed ECS demos and sample tasks
+level: low
+# NOTE: AMBERSQUID IOC image: ubuntu:22.04 (stand-in for SRBMiner-MULTI packed image)
+# AMBERSQUID real image contains: SRBMiner-MULTI (UPX-packed), entrypoint.sh,
+# amplify-role.sh, repo.sh, code.sh, ecs.sh, scale.sh, note.sh, delete.sh
+# Correlate RegisterTaskDefinition with AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+# present as plaintext container environment variables (visible in requestParameters).

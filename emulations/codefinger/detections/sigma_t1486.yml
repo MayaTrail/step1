@@ -1,0 +1,80 @@
+title: Codefinger - S3 SSE-C In-Place Object Encryption (Ransomware)
+id: d5f0b3e8-26a4-4c9d-c2f1-8b4e6d1a3c9f
+status: experimental
+description: |
+  Detects the core encryption step of the Codefinger S3 ransomware attack. The actor retrieves
+  existing S3 objects via GetObject then immediately re-uploads them to the same key with
+  SSE-C (customer-provided encryption key) headers, replacing plaintext data with an
+  attacker-controlled encrypted copy. CloudTrail captures the
+  x-amz-server-side-encryption-customer-algorithm header in the PutObject request, making
+  this technique visible on the control plane. Key signals: high-volume PutObject calls on
+  pre-existing keys from a non-native source IP, all within a short window, with SSE-C
+  algorithm set to AES256. The simultaneous appearance of README.txt ransom notes in multiple
+  prefixes is a confirmatory indicator.
+references:
+    - https://attack.mitre.org/techniques/T1486/
+    - https://halcyon.ai/blog/codefinger
+    - https://docs.aws.amazon.com/AmazonS3/latest/userguide/ServerSideEncryptionCustomerKeys.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1486
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_ssec_put:
+        eventSource: 's3.amazonaws.com'
+        eventName: 'PutObject'
+        # SSE-C algorithm is logged in requestParameters when customer-provided key is used
+        requestParameters|contains: 'x-amz-server-side-encryption-customer-algorithm'
+    filter_legitimate_ssec:
+        # Known applications that legitimately use SSE-C (tune to environment)
+        userIdentity.principalId|contains:
+            - 'svc-encrypted-backup'
+            - 'svc-compliance-archive'
+    filter_aws_services:
+        userIdentity.type: 'AWSService'
+    condition: selection_ssec_put and not (filter_legitimate_ssec or filter_aws_services)
+falsepositives:
+    - Applications that deliberately use SSE-C for compliance-driven encryption (rare in practice)
+    - Data migration tools moving objects from unencrypted to SSE-C encrypted storage
+    - Custom backup solutions that implement their own encryption layer
+level: high
+
+---
+title: Codefinger - Ransom Note Deposition in S3 (README.txt Multi-Prefix)
+id: e6a1c4f9-37b5-4d0e-d3a2-9c5f7e2b4d0a
+status: experimental
+description: |
+  Detects the deposition of ransom note objects (README.txt) in multiple S3 prefixes
+  simultaneously -- a confirmatory indicator that an active ransomware campaign is in
+  progress. Codefinger drops a ransom note per affected directory immediately after
+  re-encrypting objects in that prefix with SSE-C. A single README.txt upload is low signal;
+  identical filenames appearing in 2+ distinct prefixes within minutes is high-confidence.
+references:
+    - https://attack.mitre.org/techniques/T1486/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1486
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_ransom_note:
+        eventSource: 's3.amazonaws.com'
+        eventName: 'PutObject'
+        requestParameters|contains: 'README.txt'
+    filter_documentation:
+        # Exclude known legitimate README uploads (e.g., documentation pipelines)
+        userAgent|contains:
+            - 'aws-amplify'
+            - 'github-actions-s3-sync'
+    condition: selection_ransom_note and not filter_documentation
+falsepositives:
+    - Static website deployments that publish README.txt as documentation
+    - S3-backed artifact repositories where README.txt is a standard file
+level: high

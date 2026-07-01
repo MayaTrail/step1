@@ -1,0 +1,72 @@
+// FILE: kql_t1525.kql
+// T1525 Implant Internal Image - AMBERSQUID CodeCommit Repository Write from Attacker Role
+// Detects CodeCommit access and write operations from attacker-created role sessions,
+// including known AMBERSQUID miner deployment script filenames in PutFile calls.
+
+// Rule 1: PutFile with known AMBERSQUID miner deployment script filenames
+let IOCFilePush = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "codecommit.amazonaws.com"
+| where EventName == "PutFile"
+| where RequestParameters has_any (
+    "entrypoint.sh", "amplify-role.sh", "repo.sh", "code.sh", "jalan.sh",
+    "sup0.sh", "ecs.sh", "ulang.sh", "note.sh", "salah.sh", "delete.sh",
+    "stoptrigger.sh", "scale.sh", "restart.sh", "amplify.yml", "index.py",
+    "SRBMiner", "srbminer"
+  )
+| extend RepoName = tostring(parse_json(RequestParameters).repositoryName)
+| extend FilePath = tostring(parse_json(RequestParameters).filePath)
+| extend BranchName = tostring(parse_json(RequestParameters).branchName)
+| project TimeGenerated, EventName, RepoName, FilePath, BranchName,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "CRITICAL"
+| extend AlertReason = "AMBERSQUID miner deployment script filename detected in CodeCommit PutFile";
+
+// Rule 2: CodeCommit access from AWSCodeCommit-Role (attacker IOC role name)
+let AttackerRoleCodeCommit = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "codecommit.amazonaws.com"
+| where UserIdentityArn contains "AWSCodeCommit-Role"
+| extend RepoName = tostring(parse_json(RequestParameters).repositoryName)
+| project TimeGenerated, EventName, RepoName,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "HIGH"
+| extend AlertReason = "CodeCommit access from attacker IOC role: AWSCodeCommit-Role";
+
+// Rule 3: CodeCommit PutFile from AssumedRole session (non-console, not CodePipeline)
+let AssumedRoleWrite = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "codecommit.amazonaws.com"
+| where EventName in ("PutFile", "CreateBranch", "DeleteBranch")
+| where UserIdentityType == "AssumedRole"
+| where UserAgent !contains "console.aws.amazon.com"
+| where UserIdentityArn !contains "AWSServiceRoleForCodePipeline"
+| where UserIdentityArn !contains ":assumed-role/CodePipeline"
+| extend RepoName = tostring(parse_json(RequestParameters).repositoryName)
+| extend FilePath = tostring(parse_json(RequestParameters).filePath)
+| project TimeGenerated, EventName, RepoName, FilePath,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "MEDIUM"
+| extend AlertReason = "CodeCommit write from AssumedRole session (not CodePipeline service)";
+
+// Rule 4: Multi-region CodeCommit repository access burst (16-region AMBERSQUID pattern)
+let MultiRegionBurst = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "codecommit.amazonaws.com"
+| where EventName in ("GetRepository", "ListRepositories", "CreateRepository")
+| where UserIdentityType in ("IAMUser", "AssumedRole")
+| summarize
+    RegionCount = dcount(AWSRegion),
+    Regions = make_set(AWSRegion),
+    EventCount = count(),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated)
+  by UserIdentityArn, SourceIpAddress, bin(TimeGenerated, 10m), RecipientAccountId
+| where RegionCount >= 3
+| extend Severity = iff(RegionCount >= 8, "HIGH", "MEDIUM")
+| extend AlertReason = strcat("CodeCommit accessed across ", tostring(RegionCount), " regions within 10 minutes")
+| project FirstSeen, LastSeen, Severity, AlertReason, RegionCount, Regions,
+          EventCount, UserIdentityArn, SourceIpAddress, RecipientAccountId;
+
+union IOCFilePush, AttackerRoleCodeCommit, AssumedRoleWrite
+| sort by TimeGenerated desc

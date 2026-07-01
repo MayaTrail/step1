@@ -1,0 +1,74 @@
+# FILE: sigma_t1578.002.yml
+title: AMBERSQUID - Multi-Region Compute Infrastructure Burst for Cryptomining
+id: a1d5f7b3-2e9c-5a8d-f3b7-9c2e4a6d1f8b
+status: experimental
+description: >
+  Detects AMBERSQUID's compute scaling phase: creation of Auto Scaling Groups
+  (on-demand "task" + spot "task1" naming pattern) and CloudFormation stacks
+  containing EC2 ImageBuilder pipelines scheduled to run every minute.
+  AMBERSQUID scale: 8 instances per ASG x 4 regions (on-demand + spot),
+  8x ml.t3.2xlarge SageMaker notebooks x 4 regions, ImageBuilder pipelines
+  with cron-every-minute schedule to continuously refresh miner compute.
+  Individual signals: ASG named "task" or "task1" from non-console session;
+  CloudFormation stack creation with ImageBuilder in non-standard pipeline account;
+  RunInstances with c5.large/c5.xlarge from IAM session without standard fleet role.
+references:
+    - https://attack.mitre.org/techniques/T1578/002/
+    - https://unit42.paloaltonetworks.com/ambersquid/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1578.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_asg_ioc_names:
+        eventSource: autoscaling.amazonaws.com
+        eventName: CreateAutoScalingGroup
+        requestParameters.autoScalingGroupName:
+            - 'task'
+            - 'task1'
+    selection_imagebuilder_pipeline:
+        eventSource: imagebuilder.amazonaws.com
+        eventName:
+            - CreateImagePipeline
+            - StartImagePipelineExecution
+        userIdentity.type: AssumedRole
+    selection_cfn_imagebuilder:
+        eventSource: cloudformation.amazonaws.com
+        eventName: CreateStack
+        requestParameters.templateBody|contains:
+            - 'ImageBuilder'
+            - 'AWS::ImageBuilder'
+    selection_run_instances_non_console:
+        eventSource: ec2.amazonaws.com
+        eventName: RunInstances
+        requestParameters.instanceType:
+            - 'c5.large'
+            - 'c5.xlarge'
+            - 'c5.2xlarge'
+        userIdentity.type: IAMUser
+    filter_console:
+        userAgent|contains:
+            - 'console.aws.amazon.com'
+            - 'AWSConsole'
+    filter_legitimate_fleet:
+        userIdentity.arn|contains:
+            - ':assumed-role/AWSServiceRoleForAutoScaling'
+            - ':assumed-role/EC2FleetRole'
+    condition: >
+      (selection_asg_ioc_names or selection_imagebuilder_pipeline or
+       selection_cfn_imagebuilder or selection_run_instances_non_console)
+      and not filter_console and not filter_legitimate_fleet
+falsepositives:
+    - Legitimate Auto Scaling Groups with generic names in non-production accounts
+    - ImageBuilder pipelines created by authorized DevOps teams via CLI
+    - CloudFormation stacks containing ImageBuilder resources for AMI baking pipelines
+level: medium
+# AMBERSQUID IOC ASG names: "task" (on-demand), "task1" (spot)
+# ImageBuilder with cron-every-minute schedule is an extreme outlier — legitimate
+# pipelines typically run hourly or less frequently.
+# Correlate with T1059.009 multi-service burst occurring within 10 minutes prior
+# to elevate to HIGH — AMBERSQUID sequences these immediately after miner deployment.

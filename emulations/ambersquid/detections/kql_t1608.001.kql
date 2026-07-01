@@ -1,0 +1,72 @@
+// FILE: kql_t1608.001.kql
+// T1608.001 Stage Capabilities: Upload Malware - AMBERSQUID Malicious Container Image
+// T1608.001 generates NO CloudTrail events. AMBERSQUID stages a Docker image containing
+// SRBMiner-MULTI (UPX-packed) on an external registry before targeting victim accounts.
+// These rules detect the downstream observable: ECS task definitions referencing public
+// registry images (not corporate ECR), especially when combined with mining indicators
+// (POOL/WALLET/ALGO env vars) or credential injection (AWS_ACCESS_KEY_ID in env vars).
+
+// Rule 1: ECS RegisterTaskDefinition with public registry image (ubuntu, docker.io)
+// from non-console session - proxy for staged malicious image use
+let PublicImageTaskDef = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "ecs.amazonaws.com"
+| where EventName == "RegisterTaskDefinition"
+| where RequestParameters has_any ("\"image\":\"ubuntu", "\"image\":\"docker.io",
+                                    "\"image\":\"public.ecr.aws", "\"image\":\"ghcr.io")
+| where UserAgent !contains "console.aws.amazon.com"
+| extend TaskFamily = tostring(parse_json(RequestParameters).family)
+| extend ExecutionRoleArn = tostring(parse_json(RequestParameters).executionRoleArn)
+| project TimeGenerated, EventName, TaskFamily, ExecutionRoleArn,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "LOW"
+| extend AlertReason = "ECS task definition references public registry image from non-console session";
+
+// Rule 2: ECS task definition with AWS credential injection as plaintext env vars
+// AMBERSQUID IOC: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY as container environment variables
+let CredentialInjection = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "ecs.amazonaws.com"
+| where EventName == "RegisterTaskDefinition"
+| where RequestParameters has_any ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+| extend TaskFamily = tostring(parse_json(RequestParameters).family)
+| extend ExecutionRoleArn = tostring(parse_json(RequestParameters).executionRoleArn)
+| project TimeGenerated, EventName, TaskFamily, ExecutionRoleArn,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "CRITICAL"
+| extend AlertReason = "ECS task definition injects AWS credentials as plaintext container env vars (AMBERSQUID credential harvest vector)";
+
+// Rule 3: ECS task definition with combined public image + mining env vars
+// Highest-confidence AMBERSQUID proxy: ubuntu image + POOL/WALLET/ALGO env vars
+let MinerImageAndEnvVars = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "ecs.amazonaws.com"
+| where EventName == "RegisterTaskDefinition"
+| where RequestParameters has_any ("\"image\":\"ubuntu", "\"image\":\"docker.io")
+| where RequestParameters has_any ("POOL", "WALLET", "ALGO", "WORKER", "MINER")
+| extend TaskFamily = tostring(parse_json(RequestParameters).family)
+| extend ExecutionRoleArn = tostring(parse_json(RequestParameters).executionRoleArn)
+| project TimeGenerated, EventName, TaskFamily, ExecutionRoleArn,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "CRITICAL"
+| extend AlertReason = "ECS task definition: public base image + mining pool env vars (AMBERSQUID staged miner execution)";
+
+// Rule 4: ECR image push that triggers Inspector finding (downstream detection)
+// If the staged image is ever pulled into ECR for re-use, Inspector scanning fires
+// This detects the ECR push event — Inspector findings appear as GuardDuty/Security Hub events
+let ECRImagePush = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "ecr.amazonaws.com"
+| where EventName == "PutImage"
+| where UserIdentityType == "AssumedRole"
+| where UserAgent !contains "console.aws.amazon.com"
+| extend RepositoryName = tostring(parse_json(RequestParameters).repositoryName)
+| extend ImageTag = tostring(parse_json(RequestParameters).imageTag)
+| extend ImageDigest = tostring(parse_json(RequestParameters).imageDigest)
+| project TimeGenerated, EventName, RepositoryName, ImageTag, ImageDigest,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "MEDIUM"
+| extend AlertReason = "ECR image pushed from AssumedRole session - trigger Inspector scan for UPX-packed ELFs";
+
+union PublicImageTaskDef, CredentialInjection, MinerImageAndEnvVars, ECRImagePush
+| sort by TimeGenerated desc

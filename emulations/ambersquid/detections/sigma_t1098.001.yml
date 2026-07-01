@@ -1,0 +1,52 @@
+# FILE: sigma_t1098.001.yml
+title: AMBERSQUID - Multi-Role AssumeRole Burst for Parallel Session Establishment
+id: b5d7f3a2-9c4e-1b7d-a5f8-3c6e9b2d4f7a
+status: experimental
+description: >
+  Detects AMBERSQUID's credential multiplication phase: a single IAM user assuming
+  three distinct attacker-created roles (AWSCodeCommit-Role, sugo-role, ecsTaskExecutionRole)
+  within seconds to establish parallel STS sessions with different AWS service scopes.
+  This pattern — multiple AssumeRole calls to roles created in the same session by
+  the same IAMUser, especially including a role with AdministratorAccess — is
+  near-unique to attacker credential chain establishment. STS sessions persist even
+  after the original IAM key is rotated or revoked (3600 second expiry).
+references:
+    - https://attack.mitre.org/techniques/T1098/001/
+    - https://unit42.paloaltonetworks.com/ambersquid/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.persistence
+    - attack.t1098.001
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_assume_role:
+        eventSource: sts.amazonaws.com
+        eventName: AssumeRole
+        requestParameters|contains:
+            - 'AWSCodeCommit-Role'
+            - 'sugo-role'
+            - 'ecsTaskExecutionRole'
+    selection_assume_admin:
+        eventSource: sts.amazonaws.com
+        eventName: AssumeRole
+        userIdentity.type: IAMUser
+        requestParameters.roleArn|contains: 'ecsTaskExecutionRole'
+    filter_aws_services:
+        userIdentity.invokedBy|contains:
+            - '.amazonaws.com'
+    filter_console:
+        userAgent|contains:
+            - 'console.aws.amazon.com'
+    condition: (selection_assume_role or selection_assume_admin) and not filter_aws_services and not filter_console
+falsepositives:
+    - ECS task execution assuming the legitimate AWS-managed ecsTaskExecutionRole
+    - Cross-account workflows using an ecsTaskExecutionRole variant for container access
+    - Organizations naming internal roles with "ecsTaskExecutionRole" prefix
+level: high
+# Temporal correlation: 3 AssumeRole events to these three role names from the same
+# IAMUser principal within 30 seconds is a definitive AMBERSQUID indicator.
+# Note: ecsTaskExecutionRole assumed by an IAMUser (not ecs-tasks.amazonaws.com)
+# is always suspicious — ECS service assumes this role, not humans or scripts.
