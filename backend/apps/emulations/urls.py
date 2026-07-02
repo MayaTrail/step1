@@ -34,6 +34,7 @@ from .views import (
     EmulationRunDetailView,
     EmulationRunListView,
     EmulationTechniquesView,
+    PlaybookCommandView,
 )
 
 urlpatterns = [
@@ -46,6 +47,7 @@ urlpatterns = [
     path("<str:emulation_type>/techniques/", EmulationTechniquesView.as_view(), name="emulation-techniques"),
     path("<str:emulation_type>/detections/", EmulationDetectionsView.as_view(), name="emulation-detections"),
     path("<str:emulation_type>/playbook/", EmulationPlaybookView.as_view(), name="emulation-playbook"),
+    path("<str:emulation_type>/command/", PlaybookCommandView.as_view(), name="emulation-playbook-command"),
     # UUID-param lifecycle routes.
     path("<uuid:run_id>/", EmulationRunDetailView.as_view(), name="emulation-run-detail"),
     path("<uuid:stack_id>/attack/", EmulationAttackView.as_view(), name="emulation-attack"),

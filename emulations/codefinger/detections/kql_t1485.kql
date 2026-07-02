@@ -1,0 +1,124 @@
+// FILE: kql_t1485.kql
+// T1485 Data Destruction - Codefinger S3 Lifecycle TTL + Bulk DeleteObject
+// Detects lifecycle policy creation with short expiry and bulk deletions post-encryption
+// Platform: AWS CloudTrail -> Microsoft Sentinel AWSCloudTrail table
+
+// --- Query 1: PutBucketLifecycleConfiguration - any IAM user initiated ---
+AWSCloudTrail
+| where EventName == "PutBucketLifecycleConfiguration"
+| where EventSource == "s3.amazonaws.com"
+| where UserIdentityType == "IAMUser"
+// Exclude known IaC service accounts that legitimately manage lifecycle policies
+| where UserAgent !contains "terraform"
+| where UserAgent !contains "pulumi"
+| where UserAgent !contains "cloudformation"
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityUserName,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    RequestParameters,
+    AwsRegion,
+    ErrorCode
+| sort by TimeGenerated desc
+
+
+// --- Query 2: Lifecycle policy with short expiry - parse expiry days from request ---
+AWSCloudTrail
+| where EventName == "PutBucketLifecycleConfiguration"
+| where EventSource == "s3.amazonaws.com"
+| where UserIdentityType == "IAMUser"
+// Extract expiry days - Codefinger uses 7 days, emulation uses 1 day
+| extend ExpiryDays = extract(@'"Days"\s*:\s*(\d+)', 1, RequestParameters)
+| extend ExpiryDaysInt = toint(ExpiryDays)
+// Flag lifecycle policies with expiry <= 7 days (ransomware pressure tactic)
+| where ExpiryDaysInt <= 7 or RequestParameters contains "codefinger"
+| project
+    TimeGenerated,
+    UserIdentityUserName,
+    UserIdentityArn,
+    SourceIpAddress,
+    ExpiryDays,
+    RequestParameters,
+    AwsRegion
+| sort by TimeGenerated desc
+
+
+// --- Query 3: Bulk DeleteObject calls from IAM users - volume anomaly ---
+AWSCloudTrail
+| where EventName in ("DeleteObject", "DeleteObjects")
+| where EventSource == "s3.amazonaws.com"
+| where UserIdentityType == "IAMUser"
+// DeleteObjects (plural) can delete up to 1000 objects per API call
+| summarize
+    DeleteCallCount = count(),
+    FirstDelete = min(TimeGenerated),
+    LastDelete = max(TimeGenerated)
+    by bin(TimeGenerated, 10m), UserIdentityUserName, UserIdentityArn, SourceIpAddress
+| where DeleteCallCount > 5
+| extend DeleteWindowSeconds = datetime_diff("second", LastDelete, FirstDelete)
+| project
+    WindowStart = TimeGenerated,
+    UserIdentityUserName,
+    UserIdentityArn,
+    SourceIpAddress,
+    DeleteCallCount,
+    FirstDelete,
+    LastDelete,
+    DeleteWindowSeconds
+| sort by DeleteCallCount desc
+
+
+// --- Query 4: SSE-C PutObject immediately followed by DeleteObject same principal ---
+// The core Codefinger sequence: encrypt then delete originals
+let EncryptStep = AWSCloudTrail
+    | where EventName == "PutObject"
+    | where EventSource == "s3.amazonaws.com"
+    | where RequestParameters contains "x-amz-server-side-encryption-customer-algorithm"
+    | where UserIdentityType == "IAMUser"
+    | summarize EncryptCount = count(), EncryptTime = min(TimeGenerated)
+        by UserIdentityArn, SourceIpAddress;
+let DeleteStep = AWSCloudTrail
+    | where EventName in ("DeleteObject", "DeleteObjects")
+    | where EventSource == "s3.amazonaws.com"
+    | where UserIdentityType == "IAMUser"
+    | summarize DeleteCount = count(), DeleteTime = min(TimeGenerated)
+        by UserIdentityArn;
+EncryptStep
+| join kind=inner DeleteStep on UserIdentityArn
+| where DeleteTime > EncryptTime and DeleteTime < EncryptTime + 60m
+| project
+    UserIdentityArn,
+    SourceIpAddress,
+    EncryptCount,
+    DeleteCount,
+    EncryptTime,
+    DeleteTime,
+    DelayMinutes = datetime_diff("minute", DeleteTime, EncryptTime)
+| sort by EncryptTime desc
+
+
+// --- Query 5: Lifecycle + Delete combo - both actions same principal same day ---
+let LifecycleEvents = AWSCloudTrail
+    | where EventName == "PutBucketLifecycleConfiguration"
+    | where EventSource == "s3.amazonaws.com"
+    | where UserIdentityType == "IAMUser"
+    | project LifecycleTime = TimeGenerated, Principal = UserIdentityArn, LifecycleIP = SourceIpAddress, LifecycleParams = RequestParameters;
+let DeleteEvents = AWSCloudTrail
+    | where EventName in ("DeleteObject", "DeleteObjects")
+    | where EventSource == "s3.amazonaws.com"
+    | where UserIdentityType == "IAMUser"
+    | project DeleteTime = TimeGenerated, Principal = UserIdentityArn;
+LifecycleEvents
+| join kind=inner DeleteEvents on Principal
+| where abs(datetime_diff("minute", DeleteTime, LifecycleTime)) < 120
+| project
+    Principal,
+    LifecycleIP,
+    LifecycleTime,
+    DeleteTime,
+    LifecycleParams,
+    ProximityMinutes = abs(datetime_diff("minute", DeleteTime, LifecycleTime))
+| sort by LifecycleTime desc

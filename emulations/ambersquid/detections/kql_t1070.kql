@@ -1,0 +1,96 @@
+// FILE: kql_t1070.kql
+// T1070 Indicator Removal - AMBERSQUID CloudTrail Disable and Evidence Cleanup
+// Three detection tiers: (1) StopLogging event itself (always fires before logging stops),
+// (2) DeleteObject on CloudTrail S3 bucket (log destruction), (3) multi-resource
+// deletion burst (resource evidence cleanup). Highest priority alert in the kill chain.
+
+// Rule 1: StopLogging - CRITICAL single-event detection, fires before logging is disabled
+let StopLoggingAlert = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "cloudtrail.amazonaws.com"
+| where EventName in ("StopLogging", "DeleteTrail")
+| extend TrailName = tostring(parse_json(RequestParameters).name)
+| project TimeGenerated, EventName, TrailName,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "CRITICAL"
+| extend AlertReason = strcat(EventName, " detected - CloudTrail logging disabled (fires before logging stops, always captured)");
+
+// Rule 2: DeleteObject on CloudTrail/audit log S3 buckets
+let LogDeletionAlert = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "s3.amazonaws.com"
+| where EventName == "DeleteObject"
+| extend BucketName = tostring(parse_json(RequestParameters).bucketName)
+| extend ObjectKey = tostring(parse_json(RequestParameters).key)
+| where BucketName has_any ("cloudtrail", "trail-logs", "audit-logs", "logging") or
+        ObjectKey has_any ("CloudTrail", "AWSLogs")
+| project TimeGenerated, EventName, BucketName, ObjectKey,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "CRITICAL"
+| extend AlertReason = "DeleteObject on CloudTrail log S3 bucket - evidence destruction";
+
+// Rule 3: StopLogging followed by DeleteObject within 10 minutes (compound indicator)
+let StopLogging2 = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "cloudtrail.amazonaws.com"
+| where EventName == "StopLogging"
+| project StopTime = TimeGenerated, UserIdentityArn, SourceIpAddress, RecipientAccountId;
+
+let S3Delete = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "s3.amazonaws.com"
+| where EventName == "DeleteObject"
+| extend BucketName = tostring(parse_json(RequestParameters).bucketName)
+| extend ObjectKey = tostring(parse_json(RequestParameters).key)
+| project DeleteTime = TimeGenerated, UserIdentityArn, SourceIpAddress, RecipientAccountId,
+          BucketName, ObjectKey;
+
+let CompoundLogDestruction = StopLogging2
+| join kind=inner (S3Delete) on UserIdentityArn, SourceIpAddress, RecipientAccountId
+| where DeleteTime > StopTime
+| where datetime_diff('minute', DeleteTime, StopTime) <= 10
+| extend Severity = "CRITICAL"
+| extend AlertReason = "StopLogging followed by S3 log object deletion within 10 minutes (compound evasion)"
+| project StopTime, DeleteTime, Severity, AlertReason, BucketName, ObjectKey,
+          UserIdentityArn, SourceIpAddress, RecipientAccountId;
+
+// Rule 4: Multi-resource deletion burst (AMBERSQUID cleanup sweep)
+let ResourceCleanupBurst = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventName in (
+    "DeleteApp",             // Amplify
+    "DeleteRepository",      // CodeCommit
+    "DeleteCluster",         // ECS
+    "DeleteNotebookInstance",// SageMaker
+    "DeleteProject",         // CodeBuild
+    "DetachRolePolicy",      // IAM pre-delete
+    "DeleteRole"             // IAM
+  )
+| where UserIdentityType in ("IAMUser", "AssumedRole")
+| where UserAgent !contains "console.aws.amazon.com"
+| summarize
+    DeleteCount = count(),
+    DeletedResources = make_set(EventName),
+    DistinctServices = dcount(EventSource),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated)
+  by UserIdentityArn, SourceIpAddress, bin(TimeGenerated, 10m), RecipientAccountId
+| where DeleteCount >= 3
+| extend Severity = case(
+    DistinctServices >= 4, "HIGH",
+    DistinctServices >= 2, "MEDIUM",
+    "LOW"
+  )
+| extend AlertReason = strcat("Multi-resource deletion burst: ", tostring(DeleteCount), " deletes across ", tostring(DistinctServices), " services in 10 minutes")
+| project FirstSeen, LastSeen, Severity, AlertReason, DeleteCount, DeletedResources,
+          DistinctServices, UserIdentityArn, SourceIpAddress, RecipientAccountId;
+
+union StopLoggingAlert, LogDeletionAlert
+| union (CompoundLogDestruction | project TimeGenerated = StopTime, EventName = "StopLogging+DeleteObject",
+         BucketName, ObjectKey, UserIdentityArn, UserIdentityType = "compound", SourceIpAddress,
+         UserAgent = "N/A", AWSRegion = "compound", RecipientAccountId, Severity, AlertReason)
+| union (ResourceCleanupBurst | extend TimeGenerated = FirstSeen, EventName = "MultiResourceDeleteBurst",
+         UserIdentityType = "mixed", UserAgent = "N/A", AWSRegion = "multi"
+         | project TimeGenerated, EventName, UserIdentityArn, UserIdentityType, SourceIpAddress,
+                   UserAgent, AWSRegion, RecipientAccountId, Severity, AlertReason)
+| sort by TimeGenerated desc

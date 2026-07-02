@@ -37,6 +37,7 @@ class LogEntry(models.Model):
         EMULATION_STARTED = "emulation.started", "Emulation Started"
         EMULATION_COMPLETED = "emulation.completed", "Emulation Completed"
         EMULATION_FAILED = "emulation.failed", "Emulation Failed"
+        PLAYBOOK_COMMAND = "playbook.command", "Playbook Command Run"
 
     id = models.UUIDField(
         primary_key=True,

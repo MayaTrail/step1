@@ -1,0 +1,73 @@
+// FILE: kql_t1610.kql
+// T1610 Deploy Container - AMBERSQUID Malicious ECS Task Definition Registration
+// Detects ECS task definitions with overly permissive execution roles, miner IOC names,
+// and mining pool environment variable patterns in task container definitions.
+
+// Rule 1: RegisterTaskDefinition where environment vars contain mining indicators
+let MinerEnvVars = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "ecs.amazonaws.com"
+| where EventName == "RegisterTaskDefinition"
+| where RequestParameters has_any ("POOL", "WALLET", "ALGO", "WORKER", "MINER")
+| extend TaskFamily = tostring(parse_json(RequestParameters).family)
+| extend ExecutionRoleArn = tostring(parse_json(RequestParameters).executionRoleArn)
+| extend CPU = tostring(parse_json(RequestParameters).cpu)
+| extend Memory = tostring(parse_json(RequestParameters).memory)
+| project TimeGenerated, EventName, TaskFamily, ExecutionRoleArn, CPU, Memory,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "CRITICAL"
+| extend AlertReason = "ECS task definition contains mining pool environment variable names (POOL/WALLET/ALGO)";
+
+// Rule 2: RegisterTaskDefinition with known AMBERSQUID IOC task family or container names
+let IOCTaskNames = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "ecs.amazonaws.com"
+| where EventName == "RegisterTaskDefinition"
+| where RequestParameters has_any ("miner-fargate-task", "miner-task", "srbminer", "miner-cluster")
+| extend TaskFamily = tostring(parse_json(RequestParameters).family)
+| extend ExecutionRoleArn = tostring(parse_json(RequestParameters).executionRoleArn)
+| project TimeGenerated, EventName, TaskFamily, ExecutionRoleArn,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "HIGH"
+| extend AlertReason = "ECS task definition with AMBERSQUID IOC family or container name matched";
+
+// Rule 3: RegisterTaskDefinition where executionRoleArn is attacker-named ecsTaskExecutionRole
+// and caller is an AssumedRole (not AWS service or console)
+let AdminExecRole = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "ecs.amazonaws.com"
+| where EventName == "RegisterTaskDefinition"
+| where RequestParameters contains "ecsTaskExecutionRole"
+| where UserIdentityType == "AssumedRole"
+| where UserAgent !contains "console.aws.amazon.com"
+| where UserIdentityArn !contains ":assumed-role/AWSServiceRole"
+| where UserIdentityArn !contains "cloudformation"
+| extend TaskFamily = tostring(parse_json(RequestParameters).family)
+| extend ExecutionRoleArn = tostring(parse_json(RequestParameters).executionRoleArn)
+| project TimeGenerated, EventName, TaskFamily, ExecutionRoleArn,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "HIGH"
+| extend AlertReason = "ECS RegisterTaskDefinition with ecsTaskExecutionRole from AssumedRole session";
+
+// Rule 4: Fargate CreateService burst - multiple services created in short window
+let FargateBurst = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "ecs.amazonaws.com"
+| where EventName == "CreateService"
+| where RequestParameters contains "FARGATE"
+| where UserIdentityType == "AssumedRole"
+| where UserAgent !contains "console.aws.amazon.com"
+| summarize
+    ServiceCount = count(),
+    Clusters = make_set(tostring(parse_json(RequestParameters).cluster)),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated)
+  by UserIdentityArn, SourceIpAddress, bin(TimeGenerated, 5m), RecipientAccountId
+| where ServiceCount >= 2
+| extend Severity = iff(ServiceCount >= 10, "CRITICAL", "HIGH")
+| extend AlertReason = strcat("Fargate CreateService burst: ", tostring(ServiceCount), " services within 5 minutes")
+| project FirstSeen, LastSeen, Severity, AlertReason, ServiceCount, Clusters,
+          UserIdentityArn, SourceIpAddress, RecipientAccountId;
+
+union MinerEnvVars, IOCTaskNames, AdminExecRole
+| sort by TimeGenerated desc

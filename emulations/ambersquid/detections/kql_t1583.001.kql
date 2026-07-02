@@ -1,0 +1,74 @@
+// FILE: kql_t1583.001.kql
+// T1583.001 Acquire Infrastructure: Domains - AMBERSQUID Amplify Subdomain Acquisition
+// T1583.001 generates NO CloudTrail events for the domain registration itself.
+// AMBERSQUID automatically acquires amplifyapp.com subdomains as a side-effect of
+// CreateApp calls made in victim accounts. These rules detect the observable proxy:
+// Amplify app creation from non-console sessions producing new amplifyapp.com subdomains.
+// Cross-reference the defaultDomain in responseElements against threat intel IOC feeds.
+
+// Rule 1: Amplify CreateApp from non-console session (proxy for subdomain acquisition)
+let AmplifyAppCreation = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "amplify.amazonaws.com"
+| where EventName == "CreateApp"
+| where UserAgent !contains "console.aws.amazon.com"
+| where UserAgent !contains "Amplify Console"
+| extend AppName = tostring(parse_json(RequestParameters).name)
+| extend Repository = tostring(parse_json(RequestParameters).repository)
+| extend IAMServiceRoleArn = tostring(parse_json(RequestParameters).iamServiceRoleArn)
+// defaultDomain in responseElements contains the assigned amplifyapp.com subdomain
+| extend AssignedDomain = tostring(parse_json(ResponseElements).app.defaultDomain)
+| project TimeGenerated, EventName, AppName, Repository, IAMServiceRoleArn, AssignedDomain,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "LOW"
+| extend AlertReason = "Amplify app created from non-console session - amplifyapp.com subdomain assigned";
+
+// Rule 2: Amplify CreateApp with CodeCommit source using attacker IOC role
+let AmplifyWithCodeCommitRole = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "amplify.amazonaws.com"
+| where EventName == "CreateApp"
+| where RequestParameters has "git-codecommit"
+| where RequestParameters has_any ("AWSCodeCommit-Role", "sugo-role")
+| extend AppName = tostring(parse_json(RequestParameters).name)
+| extend Repository = tostring(parse_json(RequestParameters).repository)
+| extend AssignedDomain = tostring(parse_json(ResponseElements).app.defaultDomain)
+| project TimeGenerated, EventName, AppName, Repository, AssignedDomain,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "HIGH"
+| extend AlertReason = "Amplify app created with CodeCommit source using AMBERSQUID IOC role (AWSCodeCommit-Role)";
+
+// Rule 3: Known AMBERSQUID IOC domain correlation
+// Cross-reference AssignedDomain against known AMBERSQUID domains via threat intel lookup
+// IOC: master.d19tgz4vpyd5.amplifyapp.com
+let KnownIOCDomain = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "amplify.amazonaws.com"
+| where EventName == "CreateApp"
+| extend AssignedDomain = tostring(parse_json(ResponseElements).app.defaultDomain)
+| where AssignedDomain contains "d19tgz4vpyd5"  // AMBERSQUID IOC subdomain fragment
+| project TimeGenerated, EventName, AssignedDomain,
+          UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion, RecipientAccountId
+| extend Severity = "CRITICAL"
+| extend AlertReason = "Amplify app domain matches AMBERSQUID IOC: master.d19tgz4vpyd5.amplifyapp.com";
+
+// Rule 4: Amplify CreateApp burst - multiple apps within 10 minutes (AMBERSQUID: 5 per region)
+let AmplifyBurst = AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "amplify.amazonaws.com"
+| where EventName == "CreateApp"
+| where UserAgent !contains "console.aws.amazon.com"
+| summarize
+    AppCount = count(),
+    AppNames = make_set(tostring(parse_json(RequestParameters).name)),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated)
+  by UserIdentityArn, SourceIpAddress, bin(TimeGenerated, 10m), RecipientAccountId, AWSRegion
+| where AppCount >= 3
+| extend Severity = case(AppCount >= 5, "HIGH", "MEDIUM")
+| extend AlertReason = strcat("Amplify CreateApp burst: ", tostring(AppCount), " apps in 10 minutes (AMBERSQUID creates 5 per region)")
+| project FirstSeen, LastSeen, Severity, AlertReason, AppCount, AppNames,
+          UserIdentityArn, SourceIpAddress, AWSRegion, RecipientAccountId;
+
+union AmplifyAppCreation, AmplifyWithCodeCommitRole, KnownIOCDomain
+| sort by TimeGenerated desc

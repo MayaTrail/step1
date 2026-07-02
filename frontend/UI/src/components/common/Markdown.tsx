@@ -34,7 +34,7 @@ export function Markdown({ content }: { content: string }) {
                         <blockquote className="border-l-2 border-border pl-3 my-3 text-content-dim italic">{children}</blockquote>
                     ),
                     pre: ({ children }) => (
-                        <pre className="bg-surface-base border border-border rounded-btn p-3 overflow-x-auto my-3 text-[13px]">{children}</pre>
+                        <pre className="bg-surface-deep border border-border rounded-btn p-3.5 overflow-x-auto my-3 text-[13px]">{children}</pre>
                     ),
                     code: ({ className, children }) => {
                         const text = String(children)
@@ -42,7 +42,9 @@ export function Markdown({ content }: { content: string }) {
                         if (isInline) {
                             return <code className="font-mono text-[0.85em] bg-white/[0.06] text-content-primary rounded px-1 py-0.5">{children}</code>
                         }
-                        return <code className="font-mono text-content-secondary">{children}</code>
+                        // Block code stays neutral: brighter primary text on the darker
+                        // surface-deep block sets it apart from prose without a colour hue.
+                        return <code className="font-mono text-content-primary leading-relaxed">{children}</code>
                     },
                     table: ({ children }) => (
                         <div className="overflow-x-auto my-3">
