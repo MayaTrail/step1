@@ -59,12 +59,12 @@ def discover() -> list[dict[str, Any]]:
     for subdir in sorted(package_dir.iterdir()):
         if not subdir.is_dir():
             continue
-        if subdir.name.startswith("_") or subdir.name in _SKIP:
+        if subdir.name.startswith(("_", ".")) or subdir.name in _SKIP:
             continue
 
         manifest_file = subdir / "MANIFEST.py"
         if not manifest_file.exists():
-            logger.warning("Skipping emulations.%s — no MANIFEST.py found", subdir.name)
+            logger.debug("Skipping emulations.%s — no MANIFEST.py found", subdir.name)
             continue
 
         try:
