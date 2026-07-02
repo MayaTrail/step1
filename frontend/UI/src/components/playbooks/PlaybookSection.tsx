@@ -22,17 +22,29 @@ interface Step {
  * intro as `preamble` and turns each block into a numbered Step. A section with
  * no H4 headings yields zero steps, and the caller falls back to a plain render.
  */
+const STEP_BOUNDARY = /^####\s+(?:Query|Step)\s+\d+/im
+
 function splitSteps(markdown: string): { preamble: string; steps: Step[] } {
-  const parts = markdown.split(/^####\s+/m)
-  const preamble = (parts[0] ?? '').trim()
-  const steps: Step[] = parts.slice(1).map((part, i) => {
-    const nl = part.indexOf('\n')
-    const rawTitle = (nl === -1 ? part : part.slice(0, nl)).trim()
-    const body = (nl === -1 ? '' : part.slice(nl + 1)).trim()
-    // Drop a leading "Query 3 — " / "Step 3 - " so the badge carries the number.
-    const title = rawTitle.replace(/^(query|step)\s+\d+\s*[—:-]\s*/i, '')
-    return { n: i + 1, title, body }
-  })
+  // Only "#### Query N" / "#### Step N" headings become checklist steps. Other
+  // H4s (e.g. "#### HIGH-CONFIDENCE" under Detection Triggers) stay in the
+  // preamble so they render as compact prose rather than oversized step cards.
+  const boundary = STEP_BOUNDARY.exec(markdown)
+  if (!boundary) {
+    return { preamble: markdown.trim(), steps: [] }
+  }
+  const preamble = markdown.slice(0, boundary.index).trim()
+  const region = markdown.slice(boundary.index)
+  const steps: Step[] = region
+    .split(/^####\s+/m)
+    .slice(1)
+    .map((part, i) => {
+      const nl = part.indexOf('\n')
+      const rawTitle = (nl === -1 ? part : part.slice(0, nl)).trim()
+      const body = (nl === -1 ? '' : part.slice(nl + 1)).trim()
+      // Drop a leading "Query 3 — " / "Step 3 - " so the badge carries the number.
+      const title = rawTitle.replace(/^(query|step)\s+\d+\s*[—:-]\s*/i, '')
+      return { n: i + 1, title, body }
+    })
   return { preamble, steps }
 }
 
@@ -127,7 +139,7 @@ export function PlaybookSection({ emulationId, section }: { emulationId: string;
   return (
     <div className="flex flex-col gap-3">
       {/* Section header with progress — sticky so it stays visible while scrolling. */}
-      <div className="sticky top-0 z-10 flex items-center gap-4 flex-wrap bg-surface-deep/95 backdrop-blur-sm py-2.5 border-b border-border">
+      <div className="sticky top-0 z-10 flex items-center gap-4 flex-wrap bg-surface-deep py-2.5 border-b border-border">
         <div className="font-display text-sm font-semibold text-content-primary">{section.title}</div>
         <div className="flex items-center gap-2.5 ml-auto min-w-[180px]">
           <span className="font-mono text-2xs text-content-dim whitespace-nowrap">

@@ -95,7 +95,7 @@ function CommandOutput({ run }: { run: RunState }) {
   const r = run.result
   if (!r) return null
   if (!r.runnable) {
-    return <Notice tone="dim">{r.reason ?? 'This command cannot be run here.'} Copy it to run locally.</Notice>
+    return <Notice tone="dim">{r.reason ?? 'This command cannot be run here. Copy it to run locally.'}</Notice>
   }
   if (r.error) {
     return <Notice tone="danger">{r.error}</Notice>

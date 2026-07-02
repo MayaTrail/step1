@@ -31,6 +31,7 @@ import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 # Minimum similarity for a placeholder to bind to a stack-output key. Below this
 # the placeholder stays unresolved (copy-only) rather than risk a wrong fill.
@@ -76,12 +77,12 @@ SAFE_OPS: dict[str, frozenset[str]] = {
     }),
 }
 
-# Any of these in the raw block means it is not a single clean CLI call. A shell
-# would be needed to evaluate them, and we never invoke a shell.
-_SHELL_CONSTRUCTS = ("|", "$(", "`", "&&", "||", ";", ">>", " > ", " < ")
-
-# Characters that must never appear inside a resolved argv token.
-_METACHAR_RE = re.compile(r"[;|&`$><(){}\\\n]")
+# Read-only text filters a command may pipe into. We validate the pipeline is
+# limited to these and then run only the aws stage — the filters are cosmetic
+# formatting, and the analyst still receives the raw command output.
+_SAFE_FILTERS = frozenset({
+    "jq", "grep", "egrep", "fgrep", "head", "tail", "sort", "uniq", "wc", "cut", "column", "tr", "cat",
+})
 
 # An unfilled placeholder, e.g. <victim-iam-username>.
 _PLACEHOLDER_RE = re.compile(r"<[^>]+>")
@@ -89,8 +90,40 @@ _PLACEHOLDER_RE = re.compile(r"<[^>]+>")
 # A shell variable reference: $VAR or ${VAR}.
 _VARREF_RE = re.compile(r"\$\{?(\w+)\}?")
 
-# A simple VAR=value assignment line.
-_ASSIGN_RE = re.compile(r'^(\w+)=(.*)$')
+# A VAR=value assignment line.
+_ASSIGN_RE = re.compile(r"^(\w+)=(.*)$")
+
+# A $(date ...) command substitution, which we compute ourselves rather than
+# invoke a shell. Handles the "N unit ago" relative form playbooks use.
+_DATE_RE = re.compile(r"\$\(\s*date\b([^)]*)\)")
+_DATE_REL_RE = re.compile(r"-d\s+['\"]?(\d+)\s+(second|minute|hour|day|week)s?\s+ago['\"]?")
+_DATE_FMT_RE = re.compile(r"\+(\S+)")
+
+
+def _resolve_dates(text: str) -> str:
+    """
+    Replace `$(date ...)` substitutions with a computed UTC timestamp.
+
+    Supports the relative form playbooks use, e.g.
+    `$(date -u -d '2 hours ago' +%Y-%m-%dT%H:%M:%SZ)`, and the plain `now` form.
+    This lets a read-only command that looked back over a time window run without
+    ever invoking a shell.
+    """
+    def _repl(match: re.Match[str]) -> str:
+        args = match.group(1)
+        delta = timedelta()
+        rel = _DATE_REL_RE.search(args)
+        if rel:
+            delta = timedelta(**{f"{rel.group(2)}s": int(rel.group(1))})
+        fmt_match = _DATE_FMT_RE.search(args)
+        fmt = fmt_match.group(1) if fmt_match else "%Y-%m-%dT%H:%M:%SZ"
+        stamp = datetime.now(timezone.utc) - delta
+        try:
+            return stamp.strftime(fmt)
+        except ValueError:
+            return stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    return _DATE_RE.sub(_repl, text)
 
 
 @dataclass
@@ -114,14 +147,12 @@ def parse_command(block: str) -> ParsedCommand:
 
     Handles the common shape of a playbook snippet: a few `VAR="value"`
     assignment lines, comments, and one `aws ...` invocation (possibly split
-    across lines with trailing backslashes). Returns a ParsedCommand whose
-    `error` is set if the block is not a single, shell-free CLI call, and whose
-    `unresolved` lists any placeholders/vars still missing a value.
+    across lines with trailing backslashes, and possibly piped into read-only
+    text filters). `$(date ...)` is computed here; a trailing filter pipeline is
+    validated and dropped. Loops, other substitutions, and redirects keep the
+    command copy-only. `error` is set when it cannot become a single CLI call;
+    `unresolved` lists placeholders/vars still missing a value.
     """
-    if any(tok in block for tok in _SHELL_CONSTRUCTS):
-        return ParsedCommand(error="Command uses shell features that can't be run automatically.")
-
-    # Collect VAR=value assignments and the aws invocation, ignoring comments.
     assignments: dict[str, str] = {}
     aws_lines: list[str] = []
     collecting_aws = False
@@ -130,6 +161,9 @@ def parse_command(block: str) -> ParsedCommand:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
+        first = line.split(" ", 1)[0]
+        if first in {"for", "while", "do", "done", "if", "fi", "then", "else", "case", "esac"}:
+            return ParsedCommand(error="This command uses shell loops or conditionals. Copy it to run locally.")
         if collecting_aws:
             aws_lines.append(line.rstrip("\\").strip())
             collecting_aws = raw.rstrip().endswith("\\")
@@ -145,14 +179,37 @@ def parse_command(block: str) -> ParsedCommand:
     if not aws_lines:
         return ParsedCommand(error="No aws command found in this block.")
 
-    command_str = " ".join(aws_lines)
+    # Compute $(date ...) ourselves, then reject any other substitution/chaining
+    # that would require a shell we will not invoke.
+    command_str = _resolve_dates(" ".join(aws_lines))
+    if "$(" in command_str or "`" in command_str or any(op in command_str for op in ("&&", "||", ";")):
+        return ParsedCommand(error="This command uses shell features that can't be run automatically. Copy it to run locally.")
+
     try:
         tokens = shlex.split(command_str)
     except ValueError:
         return ParsedCommand(error="Command could not be parsed.")
 
-    # Substitute $VAR references from the block's own assignments. A reference
-    # with no matching assignment is left in place and later flagged unresolved.
+    # Drop a trailing pipeline as long as every stage is a read-only filter; run
+    # only the aws stage. shlex keeps a JMESPath '|' inside a quoted --query as
+    # part of that token, so only a real shell pipe appears as a bare '|' token.
+    if "|" in tokens:
+        pipe_at = tokens.index("|")
+        stage_start = True
+        for tok in tokens[pipe_at:]:
+            if tok == "|":
+                stage_start = True
+                continue
+            if stage_start:
+                if tok not in _SAFE_FILTERS:
+                    return ParsedCommand(error="This command pipes into an unsupported program. Copy it to run locally.")
+                stage_start = False
+        tokens = tokens[:pipe_at]
+
+    if any(tok in (">", ">>", "<") for tok in tokens):
+        return ParsedCommand(error="This command redirects output. Copy it to run locally.")
+
+    # Substitute $VAR from the block's own assignments; unknown refs are flagged.
     unresolved: list[str] = []
     resolved: list[str] = []
     for tok in tokens:
@@ -166,8 +223,7 @@ def parse_command(block: str) -> ParsedCommand:
         resolved.append(_VARREF_RE.sub(_sub, tok))
 
     parsed = ParsedCommand(argv=resolved, unresolved=unresolved)
-    # Placeholders are collected here but only make the command non-runnable;
-    # stack-output resolution (resolve_from_stack) may still fill them.
+    # Placeholders only make the command non-runnable; resolve_from_stack may fill them.
     for tok in resolved:
         parsed.unresolved.extend(_PLACEHOLDER_RE.findall(tok))
     return parsed
@@ -227,18 +283,22 @@ def validate_argv(argv: list[str]) -> str | None:
     Final gate before execution. Returns an error string, or None if safe.
 
     Enforces: it is an `aws <service> <op>` call; the (service, op) pair is in the
-    read-only allowlist; no token carries a shell metacharacter or leftover
-    placeholder. This is authoritative regardless of anything the client claimed.
+    read-only allowlist; no token still carries an unresolved placeholder or a
+    control character. Shell metacharacters in a token (e.g. the {}[]* of a
+    --query expression) are safe because execution never goes through a shell.
+    This is authoritative regardless of anything the client claimed.
     """
     if len(argv) < 3 or argv[0] != "aws":
         return "Only a single 'aws <service> <operation>' command can be run."
     service, operation = argv[1], argv[2]
     allowed = SAFE_OPS.get(service)
     if not allowed or operation not in allowed:
-        return f"'{service} {operation}' is not in the read-only allowlist; copy it to run locally."
+        return f"'{service} {operation}' is not a read-only command. Copy it to run locally."
     for tok in argv:
-        if _METACHAR_RE.search(tok) or _PLACEHOLDER_RE.search(tok):
-            return "Command still contains an unresolved value or unsafe character."
+        if "\n" in tok or "\x00" in tok:
+            return "Command contains an invalid character."
+        if _PLACEHOLDER_RE.search(tok):
+            return "This command needs values filled in. Copy it to run locally."
     return None
 
 

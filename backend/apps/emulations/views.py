@@ -795,7 +795,7 @@ class PlaybookCommandView(APIView):
 
         reason = parsed.error
         if reason is None and parsed.unresolved:
-            reason = "This command needs values to be filled in; copy it to run locally."
+            reason = "This command needs values filled in. Copy it to run locally."
         if reason is None:
             reason = command_runner.validate_argv(parsed.argv)
         if reason:
