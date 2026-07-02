@@ -31,6 +31,7 @@ from apps.infrastructure.permissions import IsEnterpriseUser
 from apps.logs.models import LogEntry
 
 from . import command_runner
+from .detections import build_detection_detail, list_detection_summaries
 from .models import EmulationRun
 from .registry import get_emulation, list_emulations
 from .serializers import (
@@ -344,68 +345,85 @@ class EmulationTechniquesView(APIView):
 
 class EmulationDetectionsView(APIView):
     """
-    Return SIGMA and KQL detection rules for an emulation type.
+    Return the detection rule index for an emulation type.
 
     GET /api/emulations/<emulation_type>/detections/
 
-    Reads .yml (SIGMA) and .kql (KQL) files from the emulation's detections/
-    subdirectory.  File contents are returned verbatim as strings — the frontend
-    renders them in CodeBlock components.
+    Groups the .yml (SIGMA) and .kql (KQL) files in the emulation's
+    detections/ subdirectory by technique and returns one summary per rule
+    (technique, title, severity, log source, formats, and both code bodies).
+    The frontend renders this as a master-detail library: the summaries feed
+    the rail, the code bodies feed the preview pane.
     """
 
     permission_classes = [IsEnterpriseUser]
 
     def get(self, request: Request, emulation_type: str) -> Response:
         """
-        Read and return detection files for emulation_type.
+        Build and return the grouped detection rule index for emulation_type.
 
         Args:
             request:        DRF request.
             emulation_type: URL path parameter — emulation package name.
 
         Returns:
-            200 with sigma and kql rule lists, or 404 if emulation_type is unknown.
+            200 with the grouped rule list, or 404 if emulation_type is unknown.
         """
         entry, err = _get_emulation_or_404(emulation_type)
         if err:
             return err
 
-        detections_path = entry.get("detections_path")
-        if not detections_path:
-            return Response({
-                "emulationType": emulation_type,
-                "sigma": [],
-                "kql": [],
-                "totalCount": 0,
-            })
-
-        detections_dir = Path(detections_path)
-        sigma_rules: list[dict] = []
-        kql_rules: list[dict] = []
-
-        for filename in sorted(entry.get("detection_files", [])):
-            filepath = detections_dir / filename
-            try:
-                content = filepath.read_text(encoding="utf-8")
-            except OSError as exc:
-                logger.warning("Could not read detection file %s: %s", filepath, exc)
-                continue
-
-            rule = {"title": filename, "code": content}
-
-            if filename.endswith(".yml"):
-                sigma_rules.append(rule)
-            elif filename.endswith(".kql"):
-                kql_rules.append(rule)
+        rules = list_detection_summaries(entry)
+        sigma_count = sum(1 for rule in rules if rule["formats"]["sigma"])
+        kql_count = sum(1 for rule in rules if rule["formats"]["kql"])
 
         return Response({
             "emulationType": emulation_type,
             "displayName": entry.get("display_name", emulation_type),
-            "sigma": sigma_rules,
-            "kql": kql_rules,
-            "totalCount": len(sigma_rules) + len(kql_rules),
-            "formats": f"SIGMA ({len(sigma_rules)}) · KQL ({len(kql_rules)})",
+            "rules": rules,
+            "totalCount": sigma_count + kql_count,
+            "formats": f"SIGMA ({sigma_count}) · KQL ({kql_count})",
         })
+
+
+class EmulationDetectionDetailView(APIView):
+    """
+    Return the full detail for a single detection rule.
+
+    GET /api/emulations/<emulation_type>/detections/<rule_id>/
+
+    rule_id is the technique grouping key (e.g. "t1098.001"). The response
+    pairs the Sigma rule, KQL query, and detection note that share that
+    technique, parses the Sigma frontmatter into structured metadata, and
+    adds the emulation-level context (threat actor, coverage, related
+    techniques) the detail page renders.
+    """
+
+    permission_classes = [IsEnterpriseUser]
+
+    def get(self, request: Request, emulation_type: str, rule_id: str) -> Response:
+        """
+        Read and return the detail payload for one detection rule.
+
+        Args:
+            request:        DRF request.
+            emulation_type: URL path parameter — emulation package name.
+            rule_id:        URL path parameter — technique grouping key.
+
+        Returns:
+            200 with the rule detail, 404 if the emulation or rule is unknown.
+        """
+        entry, err = _get_emulation_or_404(emulation_type)
+        if err:
+            return err
+
+        detail = build_detection_detail(entry, rule_id)
+        if detail is None:
+            return Response(
+                {"detail": f"Unknown detection rule '{rule_id}' for '{emulation_type}'."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(detail)
 
 
 class EmulationPlaybookView(APIView):

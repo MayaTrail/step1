@@ -12,6 +12,8 @@ allowed, since the UI renders it).
 
 from __future__ import annotations
 
+import json
+
 # Multi-turn chat: the UI renders Markdown, so allow it.
 CHAT_SYSTEM_PROMPT = (
     "You are a security analyst assistant inside the MayaTrail platform. "
@@ -92,3 +94,64 @@ def build_chat_system(entry: dict) -> str:
     turns carry only the actual user/assistant exchange.
     """
     return f"{CHAT_SYSTEM_PROMPT}\n\nContext about this emulation:\n{build_context(entry)}"
+
+
+# Detection validation: the model must return machine-parseable JSON, so these
+# prompts forbid Markdown and prose (unlike the chat prompt above).
+SYNTHESIS_SYSTEM_PROMPT = (
+    "You are a detection-engineering assistant that generates synthetic AWS "
+    "CloudTrail events to test a Sigma rule. You output STRICT JSON only: no "
+    "markdown, no code fences, no commentary. Every event must be a realistic "
+    "CloudTrail record containing the fields the rule inspects."
+)
+
+SUGGESTIONS_SYSTEM_PROMPT = (
+    "You improve AWS Sigma detection rules. You output STRICT JSON only: no "
+    "markdown, no commentary. Every suggestion must be concrete and specific to "
+    "the rule and the failures shown, not generic detection advice."
+)
+
+
+def build_synthesis_prompt(rule_text: str, positives: int, benign: int, evasion: int) -> str:
+    """
+    Build the user prompt asking the model to synthesize labeled test events.
+
+    Requests three kinds of CloudTrail events for the Sigma rule: positives that
+    should trigger it, benign look-alikes that should not, and evasion variants
+    that reach the same malicious outcome while slipping past this rule's exact
+    matching. The response contract is a strict JSON object.
+    """
+    return (
+        f"Sigma rule under test:\n\n{rule_text}\n\n"
+        f"Generate exactly {positives} positive, {benign} benign, and {evasion} "
+        "evasion AWS CloudTrail events.\n"
+        "- positive: genuine malicious activity this rule is meant to detect.\n"
+        "- benign: legitimate activity that resembles the rule's false positives "
+        "but is NOT malicious.\n"
+        "- evasion: an attacker achieving the same malicious outcome as the "
+        "positives, but altering details (resource names, casing, added fields) "
+        "to slip past this rule's exact matching.\n\n"
+        "Each event must include the fields the rule inspects (for example "
+        "eventSource, eventName, requestParameters, userIdentity, userAgent).\n\n"
+        "Respond with STRICT JSON in exactly this shape:\n"
+        '{"scenarios": [{"label": "positive|benign|evasion", '
+        '"rationale": "one short sentence", "event": { ... }}]}'
+    )
+
+
+def build_suggestions_prompt(rule_text: str, failures: list[dict]) -> str:
+    """
+    Build the user prompt asking for rule improvements grounded in failures.
+
+    `failures` are the scenarios the rule mishandled (missed an attack or
+    flagged benign activity), each carrying its label, rationale, and event.
+    """
+    failure_text = json.dumps(failures, indent=2)
+    return (
+        f"Sigma rule:\n\n{rule_text}\n\n"
+        "These test scenarios exposed weaknesses (the rule missed an attack or "
+        f"flagged benign activity):\n\n{failure_text}\n\n"
+        "Suggest concrete improvements to the rule that would fix these specific "
+        "failures without adding obvious new false positives. Respond with STRICT "
+        'JSON in exactly this shape:\n{"suggestions": ["...", "..."]}'
+    )

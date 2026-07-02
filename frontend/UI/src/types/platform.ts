@@ -121,18 +121,100 @@ export interface Conversation {
   messages?: ChatMessage[]
 }
 
-export interface DetectionRule {
+/**
+ * One rule in the detection library, grouping the Sigma and KQL variants for
+ * a single technique. Code bodies are inlined so the master-detail preview
+ * pane needs no follow-up request.
+ */
+export interface DetectionRuleSummary {
+  ruleId: string
+  technique: TechniqueRef
   title: string
-  code: string
+  severity: string
+  logSource: { product?: string; service?: string }
+  formats: { sigma: boolean; kql: boolean }
+  sigma: string | null
+  kql: string | null
 }
 
 export interface DetectionData {
   emulationType?: string
   displayName?: string
-  sigma: DetectionRule[]
-  kql: DetectionRule[]
   totalCount: number
   formats: string
+  rules: DetectionRuleSummary[]
+}
+
+export type ValidationVerdict = 'matched' | 'missed' | 'quiet' | 'false positive' | 'caught'
+
+/** One synthetic test event, its expected behaviour, and the rule's verdict. */
+export interface ValidationScenario {
+  label: 'positive' | 'benign' | 'evasion'
+  rationale: string
+  event: Record<string, unknown>
+  expected: boolean
+  matched: boolean
+  verdict: ValidationVerdict
+  firedSelections: string[]
+}
+
+/**
+ * Ephemeral result of validating a Sigma rule against AI-generated events.
+ * When `evaluable` is false (aggregation rules), only `reason` is populated.
+ */
+export interface DetectionValidation {
+  evaluable: boolean
+  reason?: string
+  fidelity?: number
+  summary?: { positiveHit: string; benignQuiet: string; evasionCaught: string }
+  scenarios?: ValidationScenario[]
+  suggestions?: string[]
+}
+
+/** MITRE technique reference: id plus, when available, name and tactic. */
+export interface TechniqueRef {
+  id: string
+  name?: string
+  tactic?: string
+}
+
+/** Detection coverage for the parent emulation (counts, not fabricated rates). */
+export interface DetectionCoverage {
+  techniquesCovered: number
+  techniquesTotal: number
+  phasesCovered: number
+  phasesTotal: number
+}
+
+/**
+ * Full detail for a single detection rule, keyed by its technique id.
+ * Every field is parsed from the rule's own Sigma frontmatter or the parent
+ * emulation's MANIFEST. No validation metrics are included at this stage.
+ */
+export interface DetectionDetail {
+  emulationType: string
+  displayName: string
+  ruleId: string
+  technique: TechniqueRef
+  title: string
+  description: string
+  status: string
+  severity: string
+  logSource: { product?: string; service?: string }
+  tags: string[]
+  author: string
+  date: string
+  falsePositives: string[]
+  references: string[]
+  note: string | null
+  threatActor: string
+  hasPlaybook: boolean
+  relatedTechniques: TechniqueRef[]
+  services: string[]
+  coverage: DetectionCoverage
+  formats: { sigma: boolean; kql: boolean }
+  sigma: string | null
+  kql: string | null
 }
 
 export interface Guardrails {

@@ -14,6 +14,7 @@ import { EmulationsListPage } from './components/emulations/EmulationsListPage'
 import { EmulationDetailPage } from './components/emulations/EmulationDetailPage'
 import { PlaybookPage } from './components/playbooks/PlaybookPage'
 import { DetectionsPage } from './components/detections/DetectionsPage'
+import { DetectionDetailPage } from './components/detections/DetectionDetailPage'
 import { GuardrailsPage } from './components/guardrails/GuardrailsPage'
 import { EmulationsHub } from './components/emulations/EmulationsHub'
 import { DetectionsHub } from './components/detections/DetectionsHub'
@@ -74,6 +75,7 @@ export default function App() {
                 <Route path=":platformId/emulations/:emulationId" element={<EmulationDetailPage />} />
                 <Route path=":platformId/emulations/:emulationId/playbook" element={<PlaybookPage />} />
                 <Route path=":platformId/emulations/:emulationId/detections" element={<DetectionsPage />} />
+                <Route path=":platformId/emulations/:emulationId/detections/:ruleId" element={<DetectionDetailPage />} />
                 <Route path=":platformId/guardrails" element={<GuardrailsPage />} />
               </Route>
             </Route>

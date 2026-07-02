@@ -17,6 +17,7 @@ import type {
   PlatformData,
   Emulation,
   DetectionData,
+  DetectionDetail,
   Guardrails,
   Playbook,
   PlaybookRaw,
@@ -101,6 +102,27 @@ export async function fetchDetections(emulationType: string): Promise<DetectionD
   if (!emulationType) return null
   try {
     const { data } = await api.get<DetectionData>(`/emulations/${emulationType}/detections/`)
+    return data
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Fetch the full detail for a single detection rule.
+ *
+ * @param emulationType - The emulation package name, e.g. "ambersquid".
+ * @param ruleId - The technique grouping key, e.g. "t1098.001".
+ */
+export async function fetchDetectionDetail(
+  emulationType: string,
+  ruleId: string,
+): Promise<DetectionDetail | null> {
+  if (!emulationType || !ruleId) return null
+  try {
+    const { data } = await api.get<DetectionDetail>(
+      `/emulations/${emulationType}/detections/${ruleId}/`,
+    )
     return data
   } catch {
     return null

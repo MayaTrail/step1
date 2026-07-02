@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { PlatformId, PlatformData, Emulation, DetectionData, Guardrails, Playbook } from '@/types'
+import type { PlatformId, PlatformData, Emulation, DetectionData, DetectionDetail, Guardrails, Playbook } from '@/types'
 import * as platformService from '@/services/platform.service'
 
 interface AsyncState<T> {
@@ -105,6 +105,23 @@ export function useDetections(emulationType: string | undefined): AsyncState<Det
     emulationType ? `detections:${emulationType}` : null,
     () => platformService.fetchDetections(emulationType as string),
     'Detections not found',
+  )
+}
+
+/**
+ * Fetch the full detail for a single detection rule.
+ *
+ * @param emulationType - The emulation package name, e.g. "ambersquid".
+ * @param ruleId - The technique grouping key, e.g. "t1098.001".
+ */
+export function useDetectionDetail(
+  emulationType: string | undefined,
+  ruleId: string | undefined,
+): AsyncState<DetectionDetail> {
+  return useCachedAsync(
+    emulationType && ruleId ? `detection:${emulationType}:${ruleId}` : null,
+    () => platformService.fetchDetectionDetail(emulationType as string, ruleId as string),
+    'Detection not found',
   )
 }
 

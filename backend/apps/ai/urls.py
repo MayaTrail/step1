@@ -6,6 +6,7 @@ from .views import (
     ConversationDetailView,
     ConversationListCreateView,
     ConversationMessagesView,
+    DetectionValidateView,
     LLMConnectorTestView,
     LLMConnectorView,
 )
@@ -13,6 +14,11 @@ from .views import (
 urlpatterns = [
     path("connector/", LLMConnectorView.as_view(), name="ai-connector"),
     path("connector/test/", LLMConnectorTestView.as_view(), name="ai-connector-test"),
+    path(
+        "detections/<str:emulation_type>/<str:rule_id>/validate/",
+        DetectionValidateView.as_view(),
+        name="ai-detection-validate",
+    ),
     path("conversations/", ConversationListCreateView.as_view(), name="ai-conversations"),
     path("conversations/<uuid:conversation_id>/", ConversationDetailView.as_view(), name="ai-conversation-detail"),
     path(
