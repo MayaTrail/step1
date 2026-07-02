@@ -3,7 +3,7 @@ import type { PlatformData } from '@/types'
 
 export const awsData: PlatformData = {
   emulations: [],
-  detections: { sigma: [], kql: [], totalCount: 0, formats: '' },
+  detections: { totalCount: 0, formats: '', rules: [] },
   guardrails: awsGuardrails,
   playbooks: [],
 }

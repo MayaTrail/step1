@@ -25,11 +25,14 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from apps.emulations.detections import build_detection_detail, parse_sigma
 from apps.emulations.registry import get_emulation
+from apps.emulations.sigma_eval import is_evaluable
 from apps.infrastructure.permissions import IsEnterpriseUser
 
 from . import crypto
 from .crypto import EncryptionNotConfigured
+from .detection_validation import run_validation
 from .models import Conversation, LLMConnector, Message
 from .prompts import build_chat_system
 from .providers import STREAM_ERROR_PREFIX, stream_chat, test_connection
@@ -244,6 +247,61 @@ class LLMConnectorTestView(APIView):
 
         ok, detail = test_connection(provider, creds)
         return Response({"ok": ok, "detail": detail})
+
+
+class DetectionValidateView(APIView):
+    """
+    Validate a Sigma detection rule against AI-generated synthetic events.
+
+    POST /api/ai/detections/<emulation_type>/<rule_id>/validate/
+
+    Synthesizes labeled CloudTrail events via the user's LLM connector, runs the
+    rule against them with the in-process Sigma evaluator, and returns an
+    ephemeral fidelity report. Aggregation Sigma rules cannot be judged from
+    single events and are reported as not evaluable rather than executed.
+    Results are not persisted.
+    """
+
+    permission_classes = [IsEnterpriseUser]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "ai_chat"
+
+    def post(self, request: Request, emulation_type: str, rule_id: str) -> Response:
+        """Run one ephemeral validation pass and return the fidelity report."""
+        entry = get_emulation(emulation_type)
+        if entry is None:
+            return Response(
+                {"detail": f"Unknown emulation '{emulation_type}'."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        detail = build_detection_detail(entry, rule_id)
+        if detail is None or not detail.get("sigma"):
+            return Response(
+                {"detail": f"No Sigma rule '{rule_id}' to validate."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        rule_text = detail["sigma"]
+        sigma_rule = parse_sigma(rule_text)
+        evaluable, reason = is_evaluable(sigma_rule)
+        if not evaluable:
+            return Response({"evaluable": False, "reason": reason})
+
+        connector = LLMConnector.objects.filter(user=request.user).first()
+        if connector is None or not connector.enabled:
+            return Response(
+                {"detail": "No active LLM connector. Connect one in Settings -> AI Assistant."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        creds, error = build_credentials(request.user, connector)
+        if error:
+            return Response({"detail": error}, status=status.HTTP_409_CONFLICT)
+
+        result = run_validation(connector.provider, creds, connector.model, rule_text, sigma_rule)
+        if "error" in result:
+            return Response({"detail": result["error"]}, status=status.HTTP_502_BAD_GATEWAY)
+        return Response(result)
 
 
 class ConversationListCreateView(APIView):

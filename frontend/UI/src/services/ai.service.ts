@@ -11,6 +11,7 @@
 import api from './api'
 import type {
   Conversation,
+  DetectionValidation,
   LLMConnector,
   LLMConnectorTestResult,
   LLMProvider,
@@ -68,6 +69,25 @@ export const SUGGESTED_MODELS: Record<LLMProvider, string[]> = {
     'us.anthropic.claude-opus-4-8',
     'us.anthropic.claude-haiku-4-5-20251001-v1:0',
   ],
+}
+
+/**
+ * Validate a Sigma detection rule against AI-generated synthetic events.
+ *
+ * Ephemeral: the backend synthesizes labeled events, runs the rule against them
+ * with the in-process evaluator, and returns a fidelity report without storing
+ * anything. Non-2xx responses (no connector, provider error) reject with the
+ * server detail.
+ */
+export async function validateDetection(
+  emulationType: string,
+  ruleId: string,
+): Promise<DetectionValidation> {
+  const { data } = await api.post<DetectionValidation>(
+    `/ai/detections/${emulationType}/${ruleId}/validate/`,
+    {},
+  )
+  return data
 }
 
 /* ── Multi-turn chat (M3) ── */

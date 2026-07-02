@@ -9,6 +9,7 @@ GET  /api/emulations/                                    EmulationListView
 GET  /api/emulations/<emulation_type>/estimate/          EmulationEstimateView
 GET  /api/emulations/<emulation_type>/techniques/        EmulationTechniquesView
 GET  /api/emulations/<emulation_type>/detections/        EmulationDetectionsView
+GET  /api/emulations/<emulation_type>/detections/<rule_id>/  EmulationDetectionDetailView
 GET  /api/emulations/<emulation_type>/playbook/          EmulationPlaybookView
 POST /api/emulations/deploy/                             EmulationDeployView
 GET  /api/emulations/runs/?status=<csv>                  EmulationRunListView
@@ -27,6 +28,7 @@ from .views import (
     EmulationAttackView,
     EmulationDeployView,
     EmulationDestroyView,
+    EmulationDetectionDetailView,
     EmulationDetectionsView,
     EmulationEstimateView,
     EmulationListView,
@@ -46,6 +48,7 @@ urlpatterns = [
     path("<str:emulation_type>/estimate/", EmulationEstimateView.as_view(), name="emulation-estimate"),
     path("<str:emulation_type>/techniques/", EmulationTechniquesView.as_view(), name="emulation-techniques"),
     path("<str:emulation_type>/detections/", EmulationDetectionsView.as_view(), name="emulation-detections"),
+    path("<str:emulation_type>/detections/<str:rule_id>/", EmulationDetectionDetailView.as_view(), name="emulation-detection-detail"),
     path("<str:emulation_type>/playbook/", EmulationPlaybookView.as_view(), name="emulation-playbook"),
     path("<str:emulation_type>/command/", PlaybookCommandView.as_view(), name="emulation-playbook-command"),
     # UUID-param lifecycle routes.

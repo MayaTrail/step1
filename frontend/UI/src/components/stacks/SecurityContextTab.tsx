@@ -162,9 +162,7 @@ export function SecurityContextTab({ emulationType }: { emulationType?: string }
                     <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-content-secondary">
                         <Badge tone="green" mono>{detectionCount} RULES</Badge>
                         {detections && (
-                            <span className="text-content-dim">
-                                {detections.sigma.length} Sigma &middot; {detections.kql.length} KQL
-                            </span>
+                            <span className="text-content-dim">{detections.formats}</span>
                         )}
                     </div>
                 ) : (
