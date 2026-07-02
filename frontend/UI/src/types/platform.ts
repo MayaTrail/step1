@@ -141,14 +141,36 @@ export interface Guardrails {
   scopeLimits: string[]
 }
 
-export interface PlaybookStep {
+/** One H2 section of a PLAYBOOK.md, kept as raw markdown so it renders faithfully. */
+export interface PlaybookSection {
+  /** URL/tab-safe slug derived from the title. */
+  id: string
+  /** Section heading with any leading ordinal ("1. ") stripped. */
   title: string
-  body: string
-  code?: string
+  /** The section body as raw markdown (sub-headings, lists, tables, all code blocks). */
+  markdown: string
 }
 
 export interface Playbook {
-  steps: PlaybookStep[]
+  /** The playbook's H1 title, if the document declares one. */
+  title?: string
+  sections: PlaybookSection[]
+}
+
+/** Result of attempting to run a playbook command via the backend runner. */
+export interface CommandResult {
+  /** False when the command is mutating, shell-using, or has unfilled placeholders. */
+  runnable: boolean
+  /** Why it is not runnable (present when runnable is false). */
+  reason?: string
+  /** True when the executed command exited 0. */
+  ok?: boolean
+  argv?: string[]
+  returncode?: number
+  stdout?: string
+  stderr?: string
+  /** Set when execution failed before running (e.g. assume-role error). */
+  error?: string
 }
 
 export interface PlaybookRaw {

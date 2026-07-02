@@ -28,7 +28,9 @@ from rest_framework.views import APIView
 
 from apps.infrastructure.models import Stack
 from apps.infrastructure.permissions import IsEnterpriseUser
+from apps.logs.models import LogEntry
 
+from . import command_runner
 from .models import EmulationRun
 from .registry import get_emulation, list_emulations
 from .serializers import (
@@ -36,7 +38,7 @@ from .serializers import (
     EmulationRunListSerializer,
     EmulationRunSerializer,
 )
-from .tasks import destroy_emulation_stack, run_emulation_attack
+from .tasks import _assume_user_role, destroy_emulation_stack, run_emulation_attack
 
 logger = logging.getLogger(__name__)
 
@@ -753,3 +755,76 @@ class EmulationDestroyView(APIView):
             {"detail": "Destroy queued.", "stackId": stack_id},
             status=status.HTTP_202_ACCEPTED,
         )
+
+
+class PlaybookCommandView(APIView):
+    """
+    Run a single read-only AWS CLI command from a playbook.
+
+    POST /api/emulations/<emulation_type>/command/   body: { "command": "<block>" }
+
+    The command is parsed to an argv, resolved against the user's most recent
+    deployed stack of this emulation (for region and resource names), validated
+    against the read-only allowlist, then executed with the user's assumed-role
+    credentials. A command that is mutating, uses shell features, or still has
+    unfilled placeholders is not run — the response says so and the UI keeps it
+    copy-only. Every executed command is written to the audit log.
+    """
+
+    permission_classes = [IsEnterpriseUser]
+
+    def post(self, request: Request, emulation_type: str) -> Response:
+        """Validate, resolve, and (if safe) execute the command; audit the run."""
+        _, err = _get_emulation_or_404(emulation_type)
+        if err:
+            return err
+
+        command = (request.data.get("command") or "").strip()
+        if not command:
+            return Response({"detail": "No command provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Most recent deployed stack of this type supplies region + resource names
+        # for placeholder resolution. Its absence is fine (no auto-fill).
+        stack = Stack.objects.filter(owner=request.user, emulation_type=emulation_type).first()
+        outputs = (stack.outputs if stack else {}) or {}
+        region = (stack.region if stack else "") or "us-east-1"
+
+        parsed = command_runner.parse_command(command)
+        if parsed.error is None:
+            parsed = command_runner.resolve_from_stack(parsed, outputs)
+
+        reason = parsed.error
+        if reason is None and parsed.unresolved:
+            reason = "This command needs values to be filled in; copy it to run locally."
+        if reason is None:
+            reason = command_runner.validate_argv(parsed.argv)
+        if reason:
+            return Response({"runnable": False, "reason": reason})
+
+        try:
+            creds = _assume_user_role(request.user)
+        except Exception as exc:  # noqa: BLE001 — surface any STS failure as a clean 502
+            logger.warning("Command run: assume-role failed user=%s: %s", request.user.id, exc)
+            return Response(
+                {"runnable": True, "ok": False, "error": "Could not assume your AWS role."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return_code, stdout, stderr = command_runner.run_argv(parsed.argv, creds, region)
+
+        LogEntry.objects.create(
+            level=LogEntry.Level.INFO if return_code == 0 else LogEntry.Level.WARNING,
+            event=LogEntry.Event.PLAYBOOK_COMMAND,
+            message=f"{emulation_type}: {' '.join(parsed.argv)} (rc={return_code})",
+            actor=request.user,
+            stack=stack,
+        )
+
+        return Response({
+            "runnable": True,
+            "ok": return_code == 0,
+            "argv": parsed.argv,
+            "returncode": return_code,
+            "stdout": stdout,
+            "stderr": stderr,
+        })

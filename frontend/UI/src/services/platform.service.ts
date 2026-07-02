@@ -20,34 +20,49 @@ import type {
   Guardrails,
   Playbook,
   PlaybookRaw,
+  CommandResult,
 } from '@/types'
 
+/** Build a tab/URL-safe slug from a section title. */
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
 /**
- * Parse a raw PLAYBOOK.md string into the Playbook steps structure expected
- * by PlaybookPage.  Each H2 section ("## Title") becomes one step; the
- * content below becomes the body; the first fenced code block becomes the
- * optional code field.
+ * Parse a raw PLAYBOOK.md into navigable sections.
+ *
+ * Each H2 heading ("## Title") becomes one section, and the markdown beneath it
+ * is preserved verbatim (sub-headings, lists, tables, and every fenced code
+ * block).  Keeping the raw markdown, rather than flattening it to a single
+ * body + first-code-block, lets the page render each section faithfully via the
+ * shared Markdown component and lets the tab set mirror whatever sections the
+ * playbook actually declares (graceful degradation across thin and rich
+ * playbooks).
  */
 function parsePlaybookMarkdown(content: string): Playbook {
-  const steps: Playbook['steps'] = []
-  const sections = content.split(/^## /m).filter(Boolean)
+  // The leading H1 (if any) is the playbook's own title.
+  const titleMatch = content.match(/^#\s+(.+)$/m)
+  const title = titleMatch ? titleMatch[1]?.trim() : undefined
 
-  for (const section of sections) {
-    const lines = section.split('\n')
-    const title = (lines[0] ?? '').trim()
-    const rest = lines.slice(1).join('\n').trim()
+  // split() on the H2 boundary drops the preamble before the first H2 as the
+  // initial element, so slice(1) discards it and leaves one entry per section.
+  const parts = content.split(/^##\s+/m).slice(1)
+  const sections: Playbook['sections'] = []
 
-    // Extract first fenced code block if present.
-    const codeMatch = rest.match(/```[\w]*\n([\s\S]*?)```/)
-    const code = codeMatch ? (codeMatch[1] ?? '').trimEnd() : undefined
-    const body = rest.replace(/```[\w]*\n[\s\S]*?```/g, '').trim()
-
-    if (title) {
-      steps.push({ title, body, code })
-    }
+  for (const part of parts) {
+    const nl = part.indexOf('\n')
+    const rawTitle = (nl === -1 ? part : part.slice(0, nl)).trim()
+    if (!rawTitle) continue
+    const markdown = (nl === -1 ? '' : part.slice(nl + 1)).trim()
+    // Strip a leading ordinal ("2. ") so the tab label reads "Identification".
+    const cleanTitle = rawTitle.replace(/^\d+\.\s*/, '')
+    sections.push({ id: slugify(cleanTitle), title: cleanTitle, markdown })
   }
 
-  return { steps }
+  return { title, sections }
 }
 
 /**
@@ -105,6 +120,18 @@ export async function fetchPlaybook(emulationType: string): Promise<Playbook | n
   } catch {
     return null
   }
+}
+
+/**
+ * Run a single read-only playbook command against the user's AWS account.
+ *
+ * The backend parses, resolves, allowlist-validates, and (only if safe) executes
+ * the command with the user's assumed role. A non-runnable command comes back
+ * with `runnable: false` and a reason rather than an error.
+ */
+export async function runPlaybookCommand(emulationType: string, command: string): Promise<CommandResult> {
+  const { data } = await api.post<CommandResult>(`/emulations/${emulationType}/command/`, { command })
+  return data
 }
 
 /* The following stubs are retained so that any call-sites that haven't yet
