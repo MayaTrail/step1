@@ -139,6 +139,10 @@ services:
     build:
       context: ./frontend/UI
       dockerfile: Dockerfile
+      args:
+        # Baked into the SPA at build time; enables the "Continue with Google"
+        # button. Value comes from the shell env or a root-level .env file.
+        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "kill -0 $$(cat /tmp/nginx.pid 2>/dev/null) 2>/dev/null || exit 1"]
