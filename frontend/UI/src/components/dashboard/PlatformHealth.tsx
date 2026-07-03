@@ -1,45 +1,49 @@
-import { useNavigate } from 'react-router-dom'
 import { Card } from '@/components/ui/Card'
+import { Badge } from '@/components/ui/Badge'
+import { IconShield } from '@/components/ui/Icons'
 import { listStacks } from '@/services/stack.service'
 import { useCachedResource } from '@/hooks/useCachedResource'
 import type { Stack } from '@/types'
-import { deriveTelemetry, formatAge } from './stackHelpers'
+import { activeStacks, deriveTelemetry, formatAge } from './stackHelpers'
 
 /**
- * Platform Health — Band D operational strip.
+ * Platform Health — vertical stat list for the side-by-side dashboard layout.
  *
- * A deliberately compact, muted footer of engineering metrics (active / healthy
- * stacks, failed deployments, last deployment) so operators retain awareness
- * without infrastructure stats dominating the security-focused dashboard.
- * Clicking through goes to the dedicated Stacks section.
+ * Shows operational + emulation metrics derived from the stack list: active,
+ * healthy, failed, last deployment, expiring soon, AWS regions, success rate,
+ * and live emulation status (running / completed).
  */
 
-/** Stack statuses considered "healthy" — successfully operating, not in-flight or failed. */
 const HEALTHY_STATUSES = new Set<Stack['status']>(['ready', 'ready_for_attack', 'attack_complete'])
 
 interface HealthStat {
     label: string
     value: string | number
-    /** Tailwind text-colour class for the value (defaults to primary). */
     valueClass?: string
+    caption?: string
 }
 
-function StatCell({ stat }: { stat: HealthStat }) {
+function StatRow({ stat }: { stat: HealthStat }) {
     return (
-        <div className="flex flex-col px-4 py-3">
-            <span className={`font-display text-lg font-bold tabular-nums leading-none ${stat.valueClass ?? 'text-content-primary'}`}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border last:border-b-0">
+            <div className="min-w-0">
+                <span className="block font-mono text-2xs uppercase tracking-label text-content-dim">
+                    {stat.label}
+                </span>
+                {stat.caption && (
+                    <span className="block font-mono text-2xs text-content-muted mt-0.5">
+                        {stat.caption}
+                    </span>
+                )}
+            </div>
+            <span className={`font-display text-sm font-bold tabular-nums leading-none shrink-0 ${stat.valueClass ?? 'text-content-primary'}`}>
                 {stat.value}
-            </span>
-            <span className="font-mono text-2xs uppercase tracking-label text-content-muted mt-1.5">
-                {stat.label}
             </span>
         </div>
     )
 }
 
 export function PlatformHealth() {
-    const navigate = useNavigate()
-    // Stale-while-revalidate: seeds from cache on revisit (no flash), never blanks.
     const { data, loading } = useCachedResource('platform-health-stacks', listStacks)
     const stacks = data ?? []
 
@@ -50,9 +54,14 @@ export function PlatformHealth() {
         .filter(Boolean)
         .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0]
 
+    const regions = new Set(activeStacks(stacks).map((s) => s.region).filter(Boolean))
+    const total = stacks.length
+    const successRate = total > 0 ? Math.round(((total - telemetry.failed) / total) * 100) : 0
+    const completed = stacks.filter((s) => s.status === 'attack_complete').length
+
     const stats: HealthStat[] = [
         { label: 'Active Stacks', value: loading ? '—' : telemetry.active, valueClass: 'text-accent-blue' },
-        { label: 'Healthy Stacks', value: loading ? '—' : healthy, valueClass: 'text-safe' },
+        { label: 'Healthy', value: loading ? '—' : healthy, valueClass: 'text-safe' },
         {
             label: 'Failed Deployments',
             value: loading ? '—' : telemetry.failed,
@@ -62,16 +71,51 @@ export function PlatformHealth() {
             label: 'Last Deployment',
             value: loading ? '—' : lastDeployedAt ? `${formatAge(lastDeployedAt)} ago` : 'None',
         },
+        {
+            label: 'Expiring Soon',
+            value: loading ? '—' : telemetry.expiringSoon,
+            valueClass: telemetry.expiringSoon > 0 ? 'text-warning' : 'text-content-primary',
+            caption: 'Within 1 hour',
+        },
+        {
+            label: 'AWS Regions',
+            value: loading ? '—' : regions.size,
+            caption: loading ? undefined : regions.size > 0 ? [...regions].join(', ') : 'No active regions',
+        },
+        {
+            label: 'Success Rate',
+            value: loading ? '—' : `${successRate}%`,
+            valueClass: successRate >= 90 ? 'text-safe' : successRate >= 70 ? 'text-warning' : 'text-danger',
+            caption: loading ? undefined : `${total - telemetry.failed}/${total} deployments`,
+        },
+        {
+            label: 'Emulations Running',
+            value: loading ? '—' : telemetry.attacking,
+            valueClass: telemetry.attacking > 0 ? 'text-warning' : 'text-content-primary',
+        },
+        {
+            label: 'Emulations Completed',
+            value: loading ? '—' : completed,
+            valueClass: 'text-safe',
+        },
     ]
 
     return (
-        <Card interactive onClick={() => navigate('/stacks')} className="flex flex-col">
-            <div className="px-4 pt-3 pb-1.5">
-                <span className="font-mono text-2xs uppercase tracking-label text-content-dim">Platform Health</span>
+        <Card className="flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3.5 border-b border-border">
+                <span className="flex items-center gap-2 font-mono text-2xs uppercase tracking-label text-content-dim">
+                    <IconShield size={14} />
+                    Platform Health
+                </span>
+                {!loading && telemetry.expiringSoon > 0 && (
+                    <Badge tone="yellow" mono dot pulse>
+                        {telemetry.expiringSoon} expiring
+                    </Badge>
+                )}
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-y sm:divide-y-0 divide-border border-t border-border">
+            <div className="flex flex-col flex-1">
                 {stats.map((stat) => (
-                    <StatCell key={stat.label} stat={stat} />
+                    <StatRow key={stat.label} stat={stat} />
                 ))}
             </div>
         </Card>

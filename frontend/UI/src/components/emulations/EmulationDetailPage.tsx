@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import { useEmulations } from '@/hooks/usePlatformData'
 import { getPlatformMeta } from '@/data'
 import type { PlatformId } from '@/types'
@@ -7,12 +7,22 @@ import { ThreatOriginBadge } from '@/components/ui/ThreatOriginBadge'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { RunEmulationModal } from '@/components/modals/RunEmulationModal'
 import { OverviewTab } from './OverviewTab'
+import { LiveEmulationTab } from './LiveEmulationTab'
 import { AttackPathTab } from './AttackPathTab'
 import { MitreMappingTab } from './MitreMappingTab'
 import { ExplainPanel } from './ExplainPanel'
 import { PastFindingsTab } from './PastFindingsTab'
 
-type DetailTab = 'overview' | 'path' | 'mitre' | 'explain' | 'findings'
+type DetailTab = 'overview' | 'live' | 'path' | 'mitre' | 'explain' | 'findings'
+
+const TAB_LABELS: Record<DetailTab, string> = {
+  overview: 'Overview',
+  live: 'Live Emulation',
+  path: 'Attack Path',
+  mitre: 'MITRE Mapping',
+  explain: 'Ask AI',
+  findings: 'Past Findings',
+}
 
 export function EmulationDetailPage() {
   const { platformId, emulationId } = useParams<{ platformId: string; emulationId: string }>()
@@ -50,18 +60,6 @@ export function EmulationDetailPage() {
           </div>
         </div>
         <div className="flex gap-3 shrink-0">
-          <Link to={`/${pid}/emulations`}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn font-body text-[0.9rem] font-medium cursor-pointer no-underline
-              bg-transparent border border-[rgba(255,255,255,0.15)] text-content-primary transition-all
-              hover:bg-[rgba(255,255,255,0.05)] hover:border-border-active">
-            &#8592; Back
-          </Link>
-          <Link to={`/${pid}/emulations/${em.id}/playbook`}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn font-body text-[0.9rem] font-medium cursor-pointer no-underline
-              bg-transparent border border-[rgba(255,255,255,0.15)] text-content-primary transition-all
-              hover:bg-[rgba(255,255,255,0.05)] hover:border-border-active">
-            &#128203; Playbook
-          </Link>
           <button
             onClick={() => setShowRunModal(true)}
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn font-body text-[0.9rem] font-semibold cursor-pointer border-none
@@ -82,7 +80,7 @@ export function EmulationDetailPage() {
 
       {/* Tabs */}
       <div className="flex border-b border-border mb-5">
-        {(['overview', 'path', 'mitre', 'explain', 'findings'] as const).map((tab) => (
+        {(['overview', 'live', 'path', 'mitre', 'explain', 'findings'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -92,7 +90,7 @@ export function EmulationDetailPage() {
                 : 'text-content-dim border-b-transparent hover:text-content-secondary'
               }`}
           >
-            {tab === 'overview' ? 'Overview' : tab === 'path' ? 'Attack Path' : tab === 'mitre' ? 'MITRE Mapping' : tab === 'explain' ? 'Ask AI' : 'Past Findings'}
+            {TAB_LABELS[tab]}
           </button>
         ))}
       </div>
@@ -108,6 +106,7 @@ export function EmulationDetailPage() {
           playbookHref={`/${pid}/emulations/${em.id}/playbook`}
         />
       )}
+      {activeTab === 'live' && <LiveEmulationTab emulation={em} onRun={() => setShowRunModal(true)} />}
       {activeTab === 'path' && <AttackPathTab emulation={em} />}
       {activeTab === 'mitre' && <MitreMappingTab emulation={em} platformLabel={platformLabel} />}
       {activeTab === 'explain' && <ExplainPanel emulation={em} />}

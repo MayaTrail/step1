@@ -119,12 +119,11 @@ export function DashboardPage() {
                 <MitreCoverageSection />
                 <PlatformThreatCoverage />
             </Suspense>
-
-            {/* ── Band C — Recent Activity ── */}
-            <ActivityFeed />
-
-            {/* ── Band D — Platform Health (compact operational strip) ── */}
-            <PlatformHealth />
+            {/* ── Band C+D — Activity + Health (side by side) ── */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
+                <ActivityFeed />
+                <PlatformHealth />
+            </div>
         </div>
     )
 }
