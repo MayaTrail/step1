@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useEmulations } from '@/hooks/usePlatformData'
 import type { Emulation } from '@/types'
 import { LibraryCard } from '@/components/common/LibraryCard'
 import { LibraryToolbar } from '@/components/common/LibraryToolbar'
 import { useLibraryFilter, emulationTactics } from '@/components/common/useLibraryFilter'
 import { platformShortLabel } from '@/data'
+import { listStacks } from '@/services/stack.service'
 import { RunEmulationModal } from '@/components/modals/RunEmulationModal'
 import { IconLaunch } from '@/components/ui/Icons'
 
@@ -21,6 +22,33 @@ export function EmulationsHub() {
   const { filtered, toolbar } = useLibraryFilter(emulations ?? [])
   const [runTarget, setRunTarget] = useState<Emulation | null>(null)
 
+  // Set of emulation_types the user has a stack for. Lets the "Has stack"
+  // toggle answer "which emulation did I just deploy?" without the user needing
+  // to remember its name. A stack's emulation_type is the same slug as the
+  // emulation id, so membership is a direct id lookup.
+  const [deployedTypes, setDeployedTypes] = useState<Set<string>>(new Set())
+  const [hasStackOnly, setHasStackOnly] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    listStacks()
+      .then((stacks) => {
+        if (cancelled) return
+        setDeployedTypes(
+          new Set(stacks.map((s) => s.emulation_type).filter((t): t is string => !!t)),
+        )
+      })
+      .catch(() => {
+        // Non-fatal: if stacks fail to load the toggle simply yields no matches.
+      })
+    return () => { cancelled = true }
+  }, [])
+
+  const visible = useMemo(
+    () => (hasStackOnly ? filtered.filter((em) => deployedTypes.has(em.id)) : filtered),
+    [filtered, hasStackOnly, deployedTypes],
+  )
+
   return (
     <div>
       {/* Page header */}
@@ -36,15 +64,26 @@ export function EmulationsHub() {
         </div>
       </div>
 
-      <LibraryToolbar {...toolbar} searchPlaceholder="Search emulations..." />
+      <LibraryToolbar
+        {...toolbar}
+        searchPlaceholder="Search emulations..."
+        showType
+        extra={
+          <StackToggleChip
+            active={hasStackOnly}
+            count={deployedTypes.size}
+            onClick={() => setHasStackOnly((v) => !v)}
+          />
+        }
+      />
 
       {loading ? (
         <div className="text-center py-16 text-content-dim font-mono text-sm">Loading emulations...</div>
-      ) : filtered.length === 0 ? (
+      ) : visible.length === 0 ? (
         <LibraryEmpty noun="emulations" />
       ) : (
         <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(320px,1fr))]">
-          {filtered.map((em) => (
+          {visible.map((em) => (
             <LibraryCard
               key={em.id}
               name={em.name}
@@ -69,6 +108,31 @@ export function EmulationsHub() {
         />
       )}
     </div>
+  )
+}
+
+/**
+ * Toggle chip that narrows the library to emulations the user has a stack for.
+ * A binary filter reads more clearly as a pill that shows its own on/off state
+ * than as another dropdown. `count` surfaces how many stacks back the filter so
+ * an empty toggle result is self-explanatory (0 = nothing deployed yet).
+ */
+function StackToggleChip({ active, count, onClick }: { active: boolean; count: number; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={active}
+      title="Show only emulations you have deployed a stack for"
+      className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm cursor-pointer transition-colors
+        ${active
+          ? 'bg-accent-blue/[0.08] border-accent-blue/40 text-accent-blue'
+          : 'bg-surface-elevated border-border text-content-secondary hover:border-border-active hover:text-content-primary'
+        }`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full ${active ? 'bg-accent-blue' : 'bg-content-dim'}`} />
+      Has stack
+      {count > 0 && <span className="font-mono text-[10px] text-content-dim">{count}</span>}
+    </button>
   )
 }
 

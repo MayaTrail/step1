@@ -27,6 +27,7 @@ function filterParams(filters?: CoverageFilters): Record<string, string> {
   if (filters?.platform) params.platform = filters.platform
   if (filters?.actor) params.actor = filters.actor
   if (filters?.emulation) params.emulation = filters.emulation
+  if (filters?.content) params.content = filters.content
   return params
 }
 

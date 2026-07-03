@@ -119,6 +119,8 @@ export interface CoverageFilters {
   platform?: string
   actor?: string
   emulation?: string
+  /** Coverage lens: techniques attacked (emulations) vs detected (detections). */
+  content?: 'emulations' | 'detections'
 }
 
 /** Content types that can drive the merged Platform & Threat Coverage section. */

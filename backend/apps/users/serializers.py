@@ -105,12 +105,9 @@ class RegisterSerializer(serializers.ModelSerializer):
     """
     Write serializer used during new account registration.
 
-    Accepts username, email, password, and an invite_code.
+    Accepts username, email, password, first_name, and last_name.
     Password is write-only and is hashed before storage via create().
     Email is normalised to lowercase and checked for uniqueness.
-
-    The invite_code field is required when the REGISTRATION_INVITE_CODE
-    setting is non-empty.  It is validated but never stored.
 
     Creates the user with is_active=False.  The user becomes active
     only after verifying the email OTP.
@@ -120,32 +117,10 @@ class RegisterSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(required=True)
     first_name = serializers.CharField(required=False, allow_blank=True, default="")
     last_name = serializers.CharField(required=False, allow_blank=True, default="")
-    invite_code = serializers.CharField(write_only=True, required=True)
 
     class Meta:
         model = User
-        fields = ["username", "email", "password", "first_name", "last_name", "invite_code"]
-
-    def validate_invite_code(self, value: str) -> str:
-        """
-        Check the submitted invite code against the server-side secret.
-
-        If REGISTRATION_INVITE_CODE is empty (gate disabled), any value
-        is accepted.  Otherwise, the codes must match exactly.
-
-        Args:
-            value: The invite code string from the request body.
-
-        Returns:
-            The invite code unchanged (it is not persisted).
-
-        Raises:
-            serializers.ValidationError: If the code does not match.
-        """
-        expected = getattr(settings, "REGISTRATION_INVITE_CODE", "")
-        if expected and value != expected:
-            raise serializers.ValidationError("Invalid invite code.")
-        return value
+        fields = ["username", "email", "password", "first_name", "last_name"]
 
     def validate_email(self, value: str) -> str:
         """
@@ -177,9 +152,6 @@ class RegisterSerializer(serializers.ModelSerializer):
         """
         Create a new inactive user and send an OTP to their email.
 
-        The invite_code is popped from validated_data since it is a
-        gate-check field and is not stored on the User model.
-
         If an inactive user with the same email already exists (from a
         previous abandoned registration), they are deleted first.
 
@@ -189,8 +161,6 @@ class RegisterSerializer(serializers.ModelSerializer):
         Returns:
             The newly created (inactive) User instance.
         """
-        validated_data.pop("invite_code", None)
-
         # Clean up any previous inactive registration for this email
         User.objects.filter(
             email=validated_data["email"], is_active=False

@@ -210,13 +210,6 @@ CELERY_BEAT_SCHEDULE = {
 EMULATIONS_BASE_DIR = config("EMULATIONS_BASE_DIR", default="")
 
 # ---------------------------------------------------------------------------
-# Registration gate
-# ---------------------------------------------------------------------------
-# When set to a non-empty string, every registration request must include
-# this exact invite code.  Set to "" (empty) to allow open registration.
-
-REGISTRATION_INVITE_CODE = config("REGISTRATION_INVITE_CODE", default="")
-
 # ---------------------------------------------------------------------------
 # Email
 # ---------------------------------------------------------------------------

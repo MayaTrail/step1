@@ -1,9 +1,8 @@
 import { useState, useRef, useEffect, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import { useTheme } from '@/context/ThemeContext'
 import { useDemoCountdown, formatCountdown } from '@/hooks/useDemoCountdown'
-import mayatrailLogo from '@/assets/mayatrail-logo.png'
+import mayatrailLogo from '@/assets/mayatrail-logo.svg'
 
 interface TopNavProps {
   onOpenSearch: () => void
@@ -12,7 +11,6 @@ interface TopNavProps {
 
 export function TopNav({ onOpenSearch, onToggleSidebar }: TopNavProps) {
   const { user, logout } = useAuth()
-  const { theme, toggleTheme } = useTheme()
   const { remaining, isExpired, isActive } = useDemoCountdown(
     user?.isDemo ? user.demoExpiresAt : null,
   )
@@ -115,17 +113,6 @@ export function TopNav({ onOpenSearch, onToggleSidebar }: TopNavProps) {
           </div>
         )}
 
-        {/* Theme toggle — icon-only, cycles light / dark / system */}
-        <button
-          onClick={toggleTheme}
-          aria-label={`Theme: ${theme}`}
-          title={`Theme: ${theme}`}
-          className="hidden sm:flex w-9 h-9 items-center justify-center bg-surface-elevated border border-border rounded-full text-content-secondary
-            cursor-pointer transition-all hover:border-border-active hover:text-content-primary"
-        >
-          {theme === 'light' ? <IconSun /> : theme === 'dark' ? <IconMoon /> : <IconMonitor />}
-        </button>
-
         {/* Account dropdown */}
         <div className="relative" ref={dropdownRef}>
           <button
@@ -214,34 +201,7 @@ function DropdownItem({
 
 /* ── Inline SVG icons (no emoji, per the design system; all inherit currentColor) ── */
 
-const THEME_ICON = 'w-[18px] h-[18px]'
 const MENU_ICON = 'w-4 h-4'
-
-function IconSun() {
-  return (
-    <svg className={THEME_ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="4" />
-      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
-    </svg>
-  )
-}
-
-function IconMoon() {
-  return (
-    <svg className={THEME_ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
-    </svg>
-  )
-}
-
-function IconMonitor() {
-  return (
-    <svg className={THEME_ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="4" width="18" height="12" rx="2" />
-      <path d="M8 20h8M12 16v4" />
-    </svg>
-  )
-}
 
 function IconUser() {
   return (

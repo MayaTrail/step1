@@ -27,10 +27,10 @@ export function ProtectedRoute() {
   if (!user) return <Navigate to="/login" replace />
   if (!user.isVerified && !user.isDemo) return <Navigate to="/connector" replace />
 
-  // Demo users whose session has expired — redirect to connector upgrade.
+  // Demo users whose session has expired — redirect to connector to reconnect.
   // This fires in real-time via useDemoCountdown (no navigation needed).
   if (user.isDemo && demoExpired) {
-    return <Navigate to="/connector?upgrade=1" replace />
+    return <Navigate to="/connector" replace />
   }
 
   return <Outlet />

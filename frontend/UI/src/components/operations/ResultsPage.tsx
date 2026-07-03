@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import { useEmulationRuns } from '@/hooks/useEmulationRuns'
 import { platformRegistry, platformShortLabel } from '@/data'
 import type { PlatformId, EmulationRunStatus } from '@/types'
@@ -37,7 +38,8 @@ const PLATFORM_OPTIONS: DropdownOption<'all' | PlatformId>[] = [
  * The "Completion" column is an honest proxy for the requested "Score": it
  * reports phases reached out of total rather than a fabricated number. A real
  * security score (detections fired / attack-path coverage) is deferred until
- * the backend computes it. Export is a deliberate "coming soon" placeholder.
+ * the backend computes it. The last column links back to the run's Live
+ * Emulation view so an operator can re-open the phase-by-phase output.
  */
 export function ResultsPage() {
   const { data: runs, loading } = useEmulationRuns(['completed', 'failed'])
@@ -104,13 +106,13 @@ export function ResultsPage() {
                 {formatRelative(run.completed_at)}
               </RunsCell>
               <RunsCell className="text-right">
-                <button
-                  disabled
-                  title="Export coming soon"
-                  className="inline-flex items-center gap-1 text-content-dim text-xs font-medium cursor-not-allowed opacity-60"
+                <Link
+                  to={`/${run.platform}/emulations/${run.emulation_type}?tab=live`}
+                  title="Open the Live Emulation view for this run"
+                  className="inline-flex items-center gap-1 text-accent-blue text-xs font-medium no-underline transition-opacity hover:opacity-60"
                 >
-                  Export
-                </button>
+                  Open Live
+                </Link>
               </RunsCell>
             </RunsRow>
           ))}

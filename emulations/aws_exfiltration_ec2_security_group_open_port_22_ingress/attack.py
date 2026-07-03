@@ -65,11 +65,22 @@ def banner(msg: str) -> None:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main(session: "boto3.Session") -> None:
-    stack_dir = str(Path(__file__).parent.parent / "infra")
-    infra     = get_pulumi_outputs(stack_dir)
-    sg_id     = infra.get("security_group_id",   "")
-    sg_name   = infra.get("security_group_name",  "stratus-red-team-sg-port22")
+def main(session: "boto3.Session", outputs: dict | None = None) -> None:
+    """Run the port-22 ingress attack against the security group from infra.
+
+    The worker (run_emulation_attack) injects the stack's Pulumi outputs as
+    `outputs`, having already selected the caller's stack by name, so the worker
+    path reads infra values straight from that dict. When run standalone there is
+    no injected dict, so fall back to reading the local infra/ stack state from
+    disk (infra/ is a sibling of this file, hence Path(__file__).parent).
+    """
+    if outputs:
+        sg_id   = outputs.get("security_group_id", "")
+        sg_name = outputs.get("security_group_name", "stratus-red-team-sg-port22")
+    else:
+        infra   = get_pulumi_outputs(str(Path(__file__).parent / "infra"))
+        sg_id   = infra.get("security_group_id", "")
+        sg_name = infra.get("security_group_name", "stratus-red-team-sg-port22")
 
     if not sg_id:
         print("[!] security_group_id not found in Pulumi outputs. Did you run `pulumi up`?")
@@ -148,4 +159,4 @@ def _session_from_outputs(outputs: dict, region: str) -> boto3.Session:
 
 def run(outputs: dict, region: str = "us-east-1") -> None:
     """Entry point called by the run_emulation_attack Celery task."""
-    main(_session_from_outputs(outputs, region))
+    main(_session_from_outputs(outputs, region), outputs)

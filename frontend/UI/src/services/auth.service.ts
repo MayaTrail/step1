@@ -133,7 +133,6 @@ async function backendSignup(req: SignupRequest): Promise<RegisterResponse> {
     password: req.password,
     first_name: firstName,
     last_name: lastName,
-    invite_code: req.inviteCode,
   })
 
   return data

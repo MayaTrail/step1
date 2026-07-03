@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { useTheme } from '@/context/ThemeContext'
 import { useAuth } from '@/context/AuthContext'
 import { AIAssistantTab } from './AIAssistantTab'
 import { SectionHeader } from './SectionHeader'
@@ -60,14 +59,7 @@ export function SettingsPage() {
 
 /* ── Appearance ── */
 
-const THEMES = [
-    { id: 'light', label: 'Light' },
-    { id: 'dark', label: 'Dark' },
-    { id: 'system', label: 'System' },
-] as const
-
 function AppearanceSection() {
-    const { theme, setTheme } = useTheme()
     const [reduceMotion, setReduceMotion] = useState(false)
 
     useEffect(() => {
@@ -79,29 +71,8 @@ function AppearanceSection() {
             <SectionHeader title="Appearance" description="Customize the interface. Changes apply immediately." />
 
             <div className="bg-surface-card rounded-[12px] border border-border p-6 md:p-8 shadow-ring divide-y divide-white/[0.05]">
-                {/* Theme */}
-                <div className="flex items-center justify-between pb-5">
-                    <div>
-                        <p className="text-content-primary text-sm font-medium">Theme</p>
-                        <p className="text-content-dim text-xs mt-0.5">Light, dark, or match your system.</p>
-                    </div>
-                    <div className="inline-flex rounded-btn border border-border bg-surface-base p-0.5">
-                        {THEMES.map((t) => (
-                            <button
-                                key={t.id}
-                                type="button"
-                                onClick={() => setTheme(t.id)}
-                                className={`px-3 py-1.5 rounded-[6px] text-xs font-medium transition-colors cursor-pointer border-none
-                                    ${theme === t.id ? 'bg-white/10 text-content-primary' : 'text-content-dim hover:text-content-secondary'}`}
-                            >
-                                {t.label}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-
                 {/* Reduce motion */}
-                <div className="py-5">
+                <div className="pb-5">
                     <ToggleRow
                         label="Reduce Motion"
                         description="Disable non-essential animations."

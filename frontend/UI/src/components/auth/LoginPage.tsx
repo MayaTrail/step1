@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import mayatrailLogo from '@/assets/mayatrail-logo.png'
+import mayatrailLogo from '@/assets/mayatrail-logo.svg'
 import { forgotPassword, resetPassword } from '@/services/auth.service'
 // AuthBackground animations removed — SaaS layout uses clean static design
 
@@ -42,7 +42,7 @@ export function LoginPage() {
   const [activeTab, setActiveTab] = useState<AuthTab>('signin')
   const [signupSuccess, setSignupSuccess] = useState(false)
   const [formVisible, setFormVisible] = useState(true)
-  const { clearError, googleSSO, error: authError } = useAuth()
+  const { clearError, googleSSO } = useAuth()
   const navigate = useNavigate()
 
   /** Fades out the form, swaps the active tab, then fades back in. */
@@ -200,12 +200,6 @@ export function LoginPage() {
               : <SignUpForm onComplete={handleSignupComplete} />
             }
 
-            {authError && (
-              <div className="mt-4 mb-2">
-                <ErrorBanner message={authError} />
-              </div>
-            )}
-
             <GoogleSignInButton onCredential={handleGoogleCredential} />
           </div>
         </div>
@@ -322,19 +316,13 @@ function SignInForm() {
             Forgot password?
           </button>
         </div>
-        <div className="relative">
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => { setPassword(e.target.value); if (hasError) clearError() }}
-            placeholder="Enter your password"
-            required
-            autoComplete="current-password"
-            className={`auth-input-solid${hasError ? ' auth-input-error' : ''}`}
-            style={hasError ? { ...inputStyle, paddingRight: '36px' } : inputStyle}
-          />
-          {hasError && <InputErrorIcon />}
-        </div>
+        <PasswordInput
+          value={password}
+          onChange={(e) => { setPassword(e.target.value); if (hasError) clearError() }}
+          placeholder="Enter your password"
+          autoComplete="current-password"
+          hasError={hasError}
+        />
       </div>
 
       {/* Remember me */}
@@ -585,29 +573,21 @@ function ResetPasswordOTPForm({ email, onSuccess, onBack }: {
       </div>
 
       <FormField label="New Password">
-        <input
-          type="password"
+        <PasswordInput
           value={newPassword}
           onChange={(e) => setNewPassword(e.target.value)}
           placeholder="Min. 8 characters"
-          required
           minLength={8}
           autoComplete="new-password"
-          className="auth-input-solid"
-          style={inputStyle}
         />
       </FormField>
 
       <FormField label="Confirm New Password">
-        <input
-          type="password"
+        <PasswordInput
           value={confirmPassword}
           onChange={(e) => setConfirmPassword(e.target.value)}
           placeholder="Re-enter new password"
-          required
           autoComplete="new-password"
-          className="auth-input-solid"
-          style={inputStyle}
         />
       </FormField>
 
@@ -667,13 +647,12 @@ function ResetPasswordOTPForm({ email, onSuccess, onBack }: {
 
 type SignUpStep = 'details' | 'otp'
 
-/** Sign-up flow: collects invite code, name, email, password, then OTP verify. */
+/** Sign-up flow: collects name, email, password, then OTP verify. */
 function SignUpForm({ onComplete }: { onComplete: () => void }) {
   const { signup, verifyOTP, resendOTP, loading, error, clearError } = useAuth()
   const [step, setStep] = useState<SignUpStep>('details')
   const [pendingEmail, setPendingEmail] = useState('')
 
-  const [inviteCode, setInviteCode] = useState('')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -689,7 +668,7 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
       return
     }
     try {
-      const res = await signup({ name, email, password, inviteCode })
+      const res = await signup({ name, email, password })
       setPendingEmail(res.email)
       setStep('otp')
     } catch {
@@ -716,19 +695,6 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
 
   return (
     <form className="flex flex-col gap-4" onSubmit={handleDetailsSubmit}>
-      <FormField label="Invite Code">
-        <input
-          type="text"
-          value={inviteCode}
-          onChange={(e) => setInviteCode(e.target.value)}
-          placeholder="Enter your invite code"
-          required
-          autoComplete="off"
-          className="auth-input-solid"
-          style={inputStyle}
-        />
-      </FormField>
-
       <FormField label="Full Name">
         <input
           type="text"
@@ -756,29 +722,21 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
       </FormField>
 
       <FormField label="Password">
-        <input
-          type="password"
+        <PasswordInput
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           placeholder="Min. 8 characters"
-          required
           minLength={8}
           autoComplete="new-password"
-          className="auth-input-solid"
-          style={inputStyle}
         />
       </FormField>
 
       <FormField label="Confirm Password">
-        <input
-          type="password"
+        <PasswordInput
           value={confirm}
           onChange={(e) => setConfirm(e.target.value)}
           placeholder="Re-enter password"
-          required
           autoComplete="new-password"
-          className="auth-input-solid"
-          style={inputStyle}
         />
       </FormField>
 
@@ -1095,6 +1053,60 @@ function FormField({ label, children }: { label: string; children: React.ReactNo
         {label}
       </label>
       {children}
+    </div>
+  )
+}
+
+/** Password input with a show/hide toggle so users can verify what they typed. */
+function PasswordInput({
+  value, onChange, placeholder, autoComplete, minLength, hasError = false,
+}: {
+  value: string
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void
+  placeholder?: string
+  autoComplete?: string
+  minLength?: number
+  hasError?: boolean
+}) {
+  const [show, setShow] = useState(false)
+  return (
+    <div className="relative">
+      <input
+        type={show ? 'text' : 'password'}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        required
+        minLength={minLength}
+        autoComplete={autoComplete}
+        className={`auth-input-solid${hasError ? ' auth-input-error' : ''}`}
+        style={{ ...inputStyle, paddingRight: '40px' }}
+      />
+      <button
+        type="button"
+        onClick={() => setShow((s) => !s)}
+        aria-label={show ? 'Hide password' : 'Show password'}
+        tabIndex={-1}
+        style={{
+          position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)',
+          background: 'none', border: 'none', cursor: 'pointer', color: '#6a6b6c',
+          padding: '2px', display: 'flex', alignItems: 'center', transition: 'color 0.15s',
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.color = '#f9f9f9')}
+        onMouseLeave={(e) => (e.currentTarget.style.color = '#6a6b6c')}
+      >
+        {show ? (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24" />
+            <line x1="1" y1="1" x2="23" y2="23" />
+          </svg>
+        ) : (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+        )}
+      </button>
     </div>
   )
 }

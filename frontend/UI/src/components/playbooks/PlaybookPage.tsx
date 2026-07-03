@@ -285,11 +285,13 @@ function RelatedLink({ to, label }: { to: string; label: string }) {
   return (
     <Link
       to={to}
-      className="flex items-center justify-between px-3.5 py-2.5 mb-2 last:mb-0 rounded-[10px] border border-border
+      className="flex items-center justify-between gap-2 px-3.5 py-2.5 mb-2 last:mb-0 rounded-[10px] border border-border
         text-[13px] text-content-secondary no-underline transition-all hover:border-border-active hover:opacity-60"
     >
-      <span>{label}</span>
-      <span className="text-content-dim">{'→'}</span>
+      {/* min-w-0 + break-words lets a long emulation id (e.g. a full atomic slug)
+          wrap inside the card instead of spilling past the fixed-width sidebar. */}
+      <span className="min-w-0 break-words">{label}</span>
+      <span className="text-content-dim shrink-0">{'→'}</span>
     </Link>
   )
 }

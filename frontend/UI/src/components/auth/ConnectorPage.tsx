@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
-import { Navigate, useNavigate, useSearchParams } from 'react-router-dom'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import mayatrailLogo from '@/assets/mayatrail-logo.png'
+import mayatrailLogo from '@/assets/mayatrail-logo.svg'
 // AuthBackground animations removed — SaaS layout uses clean static design
 
 /*
@@ -45,22 +45,40 @@ const SAMPLE_POLICY = `{
   ]
 }`
 
+/*
+ * Administrator-access alternative. Grants everything, so it never blocks an
+ * emulation, at the cost of least privilege. Offered for users who prefer a
+ * single broad policy over the scoped one above.
+ */
+const ADMIN_POLICY = `{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "MayaTrailAdministratorAccess",
+      "Effect": "Allow",
+      "Action": "*",
+      "Resource": "*"
+    }
+  ]
+}`
+
 /** ARN format: arn:aws:iam::<12-digit-account-id>:role/<role-name> */
 const ARN_RE = /^arn:aws:iam::\d{12}:role\/.+$/
 
 export function ConnectorPage() {
-  const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const {
-    user, initializing, verifyConnector, activateDemo,
+    user, initializing, verifyConnector,
     loading, error, clearError, logout,
   } = useAuth()
 
   const [roleArn, setRoleArn] = useState('')
   const [localError, setLocalError] = useState('')
   const [verifying, setVerifying] = useState(false)
-  const [demoSuccess, setDemoSuccess] = useState(false)
   const [verifySuccess, setVerifySuccess] = useState(false)
+  // Which "Full Policy JSON" variant is shown. Defaults to the recommended
+  // Administrator policy (simplest setup for an isolated test account).
+  const [policyView, setPolicyView] = useState<'scoped' | 'admin'>('admin')
   const [provider, setProvider] = useState<ProviderId>('aws')
   const [providerOpen, setProviderOpen] = useState(false)
   const providerRef = useRef<HTMLDivElement>(null)
@@ -76,8 +94,6 @@ export function ConnectorPage() {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [providerOpen])
-
-  const isUpgrade = searchParams.get('upgrade') === '1'
 
   /*
    * Auto-navigate after a brief success banner so the user sees confirmation
@@ -114,20 +130,7 @@ export function ConnectorPage() {
 
   const isDemoExpired =
     user.isDemo && user.demoExpiresAt && new Date(user.demoExpiresAt) < new Date()
-  if (user.isDemo && !isUpgrade && !isDemoExpired) return <Navigate to="/" replace />
-
-  const handleDemo = async () => {
-    clearError()
-    setLocalError('')
-    try {
-      await activateDemo()
-      setDemoSuccess(true)
-    } catch {
-      // error surfaced via AuthContext
-    }
-  }
-
-  if (demoSuccess) return <Navigate to="/" replace />
+  if (user.isDemo && !isDemoExpired) return <Navigate to="/" replace />
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -154,7 +157,6 @@ export function ConnectorPage() {
   }
 
   const displayError = localError || error
-  const showDemoOption = !isUpgrade && !user.demoUsed
 
   return (
     <div
@@ -207,15 +209,20 @@ export function ConnectorPage() {
 
         {/* ── Content area ── */}
         <div style={{ background: '#07080a', padding: '28px' }}>
-        {/* Wrapper: position:relative so right column can use top:0;bottom:0 to match left column height */}
-        <div className="w-full hidden lg:block" style={{ position: 'relative' }}>
+          {/* Wrapper: position:relative so right column can use top:0;bottom:0 to match
+            the wrapper height. minHeight scales with the viewport (clamped) so the
+            policy reference panel gets more room on tall screens and stays bounded on
+            short ones, matching the platform's viewport-adaptive sections. */}
+          <div
+            className="w-full hidden lg:block"
+            style={{ position: 'relative', minHeight: 'clamp(500px, calc(100vh - 220px), 780px)' }}
+          >
 
-          {/* ── Left column — normal flow, sizes the wrapper ── */}
-          <div className="flex flex-col gap-4" style={{ width: '34%' }}>
+            {/* ── Left column — normal flow, sizes the wrapper ── */}
+            <div className="flex flex-col gap-4" style={{ width: '34%' }}>
 
-            {/* Page heading */}
-            <div>
-              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '6px' }}>
+              {/* Page heading */}
+              <div>
                 <h1
                   style={{
                     fontSize: '26px',
@@ -223,533 +230,519 @@ export function ConnectorPage() {
                     color: '#f9f9f9',
                     letterSpacing: '-0.4px',
                     lineHeight: 1.2,
+                    marginBottom: '6px',
                   }}
                 >
-                  {isUpgrade ? 'Upgrade Account' : 'Cloud Connectors'}
+                  Cloud Connectors
                 </h1>
-                {showDemoOption && (
+                <p style={{ fontSize: '13px', color: '#6a6b6c', lineHeight: 1.6, letterSpacing: '0.2px' }}>
+                  Connect your AWS account to start running APT emulations.
+                </p>
+              </div>
+
+              {/* Main connector card */}
+              <div
+                style={{
+                  backgroundColor: '#101111',
+                  border: '1px solid rgba(255,255,255,0.06)',
+                  borderRadius: '12px',
+                  boxShadow: 'rgb(27, 28, 30) 0px 0px 0px 1px, rgb(7, 8, 10) 0px 0px 0px 1px inset',
+                  padding: '20px',
+                  position: 'relative',
+                  overflow: 'hidden',
+                }}
+              >
+                {/* Card header — compact divider only */}
+                <div style={{ marginBottom: '18px', paddingBottom: '14px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                  <p style={{ fontSize: '11px', fontWeight: 500, color: '#6a6b6c', letterSpacing: '0.3px', textTransform: 'uppercase' }}>
+                    IAM Role Setup
+                  </p>
+                </div>
+
+                {/* Demo-expired banner (existing demo users whose session ended) */}
+                {isDemoExpired && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '10px',
+                      background: 'rgba(255,188,51,0.06)',
+                      border: '1px solid rgba(255,188,51,0.2)',
+                      borderRadius: '8px',
+                      padding: '12px 14px',
+                      marginBottom: '20px',
+                    }}
+                  >
+                    <ClockIcon color="#ffbc33" />
+                    <div>
+                      <p style={{ fontSize: '13px', fontWeight: 600, color: '#ffbc33', marginBottom: '4px' }}>
+                        Demo Session Expired
+                      </p>
+                      <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.5 }}>
+                        Your demo sandbox has ended. Connect your AWS account to continue with full access.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* IAM role verified success banner */}
+                {verifySuccess && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '10px',
+                      background: 'rgba(95,201,146,0.06)',
+                      border: '1px solid rgba(95,201,146,0.2)',
+                      borderRadius: '8px',
+                      padding: '12px 14px',
+                      marginBottom: '20px',
+                    }}
+                  >
+                    <CheckCircleIcon color="#5fc992" />
+                    <div>
+                      <p style={{ fontSize: '13px', fontWeight: 600, color: '#5fc992', marginBottom: '4px' }}>
+                        IAM Role Verified
+                      </p>
+                      <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.5 }}>
+                        Your AWS account is connected. Redirecting to dashboard...
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Cloud provider dropdown */}
+                <div ref={providerRef} style={{ marginBottom: '16px', position: 'relative' }}>
+                  <label
+                    style={{
+                      display: 'block',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      color: '#9c9c9d',
+                      marginBottom: '6px',
+                      letterSpacing: '0.3px',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    Provider
+                  </label>
                   <button
                     type="button"
-                    onClick={handleDemo}
-                    disabled={loading}
+                    onClick={() => setProviderOpen((o) => !o)}
                     style={{
-                      fontSize: '12px',
-                      fontWeight: 500,
-                      color: '#FF6363',
-                      background: 'none',
-                      border: 'none',
-                      cursor: loading ? 'not-allowed' : 'pointer',
-                      opacity: loading ? 0.4 : 1,
-                      padding: 0,
-                      letterSpacing: '0.2px',
-                      transition: 'opacity 0.15s',
-                      flexShrink: 0,
-                      marginBottom: '2px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      width: '100%',
+                      padding: '9px 10px',
+                      background: '#1b1c1e',
+                      border: '1px solid rgba(255,255,255,0.06)',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      transition: 'border-color 0.15s',
                     }}
-                    onMouseEnter={(e) => { if (!loading) e.currentTarget.style.opacity = '0.6' }}
-                    onMouseLeave={(e) => { if (!loading) e.currentTarget.style.opacity = '1' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'rgba(85,179,255,0.3)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)')}
                   >
-                    Try demo mode →
+                    <ProviderIcon id={provider} />
+                    <span
+                      style={{
+                        flex: 1,
+                        textAlign: 'left',
+                        fontSize: '13px',
+                        fontWeight: 500,
+                        color: '#f9f9f9',
+                        letterSpacing: '0.2px',
+                      }}
+                    >
+                      {PROVIDERS.find((p) => p.id === provider)?.label}
+                    </span>
+                    <span
+                      style={{
+                        display: 'inline-block',
+                        transform: providerOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                        transition: 'transform 0.2s',
+                      }}
+                    >
+                      <ChevronDownIcon />
+                    </span>
                   </button>
-                )}
+
+                  {/* Dropdown list */}
+                  {providerOpen && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 'calc(100% + 4px)',
+                        left: 0,
+                        right: 0,
+                        background: '#101111',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: '8px',
+                        boxShadow: 'rgb(27, 28, 30) 0px 0px 0px 1px, rgba(0,0,0,0.5) 0px 8px 24px',
+                        zIndex: 50,
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {PROVIDERS.map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          disabled={p.soon}
+                          onClick={() => { if (p.soon) return; setProvider(p.id); setProviderOpen(false) }}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            width: '100%',
+                            padding: '9px 12px',
+                            background: provider === p.id ? 'rgba(255,255,255,0.04)' : 'transparent',
+                            border: 'none',
+                            borderBottom: '1px solid rgba(255,255,255,0.04)',
+                            cursor: p.soon ? 'not-allowed' : 'pointer',
+                            opacity: p.soon ? 0.5 : 1,
+                            transition: 'background 0.1s',
+                            textAlign: 'left',
+                          }}
+                          onMouseEnter={(e) => { if (!p.soon) e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = provider === p.id ? 'rgba(255,255,255,0.04)' : 'transparent')}
+                        >
+                          <ProviderIcon id={p.id} />
+                          <span style={{ fontSize: '13px', fontWeight: 500, color: '#f9f9f9', letterSpacing: '0.2px' }}>
+                            {p.label}
+                          </span>
+                          {p.soon ? (
+                            <span style={{ marginLeft: 'auto', fontSize: '9px', fontFamily: 'Geist Mono, monospace', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#6a6b6c', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '1px 5px' }}>
+                              Soon
+                            </span>
+                          ) : provider === p.id ? (
+                            <span style={{ marginLeft: 'auto', color: '#5fc992', display: 'flex' }}>
+                              <CheckmarkIcon />
+                            </span>
+                          ) : null}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Only AWS is supported today */}
+                <div
+                  style={{
+                    display: 'flex', alignItems: 'flex-start', gap: '8px',
+                    background: 'rgba(85,179,255,0.06)', border: '1px solid rgba(85,179,255,0.18)',
+                    borderRadius: '8px', padding: '10px 12px', marginBottom: '16px',
+                  }}
+                >
+                  <InfoIcon color="#55b3ff" />
+                  <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.5, letterSpacing: '0.2px', margin: 0 }}>
+                    MayaTrail currently supports <span style={{ color: '#55b3ff', fontWeight: 600 }}>AWS</span> only.
+                    Azure and GCP support is coming soon.
+                  </p>
+                </div>
+
+                {/* IAM Role ARN form */}
+                <form onSubmit={handleSubmit}>
+                  {/* ARN label row */}
+                  <div style={{ marginBottom: '6px', display: 'flex', justifyContent: 'space-between' }}>
+                    <label
+                      htmlFor="arn-input"
+                      style={{ fontSize: '11px', fontWeight: 500, color: '#9c9c9d', letterSpacing: '0.3px', textTransform: 'uppercase' }}
+                    >
+                      IAM Role ARN
+                    </label>
+                    <span style={{ fontSize: '11px', color: '#434345', letterSpacing: '0.2px' }}>Required</span>
+                  </div>
+
+                  {/* ARN input with leading link icon */}
+                  <div style={{ position: 'relative', marginBottom: '16px' }}>
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        bottom: 0,
+                        left: 0,
+                        paddingLeft: '10px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        pointerEvents: 'none',
+                      }}
+                    >
+                      <LinkIcon />
+                    </div>
+                    <input
+                      id="arn-input"
+                      type="text"
+                      value={roleArn}
+                      onChange={(e) => {
+                        setRoleArn(e.target.value)
+                        setLocalError('')
+                      }}
+                      placeholder="arn:aws:iam::123456789012:role/MayaTrailRole"
+                      className="auth-input-solid"
+                      style={{
+                        display: 'block',
+                        width: '100%',
+                        paddingTop: '10px',
+                        paddingBottom: '10px',
+                        paddingLeft: '32px',
+                        paddingRight: '12px',
+                        background: '#1b1c1e',
+                        border: '1px solid rgba(255,255,255,0.06)',
+                        borderRadius: '6px',
+                        fontSize: '13px',
+                        fontWeight: 500,
+                        fontFamily: 'Geist Mono, monospace',
+                        letterSpacing: '0.2px',
+                        outline: 'none',
+                        boxSizing: 'border-box',
+                        transition: 'border-color 0.15s, box-shadow 0.15s',
+                      }}
+                      onFocus={(e) => {
+                        e.target.style.borderColor = 'rgba(85,179,255,0.4)'
+                        e.target.style.boxShadow = 'hsla(202, 100%, 67%, 0.12) 0px 0px 0px 3px'
+                      }}
+                      onBlur={(e) => {
+                        e.target.style.borderColor = 'rgba(255,255,255,0.06)'
+                        e.target.style.boxShadow = 'none'
+                      }}
+                    />
+                  </div>
+
+                  {/* Verifying progress */}
+                  {verifying && (
+                    <div
+                      className="flex items-center gap-2.5"
+                      style={{ marginBottom: '12px' }}
+                    >
+                      <div
+                        className="animate-spin"
+                        style={{
+                          width: '14px',
+                          height: '14px',
+                          border: '2px solid rgba(85,179,255,0.2)',
+                          borderTopColor: '#55b3ff',
+                          borderRadius: '50%',
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span
+                        style={{
+                          fontSize: '12px',
+                          fontFamily: 'Geist Mono, monospace',
+                          color: '#55b3ff',
+                          letterSpacing: '0.2px',
+                        }}
+                      >
+                        Verifying IAM role via STS AssumeRole...
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Validation / API error */}
+                  {displayError && !verifying && (
+                    <div
+                      style={{
+                        fontSize: '12px',
+                        fontFamily: 'Geist Mono, monospace',
+                        color: '#FF6363',
+                        background: 'rgba(255,99,99,0.06)',
+                        border: '1px solid rgba(255,99,99,0.15)',
+                        borderRadius: '6px',
+                        padding: '8px 12px',
+                        letterSpacing: '0.2px',
+                        marginBottom: '12px',
+                      }}
+                    >
+                      {displayError}
+                    </div>
+                  )}
+
+                  {/* Divider + primary CTA */}
+                  <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px' }}>
+                    <button
+                      type="submit"
+                      disabled={loading || verifying}
+                      style={{
+                        width: '100%',
+                        padding: '10px 20px',
+                        background: '#FF6363',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '6px',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                        letterSpacing: '0.3px',
+                        cursor: loading || verifying ? 'not-allowed' : 'pointer',
+                        opacity: loading || verifying ? 0.5 : 1,
+                        transition: 'opacity 0.15s',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        boxShadow: 'rgba(255,99,99,0.25) 0px 1px 0px 0px inset, rgba(0,0,0,0.2) 0px -1px 0px 0px inset',
+                      }}
+                      onMouseEnter={(e) => { if (!loading && !verifying) e.currentTarget.style.opacity = '0.8' }}
+                      onMouseLeave={(e) => { if (!loading && !verifying) e.currentTarget.style.opacity = '1' }}
+                    >
+                      <ShieldCheckIcon />
+                      Verify &amp; Connect
+                    </button>
+                  </div>
+                </form>
+
               </div>
-              <p style={{ fontSize: '13px', color: '#6a6b6c', lineHeight: 1.6, letterSpacing: '0.2px' }}>
-                {isUpgrade
-                  ? 'Link your AWS account to unlock full APT emulation access.'
-                  : 'Connect your AWS account to start running APT emulations.'}
+
+              {/* Helper note — inline, no card */}
+              <p style={{ fontSize: '11px', color: '#434345', lineHeight: 1.6, letterSpacing: '0.2px', paddingLeft: '2px' }}>
+                Ensure the IAM role has an inline policy matching the permissions listed on the right.
               </p>
             </div>
 
-            {/* Main connector card */}
+            {/* ── Right column (8 cols) — hidden on mobile ── */}
             <div
+              className="flex flex-col"
               style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: 'calc(34% + 24px)',
+                right: 0,
                 backgroundColor: '#101111',
                 border: '1px solid rgba(255,255,255,0.06)',
                 borderRadius: '12px',
                 boxShadow: 'rgb(27, 28, 30) 0px 0px 0px 1px, rgb(7, 8, 10) 0px 0px 0px 1px inset',
-                padding: '20px',
-                position: 'relative',
                 overflow: 'hidden',
               }}
             >
-              {/* Card header — compact divider only */}
-              <div style={{ marginBottom: '18px', paddingBottom: '14px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                <p style={{ fontSize: '11px', fontWeight: 500, color: '#6a6b6c', letterSpacing: '0.3px', textTransform: 'uppercase' }}>
-                  IAM Role Setup
-                </p>
-              </div>
-
-              {/* Demo-expired upgrade banner */}
-              {isUpgrade && isDemoExpired && (
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: '10px',
-                    background: 'rgba(255,188,51,0.06)',
-                    border: '1px solid rgba(255,188,51,0.2)',
-                    borderRadius: '8px',
-                    padding: '12px 14px',
-                    marginBottom: '20px',
-                  }}
-                >
-                  <ClockIcon color="#ffbc33" />
-                  <div>
-                    <p style={{ fontSize: '13px', fontWeight: 600, color: '#ffbc33', marginBottom: '4px' }}>
-                      Demo Session Expired
-                    </p>
-                    <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.5 }}>
-                      Your demo sandbox has ended. Connect your AWS account to continue with full access.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* IAM role verified success banner */}
-              {verifySuccess && (
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: '10px',
-                    background: 'rgba(95,201,146,0.06)',
-                    border: '1px solid rgba(95,201,146,0.2)',
-                    borderRadius: '8px',
-                    padding: '12px 14px',
-                    marginBottom: '20px',
-                  }}
-                >
-                  <CheckCircleIcon color="#5fc992" />
-                  <div>
-                    <p style={{ fontSize: '13px', fontWeight: 600, color: '#5fc992', marginBottom: '4px' }}>
-                      IAM Role Verified
-                    </p>
-                    <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.5 }}>
-                      Your AWS account is connected. Redirecting to dashboard...
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* Cloud provider dropdown */}
-              <div ref={providerRef} style={{ marginBottom: '16px', position: 'relative' }}>
-                <label
-                  style={{
-                    display: 'block',
-                    fontSize: '11px',
-                    fontWeight: 500,
-                    color: '#9c9c9d',
-                    marginBottom: '6px',
-                    letterSpacing: '0.3px',
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  Provider
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setProviderOpen((o) => !o)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    width: '100%',
-                  padding: '9px 10px',
-                    background: '#1b1c1e',
-                    border: '1px solid rgba(255,255,255,0.06)',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    transition: 'border-color 0.15s',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'rgba(85,179,255,0.3)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)')}
-                >
-                  <ProviderIcon id={provider} />
-                  <span
-                    style={{
-                      flex: 1,
-                      textAlign: 'left',
-                      fontSize: '13px',
-                      fontWeight: 500,
-                      color: '#f9f9f9',
-                      letterSpacing: '0.2px',
-                    }}
-                  >
-                    {PROVIDERS.find((p) => p.id === provider)?.label}
-                  </span>
-                  <span
-                    style={{
-                      display: 'inline-block',
-                      transform: providerOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-                      transition: 'transform 0.2s',
-                    }}
-                  >
-                    <ChevronDownIcon />
-                  </span>
-                </button>
-
-                {/* Dropdown list */}
-                {providerOpen && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: 'calc(100% + 4px)',
-                      left: 0,
-                      right: 0,
-                      background: '#101111',
-                      border: '1px solid rgba(255,255,255,0.1)',
-                      borderRadius: '8px',
-                      boxShadow: 'rgb(27, 28, 30) 0px 0px 0px 1px, rgba(0,0,0,0.5) 0px 8px 24px',
-                      zIndex: 50,
-                      overflow: 'hidden',
-                    }}
-                  >
-                    {PROVIDERS.map((p) => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => { setProvider(p.id); setProviderOpen(false) }}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '8px',
-                          width: '100%',
-                          padding: '9px 12px',
-                          background: provider === p.id ? 'rgba(255,255,255,0.04)' : 'transparent',
-                          border: 'none',
-                          borderBottom: '1px solid rgba(255,255,255,0.04)',
-                          cursor: 'pointer',
-                          transition: 'background 0.1s',
-                          textAlign: 'left',
-                        }}
-                        onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.06)')}
-                        onMouseLeave={(e) => (e.currentTarget.style.background = provider === p.id ? 'rgba(255,255,255,0.04)' : 'transparent')}
-                      >
-                        <ProviderIcon id={p.id} />
-                        <span style={{ fontSize: '13px', fontWeight: 500, color: '#f9f9f9', letterSpacing: '0.2px' }}>
-                          {p.label}
-                        </span>
-                        {provider === p.id && (
-                          <span style={{ marginLeft: 'auto', color: '#5fc992', display: 'flex' }}>
-                            <CheckmarkIcon />
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* IAM Role ARN form */}
-              <form onSubmit={handleSubmit}>
-                {/* ARN label row */}
-                <div style={{ marginBottom: '6px', display: 'flex', justifyContent: 'space-between' }}>
-                  <label
-                    htmlFor="arn-input"
-                    style={{ fontSize: '11px', fontWeight: 500, color: '#9c9c9d', letterSpacing: '0.3px', textTransform: 'uppercase' }}
-                  >
-                    IAM Role ARN
-                  </label>
-                  <span style={{ fontSize: '11px', color: '#434345', letterSpacing: '0.2px' }}>Required</span>
-                </div>
-
-                {/* ARN input with leading link icon */}
-                <div style={{ position: 'relative', marginBottom: '16px' }}>
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      bottom: 0,
-                      left: 0,
-                      paddingLeft: '10px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      pointerEvents: 'none',
-                    }}
-                  >
-                    <LinkIcon />
-                  </div>
-                  <input
-                    id="arn-input"
-                    type="text"
-                    value={roleArn}
-                    onChange={(e) => {
-                      setRoleArn(e.target.value)
-                      setLocalError('')
-                    }}
-                    placeholder="arn:aws:iam::123456789012:role/MayaTrailRole"
-                    className="auth-input-solid"
-                    style={{
-                      display: 'block',
-                      width: '100%',
-                      paddingTop: '10px',
-                      paddingBottom: '10px',
-                      paddingLeft: '32px',
-                      paddingRight: '12px',
-                      background: '#1b1c1e',
-                      border: '1px solid rgba(255,255,255,0.06)',
-                      borderRadius: '6px',
-                      fontSize: '13px',
-                      fontWeight: 500,
-                      fontFamily: 'Geist Mono, monospace',
-                      letterSpacing: '0.2px',
-                      outline: 'none',
-                      boxSizing: 'border-box',
-                      transition: 'border-color 0.15s, box-shadow 0.15s',
-                    }}
-                    onFocus={(e) => {
-                      e.target.style.borderColor = 'rgba(85,179,255,0.4)'
-                      e.target.style.boxShadow = 'hsla(202, 100%, 67%, 0.12) 0px 0px 0px 3px'
-                    }}
-                    onBlur={(e) => {
-                      e.target.style.borderColor = 'rgba(255,255,255,0.06)'
-                      e.target.style.boxShadow = 'none'
-                    }}
-                  />
-                </div>
-
-                {/* Verifying progress */}
-                {verifying && (
-                  <div
-                    className="flex items-center gap-2.5"
-                    style={{ marginBottom: '12px' }}
-                  >
-                    <div
-                      className="animate-spin"
-                      style={{
-                        width: '14px',
-                        height: '14px',
-                        border: '2px solid rgba(85,179,255,0.2)',
-                        borderTopColor: '#55b3ff',
-                        borderRadius: '50%',
-                        flexShrink: 0,
-                      }}
-                    />
-                    <span
-                      style={{
-                        fontSize: '12px',
-                        fontFamily: 'Geist Mono, monospace',
-                        color: '#55b3ff',
-                        letterSpacing: '0.2px',
-                      }}
-                    >
-                      Verifying IAM role via STS AssumeRole...
-                    </span>
-                  </div>
-                )}
-
-                {/* Validation / API error */}
-                {displayError && !verifying && (
-                  <div
-                    style={{
-                      fontSize: '12px',
-                      fontFamily: 'Geist Mono, monospace',
-                      color: '#FF6363',
-                      background: 'rgba(255,99,99,0.06)',
-                      border: '1px solid rgba(255,99,99,0.15)',
-                      borderRadius: '6px',
-                      padding: '8px 12px',
-                      letterSpacing: '0.2px',
-                      marginBottom: '12px',
-                    }}
-                  >
-                    {displayError}
-                  </div>
-                )}
-
-                {/* Divider + primary CTA */}
-                <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px' }}>
-                  <button
-                    type="submit"
-                    disabled={loading || verifying}
-                    style={{
-                      width: '100%',
-                      padding: '10px 20px',
-                      background: '#FF6363',
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: '6px',
-                      fontSize: '13px',
-                      fontWeight: 600,
-                      letterSpacing: '0.3px',
-                      cursor: loading || verifying ? 'not-allowed' : 'pointer',
-                      opacity: loading || verifying ? 0.5 : 1,
-                      transition: 'opacity 0.15s',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '8px',
-                      boxShadow: 'rgba(255,99,99,0.25) 0px 1px 0px 0px inset, rgba(0,0,0,0.2) 0px -1px 0px 0px inset',
-                    }}
-                    onMouseEnter={(e) => { if (!loading && !verifying) e.currentTarget.style.opacity = '0.8' }}
-                    onMouseLeave={(e) => { if (!loading && !verifying) e.currentTarget.style.opacity = '1' }}
-                  >
-                    <ShieldCheckIcon />
-                    Verify &amp; Connect
-                  </button>
-                </div>
-              </form>
-
-              {/* Card footer — back link for upgrade flow */}
-              {isUpgrade && (
-                <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                  <button
-                    type="button"
-                    onClick={() => window.history.back()}
-                    style={ghostBtnStyle}
-                    onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.6')}
-                    onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
-                  >
-                    ← Back to Profile
-                  </button>
-                </div>
-              )}
-              {!isUpgrade && (
-                <p style={{ marginTop: '14px', fontSize: '12px', color: '#434345', letterSpacing: '0.2px' }}>
-                  Need help? <a href="mailto:admin@mayatrail.tech?subject=MayaTrail%20IAM%20Role%20Setup%20Help" style={{ color: '#55b3ff', textDecoration: 'none' }}>Contact support</a>
-                </p>
-              )}
-            </div>
-
-            {/* Helper note — inline, no card */}
-            <p style={{ fontSize: '11px', color: '#434345', lineHeight: 1.6, letterSpacing: '0.2px', paddingLeft: '2px' }}>
-              Ensure the IAM role has an inline policy matching the permissions listed on the right.
-            </p>
-          </div>
-
-          {/* ── Right column (8 cols) — hidden on mobile ── */}
-          <div
-            className="flex flex-col"
-            style={{
-              position: 'absolute',
-              top: 0,
-              bottom: 0,
-              left: 'calc(34% + 24px)',
-              right: 0,
-              backgroundColor: '#101111',
-              border: '1px solid rgba(255,255,255,0.06)',
-              borderRadius: '12px',
-              boxShadow: 'rgb(27, 28, 30) 0px 0px 0px 1px, rgb(7, 8, 10) 0px 0px 0px 1px inset',
-              overflow: 'hidden',
-            }}
-          >
-            {/* Panel header */}
-            <div
-              style={{
-                padding: '16px 20px',
-                borderBottom: '1px solid rgba(255,255,255,0.06)',
-                flexShrink: 0,
-              }}
-            >
-              <div className="flex items-center gap-2" style={{ marginBottom: '4px' }}>
-                <PolicyIcon />
-                <span style={{ fontSize: '15px', fontWeight: 600, color: '#f9f9f9', letterSpacing: '0.2px' }}>
-                  Required IAM Policy
-                </span>
-              </div>
-              <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.6, letterSpacing: '0.2px' }}>
-                Minimum permissions required for MayaTrail to function.
-              </p>
-            </div>
-
-            {/* Scrollable policy list */}
-            <div
-              className="flex-1 overflow-y-auto flex flex-col gap-4"
-              style={{ padding: '16px 20px', minHeight: 0 }}
-            >
-              <PolicyGroup
-                title="S3 — Emulation Target Storage"
-                accent="#55b3ff"
-                actions={[
-                  's3:CreateBucket', 's3:DeleteBucket', 's3:PutObject',
-                  's3:GetObject', 's3:DeleteObject', 's3:ListBucket',
-                ]}
-                reason="Pulumi provisions S3 buckets as target infrastructure for emulations. Buckets and objects are created and torn down per emulation run."
-              />
-              <PolicyGroup
-                title="IAM — Identity Emulation"
-                accent="#5fc992"
-                actions={[
-                  'iam:CreateRole', 'iam:DeleteRole', 'iam:AttachRolePolicy',
-                  'iam:DetachRolePolicy', 'iam:PutRolePolicy', 'iam:DeleteRolePolicy',
-                  'iam:CreateUser', 'iam:DeleteUser', 'iam:CreateAccessKey',
-                  'iam:DeleteAccessKey', 'iam:ListAccessKeys',
-                ]}
-                reason="Emulations test IAM privilege escalation and policy manipulation. Short-lived IAM users and roles are provisioned to simulate attacker behavior like policy attachment and access key theft."
-              />
-              <PolicyGroup
-                title="STS — Role Assumption"
-                accent="#ffbc33"
-                actions={['sts:AssumeRole', 'sts:GetCallerIdentity']}
-                reason="STS is used to verify this connector and for emulations that test cross-account role chaining and eventual consistency exploitation."
-              />
-              <PolicyGroup
-                title="KMS — Encryption Emulation"
-                accent="#FF6363"
-                actions={[
-                  'kms:CreateKey', 'kms:ScheduleKeyDeletion',
-                  'kms:Encrypt', 'kms:Decrypt', 'kms:GenerateDataKey',
-                ]}
-                reason="KMS ransomware emulations create encryption keys, re-encrypt S3 objects under attacker-controlled keys, then schedule key deletion — simulating real cloud ransomware techniques."
-              />
-
-              {/* Full policy JSON reference */}
-              <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px' }}>
-                <p
-                  style={{
-                    fontSize: '10px',
-                    fontFamily: 'Geist Mono, monospace',
-                    color: '#6a6b6c',
-                    letterSpacing: '1px',
-                    textTransform: 'uppercase',
-                    marginBottom: '8px',
-                  }}
-                >
-                  Full Policy JSON
-                </p>
-                <pre
-                  style={{
-                    fontFamily: 'Geist Mono, monospace',
-                    fontSize: '11px',
-                    lineHeight: 1.7,
-                    color: '#55b3ff',
-                    whiteSpace: 'pre',
-                    background: '#07080a',
-                    borderRadius: '8px',
-                    padding: '16px',
-                    border: '1px solid rgba(255,255,255,0.06)',
-                    overflowX: 'auto',
-                    margin: 0,
-                  }}
-                >
-                  {SAMPLE_POLICY}
-                </pre>
-              </div>
-            </div>
-
-            {/* Panel footer */}
-            <div
-              style={{
-                padding: '10px 20px',
-                borderTop: '1px solid rgba(255,255,255,0.06)',
-                flexShrink: 0,
-              }}
-            >
-              <p
+              {/* Panel header */}
+              <div
                 style={{
-                  fontSize: '11px',
-                  fontFamily: 'Geist Mono, monospace',
-                  color: '#434345',
-                  lineHeight: 1.6,
+                  padding: '16px 20px',
+                  borderBottom: '1px solid rgba(255,255,255,0.06)',
+                  flexShrink: 0,
                 }}
               >
-                All resources are created in an isolated Pulumi stack and destroyed after each run.
-                The role must trust MayaTrail's AWS account to assume it.
-              </p>
-            </div>
-          </div>
+                <div className="flex items-center gap-2" style={{ marginBottom: '4px' }}>
+                  <PolicyIcon />
+                  <span style={{ fontSize: '15px', fontWeight: 600, color: '#f9f9f9', letterSpacing: '0.2px' }}>
+                    Required IAM Policy
+                  </span>
+                </div>
+                <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.6, letterSpacing: '0.2px' }}>
+                  Minimum permissions required for MayaTrail to function.
+                </p>
+              </div>
 
-        </div>
+              {/* Scrollable policy list */}
+              <div
+                className="flex-1 overflow-y-auto flex flex-col gap-4"
+                style={{ padding: '16px 20px', minHeight: 0 }}
+              >
+                <PolicyGroup
+                  title="S3 — Emulation Target Storage"
+                  accent="#55b3ff"
+                  actions={[
+                    's3:CreateBucket', 's3:DeleteBucket', 's3:PutObject',
+                    's3:GetObject', 's3:DeleteObject', 's3:ListBucket',
+                  ]}
+                  reason="Pulumi provisions S3 buckets as target infrastructure for emulations. Buckets and objects are created and torn down per emulation run."
+                />
+                <PolicyGroup
+                  title="IAM — Identity Emulation"
+                  accent="#5fc992"
+                  actions={[
+                    'iam:CreateRole', 'iam:DeleteRole', 'iam:AttachRolePolicy',
+                    'iam:DetachRolePolicy', 'iam:PutRolePolicy', 'iam:DeleteRolePolicy',
+                    'iam:CreateUser', 'iam:DeleteUser', 'iam:CreateAccessKey',
+                    'iam:DeleteAccessKey', 'iam:ListAccessKeys',
+                  ]}
+                  reason="Emulations test IAM privilege escalation and policy manipulation. Short-lived IAM users and roles are provisioned to simulate attacker behavior like policy attachment and access key theft."
+                />
+                <PolicyGroup
+                  title="STS — Role Assumption"
+                  accent="#ffbc33"
+                  actions={['sts:AssumeRole', 'sts:GetCallerIdentity']}
+                  reason="STS is used to verify this connector and for emulations that test cross-account role chaining and eventual consistency exploitation."
+                />
+                <PolicyGroup
+                  title="KMS — Encryption Emulation"
+                  accent="#FF6363"
+                  actions={[
+                    'kms:CreateKey', 'kms:ScheduleKeyDeletion',
+                    'kms:Encrypt', 'kms:Decrypt', 'kms:GenerateDataKey',
+                  ]}
+                  reason="KMS ransomware emulations create encryption keys, re-encrypt S3 objects under attacker-controlled keys, then schedule key deletion, simulating real cloud ransomware techniques."
+                />
+
+                {/* Full policy JSON reference — scoped (least privilege) or admin */}
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', gap: '8px', flexWrap: 'wrap' }}>
+                    <p
+                      style={{
+                        fontSize: '10px',
+                        fontFamily: 'Geist Mono, monospace',
+                        color: '#6a6b6c',
+                        letterSpacing: '1px',
+                        textTransform: 'uppercase',
+                        margin: 0,
+                      }}
+                    >
+                      Full Policy JSON
+                    </p>
+                    <div style={{ display: 'flex', gap: '2px', background: '#07080a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '6px', padding: '2px' }}>
+                      <PolicyTab label="Least Privilege" active={policyView === 'scoped'} onClick={() => setPolicyView('scoped')} />
+                      <PolicyTab label="Administrator" active={policyView === 'admin'} recommended onClick={() => setPolicyView('admin')} />
+                    </div>
+                  </div>
+                  <p style={{ fontSize: '11px', color: '#9c9c9d', lineHeight: 1.5, marginBottom: '8px', letterSpacing: '0.2px' }}>
+                    <span style={{ color: '#5fc992', fontWeight: 600 }}>Recommended:</span> use the Administrator policy for the
+                    easiest setup as it grants full access in your isolated test account, so no permissions need tuning. Pick
+                    Least Privilege only if you want tighter scoping.
+                  </p>
+                  <pre
+                    style={{
+                      fontFamily: 'Geist Mono, monospace',
+                      fontSize: '11px',
+                      lineHeight: 1.7,
+                      color: policyView === 'admin' ? '#ffbc33' : '#55b3ff',
+                      whiteSpace: 'pre',
+                      background: '#07080a',
+                      borderRadius: '8px',
+                      padding: '16px',
+                      border: '1px solid rgba(255,255,255,0.06)',
+                      overflowX: 'auto',
+                      margin: 0,
+                    }}
+                  >
+                    {policyView === 'admin' ? ADMIN_POLICY : SAMPLE_POLICY}
+                  </pre>
+                </div>
+              </div>
+
+              {/* Panel footer */}
+              <div
+                style={{
+                  padding: '10px 20px',
+                  borderTop: '1px solid rgba(255,255,255,0.06)',
+                  flexShrink: 0,
+                }}
+              >
+                <p
+                  style={{
+                    fontSize: '11px',
+                    fontFamily: 'Geist Mono, monospace',
+                    color: '#434345',
+                    lineHeight: 1.6,
+                  }}
+                >
+                  All resources are created in an isolated Pulumi stack and destroyed after each run.
+                  The role must trust MayaTrail's AWS account to assume it.
+                </p>
+              </div>
+            </div>
+
+          </div>
         </div>{/* end content area */}
       </div>{/* end outer card */}
     </div>
@@ -836,19 +829,44 @@ function PolicyGroup({
   )
 }
 
-/* ── Shared button components ── */
-
-const ghostBtnStyle: React.CSSProperties = {
-  fontSize: '11px',
-  fontFamily: 'Geist Mono, monospace',
-  color: '#6a6b6c',
-  background: 'none',
-  border: 'none',
-  cursor: 'pointer',
-  padding: 0,
-  letterSpacing: '0.2px',
-  transition: 'opacity 0.15s',
+/** Small segmented toggle used to switch the displayed full-policy JSON. */
+function PolicyTab({
+  label, active, onClick, recommended = false,
+}: {
+  label: string
+  active: boolean
+  onClick: () => void
+  recommended?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        fontFamily: 'Geist Mono, monospace',
+        fontSize: '10px',
+        letterSpacing: '0.3px',
+        padding: '4px 10px',
+        borderRadius: '4px',
+        border: 'none',
+        cursor: 'pointer',
+        background: active ? 'rgba(85,179,255,0.12)' : 'transparent',
+        color: active ? '#55b3ff' : '#6a6b6c',
+        transition: 'color 0.15s, background 0.15s',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+      }}
+    >
+      {recommended && (
+        <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#5fc992', flexShrink: 0 }} />
+      )}
+      {label}
+    </button>
+  )
 }
+
+/* ── Shared button components ── */
 
 const outlineBtnStyle: React.CSSProperties = {
   fontSize: '11px',
@@ -976,73 +994,76 @@ function CheckmarkIcon() {
   )
 }
 
+function InfoIcon({ color }: { color: string }) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.6" style={{ marginTop: '1px', flexShrink: 0 }}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5" strokeLinecap="round" />
+      <circle cx="12" cy="8" r="0.9" fill={color} stroke="none" />
+    </svg>
+  )
+}
+
 /* ── Provider dropdown data ── */
 
 type ProviderId = 'aws' | 'azure' | 'gcp'
 
-const PROVIDERS: { id: ProviderId; label: string }[] = [
+const PROVIDERS: { id: ProviderId; label: string; soon?: boolean }[] = [
   { id: 'aws', label: 'Amazon Web Services' },
-  { id: 'azure', label: 'Microsoft Azure' },
-  { id: 'gcp', label: 'Google Cloud' },
+  { id: 'azure', label: 'Microsoft Azure', soon: true },
+  { id: 'gcp', label: 'Google Cloud', soon: true },
 ]
 
-/** Renders the colored icon swatch for a given cloud provider. */
+/** Swatch wrapper that tints a provider logo on a rounded square. */
+function ProviderSwatch({ bg, children }: { bg: string; children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        width: '24px', height: '24px', borderRadius: '4px', background: bg,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+      }}
+    >
+      {children}
+    </div>
+  )
+}
+
+/** Renders the brand logo swatch for a given cloud provider. */
 function ProviderIcon({ id }: { id: ProviderId }) {
   if (id === 'aws') {
+    // AWS "smile": the orange swoosh + arrowhead from the AWS brand mark.
     return (
-      <div
-        style={{
-          width: '24px', height: '24px', borderRadius: '4px',
-          background: 'rgba(255,153,0,0.15)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0,
-        }}
-      >
-        <svg width="14" height="14" viewBox="0 0 48 48" fill="none">
-          <path
-            d="M14.6 27.6c0 .5.1.9.2 1.2.2.4.4.7.7 1 .1.1.1.3 0 .4l-.9.6c-.1.1-.3.1-.4-.1-.2-.3-.4-.6-.6-.9-.4-.7-.6-1.5-.6-2.4 0-1.7.7-3.1 2-4.3l.8 1c.1.2.1.3 0 .4-.8.7-1.2 1.8-1.2 3.1zm4.9-1.1c-.1.1-.2.1-.3 0l-.7-.7c-.1-.1-.1-.3.1-.4.9-.7 2-1 3.1-1 1.8 0 3.3.7 4.4 1.9l-.8.8c-.1.1-.3.1-.4 0-.8-.8-1.8-1.3-3.2-1.3-.8 0-1.6.2-2.2.7zm3.8 5.4c-.8 0-1.5-.1-2.1-.4l-.3 1.2c.8.3 1.6.5 2.4.5 1.5 0 2.8-.5 3.8-1.3l-.7-1c-.1-.1-.3-.1-.4 0-.6.6-1.5 1-2.7 1z"
-            fill="#FF9900"
-          />
-          <path d="M34.2 28.5c-.9.7-2.3 1-3.6 1-1.8 0-3.4-.7-4.6-1.8l.8-.9c.2-.2.3-.2.5 0 .9.8 2.1 1.3 3.3 1.3.9 0 1.8-.2 2.5-.7l1.1 1.1z" fill="#FF9900" />
+      <ProviderSwatch bg="rgba(255,153,0,0.15)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+          <path d="M4.2 14.5c2.45 1.56 5.35 2.37 8.2 2.37 1.96 0 4-.42 5.98-1.24.34-.14.62.23.3.48-1.9 1.45-4.4 2.18-6.6 2.18-3.1 0-5.9-1.16-7.98-3.06-.16-.14 0-.35.1-.71z" fill="#FF9900" />
+          <path d="M19.1 13.6c-.32-.4-2.1-.2-2.9-.1-.24.03-.28-.18-.06-.33 1.42-1 3.74-.72 4.02-.38.28.35-.08 2.68-1.42 3.8-.2.17-.4.08-.3-.15.3-.76.98-2.46.66-2.84z" fill="#FF9900" />
         </svg>
-      </div>
+      </ProviderSwatch>
     )
   }
 
   if (id === 'azure') {
+    // Azure two-tone blue triangular mark.
     return (
-      <div
-        style={{
-          width: '24px', height: '24px', borderRadius: '4px',
-          background: 'rgba(0,120,212,0.15)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0,
-        }}
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-          <path d="M13.05 2L7 13.5l4.5 1.5L6 22h12L13.05 2z" fill="#0078D4" />
-          <path d="M7 13.5L2 22h4l5.5-8.5L7 13.5z" fill="#50a0ef" />
+      <ProviderSwatch bg="rgba(0,120,212,0.15)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+          <path d="M9.55 3.6h4.05L9.35 16.9a.86.86 0 01-.82.58H4.9a.43.43 0 01-.4-.58L8.73 4.2a.86.86 0 01.82-.6z" fill="#114A8B" />
+          <path d="M13.9 4.2a.86.86 0 00-.82-.6H9.6c.36 0 .68.24.8.6l4.5 12.7a.43.43 0 01-.4.58h3.6a.43.43 0 00.4-.58L13.9 4.2z" fill="#0078D4" />
+          <path d="M8.05 15.2h6.35l1.05 2.9-8.9-.02z" fill="#0078D4" opacity="0.9" />
         </svg>
-      </div>
+      </ProviderSwatch>
     )
   }
 
-  /* gcp */
+  // GCP four-color mark.
   return (
-    <div
-      style={{
-        width: '24px', height: '24px', borderRadius: '4px',
-        background: 'rgba(66,133,244,0.12)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        flexShrink: 0,
-      }}
-    >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-        <path d="M12 6.5l2.5 2.5H9.5L12 6.5z" fill="#EA4335" />
-        <path d="M16 9l2 2h-3.5L16 9z" fill="#FBBC04" />
-        <path d="M17.5 17.5H6.5L4 11h16l-2.5 6.5z" fill="#4285F4" />
-        <path d="M6.5 17.5l-2-2.5h15l-2 2.5H6.5z" fill="#34A853" />
+    <ProviderSwatch bg="rgba(66,133,244,0.12)">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+        <path d="M14.9 8.3l1.5-1.5A6.6 6.6 0 005.6 9.9l2.05.02a3.95 3.95 0 015.55-1.05l1.7-.57z" fill="#EA4335" />
+        <path d="M16.4 6.8l-1.5 1.5c1 .84 1.6 2.1 1.6 3.45v.5a2.05 2.05 0 010 4.1H12l-.02 2.05H16.5a6.6 6.6 0 00-.1-11.6z" fill="#4285F4" />
+        <path d="M8 19.9h4V17.85H8a1.98 1.98 0 01-.82-.18l-1.72.6A4.05 4.05 0 008 19.9z" fill="#34A853" />
+        <path d="M5.6 9.9A4.05 4.05 0 005.46 17.27l1.72-.6a2.05 2.05 0 01.47-3.65L7.65 9.92 5.6 9.9z" fill="#FBBC04" />
       </svg>
-    </div>
+    </ProviderSwatch>
   )
 }

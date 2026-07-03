@@ -74,11 +74,20 @@ def _emulation_technique_ids(entry: dict[str, Any]) -> set[str]:
     return covered
 
 
-def _covered_technique_ids(entries: list[dict[str, Any]]) -> set[str]:
-    """Return the union of covered technique IDs across the given emulations."""
+def _covered_technique_ids(
+    entries: list[dict[str, Any]], content: str = "emulations"
+) -> set[str]:
+    """
+    Return the union of covered technique IDs across the given emulations.
+
+    content selects the coverage lens: "emulations" counts techniques the
+    emulations exercise; "detections" counts techniques their detection rules
+    cover (derived from detection filenames).
+    """
+    per_entry = _detection_technique_ids if content == "detections" else _emulation_technique_ids
     covered: set[str] = set()
     for entry in entries:
-        covered |= _emulation_technique_ids(entry)
+        covered |= per_entry(entry)
     return covered
 
 
@@ -326,6 +335,7 @@ def mitre_coverage(
     platform: str | None = None,
     actor: str | None = None,
     emulation: str | None = None,
+    content: str = "emulations",
 ) -> dict[str, Any]:
     """
     Build the redesigned MITRE ATT&CK coverage payload: an executive summary, a
@@ -333,10 +343,12 @@ def mitre_coverage(
     derived insights, and the available filter options.
 
     Coverage is computed over the emulation subset matching the filters, so the
-    whole view re-scopes by platform / threat actor / emulation.
+    whole view re-scopes by platform / threat actor / emulation. content selects
+    the lens: "emulations" (techniques attacked) or "detections" (techniques the
+    detection rules cover).
     """
     entries = _filtered_emulations(platform, actor, emulation)
-    covered_ids = _covered_technique_ids(entries)
+    covered_ids = _covered_technique_ids(entries, content)
     rows = _tactic_rows(covered_ids)
 
     total = catalog.technique_count()
@@ -377,6 +389,7 @@ def tactic_detail(
     platform: str | None = None,
     actor: str | None = None,
     emulation: str | None = None,
+    content: str = "emulations",
 ) -> dict[str, Any] | None:
     """
     Build the drill-down payload for a single tactic: covered and missing
@@ -393,7 +406,7 @@ def tactic_detail(
     tactic_ids = {t["id"] for t in techniques}
 
     entries = _filtered_emulations(platform, actor, emulation)
-    covered_ids = _covered_technique_ids(entries) & tactic_ids
+    covered_ids = _covered_technique_ids(entries, content) & tactic_ids
 
     covered = [{"id": t["id"], "name": t["name"]} for t in techniques if t["id"] in covered_ids]
     missing = [{"id": t["id"], "name": t["name"]} for t in techniques if t["id"] not in covered_ids]

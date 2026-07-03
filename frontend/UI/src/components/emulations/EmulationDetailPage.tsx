@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { useEmulations } from '@/hooks/usePlatformData'
 import { getPlatformMeta } from '@/data'
 import type { PlatformId } from '@/types'
@@ -29,7 +29,14 @@ export function EmulationDetailPage() {
   const pid = platformId as PlatformId
   const meta = getPlatformMeta(pid)
   const { data: emulations, loading } = useEmulations(pid)
-  const [activeTab, setActiveTab] = useState<DetailTab>('overview')
+  const [searchParams] = useSearchParams()
+  // Seed the initial tab from a `?tab=` deep link (e.g. Results "Open Live"
+  // navigates here with ?tab=live). Falls back to Overview for absent/unknown
+  // values so a stray param can never render a blank page.
+  const initialTab = searchParams.get('tab')
+  const [activeTab, setActiveTab] = useState<DetailTab>(
+    initialTab && initialTab in TAB_LABELS ? (initialTab as DetailTab) : 'overview',
+  )
   const [showRunModal, setShowRunModal] = useState(false)
 
   const platformLabel = meta?.label ?? platformId?.toUpperCase() ?? ''

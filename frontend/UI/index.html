@@ -26,16 +26,8 @@
     }
   </style>
   <script>
-    // Apply saved theme before paint to prevent flash
-    (function () {
-      var t = localStorage.getItem('mayatrail_theme') || 'dark';
-      document.documentElement.setAttribute('data-theme', t);
-      // Light theme override for inline baseline above
-      if (t === 'light') {
-        document.documentElement.style.backgroundColor = '#f5f7fa';
-        document.documentElement.style.color = '#1a2332';
-      }
-    })();
+    // The app is dark-only; pin the theme before paint (ignores any stored pref).
+    document.documentElement.setAttribute('data-theme', 'dark');
   </script>
   <!-- Google Identity Services — required for "Continue with Google" auth -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
