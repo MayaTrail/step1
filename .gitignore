@@ -236,3 +236,4 @@ tests/
 frontend/screens/
 
 mt-app-kyp.pem
+*app-password

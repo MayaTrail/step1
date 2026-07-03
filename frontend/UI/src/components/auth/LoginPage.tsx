@@ -654,6 +654,7 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
   const [pendingEmail, setPendingEmail] = useState('')
 
   const [name, setName] = useState('')
+  const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -663,12 +664,18 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
     e.preventDefault()
     clearError()
     setLocalError('')
+    // Keep this a subset of Django's username rule so anything accepted here
+    // also passes server-side validation (no frontend-accepts / backend-rejects).
+    if (!/^[a-zA-Z0-9_.-]{3,30}$/.test(username)) {
+      setLocalError('Username must be 3-30 characters using letters, numbers, and . _ - only (no spaces).')
+      return
+    }
     if (password !== confirm) {
       setLocalError('Passwords do not match')
       return
     }
     try {
-      const res = await signup({ name, email, password })
+      const res = await signup({ name, username, email, password })
       setPendingEmail(res.email)
       setStep('otp')
     } catch {
@@ -706,6 +713,23 @@ function SignUpForm({ onComplete }: { onComplete: () => void }) {
           className="auth-input-solid"
           style={inputStyle}
         />
+      </FormField>
+
+      <FormField label="Username">
+        <input
+          type="text"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="jane_doe"
+          required
+          maxLength={30}
+          autoComplete="username"
+          className="auth-input-solid"
+          style={inputStyle}
+        />
+        <p className="mt-1.5 text-[11px] text-content-dim">
+          3-30 characters. Letters, numbers, and . _ - only.
+        </p>
       </FormField>
 
       <FormField label="Email">
