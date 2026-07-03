@@ -12,6 +12,11 @@ COPY package.json package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 
 COPY . .
+
+# Vite inlines VITE_* variables into the bundle at build time, so the Google
+# client id (public, not a secret) must be present here rather than at runtime.
+ARG VITE_GOOGLE_CLIENT_ID
+ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
 RUN npm run build
 
 # ── Stage 2: Serve ──
