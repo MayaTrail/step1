@@ -2,6 +2,11 @@ import json
 import pulumi
 import pulumi_aws as aws
 
+# Availability zone is derived from the deploy region (aws:region config); a
+# hardcoded AZ such as "us-east-1a" exists only in us-east-1 and breaks deploys
+# in every other region.
+region = aws.get_region().id
+
 # ── Resource Name Constants ────────────────────────────────────────────────────
 PREFIX        = "stratus-red-team-user-data"
 INSTANCE_TYPE = "t3.micro"
@@ -24,7 +29,7 @@ ami = aws.ec2.get_ami(
 
 vpc = aws.ec2.Vpc(f"{PREFIX}-vpc", cidr_block="10.11.0.0/16", enable_dns_hostnames=True, tags={"Name": f"{PREFIX}-vpc", **TAGS})
 igw = aws.ec2.InternetGateway(f"{PREFIX}-igw", vpc_id=vpc.id, tags=TAGS)
-subnet = aws.ec2.Subnet(f"{PREFIX}-subnet", vpc_id=vpc.id, cidr_block="10.11.1.0/24", availability_zone="us-east-1a", map_public_ip_on_launch=True, tags=TAGS)
+subnet = aws.ec2.Subnet(f"{PREFIX}-subnet", vpc_id=vpc.id, cidr_block="10.11.1.0/24", availability_zone=f"{region}a", map_public_ip_on_launch=True, tags=TAGS)
 rt = aws.ec2.RouteTable(f"{PREFIX}-rt", vpc_id=vpc.id, routes=[aws.ec2.RouteTableRouteArgs(cidr_block="0.0.0.0/0", gateway_id=igw.id)], tags=TAGS)
 aws.ec2.RouteTableAssociation(f"{PREFIX}-rta", subnet_id=subnet.id, route_table_id=rt.id)
 

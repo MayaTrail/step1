@@ -2,6 +2,11 @@ import json
 import pulumi
 import pulumi_aws as aws
 
+# Availability zone is derived from the deploy region (aws:region config); a
+# hardcoded AZ such as "us-east-1a" exists only in us-east-1 and breaks deploys
+# in every other region.
+region = aws.get_region().id
+
 # ── Resource Name Constants ────────────────────────────────────────────────────
 PREFIX         = "stratus-red-team-ssm-send-command"
 INSTANCE_COUNT = 3
@@ -43,7 +48,7 @@ subnet = aws.ec2.Subnet(
     f"{PREFIX}-subnet",
     vpc_id=vpc.id,
     cidr_block="10.99.1.0/24",
-    availability_zone="us-east-1a",
+    availability_zone=f"{region}a",
     map_public_ip_on_launch=True,
     tags={"Name": f"{PREFIX}-subnet", **TAGS},
 )

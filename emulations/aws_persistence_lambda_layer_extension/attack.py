@@ -91,9 +91,15 @@ def make_layer_zip() -> bytes:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main(session: "boto3.Session") -> None:
-    stack_dir     = str(Path(__file__).parent.parent / "infra")
-    infra         = get_pulumi_outputs(stack_dir)
+def main(session: "boto3.Session", outputs: dict | None = None) -> None:
+    # The worker injects the stack's Pulumi outputs (it has already selected the
+    # caller's stack by name), so read infra values from that dict. Standalone runs
+    # have no injected dict and read the local infra/ state from disk (infra/ is a
+    # sibling of this file, hence Path(__file__).parent).
+    if outputs:
+        infra = outputs
+    else:
+        infra = get_pulumi_outputs(str(Path(__file__).parent / "infra"))
     function_name = infra.get("function_name", "stratus-red-team-layer-lambda")
 
     lambda_client = session.client("lambda")
@@ -183,4 +189,4 @@ def _session_from_outputs(outputs: dict, region: str) -> boto3.Session:
 
 def run(outputs: dict, region: str = "us-east-1") -> None:
     """Entry point called by the run_emulation_attack Celery task."""
-    main(_session_from_outputs(outputs, region))
+    main(_session_from_outputs(outputs, region), outputs)
