@@ -169,6 +169,14 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,
 }
 
+# Let the single "Username or Email" login field authenticate by either
+# identifier. The custom backend widens the account lookup; ModelBackend stays
+# as the fallback and still performs password/active-user checks.
+AUTHENTICATION_BACKENDS = [
+    "apps.users.backends.UsernameOrEmailBackend",
+    "django.contrib.auth.backends.ModelBackend",
+]
+
 # Google OAuth client ID — used by GoogleOAuthView to verify id_tokens.
 # Obtain from Google Cloud Console -> APIs & Services -> Credentials.
 GOOGLE_CLIENT_ID = config("GOOGLE_CLIENT_ID", default="")

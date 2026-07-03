@@ -128,7 +128,7 @@ async function backendSignup(req: SignupRequest): Promise<RegisterResponse> {
   const lastName = parts.slice(1).join(' ')
 
   const { data } = await api.post<RegisterResponse>('/auth/register/', {
-    username: req.email,
+    username: req.username,
     email: req.email,
     password: req.password,
     first_name: firstName,
