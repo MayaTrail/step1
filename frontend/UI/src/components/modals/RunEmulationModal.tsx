@@ -499,7 +499,20 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
                         </div>
                         <div className="mt-2 font-mono text-[10px] text-content-dim">{estimate.note}</div>
                       </div>
-                    ) : null}
+                    ) : (
+                      <div className="bg-surface-base border border-border rounded-[8px] p-4 font-mono text-[11px] text-content-dim leading-[1.7]">
+                        Cost estimate is unavailable right now. This emulation provisions short-lived,
+                        auto-destroyed resources (typically well under $0.01/hr). For a precise figure, use the{' '}
+                        <a
+                          href="https://calculator.aws/#/"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ color: '#55b3ff', textDecoration: 'none' }}
+                        >
+                          AWS Pricing Calculator
+                        </a>.
+                      </div>
+                    )}
                   </div>
 
                   {/* Stack name */}

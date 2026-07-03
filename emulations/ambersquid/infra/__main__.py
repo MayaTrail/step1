@@ -78,7 +78,9 @@ subnet = aws.ec2.Subnet(
     "ambersquid-public-subnet",
     vpc_id=vpc.id,
     cidr_block="10.99.1.0/24",
-    availability_zone="us-east-1a",
+    # Derive the AZ from the deploy region (region comes from aws:region config).
+    # A hardcoded "us-east-1a" only exists in us-east-1 and breaks every other region.
+    availability_zone=f"{region}a",
     map_public_ip_on_launch=True,
     tags={"Name": "ambersquid-public-subnet", **TAGS},
 )
@@ -481,13 +483,13 @@ container_defs = pulumi.Output.all(victim_key.id, victim_key.secret).apply(
             "environment": [
                 {"name": "AWS_ACCESS_KEY_ID", "value": args[0]},
                 {"name": "AWS_SECRET_ACCESS_KEY", "value": args[1]},
-                {"name": "AWS_DEFAULT_REGION", "value": "us-east-1"},
+                {"name": "AWS_DEFAULT_REGION", "value": region},
             ],
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {
                     "awslogs-group": LOG_GROUP_NAME,
-                    "awslogs-region": "us-east-1",
+                    "awslogs-region": region,
                     "awslogs-stream-prefix": "miner",
                 },
             },

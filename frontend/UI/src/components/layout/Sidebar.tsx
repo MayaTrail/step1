@@ -69,7 +69,6 @@ export function Sidebar({ isOpen }: SidebarProps) {
           to={`/platforms/${platform.route}`}
           icon={<PlatformIcon platformId={platform.id} size={17} className="shrink-0" />}
           label={platformShortLabel(platform.id)}
-          badge={platform.badgeCount}
         />
       ))}
 
@@ -104,8 +103,6 @@ interface NavItemProps {
   exact?: boolean
   /** Override the active-match prefix (e.g. a platform route covering nested pages). */
   matchPrefix?: string
-  /** Optional right-aligned count badge. */
-  badge?: number
 }
 
 /**
@@ -113,7 +110,7 @@ interface NavItemProps {
  * in Raycast Blue (the design system's "selected item" color) plus a faint
  * blue surface tint. Hover uses the standard card surface, never a color swap.
  */
-function NavItem({ to, icon, label, exact, matchPrefix, badge }: NavItemProps) {
+function NavItem({ to, icon, label, exact, matchPrefix }: NavItemProps) {
   const location = useLocation()
   const prefix = matchPrefix ?? to
   const active = exact
@@ -132,11 +129,6 @@ function NavItem({ to, icon, label, exact, matchPrefix, badge }: NavItemProps) {
     >
       <span className={active ? 'text-accent-blue' : 'text-content-dim'}>{icon}</span>
       <span>{label}</span>
-      {badge != null && (
-        <span className="ml-auto bg-surface-elevated rounded-[3px] px-[5px] py-px font-mono text-[9px] text-content-dim">
-          {badge}
-        </span>
-      )}
     </Link>
   )
 }

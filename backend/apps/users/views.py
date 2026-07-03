@@ -38,7 +38,7 @@ class RegisterView(APIView):
     Public endpoint for new user registration.
 
     POST /api/auth/register/
-    Accepts: { username, email, password, first_name, last_name, invite_code }
+    Accepts: { username, email, password, first_name, last_name }
     Returns: { message, email } on success (201).
 
     The user is created as inactive.  An OTP is sent to the provided

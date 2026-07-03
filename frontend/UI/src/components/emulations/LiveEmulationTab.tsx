@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import type {
   AttackPhase,
   Emulation,
@@ -162,7 +163,66 @@ export function LiveEmulationTab({ emulation, onRun }: { emulation: Emulation; o
           </pre>
         </div>
       </div>
+
+      {/* Once the run settles, point the operator at the validation loop: the
+          attack is only half the exercise, the other half is checking whether
+          their defenses saw it. */}
+      {(run.status === 'completed' || run.status === 'failed') && <NextSteps emulation={emulation} />}
     </div>
+  )
+}
+
+/**
+ * Post-run guidance shown when a run reaches a terminal state. Directs the user
+ * to the three things worth doing after an attack fires: work the IR playbook,
+ * review the detection rules that should have caught it, and go check their own
+ * logging to confirm the activity was recorded. The first two deep-link into
+ * existing pages; the logging step is guidance because that lives in the user's
+ * own environment, not this platform.
+ */
+function NextSteps({ emulation }: { emulation: Emulation }) {
+  const base = `/${emulation.platform}/emulations/${emulation.id}`
+  return (
+    <div className="bg-surface-card border border-border rounded-card p-5">
+      <div className="text-[0.85rem] font-semibold text-content-primary mb-1">What to do next</div>
+      <p className="text-[0.78rem] text-content-secondary leading-[1.55] mb-4">
+        The attack has run. Now validate whether your defenses caught it.
+      </p>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <NextStep
+          to={`${base}/playbook`}
+          title="Open the IR playbook"
+          body="Work the detection and response steps mapped to this technique."
+        />
+        <NextStep
+          to={`${base}/detections`}
+          title="Review detection rules"
+          body="Check the Sigma and KQL rules that should fire on this activity."
+        />
+        <NextStep
+          title="Check your logging"
+          body="Search your SIEM or CloudTrail for the API calls above to confirm they were recorded."
+        />
+      </div>
+    </div>
+  )
+}
+
+/** One "what next" tile. Renders as a link when `to` is set, else static guidance. */
+function NextStep({ to, title, body }: { to?: string; title: string; body: string }) {
+  const inner = (
+    <>
+      <div className="text-[0.8rem] font-semibold text-content-primary mb-1">{title}</div>
+      <div className="text-[0.72rem] text-content-secondary leading-[1.5]">{body}</div>
+    </>
+  )
+  const cls = 'block border border-border rounded-btn px-3.5 py-3 bg-[rgba(255,255,255,0.01)] h-full'
+  return to ? (
+    <Link to={to} className={`${cls} no-underline transition-colors hover:border-accent-blue/40`}>
+      {inner}
+    </Link>
+  ) : (
+    <div className={cls}>{inner}</div>
   )
 }
 

@@ -37,7 +37,12 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(() => authService.getStoredUser())
   const [loading, setLoading] = useState(false)
-  const [initializing, setInitializing] = useState(true)
+  // Only "initializing" when there is a token to hydrate from /auth/me/. With no
+  // token there is nothing to revalidate, so start false and render the target
+  // route (e.g. /login) on the first paint instead of flashing a spinner first.
+  const [initializing, setInitializing] = useState(
+    () => Boolean(localStorage.getItem('mayatrail_token')),
+  )
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {

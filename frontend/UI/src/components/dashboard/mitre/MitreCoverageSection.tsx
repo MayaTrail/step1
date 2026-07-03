@@ -228,7 +228,23 @@ export function MitreCoverageSection() {
                     options={options.tactics}
                     onChange={(v) => setSelected(v || null)}
                 />
-                <FilterSelect placeholder="Detection (soon)" value="" options={[]} onChange={() => {}} disabled />
+                {/* Coverage lens: techniques attacked (emulations) vs detected (detections) */}
+                <div className="inline-flex rounded-btn border border-border bg-surface-elevated overflow-hidden">
+                    {(['emulations', 'detections'] as const).map((c) => {
+                        const activeContent = (filters.content ?? 'emulations') === c
+                        return (
+                            <button
+                                key={c}
+                                type="button"
+                                onClick={() => patchFilters({ content: c })}
+                                className={`px-2.5 py-1 text-xs font-medium capitalize transition-colors
+                                    ${activeContent ? 'bg-accent-blue/[0.15] text-accent-blue' : 'text-content-dim hover:text-content-secondary'}`}
+                            >
+                                {c}
+                            </button>
+                        )
+                    })}
+                </div>
                 <button
                     type="button"
                     onClick={() => setSortMode((m) => (m === 'gaps' ? 'matrix' : 'gaps'))}

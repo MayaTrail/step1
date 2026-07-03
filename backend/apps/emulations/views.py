@@ -499,8 +499,10 @@ class EmulationDeployView(APIView):
     POST /api/emulations/deploy/
     Body: { "emulation_type": "scarleteel", "stack_name": "scarleteel-himan10" }
 
-    Enforces one-active-stack-per-user.  Returns 409 if the user already has a
-    non-terminal emulation stack.
+    Enforces one active stack per emulation type: a user can run several
+    different emulations concurrently, but not two stacks of the same emulation
+    (they would collide on the shared Pulumi stack name). Returns 409 if the
+    user already has a non-terminal stack for this emulation.
     """
 
     permission_classes = [IsEnterpriseUser]
@@ -531,18 +533,21 @@ class EmulationDeployView(APIView):
         emulation_type = serializer.validated_data["emulation_type"]
         stack_name = serializer.validated_data["stack_name"]
 
+        # Only a stack of the SAME emulation blocks a deploy; different
+        # emulations can run concurrently (each is its own Pulumi stack).
         active = Stack.objects.filter(
             owner=request.user,
             status__in=self._ACTIVE_STATUSES,
-            emulation_type__isnull=False,
-        ).exclude(emulation_type="").first()
+            emulation_type=emulation_type,
+        ).first()
 
         if active:
             return Response(
                 {
                     "detail": (
-                        f"You already have an active emulation stack ({active.name}, "
-                        f"status: {active.status}). Destroy it before deploying a new one."
+                        f"You already have an active stack for this emulation "
+                        f"({active.name}, status: {active.status}). Destroy it before "
+                        f"deploying this emulation again."
                     ),
                     "stackId": str(active.id),
                 },

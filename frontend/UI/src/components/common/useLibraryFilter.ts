@@ -17,6 +17,14 @@ export function emulationTactics(em: Emulation): string[] {
   return out
 }
 
+/** Emulation kind: atomic single-technique vs composite APT emulation. */
+export type LibraryType = 'all' | 'atomic' | 'composite'
+
+/** True when an emulation is an atomic single-technique (vs a composite APT). */
+function isAtomic(em: Emulation): boolean {
+  return (em.originLabel ?? '').toUpperCase().includes('ATOMIC')
+}
+
 export interface LibraryToolbarState {
   search: string
   onSearch: (v: string) => void
@@ -24,6 +32,8 @@ export interface LibraryToolbarState {
   onPlatform: (v: 'all' | PlatformId) => void
   severity: 'all' | Severity
   onSeverity: (v: 'all' | Severity) => void
+  type: LibraryType
+  onType: (v: LibraryType) => void
 }
 
 /**
@@ -36,11 +46,15 @@ export function useLibraryFilter(emulations: Emulation[]) {
   const [search, setSearch] = useState('')
   const [platform, setPlatform] = useState<'all' | PlatformId>('all')
   const [severity, setSeverity] = useState<'all' | Severity>('all')
+  const [type, setType] = useState<LibraryType>('all')
 
   const filtered = useMemo(() => {
     let list = emulations
     if (platform !== 'all') list = list.filter((e) => e.platform === platform)
     if (severity !== 'all') list = list.filter((e) => e.severity === severity)
+    if (type !== 'all') {
+      list = list.filter((e) => (type === 'atomic' ? isAtomic(e) : !isAtomic(e)))
+    }
     const q = search.trim().toLowerCase()
     if (q) {
       list = list.filter(
@@ -50,12 +64,13 @@ export function useLibraryFilter(emulations: Emulation[]) {
       )
     }
     return list
-  }, [emulations, search, platform, severity])
+  }, [emulations, search, platform, severity, type])
 
   const toolbar: LibraryToolbarState = {
     search, onSearch: setSearch,
     platform, onPlatform: setPlatform,
     severity, onSeverity: setSeverity,
+    type, onType: setType,
   }
 
   return { filtered, toolbar }

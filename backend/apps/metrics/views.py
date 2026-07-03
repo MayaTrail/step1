@@ -35,11 +35,14 @@ class CoverageSummaryView(APIView):
 
 
 def _coverage_filters(request: Request) -> dict[str, str | None]:
-    """Extract the optional platform / actor / emulation coverage filters."""
+    """Extract the optional platform / actor / emulation / content coverage filters."""
+    content = request.query_params.get("content")
     return {
         "platform": request.query_params.get("platform"),
         "actor": request.query_params.get("actor"),
         "emulation": request.query_params.get("emulation"),
+        # Coverage lens: "detections" or the default "emulations".
+        "content": "detections" if content == "detections" else "emulations",
     }
 
 

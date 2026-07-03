@@ -15,6 +15,7 @@
  */
 
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import type { Stack, StackStatus } from '@/types'
 import { Badge } from '@/components/ui/Badge'
 import {
@@ -109,9 +110,23 @@ export function StackCard({
                                 {meta.label}
                             </Badge>
                         </div>
-                        <div className="font-mono text-[11px] text-content-dim">
-                            {stack.emulation_type ? emulationLabel(stack.emulation_type) : 'Infrastructure Stack'}
-                        </div>
+                        {stack.emulation_type ? (
+                            // Link back to the emulation this stack was deployed for. The
+                            // catalogue is AWS-only, so the platform segment is fixed. stopPropagation
+                            // keeps the click from toggling the card's expand state.
+                            <Link
+                                to={`/aws/emulations/${stack.emulation_type}`}
+                                onClick={(e) => e.stopPropagation()}
+                                title="View this emulation"
+                                className="inline-flex items-center gap-1 font-mono text-[11px] text-content-dim no-underline
+                                    transition-colors hover:text-accent-blue"
+                            >
+                                {emulationLabel(stack.emulation_type)}
+                                <span aria-hidden="true">&#8599;</span>
+                            </Link>
+                        ) : (
+                            <div className="font-mono text-[11px] text-content-dim">Infrastructure Stack</div>
+                        )}
                     </div>
 
                     {/* Logs quick action — always available */}
@@ -209,7 +224,7 @@ export function StackCard({
 
                     {confirmDelete ? (
                         <ConfirmPair
-                            prompt="Delete record?"
+                            prompt="Also deletes this stack's emulation results. Delete?"
                             tone="danger"
                             onConfirm={() => { setConfirmDelete(false); onDelete() }}
                             onCancel={() => setConfirmDelete(false)}
