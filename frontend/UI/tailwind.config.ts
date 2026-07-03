@@ -146,6 +146,16 @@ export default {
         spin: {
           to: { transform: 'rotate(360deg)' },
         },
+        travel: {
+          '0%':   { left: '0%',   opacity: '0' },
+          '25%':  { opacity: '1' },
+          '75%':  { opacity: '1' },
+          '100%': { left: '100%', opacity: '0' },
+        },
+        nodeGlow: {
+          '0%, 100%': { boxShadow: '0 0 0 1px var(--blue), 0 0 16px hsla(202, 100%, 67%, 0.18)' },
+          '50%':      { boxShadow: '0 0 0 1px var(--blue), 0 0 28px hsla(202, 100%, 67%, 0.4)' },
+        },
       },
 
       animation: {
@@ -154,6 +164,8 @@ export default {
         modalIn:     'modalIn 0.25s ease-out',
         slideUp:     'slideUp 0.3s ease-out',
         spin:        'spin 0.6s linear infinite',
+        travel:      'travel 1.4s linear infinite',
+        nodeGlow:    'nodeGlow 1.8s ease-in-out infinite',
       },
     },
   },

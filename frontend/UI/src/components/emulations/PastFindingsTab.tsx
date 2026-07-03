@@ -1,9 +1,10 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { Emulation, EmulationRunListItem, EmulationRunStatus } from '@/types'
 import { useEmulationRuns } from '@/hooks/useEmulationRuns'
 import { Card } from '@/components/ui/Card'
 import { MetricCard } from '@/components/ui/MetricCard'
 import { Button } from '@/components/ui/Button'
+import { servicesForPlatform, type AwsService } from '@/data/awsServices'
 import {
   RunStatusBadge,
   formatRelative,
@@ -46,6 +47,7 @@ function formatDuration(start: string | null, end: string | null): string {
 
 export function PastFindingsTab({ emulation: em, onRun }: PastFindingsTabProps) {
   const { data, loading } = useEmulationRuns(ALL_STATUSES)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const realRuns = useMemo(
     () => (data ?? []).filter((r) => r.emulation_type === em.id),
@@ -90,6 +92,7 @@ export function PastFindingsTab({ emulation: em, onRun }: PastFindingsTabProps) 
   const success = runs.filter((r) => r.status === 'completed').length
   const failed = runs.filter((r) => r.status === 'failed').length
   const lastRun = runs[0] // endpoint returns newest-first
+  const selectedRun = runs.find((r) => r.id === selectedId) ?? lastRun
 
   return (
     <div className="flex flex-col gap-4 animate-fadeIn">
@@ -111,8 +114,11 @@ export function PastFindingsTab({ emulation: em, onRun }: PastFindingsTabProps) 
         />
       </div>
 
+      {/* ── Coverage report for the selected run ─────────────────────── */}
+      {selectedRun && <CoverageReport run={selectedRun} em={em} />}
+
       {/* ── Execution history ───────────────────────────────────────── */}
-      <RunsTable headers={['Run', 'Environment', 'Status', 'Started', 'Completion', 'Duration']}>
+      <RunsTable headers={['Run', 'Environment', 'Status', 'Started', 'Completion', 'Duration', 'Coverage']}>
         {runs.map((r) => (
           <RunsRow key={r.id}>
             <RunsCell className="font-mono text-xs text-content-primary" title={r.id}>
@@ -131,11 +137,149 @@ export function PastFindingsTab({ emulation: em, onRun }: PastFindingsTabProps) 
             <RunsCell className="font-mono text-xs whitespace-nowrap">
               {formatDuration(r.started_at, r.completed_at)}
             </RunsCell>
+            <RunsCell>
+              <button
+                onClick={() => setSelectedId(r.id)}
+                className={`font-mono text-[11px] no-underline transition-opacity hover:opacity-70
+                  ${selectedRun?.id === r.id ? 'text-content-dim' : 'text-accent-blue'}`}
+              >
+                {selectedRun?.id === r.id ? 'Viewing' : 'View'}
+              </button>
+            </RunsCell>
           </RunsRow>
         ))}
       </RunsTable>
     </div>
   )
+}
+
+/* Per-run coverage report, computed from the run record and the MANIFEST. */
+
+const TACTIC_COLORS: Record<string, string> = {
+  'Initial Access': 'text-danger',
+  'Credential Access': 'text-danger',
+  'Lateral Movement': 'text-danger',
+  'Privilege Escalation': 'text-danger',
+  'Impact': 'text-danger',
+  'Exfiltration': 'text-danger',
+  'Defense Evasion': 'text-yellow',
+  'Execution': 'text-yellow',
+  'Collection': 'text-yellow',
+  'Persistence': 'text-green',
+  'Discovery': 'text-accent-blue',
+  'Resource Development': 'text-accent-blue',
+}
+
+function CoverageReport({ run, em }: { run: EmulationRunListItem; em: Emulation }) {
+  const phases = em.attackPath
+  const totalPhases = run.phase_total || phases.length
+  // A completed run walked every phase; otherwise it reached phase_current.
+  const executed = run.status === 'completed' ? phases.length : run.phase_current
+  const coveredPhases = phases.filter((p) => p.phase <= executed)
+  const coveredTechniques = coveredPhases.flatMap((p) => p.techniques)
+  const totalTechniques = phases.flatMap((p) => p.techniques).length
+
+  const mapById = new Map(em.mitreMappings.map((m) => [m.id, m]))
+  const tactics = Array.from(
+    new Set(coveredTechniques.map((t) => mapById.get(t.id)?.tactic).filter(Boolean) as string[]),
+  )
+
+  const serviceMap = new Map<string, AwsService>()
+  for (const tech of coveredTechniques) {
+    const platform = mapById.get(tech.id)?.platform
+    if (!platform) continue
+    const resolved = servicesForPlatform(platform)
+    if (resolved.length) resolved.forEach((s) => serviceMap.set(s.label, s))
+    else serviceMap.set(platform, { label: platform, category: '', summary: '' })
+  }
+  const services = Array.from(serviceMap.values())
+
+  const result = runResult(run)
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
+        <span className="font-mono text-[11px] text-content-dim" title={run.id}>
+          Run {run.id.slice(0, 8)}
+        </span>
+        <span className={`font-mono text-[11px] font-semibold uppercase tracking-[0.5px] px-2 py-0.5 rounded ${result.cls}`}>
+          {result.label}
+        </span>
+        <span className="font-mono text-[11px] text-content-dim ml-auto">
+          {formatDuration(run.started_at, run.completed_at)} duration
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        <MetricCard accent="neutral" label="Phases Executed" value={`${Math.min(executed, totalPhases)}/${totalPhases}`} />
+        <MetricCard accent="neutral" label="Techniques Covered" value={`${coveredTechniques.length}/${totalTechniques}`} />
+        <MetricCard accent="neutral" label="Tactics" value={tactics.length} />
+        <MetricCard accent="neutral" label="Services Touched" value={services.length} />
+      </div>
+
+      {/* Kill-chain coverage */}
+      <div className="mb-4">
+        <div className="font-mono text-[10px] uppercase tracking-[1px] text-content-dim mb-2">Kill-chain coverage</div>
+        <div className="flex flex-wrap gap-1.5">
+          {phases.map((p) => {
+            const covered = p.phase <= executed
+            const failedHere = run.status === 'failed' && p.phase === run.phase_current
+            return (
+              <span
+                key={p.phase}
+                className={`font-mono text-[10px] px-2 py-1 rounded border
+                  ${failedHere ? 'border-danger/40 text-danger' : covered ? 'border-green/40 text-green' : 'border-border text-content-dim opacity-60'}`}
+              >
+                P{p.phase} {p.name}
+              </span>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Tactics covered */}
+      {tactics.length > 0 && (
+        <div className="mb-4">
+          <div className="font-mono text-[10px] uppercase tracking-[1px] text-content-dim mb-2">MITRE tactics exercised</div>
+          <div className="flex flex-wrap gap-1.5">
+            {tactics.map((t) => (
+              <span key={t} className={`font-mono text-[11px] px-2 py-1 rounded bg-white/[0.04] ${TACTIC_COLORS[t] ?? 'text-content-secondary'}`}>
+                {t}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Services touched */}
+      {services.length > 0 && (
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[1px] text-content-dim mb-2">AWS services touched</div>
+          <div className="flex flex-wrap gap-1.5">
+            {services.map((s) => (
+              <span key={s.label} className="font-mono text-[11px] px-2 py-1 rounded bg-white/[0.04] text-content-secondary">
+                {s.label}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+/** Human result label + colour for a run's coverage report. */
+function runResult(run: EmulationRunListItem): { label: string; cls: string } {
+  switch (run.status) {
+    case 'completed':
+      return { label: 'Full kill chain executed', cls: 'text-green bg-green/10' }
+    case 'failed':
+      return { label: `Failed at Phase ${run.phase_current}`, cls: 'text-danger bg-danger/10' }
+    case 'running':
+      return { label: `In progress · Phase ${run.phase_current}`, cls: 'text-accent-blue bg-accent-blue/[0.12]' }
+    default:
+      return { label: 'Queued', cls: 'text-yellow bg-yellow/10' }
+  }
 }
 
 /**

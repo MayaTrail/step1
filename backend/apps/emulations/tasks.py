@@ -24,10 +24,12 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
@@ -522,6 +524,62 @@ def poll_ec2_readiness(self, stack_id: str) -> None:
         stack.save(update_fields=["status", "updated_at"])
 
 
+_PHASE_MARKER = re.compile(r"\bPHASE\s+(\d+)", re.IGNORECASE)
+
+
+class _ProgressWriter:
+    """
+    stdout proxy that streams captured attack output to the EmulationRun.
+
+    It buffers everything (so the task's final save still holds the complete
+    log) while periodically flushing the growing stdout and the current phase
+    to the database, so the frontend can render a live view by polling the run.
+
+    The current phase is inferred from "PHASE N" markers the attack modules
+    print, clamped to [0, phase_total]. Modules that do not print such markers
+    simply leave the phase at 0 and stream logs only (graceful degradation).
+    """
+
+    _FLUSH_INTERVAL_SECONDS = 1.5
+
+    def __init__(self, run, phase_total: int):
+        """Wrap an EmulationRun; phase_total bounds the inferred phase index."""
+        self._run = run
+        self._phase_total = phase_total
+        self._buffer = io.StringIO()
+        self._phase = 0
+        self._last_flush = 0.0
+
+    def write(self, text: str) -> int:
+        """Buffer text, update the inferred phase, and flush on a time debounce."""
+        self._buffer.write(text)
+        markers = _PHASE_MARKER.findall(text)
+        if markers:
+            highest = max(int(marker) for marker in markers)
+            if self._phase_total:
+                highest = min(highest, self._phase_total)
+            self._phase = max(self._phase, highest)
+        if time.monotonic() - self._last_flush >= self._FLUSH_INTERVAL_SECONDS:
+            self.flush()
+        return len(text)
+
+    def flush(self) -> None:
+        """Persist the current stdout and phase to the run record."""
+        self._last_flush = time.monotonic()
+        self._run.stdout = self._buffer.getvalue()
+        self._run.phase_current = self._phase
+        try:
+            self._run.save(update_fields=["stdout", "phase_current"])
+        except Exception as exc:  # noqa: BLE001
+            # A transient DB error mid-stream must not abort the attack; the
+            # task's final save in its finally block is authoritative.
+            logger.debug("Progress flush failed for run=%s: %s", self._run.id, exc)
+
+    def getvalue(self) -> str:
+        """Return the full buffered stdout."""
+        return self._buffer.getvalue()
+
+
 @shared_task(bind=True, name="emulations.run_emulation_attack", queue="enterprise")
 def run_emulation_attack(self, run_id: str) -> dict:
     """
@@ -557,8 +615,10 @@ def run_emulation_attack(self, run_id: str) -> dict:
     stack.status = Stack.Status.ATTACKING
     stack.save(update_fields=["status", "updated_at"])
 
-    stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
+    # Placeholder so the finally block is safe if setup fails before the real
+    # writer (bound to phase_total) is created inside the try below.
+    stdout_writer = _ProgressWriter(run, 0)
 
     try:
         # Ensure the emulations package is importable.
@@ -575,6 +635,10 @@ def run_emulation_attack(self, run_id: str) -> dict:
         run.phase_total = phase_total
         run.save(update_fields=["phase_total"])
 
+        # Streams stdout and inferred phase progress to the DB during the run so
+        # the frontend live view can follow the attack as it walks the kill chain.
+        stdout_writer = _ProgressWriter(run, phase_total)
+
         # Secret outputs are not persisted to the DB, so fetch the full output
         # set (including decrypted secrets) live from Pulumi state for the attack.
         attack_outputs = _live_stack_outputs(stack)
@@ -589,11 +653,13 @@ def run_emulation_attack(self, run_id: str) -> dict:
         # acceptable cost, optimisable later by assuming once and threading creds.)
         attack_outputs["_aws_credentials"] = _assume_user_role(stack.owner)
 
-        with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
+        with redirect_stdout(stdout_writer), redirect_stderr(stderr_buf):
             mod.run(attack_outputs, region=stack.region)
 
         run.status = EmulationRun.Status.COMPLETED
         stack.status = Stack.Status.ATTACK_COMPLETE
+        # A completed run has walked every phase; mark the kill chain full.
+        run.phase_current = phase_total
 
     except Exception as exc:
         stderr_buf.write(f"\nTask exception: {exc}\n")
@@ -602,10 +668,12 @@ def run_emulation_attack(self, run_id: str) -> dict:
         logger.error("run_emulation_attack failed for run=%s: %s", run_id, exc)
 
     finally:
-        run.stdout = stdout_buf.getvalue()
+        run.stdout = stdout_writer.getvalue()
         run.stderr = stderr_buf.getvalue()
         run.completed_at = timezone.now()
-        run.save(update_fields=["status", "stdout", "stderr", "completed_at", "phase_total"])
+        run.save(update_fields=[
+            "status", "stdout", "stderr", "completed_at", "phase_total", "phase_current",
+        ])
         stack.save(update_fields=["status", "updated_at"])
 
     return {

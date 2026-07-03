@@ -253,6 +253,9 @@ aws.s3.BucketObjectv2(
 secret = aws.secretsmanager.Secret(
     f"mayatrail-scarleteel-secret-{stack_name}",
     name=f"mayatrail-scarleteel-secret-{stack_name}",
+    # Force-delete on destroy so a same-name redeploy is not blocked by Secrets
+    # Manager's deletion recovery window (the name stays reserved otherwise).
+    recovery_window_in_days=0,
     tags={"MayaTrail": "scarleteel"},
 )
 
