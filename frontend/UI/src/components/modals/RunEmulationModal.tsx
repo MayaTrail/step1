@@ -33,7 +33,7 @@ interface RunEmulationModalProps {
 }
 
 /* ── Phase type ── */
-type ModalPhase = 'form' | 'deploying' | 'ready' | 'attacking' | 'done' | 'error'
+type ModalPhase = 'form' | 'deploying' | 'destroying' | 'ready' | 'attacking' | 'done' | 'error'
 
 /* ── Stack status helpers ── */
 const TERMINAL_STACK_STATUSES = new Set<StackStatus>([
@@ -74,6 +74,8 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
   // A spent (attack_complete) stack blocks a fresh deploy; the form offers a
   // one-click "destroy and redeploy" when one exists for this emulation.
   const [blockingStack, setBlockingStack] = useState<{ id: string; name: string } | null>(null)
+  // Positive confirmation shown in the form after a stack is destroyed.
+  const [notice, setNotice] = useState<string | null>(null)
   const [estimate, setEstimate] = useState<EmulationEstimate | null>(null)
   const [estimateLoading, setEstimateLoading] = useState(true)
   const [stackName, setStackName] = useState(`${emulationId}-run`)
@@ -188,6 +190,7 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
   const handleDeploy = useCallback(async () => {
     if (!stackName.trim()) return
     setError(null)
+    setNotice(null)
     setPhase('deploying')
     setStatusMsg('Deploying infrastructure...')
 
@@ -243,11 +246,13 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
     }
   }, [emulationId, stackName, pollStackToReady, resumeDeploy])
 
-  const handleDestroyAndRedeploy = useCallback(async (stackId: string) => {
+  const handleDestroy = useCallback(async (stackId: string) => {
     setError(null)
+    setNotice(null)
     setBlockingStack(null)
-    setPhase('deploying')
-    setStatusMsg('Destroying the previous stack...')
+    setPhase('destroying')
+    setStackStatus('destroying')
+    setStatusMsg('Destroying stack...')
 
     const controller = new AbortController()
     abortRef.current = controller
@@ -255,39 +260,41 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
     try {
       await destroyEmulationStack(stackId)
 
-      // A completed stack counts as active, so a deploy would 409 until it is
-      // torn down; wait for teardown before deploying a fresh baseline.
+      // Poll until the record is gone (destroy deletes it) or teardown fails.
+      // Unbounded like the deploy poll -- a real VPC/EC2 teardown can take
+      // several minutes; cancellation is via the abort signal (close).
       const DESTROY_TERMINAL = new Set<StackStatus>(['destroyed', 'failed'])
       let current: StackStatus = 'destroying'
-      let polls = 0
-      while (!DESTROY_TERMINAL.has(current) && polls < 75) {
+      while (!DESTROY_TERMINAL.has(current)) {
         if (controller.signal.aborted) return
         await wait(4000, controller.signal)
         try {
           current = (await getStack(stackId)).status
         } catch {
-          current = 'destroyed' // record gone -> treat as torn down
+          current = 'destroyed' // record gone -> torn down
         }
-        setStatusMsg(`Destroying the previous stack... (${current})`)
-        polls++
+        setStackStatus(current)
+        setStatusMsg(`Destroying stack... (${current})`)
       }
 
       if (current !== 'destroyed') {
         setPhase('error')
-        setError(`Could not destroy the previous stack (status: ${current}).`)
+        setError(`Could not destroy the stack (status: ${current}).`)
         return
       }
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') return
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
       setPhase('error')
-      setError(detail ?? 'Failed to destroy the previous stack.')
+      setError(detail ?? 'Failed to destroy the stack.')
       return
     }
 
-    // Clean baseline in place — deploy a fresh stack.
-    await handleDeploy()
-  }, [handleDeploy])
+    // Destroyed. Return to the form so the user can deploy a fresh stack.
+    setStatusMsg('')
+    setNotice('Previous stack destroyed. You can deploy a fresh stack below.')
+    setPhase('form')
+  }, [])
 
   const handleAttack = useCallback(async (stackIdArg?: string) => {
     const targetStackId = stackIdArg || deployedStackId
@@ -401,9 +408,20 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
         {/* Body */}
         <div className="px-6 py-5 overflow-y-auto flex-1">
 
+          {/* Persistent hint: deploys/teardowns run in the background. */}
+          <div className="mb-4 font-mono text-[10px] text-content-dim bg-surface-base border border-border rounded-[6px] px-3 py-2 leading-[1.6]">
+            Deploys and teardowns run in the background. You can track live stack status anytime in the
+            <span className="text-accent-blue"> Stacks</span> section.
+          </div>
+
           {/* ── Form ── */}
           {phase === 'form' && (
             <div className="flex flex-col gap-5">
+              {notice && (
+                <div className="font-mono text-[11px] text-safe bg-safe/[0.08] border border-safe/25 rounded-[6px] px-4 py-2.5">
+                  {notice}
+                </div>
+              )}
               {/* Mode toggle: deploy a new stack vs. run against an existing ready one */}
               <div className="flex gap-1 p-1 bg-surface-base border border-border rounded-[8px]">
                 <button
@@ -441,7 +459,7 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
                       </div>
                       <div className="font-mono text-[10px] text-content-dim leading-[1.6]">
                         Emulations run against a clean baseline, so a spent stack must be torn down first.
-                        Use &ldquo;Destroy &amp; Redeploy Fresh&rdquo; below to run again.
+                        Destroy it below, then deploy a fresh stack.
                       </div>
                     </div>
                   )}
@@ -566,6 +584,24 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
             </div>
           )}
 
+          {/* ── Destroying ── */}
+          {phase === 'destroying' && (
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center gap-3">
+                <span className="inline-block w-4 h-4 border-2 border-danger border-t-transparent rounded-full animate-spin shrink-0" />
+                <div>
+                  <div className="font-mono text-[0.75rem] uppercase tracking-[1.5px] text-content-dim mb-0.5">
+                    Destroying
+                  </div>
+                  <div className="font-mono text-sm text-content-secondary">{statusMsg}</div>
+                </div>
+              </div>
+              <div className="bg-surface-base border border-border rounded-[6px] px-4 py-3 font-mono text-[11px] text-content-dim">
+                Stack status: <span className="text-danger">{stackStatus || 'destroying'}</span>
+              </div>
+            </div>
+          )}
+
           {/* ── Ready for attack ── */}
           {phase === 'ready' && (
             <div className="flex flex-col gap-4">
@@ -657,13 +693,11 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
           )}
           {phase === 'form' && formMode === 'new' && blockingStack && (
             <button
-              onClick={() => handleDestroyAndRedeploy(blockingStack.id)}
-              disabled={estimateLoading}
+              onClick={() => handleDestroy(blockingStack.id)}
               className="px-5 py-2.5 rounded-btn font-body text-[0.85rem] font-semibold cursor-pointer border-none
-                bg-danger text-white transition-all hover:-translate-y-px hover:shadow-[0_8px_40px_rgba(255,34,68,0.4)]
-                disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none"
+                bg-danger text-white transition-all hover:-translate-y-px hover:shadow-[0_8px_40px_rgba(255,34,68,0.4)]"
             >
-              &#9851; Destroy &amp; Redeploy Fresh
+              &#9851; Destroy Stack
             </button>
           )}
           {phase === 'form' && formMode === 'new' && !blockingStack && (
@@ -696,6 +730,16 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
                 hover:bg-[rgba(255,255,255,0.05)] hover:border-border-active"
             >
               Close (keeps deploying)
+            </button>
+          )}
+          {phase === 'destroying' && (
+            <button
+              onClick={handleClose}
+              className="px-5 py-2.5 rounded-btn font-body text-[0.85rem] font-medium cursor-pointer
+                bg-transparent border border-[rgba(255,255,255,0.15)] text-content-primary transition-all
+                hover:bg-[rgba(255,255,255,0.05)] hover:border-border-active"
+            >
+              Close (keeps destroying)
             </button>
           )}
           {phase === 'ready' && (
