@@ -36,6 +36,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from datetime import timedelta
 
 import boto3
+from botocore.exceptions import ClientError
 import requests as http_requests
 from celery import shared_task
 from django.apps import apps
@@ -58,9 +59,85 @@ from apps.infrastructure.tasks import (
 
 logger = logging.getLogger(__name__)
 
-# S3 bucket for Pulumi state (same value used by infrastructure/tasks.py).
+# Pulumi state bucket. Each tenant's state lives in that tenant's own AWS
+# account, so the bucket name is resolved per-tenant from the account id (see
+# _state_bucket_from_creds). STATE_BUCKET is only the fallback when the account
+# cannot be resolved. STATE_BUCKET_REGION is the region the state bucket lives in.
 STATE_BUCKET = os.environ.get("STATE_BUCKET", "mayatrail-state-bucket")
 STATE_BUCKET_REGION = os.environ.get("STATE_BUCKET_REGION", "ap-south-1")
+
+
+def _state_bucket_from_creds(aws_creds: dict[str, str]) -> str:
+    """Return the per-tenant Pulumi state bucket name for the given assumed creds.
+
+    The state bucket lives in the tenant's own account. Since S3 bucket names are
+    globally unique across all of AWS, a shared name cannot exist in more than
+    one account; instead the name embeds the tenant's account id (resolved from
+    the assumed credentials via STS GetCallerIdentity), which is globally unique.
+    Falls back to STATE_BUCKET when the account id cannot be resolved.
+
+    Args:
+        aws_creds: STS credential dict from _assume_user_role().
+
+    Returns:
+        The bucket name, e.g. "mayatrail-state-123456789012".
+    """
+    try:
+        sts = boto3.client(
+            "sts",
+            aws_access_key_id=aws_creds["AWS_ACCESS_KEY_ID"],
+            aws_secret_access_key=aws_creds["AWS_SECRET_ACCESS_KEY"],
+            aws_session_token=aws_creds["AWS_SESSION_TOKEN"],
+        )
+        account_id = sts.get_caller_identity()["Account"]
+    except (ClientError, KeyError):
+        return STATE_BUCKET
+    return f"mayatrail-state-{account_id}"
+
+
+def _ensure_state_bucket(bucket: str, aws_creds: dict[str, str]) -> None:
+    """Create the Pulumi state bucket in the tenant's account if it is missing.
+
+    The Pulumi S3 backend requires the bucket to exist before any stack
+    operation. Buckets are created lazily with the tenant's assumed credentials
+    in STATE_BUCKET_REGION, so onboarding a new account needs no manual bucket
+    setup and a deleted bucket self-heals on the next operation. Creating a
+    bucket the caller already owns is treated as success (idempotent).
+
+    Args:
+        bucket: The bucket name to ensure exists.
+        aws_creds: STS credential dict from _assume_user_role().
+    """
+    s3 = boto3.client(
+        "s3",
+        aws_access_key_id=aws_creds["AWS_ACCESS_KEY_ID"],
+        aws_secret_access_key=aws_creds["AWS_SECRET_ACCESS_KEY"],
+        aws_session_token=aws_creds["AWS_SESSION_TOKEN"],
+        region_name=STATE_BUCKET_REGION,
+    )
+    try:
+        s3.head_bucket(Bucket=bucket)
+        return
+    except ClientError as exc:
+        # 404 / NoSuchBucket means it does not exist yet, so fall through and
+        # create it. Any other error (e.g. 403: the name is taken by another
+        # account) is surfaced rather than masked by a later, more cryptic failure.
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        if code not in ("404", "NoSuchBucket"):
+            raise
+
+    params: dict = {"Bucket": bucket}
+    # us-east-1 rejects an explicit LocationConstraint; every other region needs
+    # one, or the bucket is silently created in us-east-1 instead.
+    if STATE_BUCKET_REGION != "us-east-1":
+        params["CreateBucketConfiguration"] = {"LocationConstraint": STATE_BUCKET_REGION}
+    try:
+        s3.create_bucket(**params)
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        # A concurrent create or a prior run is fine as long as we own the bucket.
+        if code not in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):
+            raise
 
 # Base directory under which emulation packages are mounted.
 # Each emulation's Pulumi program lives at {EMULATIONS_BASE_DIR}/{type}/infra/.
@@ -124,6 +201,7 @@ def _assume_user_role(user) -> dict[str, str]:
 def _build_workspace_env(
     region: str,
     aws_creds: dict[str, str],
+    bucket: str,
 ) -> dict[str, str]:
     """
     Build the environment variable dict passed to a Pulumi LocalWorkspace.
@@ -135,12 +213,13 @@ def _build_workspace_env(
     Args:
         region:    AWS region for this stack (e.g. "ap-south-1").
         aws_creds: STS credential dict from _assume_user_role().
+        bucket:    Per-tenant Pulumi state bucket name (from _state_bucket_from_creds).
 
     Returns:
         Dict of environment variable name/value pairs for the workspace.
     """
     env: dict[str, str] = {
-        "PULUMI_BACKEND_URL": f"s3://{STATE_BUCKET}?region={STATE_BUCKET_REGION}",
+        "PULUMI_BACKEND_URL": f"s3://{bucket}?region={STATE_BUCKET_REGION}",
         "AWS_REGION": region,
         "AWS_DEFAULT_REGION": region,
         **aws_creds,
@@ -175,7 +254,12 @@ def _get_pulumi_stack(
     Returns:
         Configured pulumi.automation.Stack instance ready for an operation.
     """
-    env = _build_workspace_env(region, aws_creds)
+    # Resolve the tenant's own state bucket from the assumed creds and make sure
+    # it exists before selecting the stack, so a new account needs no manual
+    # bucket setup and the S3 backend never points at a missing bucket.
+    bucket = _state_bucket_from_creds(aws_creds)
+    _ensure_state_bucket(bucket, aws_creds)
+    env = _build_workspace_env(region, aws_creds, bucket)
 
     stack = auto.create_or_select_stack(
         stack_name=stack_name,
@@ -782,9 +866,11 @@ def estimate_emulation_cost(self, emulation_type: str, region: str, user_id: str
     # capped at 64 chars after Pulumi appends its random suffix.
     stack_name = f"est-{uuid.uuid4().hex[:8]}"
 
+    bucket = _state_bucket_from_creds(aws_creds)
+    _ensure_state_bucket(bucket, aws_creds)
     env = {
         **os.environ,
-        "PULUMI_BACKEND_URL": f"s3://{STATE_BUCKET}?region={STATE_BUCKET_REGION}",
+        "PULUMI_BACKEND_URL": f"s3://{bucket}?region={STATE_BUCKET_REGION}",
         "AWS_REGION": region,
         "AWS_DEFAULT_REGION": region,
         "PULUMI_CONFIG_PASSPHRASE": os.environ.get("PULUMI_CONFIG_PASSPHRASE", ""),
