@@ -25,30 +25,21 @@
 
 ## The problem
 
-Cloud misconfiguration is the leading cause of cloud breaches — a single over-permissive IAM
-role or an EC2 instance with IMDSv1 enabled is enough to lose an account. Yet security teams
-have almost no safe way to *rehearse* these attacks against infrastructure that looks like
-their own:
+Cloud and Kubernetes misconfiguration is the leading cause of modern breaches — a single over-permissive IAM role, an EC2 instance with IMDSv1 enabled, or a pod with a writable hostPath mount is enough to lose an account or a cluster. Yet security teams have almost no safe way to rehearse these attacks against infrastructure that looks like their own:
 
-- **Production is too risky to attack.** You can't run a credential-theft-to-persistence chain
-  against live infrastructure to see if it works.
-- **Pentests are expensive and infrequent.** A point-in-time engagement once or twice a year
-  doesn't keep pace with infrastructure that changes daily.
-- **Knowing about a misconfiguration isn't the same as knowing your blast radius.** Most tools
-  flag that IMDSv1 is on; they don't show you the full kill chain it unlocks — or whether your
-  detections would catch it.
-
-The result: teams discover whether their cloud is exploitable only when a real attacker shows
-them.
+Production is too risky to attack. You can't run a credential-theft-to-persistence chain, or a pod-to-node escape, against live infrastructure just to see if it works.
+Pentests are expensive and infrequent. A point-in-time engagement once or twice a year doesn't keep pace with infrastructure that changes daily.
+Knowing about a misconfiguration isn't the same as knowing your blast radius. Most tools flag that IMDSv1 is on or that a pod can mount hostPath; they don't show you the full kill chain it unlocks — or whether your detections would catch it.
+The result: teams discover whether their cloud or cluster is exploitable only when a real attacker shows them.
 
 ## The solution
 
 MayaTrail closes the loop — **connect → deploy → attack → observe → auto-destroy** — running
 real adversary emulations inside an isolated, disposable environment in *your own* AWS account.
 
-1. **Connect** your AWS account via STS AssumeRole — no long-lived keys to hand over.
+1. **Connect** your AWS account by granting a scoped, cross-account IAM role (no long-lived keys to hand over — MayaTrail assumes the role via STS at run time), or target a MayaTrail-provisioned Kubernetes host for cluster-level emulations.
 2. **Deploy** a realistic, intentionally vulnerable environment from code (Pulumi).
-3. **Attack** it with a real adversary emulation modelled on a documented campaign.
+3. **Attack** it with a real adversary emulation modelled on a documented campaign or a known CVE/misconfiguration class.
 4. **Observe** the outcome in a dashboard: the kill chain, MITRE ATT&CK coverage, blast
    radius, and an immutable audit log — plus detection rules you can take straight to your SIEM.
 5. **Auto-destroy** — every environment has a TTL, so nothing lingers and costs stay bounded.
@@ -62,35 +53,32 @@ infrastructure changes.
 
 ## Who it's for
 
-MayaTrail is built for the people responsible for cloud security posture:
+MayaTrail is built for the people responsible for cloud and cluster security posture:
 
 | Persona | What they get from MayaTrail |
 |---|---|
 | **Detection Engineer** | Real attacker telemetry plus shipped Sigma + KQL rules to validate and tune detections against. |
 | **Security Engineer** | A safe range to validate whether a misconfiguration is actually exploitable end-to-end. |
 | **Cloud Security Engineer** | Realistic, documented attack scenarios run safely inside their own AWS account. |
+| **Platform / Kubernetes Engineer** | Hands-on proof of cluster-level attack paths without touching production clusters. |
 | **DevSecOps Engineer** | Disposable, IaC-defined environments that fit into existing pipelines. |
 | **SOC Analyst** | A controlled environment to study real attack patterns and response. |
 | **Security Architect** | Evidence of blast radius to inform guardrails and policy decisions. |
 
 ## Key capabilities
 
-- **Runs in your own AWS account** — connection is via scoped STS AssumeRole; no long-lived
-  credentials are stored.
+- **Multi-platform** — AWS today, with native Kubernetes attack emulations and the plugin model built to extend to Azure and GCP.
+- **Runs against your own infrastructure** — AWS connection is via a scoped, cross-account IAM role that MayaTrail assumes at run time; no long-lived credentials are stored.
 - **Real-world adversary emulations** — modelled on documented campaigns, not toy scenarios.
-- **Mapped to MITRE ATT&CK** — every phase is tied to a technique, with coverage surfaced on
-  the dashboard.
-- **Ships detection rules** — each emulation includes Sigma and KQL rules and an
-  incident-response playbook, ready for your SIEM.
-- **Ephemeral and cost-aware** — environments carry a TTL and are auto-destroyed on a schedule;
-  cost estimates are shown up front.
-- **Plugin-based emulation packages** — drop in a new emulation package and it's
-  auto-discovered, infra and detections included.
+- **Mapped to MITRE ATT&CK** — every phase is tied to a technique, with coverage surfaced on the dashboard.
+- **Ships detection rules** — each emulation includes Sigma and KQL rules and an incident-response playbook, ready for your SIEM.
+- **Ephemeral and cost-aware** — environments carry a TTL and are auto-destroyed on a schedule; cost estimates are shown up front.
+- **Plugin-based emulation packages** — drop in a new emulation package and it's auto-discovered, infra and detections included.
 - **Auditable** — an immutable log records every connect, deploy, attack, and destroy.
 
 ## Why now
 
-Cloud footprints are growing faster than the teams defending them, and the discipline is
+Cloud and Kubernetes footprints are growing faster than the teams defending them, and the discipline is
 shifting from point-in-time pentests toward **continuous threat exposure management** — always
 knowing whether your environment is exploitable today, not last quarter. MayaTrail makes that
 rehearsal loop cheap, safe, and repeatable enough to run continuously.
@@ -100,6 +88,7 @@ rehearsal loop cheap, safe, and repeatable enough to run continuously.
 `step1` is the first phase of a deliberately staged platform. Direction ahead:
 
 - A growing library of adversary emulations across more documented campaigns
+- Deeper Kubernetes coverage: multi-node clusters, managed control planes (EKS/GKE/AKS), and container-runtime-level attack paths
 - Multi-cloud support (Azure, GCP, Kubernetes) — the platform model already accounts for it
 - Deeper detection-engineering workflows built on emulation telemetry
 - CI/CD integration to rehearse attacks on every infrastructure change
@@ -112,8 +101,7 @@ rehearsal loop cheap, safe, and repeatable enough to run continuously.
 
 MayaTrail runs as a full-stack web application. The flow for a single emulation:
 
-1. **Connect** — a user connects their AWS account; the `connectors` app establishes access via
-   STS AssumeRole (no long-lived keys are stored).
+1. **Connect** —  for AWS emulations, a user grants a cross-account IAM role scoped to the permissions each emulation needs; the connectors app verifies it and MayaTrail assumes it via STS at run       time (no long-lived keys are stored). Kubernetes emulations target a MayaTrail-provisioned host running a lightweight, isolated control plane.
 2. **Deploy** — the enterprise Celery worker provisions the emulation's infrastructure into the
    user's account using the **Pulumi Automation API, in-process** (no Docker socket, no
    ephemeral Pulumi containers). Pulumi state lives in a dedicated S3 state bucket.
@@ -121,9 +109,7 @@ MayaTrail runs as a full-stack web application. The flow for a single emulation:
    freshly provisioned infrastructure.
 4. **Observe** — results, MITRE ATT&CK mappings, and detection rules surface in the dashboard;
    the `logs` app records an immutable audit trail.
-5. **Auto-destroy** — each stack carries a TTL (SCARLETEEL defaults to 4 hours); Celery Beat
-   runs an auto-destroy task every 15 minutes so expired environments are cleaned up and costs
-   stay bounded.
+5. **Auto-destroy** — each stack carries a TTL (SCARLETEEL defaults to 4 hours, most Kubernetes emulations default to 2 hours); Celery Beat runs an auto-destroy task every 15 minutes so expired environments are cleaned up and costs stay bounded.
 
 ## Quick start (Docker Compose)
 
@@ -139,8 +125,7 @@ docker-compose up --build
 The application is available at `http://localhost`. Migrations run automatically on backend
 startup.
 
-**Prerequisites:** Docker and Docker Compose, plus AWS credentials for the platform account
-(used to AssumeRole into target accounts and to store Pulumi state).
+**Prerequisites:** Docker and Docker Compose, plus AWS credentials for the platform account (used to AssumeRole into target accounts, provision Kubernetes hosts, and store Pulumi state).
 
 ### Key environment variables (`backend/.env`)
 
@@ -167,8 +152,15 @@ npm run dev    # Vite dev server on http://localhost:3000
 
 ## Emulations
 
-MayaTrail ships adversary emulations as self-contained, auto-discovered packages. Each package
-bundles everything needed to run and learn from the attack:
+The point of MayaTrail isn't the module list — it's letting your team run a real APT chain end-to-end and find out, concretely, whether your detections fire, your SOC catches it in time, and your playbooks and guardrails hold up under an actual (contained) compromise. Use it to:
+
+- **Test detections** — run the real technique and confirm your Sigma/KQL rules actually fire, not just that they parse.
+- **Grade SOC response** — trigger a live-looking incident and time how fast the team detects, triages, and escalates.
+- **Validate playbooks** — walk the shipped incident-response playbook against a real, contained compromise instead of a tabletop hypothetical.
+- **Prove guardrails** — confirm IAM boundaries, network policies, and Kubernetes admission controls actually stop the attack where you think they do.
+- **Run drills on demand** — spin up a fresh, disposable environment for a red/blue/purple team exercise whenever you need one, then let it auto-destroy.
+Each emulation packages a documented threat-actor campaign or a disclosed CVE/misconfiguration class as a self-contained, auto-discovered plugin: Pulumi infra to stand up the vulnerable environment, an attack script that executes the real kill chain, MITRE ATT&CK mappings per phase, Sigma/KQL detection rules, and an incident-response playbook. Today, it spans multi-phase AWS campaigns (including SCARLETEEL, AMBERSQUID, Codefinger, and DangerDev), a library of narrower single-technique AWS emulations for isolating one detection at a time, and Kubernetes emulations covering RBAC abuse, adversary-in-the-middle, Pod Security Admission bypass, and host escape. The full, current catalogue — MITRE coverage, severity, cost and TTL per module — is browsable live in the dashboard, since new packages are auto-discovered as soon as they land in emulations/
+
 
 - `MANIFEST.py` — identity, kill-chain phases, MITRE ATT&CK mappings, cost and TTL metadata
 - `attack.py` — a `run(outputs)` function that executes the kill chain
@@ -193,27 +185,6 @@ bundles everything needed to run and learn from the attack:
 >
 > Without submodule access `emulations/_kb/` stays empty — the public emulation packages still build and run;
 > only the authoring methodology is gated.
-
-### SCARLETEEL 2.0
-
-A 6-phase APT emulation based on the real-world SCARLETEEL campaign documented by the Sysdig
-Threat Research Team (2023). It chains container exploitation with AWS credential theft to
-achieve lateral movement, data exfiltration, and persistence.
-
-| Phase | Tactic | MITRE technique(s) |
-|---|---|---|
-| 1. Initial Access | Initial Access | `T1190` Exploit Public-Facing Application (container RCE) |
-| 2. Credential Access | Credential Access | `T1552.005` Cloud Instance Metadata API (IMDSv1) |
-| 3. Discovery | Discovery | `T1087.004` Cloud Account Discovery · `T1580` Cloud Infrastructure Discovery |
-| 4. Defense Evasion | Defense Evasion | `T1562.008` Disable Cloud Logs (CloudTrail) |
-| 5. Lateral Movement | Privilege Escalation / Lateral Movement | `T1548.005` Abuse Elevation Control (AssumeRole) · `T1550.001` Application Access Token |
-| 6. Persistence | Persistence | `T1098` Account Manipulation (Lambda backdoor) |
-
-**Severity:** CRITICAL · **Duration:** ~20 min · **Resources:** 19 · **Default TTL:** 4 hours ·
-**Est. cost:** ~$0.05/hr
-**Services exercised:** IAM, STS, EC2, Lambda, S3, Secrets Manager, ECS, CloudTrail
-**Detections shipped:** Sigma + KQL rules for T1190, T1552.005, T1087.004, T1562.008,
-T1548.005, and T1098, plus a full incident-response playbook.
 
 <p align="center">
   <img src="docs/assets/aws-platform-overview.png" alt="MayaTrail dashboard" width="820"/>
@@ -240,7 +211,7 @@ step1/
 ├── backend/                    # Django REST API
 │   ├── apps/
 │   │   ├── users/              # Auth: registration (invite code), JWT login, Google SSO, profile
-│   │   ├── connectors/         # AWS account connection via STS AssumeRole
+│   │   ├── connectors/         # AWS account connection via cross-account IAM role
 │   │   ├── emulations/         # Emulation catalogue + run lifecycle (deploy/attack/destroy)
 │   │   ├── infrastructure/     # Stack model, Celery tasks, TTL auto-destroy
 │   │   ├── metrics/            # Platform Overview dashboard metrics (MITRE + attack-surface coverage)
@@ -251,12 +222,18 @@ step1/
 │   └── requirements.txt
 ├── emulations/                 # Adversary emulation packages (mounted at /opt/emulations)
 │   ├── registry.py             # Auto-discovers packages via MANIFEST.py
-│   └── scarleteel/             # SCARLETEEL 2.0 emulation
-│       ├── MANIFEST.py         # Identity, MITRE mappings, cost + TTL metadata
-│       ├── attack.py           # run(outputs) — executes the kill chain
-│       ├── infra/              # Pulumi program (vulnerable infrastructure)
-│       ├── detections/         # Sigma + KQL detection rules per technique
-│       └── PLAYBOOK.md         # Incident-response playbook
+│   ├── scarleteel/             # SCARLETEEL 2.0 campaign emulation
+│   ├── ambersquid/             # AMBERSQUID campaign emulation
+│   ├── codefinger/             # Codefinger S3 ransomware campaign emulation
+│   ├── dangerdev/              # DangerDev campaign emulation
+│   ├── aws_*/                  # ~30 single-technique atomic AWS emulations
+│   ├── k8s_rbac_impersonation/  # K8s RBAC impersonation privilege escalation
+│   ├── k8s_external_ips_mitm/   # K8s CVE-2020-8554 externalIPs MITM
+│   ├── k8s_pod_status_mitm/     # K8s pod status.podIP MITM
+│   ├── k8s_pvc_psa_bypass/      # K8s Pod Security Admission bypass via PV abuse
+│   ├── k8s_writable_log_escape/ # K8s writable /var/log host escape
+│   └── k8s_attack_readme.md    # Kubernetes emulation catalogue walkthrough
+│       # each package: MANIFEST.py, attack.py, infra/ (Pulumi), detections/, PLAYBOOK.md
 ├── frontend/UI/                # React + TypeScript SPA
 │   ├── src/
 │   │   ├── components/         # dashboard, emulations, playbooks, detections, platforms, ...
@@ -275,7 +252,9 @@ step1/
 Good entry points for understanding the codebase:
 
 - `docker-compose.yml` — the full service topology and how the pieces connect
-- `emulations/scarleteel/` — a complete emulation package (manifest, attack, infra, detections, playbook)
+- `emulations/scarleteel/` — a complete AWS emulation package (manifest, attack, infra, detections, playbook)
+- `emulations/k8s_rbac_impersonation/` — a complete Kubernetes emulation package, and
+  `emulations/k8s_attack_readme.md` for how all five Kubernetes attacks work end to end
 - `emulations/_kb/AUTHORING.md` — **the authoring/migration knowledge base (private submodule); read it before
   writing or migrating an emulation** (see the [Emulations](#emulations) callout to initialise it)
 - `frontend/UI/DESIGN.md` — the frontend design system; read it before any UI change
