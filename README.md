@@ -266,7 +266,7 @@ step1/
 │   ├── ambersquid/             # AMBERSQUID campaign emulation
 │   ├── codefinger/             # Codefinger S3 ransomware campaign emulation
 │   ├── dangerdev/              # DangerDev campaign emulation
-│   ├── aws_*/                  # ~30 single-technique atomic AWS emulations
+│   ├── aws_*/                  # ~30 single-technique atomic AWS emulations based on stratus red team's emulations
 │   ├── k8s_rbac_impersonation/  # K8s RBAC impersonation privilege escalation
 │   ├── k8s_external_ips_mitm/   # K8s CVE-2020-8554 externalIPs MITM
 │   ├── k8s_pod_status_mitm/     # K8s pod status.podIP MITM
