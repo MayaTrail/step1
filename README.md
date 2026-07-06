@@ -111,6 +111,46 @@ MayaTrail runs as a full-stack web application. The flow for a single emulation:
    the `logs` app records an immutable audit trail.
 5. **Auto-destroy** — each stack carries a TTL (SCARLETEEL defaults to 4 hours, most Kubernetes emulations default to 2 hours); Celery Beat runs an auto-destroy task every 15 minutes so expired environments are cleaned up and costs stay bounded.
 
+## Connecting your AWS account
+
+AWS emulations run against **your own account** via a cross-account IAM role — MayaTrail never
+asks for or stores long-lived AWS access keys. To connect:
+
+1. **Create an IAM role** in your AWS account (e.g. `MayaTrailRole`).
+2. **Attach a trust policy** allowing the MayaTrail platform account to assume it (see below).
+3. **Attach a permissions policy** scoped to what emulations need — the connector page in the app
+   shows the exact policy required, grouped by emulation category, plus the full JSON to
+   copy/paste.
+4. **Submit the role's ARN** on the connector page
+   (`arn:aws:iam::<your-account-id>:role/<role-name>`). MayaTrail verifies it live via
+   `sts:AssumeRole` before marking the connection verified — nothing is provisioned until you
+   actually run an emulation.
+
+### Using the hosted app (app.mayatrail.tech)
+
+If you're using the hosted instance at [app.mayatrail.tech](https://app.mayatrail.tech), trust
+MayaTrail's platform AWS account, `940482414561`, in your role's trust policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::940482414561:root" },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+```
+
+### Self-hosting
+
+If you're running your own instance (see [Quick start](#quick-start-docker-compose) below), the
+trust policy must instead reference **your own platform account** — the AWS account behind the
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` credentials configured in `backend/.env`, since
+that's the identity the `connectors` app assumes the role as.
+
 ## Quick start (Docker Compose)
 
 ```bash
