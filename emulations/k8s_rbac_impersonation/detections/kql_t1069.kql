@@ -1,0 +1,23 @@
+// k8s_rbac_impersonation — T1069: Permission Groups Discovery
+// Detects SelfSubjectRulesReview creation used to enumerate a service account's
+// own RBAC permissions prior to an impersonation attempt.
+//
+// References:
+//   https://attack.mitre.org/techniques/T1069/
+//   https://kubernetes.io/docs/reference/access-authn-authz/authorization/
+
+KubernetesAuditLogs
+| where TimeGenerated > ago(1h)
+| extend log = parse_json(AuditLog)
+| where tostring(log.verb) == "create"
+| where tostring(log.objectRef.resource) == "selfsubjectrulesreviews"
+| where tostring(log.objectRef.apiGroup) == "authorization.k8s.io"
+| project
+    TimeGenerated,
+    CallerUser       = tostring(log.user.username),
+    CallerGroups     = tostring(log.user.groups),
+    SourceIP         = tostring(log.sourceIPs[0]),
+    ResponseCode     = toint(log.responseStatus.code),
+    AuditID          = tostring(log.auditID)
+| extend AlertTitle = "Kubernetes: SelfSubjectRulesReview — potential RBAC enumeration"
+| order by TimeGenerated desc

@@ -1,0 +1,30 @@
+title: Kubernetes RBAC Permission Enumeration via SelfSubjectRulesReviews
+id: a1b2c3d4-1111-4aaa-b111-aaaaaaaaaaaa
+status: experimental
+description: |
+  Detects creation of a SelfSubjectRulesReview resource, which allows a caller
+  to inspect their own RBAC permissions without triggering wildcard discovery
+  alarms. Attackers use this to confirm impersonate rights before escalating.
+  Emulated by MayaTrail k8s_rbac_impersonation (Phase 1).
+references:
+  - https://attack.mitre.org/techniques/T1069/
+  - https://kubernetes.io/docs/reference/access-authn-authz/authorization/#checking-api-access
+author: MayaTrail Security Research
+date: 2026/06/28
+tags:
+  - attack.discovery
+  - attack.t1069
+  - kubernetes
+logsource:
+  product: kubernetes
+  service: audit
+detection:
+  selection:
+    verb: create
+    objectRef.resource: selfsubjectrulesreviews
+    objectRef.apiGroup: authorization.k8s.io
+  condition: selection
+falsepositives:
+  - kubectl auth can-i --list invocations from legitimate users
+  - RBAC auditing tooling (e.g. rbac-lookup, kubectl-who-can)
+level: medium

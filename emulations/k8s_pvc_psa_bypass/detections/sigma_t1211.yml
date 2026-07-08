@@ -1,0 +1,31 @@
+title: Kubernetes HostPath PersistentVolume Created — PSA Bypass Indicator
+id: e5f6a7b8-5555-4eee-b555-eeeeeeeeeeee
+status: experimental
+description: |
+  Detects creation of a PersistentVolume with a hostPath spec. Pod Security
+  Admission (PSA) only inspects Pod specs at admission time and does not audit
+  the PV/PVC storage provisioning layer. An attacker can create a PV pointing
+  to a sensitive host path and later bind a pod to it, bypassing PSA baseline
+  and restricted policies entirely.
+  Emulated by MayaTrail k8s_pvc_psa_bypass (Phase 1).
+references:
+  - https://attack.mitre.org/techniques/T1211/
+  - https://kubernetes.io/docs/concepts/security/pod-security-admission/
+author: MayaTrail Security Research
+date: 2026/06/28
+tags:
+  - attack.defense_evasion
+  - attack.t1211
+  - kubernetes
+logsource:
+  product: kubernetes
+  service: audit
+detection:
+  selection:
+    verb: create
+    objectRef.resource: persistentvolumes
+  condition: selection
+falsepositives:
+  - Legitimate cluster storage administrators provisioning storage
+  - Static provisioners creating PVs for NFS, local, or CSI drivers
+level: medium

@@ -1,0 +1,27 @@
+// k8s_rbac_impersonation — T1548: Abuse Elevation Control Mechanism
+// Detects Kubernetes API requests that succeeded while using impersonation headers,
+// where the impersonated identity is not a system: built-in account.
+//
+// References:
+//   https://attack.mitre.org/techniques/T1548/
+//   https://kubernetes.io/docs/reference/access-authn-authz/authentication/#user-impersonation
+
+KubernetesAuditLogs
+| where TimeGenerated > ago(1h)
+| extend log = parse_json(AuditLog)
+| where isnotempty(tostring(log.impersonatedUser.username))
+| where not (tostring(log.impersonatedUser.username) startswith "system:")
+| where toint(log.responseStatus.code) in (200, 201)
+| project
+    TimeGenerated,
+    OriginalCaller       = tostring(log.user.username),
+    ImpersonatedUser     = tostring(log.impersonatedUser.username),
+    ImpersonatedGroups   = tostring(log.impersonatedUser.groups),
+    Verb                 = tostring(log.verb),
+    Resource             = tostring(log.objectRef.resource),
+    Namespace            = tostring(log.objectRef.namespace),
+    SourceIP             = tostring(log.sourceIPs[0]),
+    ResponseCode         = toint(log.responseStatus.code),
+    AuditID              = tostring(log.auditID)
+| extend AlertTitle = "Kubernetes: Successful API call using impersonation headers — privilege escalation"
+| order by TimeGenerated desc

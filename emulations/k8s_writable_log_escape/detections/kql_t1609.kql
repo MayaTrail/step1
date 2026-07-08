@@ -1,0 +1,25 @@
+// k8s_writable_log_escape — T1609: Container Administration Command
+// Detects use of pods/exec subresource, which allows running commands inside
+// a container. An attacker exploiting a writable /var/log mount uses exec to
+// create a symlink pointing to a sensitive host file before exfiltrating it
+// via the Kubelet log proxy endpoint.
+//
+// References:
+//   https://attack.mitre.org/techniques/T1609/
+
+KubernetesAuditLogs
+| where TimeGenerated > ago(1h)
+| extend log = parse_json(AuditLog)
+| where tostring(log.verb) == "create"
+| where tostring(log.objectRef.resource) == "pods"
+| where tostring(log.objectRef.subresource) == "exec"
+| project
+    TimeGenerated,
+    CallerUser   = tostring(log.user.username),
+    Namespace    = tostring(log.objectRef.namespace),
+    PodName      = tostring(log.objectRef.name),
+    SourceIP     = tostring(log.sourceIPs[0]),
+    ResponseCode = toint(log.responseStatus.code),
+    AuditID      = tostring(log.auditID)
+| extend AlertTitle = "Kubernetes: pods/exec — container command execution detected"
+| order by TimeGenerated desc
