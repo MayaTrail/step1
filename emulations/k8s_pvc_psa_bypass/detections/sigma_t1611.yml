@@ -1,0 +1,33 @@
+title: Kubernetes Pod Mounting PVC Bound to HostPath Volume
+id: f6a7b8c9-6666-4fff-b666-ffffffffffff
+status: experimental
+description: |
+  Detects creation of pods that reference a PersistentVolumeClaim. When
+  combined with a PV that uses a hostPath spec (T1211), the pod effectively
+  mounts the host filesystem from an otherwise policy-compliant container,
+  achieving host escape (T1611). Correlate with prior PV creation events.
+  Emulated by MayaTrail k8s_pvc_psa_bypass (Phase 3).
+references:
+  - https://attack.mitre.org/techniques/T1611/
+  - https://kubernetes.io/docs/concepts/storage/persistent-volumes/#hostpath
+author: MayaTrail Security Research
+date: 2026/06/28
+tags:
+  - attack.privilege_escalation
+  - attack.t1611
+  - kubernetes
+logsource:
+  product: kubernetes
+  service: audit
+detection:
+  selection:
+    verb: create
+    objectRef.resource: pods
+  filter_system_ns:
+    objectRef.namespace:
+      - 'kube-system'
+      - 'kube-public'
+  condition: selection and not filter_system_ns
+falsepositives:
+  - Normal application workloads scheduling pods that use PVCs for persistent storage
+level: low

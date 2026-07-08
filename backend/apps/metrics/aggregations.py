@@ -57,6 +57,83 @@ PLATFORM_LABELS = {
 # (matches the dashboard's "safe" green).
 NAVIGATOR_COVERED_COLOR = "#5fc992"
 
+# Attack-surface taxonomy: maps a MANIFEST service short-name to a presentation
+# category for the Platform Overview's Attack Surface Coverage panel. This is the
+# single source of truth for the grouping; the frontend renders it as-is. Add a
+# line to categorise a new service; unmapped services fall into "Other" so nothing
+# is dropped. Names must match the MANIFEST `services` entries exactly.
+_ATTACK_SURFACE_OTHER = "Other"
+
+_ATTACK_SURFACE_CATEGORY_ORDER = [
+    "Identity & Access",
+    "Control Plane",
+    "Compute & Workloads",
+    "Runtime",
+    "Storage & Data",
+    "Networking",
+    "Messaging",
+    "AI / ML",
+    "Management & Detection",
+    _ATTACK_SURFACE_OTHER,
+]
+
+_SERVICE_CATEGORY = {
+    "IAM": "Identity & Access",
+    "STS": "Identity & Access",
+    "IAM Roles Anywhere": "Identity & Access",
+    "Kubernetes RBAC": "Identity & Access",
+    "Pod Security Admission": "Identity & Access",
+    "Kubernetes API": "Control Plane",
+    "Kubelet": "Control Plane",
+    "EC2": "Compute & Workloads",
+    "Lambda": "Compute & Workloads",
+    "ECS": "Compute & Workloads",
+    "CodeBuild": "Compute & Workloads",
+    "Amplify": "Compute & Workloads",
+    "Container Runtime": "Runtime",
+    "S3": "Storage & Data",
+    "Secrets Manager": "Storage & Data",
+    "KMS": "Storage & Data",
+    "PersistentVolume": "Storage & Data",
+    "Route53": "Networking",
+    "kube-proxy": "Networking",
+    "SES": "Messaging",
+    "SNS": "Messaging",
+    "Bedrock": "AI / ML",
+    "SageMaker": "AI / ML",
+    "CloudTrail": "Management & Detection",
+    "CloudWatch": "Management & Detection",
+    "GuardDuty": "Management & Detection",
+    "SSM": "Management & Detection",
+    "CodeCommit": "Management & Detection",
+}
+
+
+def _attack_surface(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Group the distinct services exercised by the given emulations into
+    attack-surface categories, derived from each MANIFEST's `services` list.
+
+    Services are grouped via _SERVICE_CATEGORY; an unmapped service falls into
+    "Other". Categories are returned in _ATTACK_SURFACE_CATEGORY_ORDER, and any
+    category referenced by the map but missing from that order is appended last so
+    a taxonomy entry can never be silently dropped. Empty categories are omitted.
+
+    Returns a list of {"name": <category>, "services": [<service>, ...]}.
+    """
+    by_category: dict[str, set[str]] = {}
+    for entry in entries:
+        for service in entry.get("services", []) or []:
+            category = _SERVICE_CATEGORY.get(service, _ATTACK_SURFACE_OTHER)
+            by_category.setdefault(category, set()).add(service)
+
+    ordered = [name for name in _ATTACK_SURFACE_CATEGORY_ORDER if name in by_category]
+    extras = sorted(name for name in by_category if name not in _ATTACK_SURFACE_CATEGORY_ORDER)
+    return [
+        {"name": name, "services": sorted(by_category[name])}
+        for name in [*ordered, *extras]
+    ]
+
 
 def _emulation_technique_ids(entry: dict[str, Any]) -> set[str]:
     """
@@ -578,6 +655,7 @@ def platform_coverage(platform: str | None = None) -> dict[str, Any]:
                 "emulations": len(plat_entries),
                 "playbooks": sum(1 for e in plat_entries if _has_playbook(e)),
                 "detections": sum(_detection_count(e) for e in plat_entries),
+                "attackSurface": _attack_surface(plat_entries),
             }
         )
 

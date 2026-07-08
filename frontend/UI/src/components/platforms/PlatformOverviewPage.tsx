@@ -4,8 +4,8 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { usePlatformOverview } from '@/hooks/usePlatformOverview'
 import { useEmulations } from '@/hooks/usePlatformData'
 import { getPlatformMeta } from '@/data'
-import { attackSurfaceFor } from '@/data/attackSurface'
 import type { PlatformId, Emulation } from '@/types'
+import type { AttackSurfaceCategory } from '@/types/metrics'
 import { MetricCard } from '@/components/ui/MetricCard'
 import { severityColorClass } from '@/components/ui/SeverityBadge'
 import {
@@ -90,7 +90,7 @@ export function PlatformOverviewPage() {
           internally when its content overflows. */}
       <SectionLabel>Coverage &amp; Activity</SectionLabel>
       <div className="flex flex-col lg:flex-row gap-4 mb-2 items-stretch lg:flex-1 lg:min-h-0">
-        <AttackSurfaceBox platform={pid} emulations={emulations} />
+        <AttackSurfaceBox categories={coverage?.attackSurface ?? []} />
         <TopTechniquesBox emulations={emulations} mitreTotal={mitre?.totalTechniques ?? 0} mitreCovered={mitre?.coveredTechniques ?? 0} />
         <RecentlyAddedBox platform={pid} emulations={emulations} />
       </div>
@@ -152,40 +152,35 @@ function BoxEmpty({ text }: { text: string }) {
 
 /* ── Attack Surface Coverage ──────────────────────────────────────────────── */
 
-function AttackSurfaceBox({ platform, emulations }: { platform: PlatformId; emulations: Emulation[] }) {
-  const categories = attackSurfaceFor(platform)
-  const covered = useMemo(
-    () => new Set(emulations.flatMap((e) => e.services ?? [])),
-    [emulations],
-  )
-
+function AttackSurfaceBox({ categories }: { categories: AttackSurfaceCategory[] }) {
   const totalServices = categories.reduce((n, c) => n + c.services.length, 0)
-  const coveredServices = categories.reduce(
-    (n, c) => n + c.services.filter((s) => covered.has(s)).length,
-    0,
-  )
-  const pct = totalServices ? Math.round((coveredServices / totalServices) * 100) : 0
+  const maxInCategory = categories.reduce((m, c) => Math.max(m, c.services.length), 0)
 
   return (
     <OverviewBox
       title="Attack Surface Coverage"
-      headline={categories.length ? `${coveredServices}/${totalServices} services` : '—'}
-      pct={categories.length ? pct : undefined}
+      headline={totalServices ? `${totalServices} service${totalServices === 1 ? '' : 's'}` : '—'}
     >
       {categories.length === 0 ? (
-        <BoxEmpty text="No attack-surface data yet" />
+        <BoxEmpty text="No services exercised yet" />
       ) : (
         <div className="flex flex-col gap-3">
           {categories.map((cat) => {
-            const c = cat.services.filter((s) => covered.has(s)).length
-            const cpct = cat.services.length ? Math.round((c / cat.services.length) * 100) : 0
+            // Bar length is relative (category count vs the largest category), a
+            // visual weight only. The number is the exercised-service count.
+            const width = maxInCategory ? Math.round((cat.services.length / maxInCategory) * 100) : 0
             return (
               <div key={cat.name} className="flex items-center gap-3">
-                <span className="text-sm text-content-secondary w-[92px] shrink-0 truncate">{cat.name}</span>
+                <span
+                  className="text-sm text-content-secondary w-[128px] shrink-0 truncate"
+                  title={cat.services.join(', ')}
+                >
+                  {cat.name}
+                </span>
                 <div className="flex-1 h-2 rounded-full bg-surface-elevated overflow-hidden">
-                  <div className={`h-full rounded-full ${c ? 'bg-accent-blue' : 'bg-transparent'}`} style={{ width: `${cpct}%` }} />
+                  <div className="h-full rounded-full bg-accent-blue" style={{ width: `${width}%` }} />
                 </div>
-                <span className="font-mono text-[12px] text-content-dim w-8 text-right">{c}/{cat.services.length}</span>
+                <span className="font-mono text-[12px] text-content-dim w-6 text-right">{cat.services.length}</span>
               </div>
             )
           })}

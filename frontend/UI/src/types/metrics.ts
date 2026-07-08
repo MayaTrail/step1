@@ -154,12 +154,21 @@ export interface ThreatCoverage {
 }
 
 /** Content-depth counts for one platform. */
+export interface AttackSurfaceCategory {
+  /** Category display name, e.g. "Identity & Access". */
+  name: string
+  /** Distinct services in this category exercised by the platform's emulations. */
+  services: string[]
+}
+
 export interface PlatformCoverageRow {
   platform: string
   label: string
   emulations: number
   playbooks: number
   detections: number
+  /** Attack-surface categories derived server-side from the emulations' MANIFEST services. */
+  attackSurface: AttackSurfaceCategory[]
 }
 
 /** GET /api/metrics/platform-coverage — per-platform content depth. */

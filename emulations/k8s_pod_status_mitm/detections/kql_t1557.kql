@@ -1,0 +1,31 @@
+// k8s_pod_status_mitm — T1557: Adversary-in-the-Middle (podIP Spoofing)
+// Detects patch/update operations on the pods/status subresource from callers
+// that are not the kubelet (system:node:*) or kube-system service accounts.
+// An attacker with this privilege can overwrite a pod's podIP field, diverting
+// service endpoint traffic to their own container.
+//
+// References:
+//   https://attack.mitre.org/techniques/T1557/
+
+KubernetesAuditLogs
+| where TimeGenerated > ago(1h)
+| extend log = parse_json(AuditLog)
+| where tostring(log.verb) in ("patch", "update")
+| where tostring(log.objectRef.resource) == "pods"
+| where tostring(log.objectRef.subresource) == "status"
+| where not (tostring(log.user.username) startswith "system:node:")
+| where not (tostring(log.user.username) startswith "system:serviceaccount:kube-system:")
+| extend requestObj = parse_json(tostring(log.requestObject))
+| extend NewPodIP   = tostring(requestObj.status.podIP)
+| project
+    TimeGenerated,
+    CallerUser   = tostring(log.user.username),
+    Namespace    = tostring(log.objectRef.namespace),
+    PodName      = tostring(log.objectRef.name),
+    NewPodIP,
+    Verb         = tostring(log.verb),
+    SourceIP     = tostring(log.sourceIPs[0]),
+    ResponseCode = toint(log.responseStatus.code),
+    AuditID      = tostring(log.auditID)
+| extend AlertTitle = "Kubernetes: pods/status patched by non-system account — potential IP spoofing"
+| order by TimeGenerated desc

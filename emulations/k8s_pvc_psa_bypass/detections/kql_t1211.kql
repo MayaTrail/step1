@@ -1,0 +1,26 @@
+// k8s_pvc_psa_bypass — T1211: Exploitation for Defense Evasion
+// Detects creation of PersistentVolumes. In clusters relying on PSA,
+// an attacker creates a PV with a hostPath spec to bypass pod-level
+// security policies. Flag all PV creations for review, especially those
+// where requestObject contains a hostPath field.
+//
+// References:
+//   https://attack.mitre.org/techniques/T1211/
+
+KubernetesAuditLogs
+| where TimeGenerated > ago(1h)
+| extend log = parse_json(AuditLog)
+| where tostring(log.verb) == "create"
+| where tostring(log.objectRef.resource) == "persistentvolumes"
+| extend requestObj = parse_json(tostring(log.requestObject))
+| extend HostPath = tostring(requestObj.spec.hostPath.path)
+| project
+    TimeGenerated,
+    CallerUser   = tostring(log.user.username),
+    PVName       = tostring(log.objectRef.name),
+    HostPath,
+    SourceIP     = tostring(log.sourceIPs[0]),
+    ResponseCode = toint(log.responseStatus.code),
+    AuditID      = tostring(log.auditID)
+| extend AlertTitle = "Kubernetes: PersistentVolume created — verify hostPath is not sensitive"
+| order by TimeGenerated desc
