@@ -1,6 +1,51 @@
-// Usage of EC2 Instance Connect on Multiple Instances (T1021.004) — eventName(s) auto-derived; verify casing.
-// Signal: CloudTrail ec2-instance-connect:SendSSHPublicKey from an unexpected principal or source IP address
+// Usage of EC2 Instance Connect on Multiple Instances (T1021.004 / T1021.008)
+//
+// The pushed key lives ~60 seconds and leaves NO artifact in the instance's
+// authorized_keys — auditing host key files after the fact finds nothing. The
+// control plane is the only durable record that access was granted.
+//
+// instanceOSUser is the escalation discriminator: a key pushed for `root`
+// (rather than ec2-user/ubuntu) is a direct privileged foothold.
+//
+// os_users is scoped to SUCCESSFUL pushes only — including denied attempts
+// inflates the set with users the actor never actually reached.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 AWSCloudTrail
-| where EventName in ("SendSSHPublicKey")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
-| order by TimeGenerated desc
+| where TimeGenerated > ago(24h)
+| where EventSource == "ec2-instance-connect.amazonaws.com"
+| where EventName in ("SendSSHPublicKey", "OpenTunnel")
+| extend Req = parse_json(RequestParameters)
+| extend InstanceId = tostring(Req.instanceId)
+| extend OSUser     = tostring(Req.instanceOSUser)
+| extend Succeeded  = isempty(ErrorCode)
+| summarize
+    Pushes          = countif(EventName == "SendSSHPublicKey" and Succeeded),
+    Tunnels         = countif(EventName == "OpenTunnel" and Succeeded),
+    Denied          = countif(not(Succeeded)),
+    DistinctTargets = dcountif(InstanceId, Succeeded),
+    TargetSet       = make_set_if(InstanceId, Succeeded, 20),
+    OSUsers         = make_set_if(OSUser, Succeeded, 10),   // successes only
+    RootPushes      = countif(OSUser == "root" and Succeeded),
+    SourceIPs       = make_set(SourceIpAddress, 10),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 15m)
+| where DistinctTargets >= 1
+| extend Verdict = case(
+    DistinctTargets >= 2, "EC2 INSTANCE CONNECT FAN-OUT — lateral movement, P0",
+    RootPushes > 0,       "KEY PUSHED FOR ROOT — privileged foothold, P0",
+    Tunnels > 0,          "EIC ENDPOINT TUNNEL — private-subnet access",
+    "INSTANCE CONNECT KEY PUSH — verify against operator allowlist")
+| project TimeGenerated, UserIdentityArn, Pushes, Tunnels, Denied,
+          DistinctTargets, TargetSet, OSUsers, RootPushes, SourceIPs, Verdict
+| order by DistinctTargets desc
+//
+// HIGHEST-CONFIDENCE CORRELATION: join the above against VPC Flow Logs for
+// inbound tcp/22 ACCEPT to the same instance within ~60s of the push. The push
+// is permission; the SSH is the access. On its own SendSSHPublicKey does not
+// prove a login occurred.
+//
+// Flow Log field caution: in the DEFAULT format, $13 is the action
+// (ACCEPT/REJECT) and the final field is the log status. If you use a custom
+// format, the positions differ — check your format string rather than assuming.

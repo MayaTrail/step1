@@ -1,7 +1,66 @@
-// Persist via Lambda Layer (T1525) — eventName(s) auto-derived; verify casing.
-// Signal: lambda:PublishLayerVersion followed by lambda:UpdateFunctionConfiguration adding an unexpected layer — especially a newly created layer from an unknown principal
+// Persist via Lambda Layer (T1525)
+//
+// The allowlist comparison is the whole detection: UpdateFunctionConfiguration
+// fires on every memory/timeout/env change, so "a layer was attached" is only
+// interesting when the layer is not one of yours.
+//
+// LAYER ARN STRUCTURE (':'-delimited):
+//   arn:aws:lambda:REGION:OWNER_ACCOUNT:layer:NAME:VERSION
+//     field 5 = owner account   field 7 = layer name   field 8 = version
+// The owner account is the strongest allowlist key — it survives layers being
+// renamed or re-versioned.
+//
+// DeleteLayerVersion is excluded from alerting; it is teardown, not persistence.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let TrustedLayerOwners = dynamic(["111111111111","222222222222"]);  // REPLACE: your accounts + trusted vendors
 AWSCloudTrail
-| where EventSource in ("lambda.amazonaws.com")
-| where EventName in ("PublishLayerVersion", "UpdateFunctionConfiguration", "DeleteLayerVersion")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| where TimeGenerated > ago(7d)
+| where EventSource == "lambda.amazonaws.com"
+| where EventName == "UpdateFunctionConfiguration"
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend FunctionName = tostring(Req.functionName)
+| where isnotempty(Req.layers)
+| mv-expand LayerArn = Req.layers to typeof(string)
+| extend Parts      = split(LayerArn, ":")
+| extend LayerOwner = tostring(Parts[4])
+| extend LayerName  = tostring(Parts[6])
+| extend LayerVer   = tostring(Parts[7])
+| where LayerOwner !in (TrustedLayerOwners)
+| project TimeGenerated, UserIdentityArn, FunctionName, LayerArn,
+          LayerOwner, LayerName, LayerVer, SourceIpAddress
+| extend Verdict = "UNAPPROVED LAYER ATTACHED — code injection into the function, P0"
 | order by TimeGenerated desc
+//
+// ============================================================================
+// CONTAINMENT GOTCHA — read before removing the layer
+// ============================================================================
+// UpdateFunctionConfiguration --layers REPLACES THE ENTIRE LAYER LIST. It does
+// not remove one entry. Re-specify every legitimate layer you intend to keep,
+// or you will silently strip the function's real dependencies while removing
+// the malicious one.
+//
+// WHAT THE LAYER ACTUALLY DOES depends on where its files sit:
+//   /opt/extensions/...  -> a true EXTENSION: auto-launched by Lambda at INIT,
+//                           runs regardless of whether the function imports it
+//   python/...           -> a CODE layer: runs ONLY if imported, or if it
+//                           shadows a module the function already imports
+// This emulation ships python/ despite "extension" in its name, so the payload
+// is conditional rather than automatic. Check the path before assessing impact.
+//
+// sys.path order: /var/task (function code) -> /opt/python/site-packages ->
+// /opt/python -> runtime. A layer beats the runtime's own libraries but never
+// the function's own modules.
+//
+// LAYER CONTENT IS NOT IN CLOUDTRAIL. Download and scan it:
+//   aws lambda get-layer-version-by-arn --arn <LayerArn>
+// and fetch the presigned Content.Location URL.
+//
+// RESPONSE: if the layer's code ran, treat the function's EXECUTION ROLE
+// credentials as compromised. Also delete-layer-version and remove any
+// AddLayerVersionPermission cross-account share.
+//
+// Invoke is DATA-PLANE — see the backdoor-function detection note for the
+// synchronous-invoke null-requestParameters trap when establishing whether the
+// function ran during the exposure window.

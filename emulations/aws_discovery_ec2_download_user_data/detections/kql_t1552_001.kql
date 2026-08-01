@@ -1,7 +1,33 @@
-// Download EC2 Instance User Data (T1552.001) — eventName(s) auto-derived; verify casing.
-// Signal: ec2:DescribeInstanceAttribute with Attribute=userData called on multiple instances in rapid succession from a principal without normal operational need
+// Download EC2 Instance User Data (T1552.001)
+//
+// Two things make this deployable where the original was not:
+//
+//   1. `attribute == "userData"` — DescribeInstanceAttribute is called for many
+//      benign attribute types. Without this filter the query returns routine
+//      administration, not credential harvesting.
+//   2. Counting DISTINCT INSTANCES, not events. The technique is defined by
+//      breadth: one user-data read is administration, fifty is harvesting.
+//
+// DescribeInstances is deliberately absent — it is among the highest-volume
+// calls in AWS (every console load, every inventory tool) and is enumeration
+// context, not a trigger.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 AWSCloudTrail
-| where EventSource in ("ec2.amazonaws.com")
-| where EventName in ("DescribeInstances", "DescribeInstanceAttribute")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
-| order by TimeGenerated desc
+| where TimeGenerated > ago(24h)
+| where EventSource == "ec2.amazonaws.com"
+| where EventName == "DescribeInstanceAttribute"
+| extend Req = parse_json(RequestParameters)
+| where tostring(Req.attribute) == "userData"
+| where isempty(ErrorCode)
+| extend InstanceId = tostring(Req.instanceId)
+| summarize
+    InstancesRead = dcount(InstanceId),
+    Calls         = count(),
+    SourceIPs     = make_set(SourceIpAddress, 10),
+    FirstSeen     = min(TimeGenerated),
+    LastSeen      = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 10m)
+| where InstancesRead > 5
+| extend Verdict = "EC2 USER-DATA HARVESTING — P0"
+| order by InstancesRead desc

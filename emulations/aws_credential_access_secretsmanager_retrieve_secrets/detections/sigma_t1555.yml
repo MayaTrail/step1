@@ -1,8 +1,21 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Retrieve a High Number of Secrets Manager Secrets (T1555)
+# Retrieve a High Number of Secrets Manager Secrets (T1555)
+#
+# The original rule matched `eventName IN (ListSecrets, GetSecretValue)` with a
+# bare `condition: selection`. That is undeployable: GetSecretValue is among
+# the most frequent calls in any account using Secrets Manager — every app
+# fetches its config secret on startup and on cache expiry. A 1:1 rule fires
+# constantly and is muted within days.
+#
+# The technique is defined by VOLUME OF DISTINCT SECRETS from one principal, so
+# the detection is the correlation below, not a single-event match. ListSecrets
+# is enumeration context and is never a standalone trigger.
+title: Secrets Manager GetSecretValue (successful)
 id: 7c91b6ef-a04a-5e70-8022-c38561d369f6
+name: secretsmanager_getsecretvalue_base
 status: experimental
-description: High volume of secretsmanager:GetSecretValue from single principal in short window
+description: >-
+  Base rule. Fires on every successful secret read by design — NOT for direct
+  alerting. Exists to be referenced by the correlation below.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.secretsmanager-retrieve-secrets/
 tags:
@@ -14,6 +27,46 @@ logsource:
 detection:
   selection:
     eventSource: 'secretsmanager.amazonaws.com'
-    eventName: ['ListSecrets', 'GetSecretValue']
-  condition: selection
-level: medium
+    eventName: 'GetSecretValue'
+  # A disclosed secret has no errorCode (in Sigma, `errorCode: null` matches
+  # when the field is absent). Keeping only successful reads aligns the
+  # correlation's distinct-secret count with the eradication work-list —
+  # otherwise a principal hitting AccessDenied on 15 secrets fires the same P0
+  # as a real exfiltration.
+  success:
+    errorCode: null
+  condition: selection and success
+falsepositives:
+  - Normal application secret fetches — expected, which is why this is `low`
+level: low
+---
+# THE deployable detection.
+#
+# value_count over requestParameters.secretId counts DISTINCT SECRETS, which is
+# the correct measure of this technique's severity. It also naturally absorbs
+# the batch-API variant: BatchGetSecretValue emits a per-secret GetSecretValue
+# entry, so those land in the same base rule and are counted once each.
+title: Mass Secrets Manager retrieval by a single principal
+id: 2a6d84f0-b371-4c98-85e2-7f1904cb3d6a
+status: experimental
+description: >-
+  One principal read 15 or more distinct secrets within 10 minutes — vault
+  sweeping rather than an application fetching its own configuration.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.secretsmanager-retrieve-secrets/
+tags:
+  - attack.credential_access
+  - attack.t1555
+correlation:
+  type: value_count
+  rules:
+    - secretsmanager_getsecretvalue_base
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gte: 15
+    field: requestParameters.secretId     # count DISTINCT secrets, not events
+falsepositives:
+  - Secret-rotation jobs and vault-migration tooling — allowlist by principal
+level: high

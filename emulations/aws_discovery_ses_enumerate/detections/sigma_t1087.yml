@@ -1,8 +1,91 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Enumerate SES for Phishing Capability (T1087)
+# Enumerate SES for Phishing Capability (T1087)
+#
+# Two defects in the original rule:
+#
+#   1. It matched any ONE of four SES reads with a bare `condition: selection`.
+#      GetSendQuota and GetAccountSendingEnabled are read by dashboards and
+#      health checks, so it fired on benign monitoring — and matching a single
+#      call cannot express the recon FINGERPRINT, which is the whole set of
+#      reads appearing together.
+#   2. v1 event names only. An attacker using the SESv2 SDK produces
+#      `GetAccount` and `ListEmailIdentities`, which the rule never matched —
+#      trivially evadable. Both are included below.
+#
+# NOTE: SES v1 and SESv2 both log under `ses.amazonaws.com`. There is no
+# separate `email.amazonaws.com` event source.
+title: SES read API call
 id: 4bf4dd44-67a3-5810-8022-f448c9ed8657
+name: ses_read_base
 status: experimental
-description: Multiple SES read APIs (ses:GetAccountSendingEnabled, ses:GetSendQuota, ses:ListIdentities, ses:GetIdentityVerificationAttributes) called in rapid succession from unexpected principals
+description: >-
+  Any SES capability-read API, v1 or v2. Base rule for the fingerprint
+  correlation — individually these are routine monitoring calls, so this is not
+  for direct alerting.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.discovery.ses-enumerate/
+tags:
+  - attack.discovery
+  - attack.t1087
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ses.amazonaws.com'   # SES v1 AND SESv2 both log under this source
+    eventName:
+      - 'GetAccountSendingEnabled'
+      - 'GetSendQuota'
+      - 'ListIdentities'
+      - 'GetIdentityVerificationAttributes'
+      - 'GetAccount'                   # SESv2 (sending-enabled + quota in one call)
+      - 'ListEmailIdentities'          # SESv2
+  condition: selection
+falsepositives:
+  - Dashboards and health checks reading send quota
+level: low
+---
+# THE deployable detection. The fingerprint is BREADTH of distinct SES read
+# APIs from one principal — an actor establishing whether the account can send
+# phishing mail, and from which verified identities.
+title: SES phishing-capability reconnaissance fingerprint
+id: 6e0a92b4-8d17-4c53-b9f6-215e7c48a0d3
+status: experimental
+description: >-
+  A single principal exercised three or more distinct SES capability-read APIs
+  within ten minutes — the reconnaissance pattern that precedes send abuse.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.discovery.ses-enumerate/
+tags:
+  - attack.discovery
+  - attack.t1087
+correlation:
+  type: value_count
+  rules:
+    - ses_read_base
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gte: 3
+    field: eventName                   # count DISTINCT SES read APIs
+falsepositives:
+  - SES operations tooling that polls several APIs together — allowlist by
+    principal
+level: high
+---
+# Follow-on abuse. The recon above is the precursor; THIS is the damage, and
+# the original rule set had nothing covering it.
+#
+# IMPORTANT: ses:SendEmail / SendRawEmail are DATA-plane events. They are NOT
+# in CloudTrail management events and cannot be detected here — monitor the
+# CloudWatch AWS/SES `Send` metric or SES event publishing for send spikes.
+# What IS visible in CloudTrail is the account being prepared for sending.
+title: SES account prepared for bulk sending
+id: b3f71ce8-249d-4a06-8e5c-71c0d6934f2b
+status: experimental
+description: >-
+  Sandbox exit requested, a new sending identity created, or sending re-enabled.
+  Following capability reconnaissance, this indicates progression to abuse.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.discovery.ses-enumerate/
 tags:
@@ -14,6 +97,14 @@ logsource:
 detection:
   selection:
     eventSource: 'ses.amazonaws.com'
-    eventName: ['ListIdentities', 'GetAccountSendingEnabled', 'GetSendQuota', 'GetIdentityVerificationAttributes']
+    eventName:
+      - 'UpdateAccountSendingEnabled'
+      - 'PutAccountSendingAttributes'
+      - 'VerifyEmailIdentity'
+      - 'VerifyDomainIdentity'
+      - 'CreateEmailIdentity'
   condition: selection
-level: medium
+falsepositives:
+  - Legitimate onboarding of new sending domains — correlate with change
+    management
+level: high

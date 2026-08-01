@@ -1,7 +1,64 @@
-// Backdoor IAM User with Federated Token (T1550.001) — eventName(s) auto-derived; verify casing.
-// Signal: sts:GetFederationToken called with a permissive inline policy or from an unexpected principal; federated sessions appear in CloudTrail with token source info
+// Backdoor IAM User with Federated Token (T1550.001)
+//
+// GetCallerIdentity is deliberately ABSENT. It is among the highest-volume calls
+// in AWS and bundling it — as the original query did — buries the rare
+// GetFederationToken signal entirely.
+//
+// Scored on the two things that determine how bad a minted token is: how BROAD
+// the requested policy was, and how LONG it lasts (up to 36h / 129600s).
+//
+// requestParameters.policy IS LOGGED UNREDACTED — the attacker's requested
+// policy document is available for forensics, which is unusually generous.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 AWSCloudTrail
-| where EventSource in ("sts.amazonaws.com")
-| where EventName in ("GetFederationToken", "GetCallerIdentity")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| where TimeGenerated > ago(7d)
+| where EventSource == "sts.amazonaws.com"
+| where EventName == "GetFederationToken"
+| extend Req  = parse_json(RequestParameters)
+| extend Resp = parse_json(ResponseElements)
+| extend SessionName  = tostring(Req.name)
+| extend DurationSec  = toint(Req.durationSeconds)
+| extend RequestedPolicy = tostring(Req.policy)
+| extend FederatedArn = tostring(Resp.federatedUser.arn)
+| extend MintedKey    = tostring(Resp.credentials.accessKeyId)
+| extend BroadPolicy  = RequestedPolicy contains "\"Action\":\"*\""
+                     or RequestedPolicy contains "\"Action\": \"*\""
+| project TimeGenerated, UserIdentityArn, SessionName, DurationSec, BroadPolicy,
+          FederatedArn, MintedKey, SourceIpAddress, ErrorCode
+| extend Verdict = case(
+    isnotempty(ErrorCode),                  "GETFEDERATIONTOKEN DENIED — probing",
+    BroadPolicy and DurationSec >= 43200,   "BROAD LONG-LIVED FEDERATION TOKEN — P0",
+    BroadPolicy,                            "BROAD FEDERATION TOKEN — P0",
+    "FEDERATION TOKEN MINTED — verify against approved federation use")
 | order by TimeGenerated desc
+//
+// ============================================================================
+// IMPORTANT — what Action:"*" actually means here
+// ============================================================================
+// The token's permissions are the INTERSECTION of the source user's permissions
+// AND the inline policy. So Action:"*" is a CEILING, not a grant — it is NOT
+// privilege escalation. The blast radius is exactly the source user's own
+// privilege. Triage accordingly: a broad policy on a low-privilege user is far
+// less serious than a narrow one on an admin.
+//
+// ============================================================================
+// REVOCATION — the part that catches responders out
+// ============================================================================
+// There is NO API to revoke a federation token. Rotating or deleting the source
+// user's ACCESS KEYS DOES NOT STOP IT — the token was already minted.
+//
+// The only reliable path is to attach an explicit DENY to the SOURCE IAM USER.
+// Permissions are evaluated per-request against the user's live policies, so
+// the deny cascades to the derived federated session near-immediately (IAM is
+// eventually consistent; allow a few seconds for propagation).
+// Deleting the user also ends its federated sessions.
+//
+// HUNT what the token did — pivot on the minted key (starts with ASIA):
+//
+//   AWSCloudTrail
+//   | where TimeGenerated > ago(7d)
+//   | where UserIdentityAccessKeyId == "<MintedKey>"
+//        or (UserIdentityType == "FederatedUser" and UserIdentityArn has "federated-user/<SessionName>")
+//   | summarize Calls = count(), Actions = make_set(EventName, 30),
+//               IPs = make_set(SourceIpAddress, 10)

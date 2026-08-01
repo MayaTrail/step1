@@ -1,8 +1,20 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Backdoor IAM User with Additional Access Key (T1098.001)
+# Backdoor IAM User with Additional Access Key (T1098.001)
+#
+# The original rule's DESCRIPTION was correct — "where the requesting principal
+# is NOT the user themselves" — but the rule never implemented it. It matched
+# CreateAccessKey + DeleteAccessKey with a bare `condition: selection`, so it
+# fired on every routine self-service key creation and on the benign revert.
+# DeleteAccessKey is dropped as a trigger.
+#
+# The discriminator is CALLER != TARGET. A key minted for someone else is
+# persistence: it survives the attacker's own credentials being revoked.
+title: IAM access key created for another user by a non-provisioning principal
 id: d0c9c024-a07e-51cf-9a04-9a3196cfc77c
 status: experimental
-description: iam:CreateAccessKey on an existing user where the requesting principal is NOT the user themselves — indicates an external actor creating credentials
+description: >-
+  An access key was minted for a named user by a principal outside the
+  provisioning allowlist. The resulting credential belongs to the victim, so it
+  survives rotation of the attacker's own access.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-backdoor-user/
 tags:
@@ -14,6 +26,25 @@ logsource:
 detection:
   selection:
     eventSource: 'iam.amazonaws.com'
-    eventName: ['CreateAccessKey', 'DeleteAccessKey']
-  condition: selection
-level: medium
+    eventName: 'CreateAccessKey'
+    # Self-service key creation OMITS userName (the key is minted for the
+    # caller), so requiring it here already excludes most benign activity.
+    # Verify your backend supports the `exists` modifier.
+    requestParameters.userName|exists: true
+  provisioning:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'
+      - ':role/identity-admin'
+      - ':role/BreakGlassAdmin'
+  # RESIDUAL FALSE POSITIVE: a user passing their OWN name. Removing it needs a
+  # field-to-field comparison (requestParameters.userName ==
+  # userIdentity.userName) that Sigma cannot express portably — `kql_t1098_001.kql`
+  # does it explicitly.
+  #
+  # Note also that for ROLE callers there is no userIdentity.userName to compare
+  # against, so "for another user" is a coarse flag in that case, not a proof.
+  condition: selection and not provisioning
+falsepositives:
+  - A user creating their own key while explicitly passing their own name
+  - Provisioning principals not yet in the allowlist
+level: high

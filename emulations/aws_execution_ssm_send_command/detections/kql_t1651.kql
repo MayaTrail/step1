@@ -1,7 +1,38 @@
-// Execute Commands on EC2 Instances via SSM (T1651) — eventName(s) auto-derived; verify casing.
-// Signal: ssm:SendCommand in CloudTrail, especially with AWS-RunShellScript document targeting multiple instances
+// Execute Commands on EC2 Instances via SSM (T1651)
+//
+// Discriminators: shell DOCUMENT, non-automation PRINCIPAL, and FAN-OUT across
+// target instances. The original query matched three SSM event names with no
+// qualifier at all, which is unusable — SendCommand and GetCommandInvocation
+// are routine patching.
+//
+// Targeting has two shapes and both matter:
+//   Req.instanceIds - explicit list; count it.
+//   Req.targets     - tag-based selector. A broad tag target is fleet-wide
+//                     regardless of how many explicit instances are named, so
+//                     its mere presence is treated as fan-out.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 AWSCloudTrail
-| where EventSource in ("ssm.amazonaws.com")
-| where EventName in ("DescribeInstanceInformation", "SendCommand", "GetCommandInvocation")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
-| order by TimeGenerated desc
+| where TimeGenerated > ago(24h)
+| where EventSource == "ssm.amazonaws.com"
+| where EventName == "SendCommand"
+| extend Req = parse_json(RequestParameters)
+| extend Doc = tostring(Req.documentName)
+| where Doc in ("AWS-RunShellScript", "AWS-RunPowerShellScript")
+| extend TargetCount = array_length(Req.instanceIds)
+| extend HasTagTargets = isnotempty(Req.targets)
+| where UserIdentityArn !has "role/patch-automation"      // tune to your allowlist
+      and UserIdentityArn !has "role/ssm-runner"
+| project TimeGenerated, UserIdentityArn, Doc, TargetCount, HasTagTargets,
+          SourceIpAddress, CommandId = tostring(parse_json(ResponseElements).command.commandId)
+// Threshold is >= 3 (tune to your real maintenance-window batch sizes). A broad
+// tag Targets is fleet-wide regardless of the explicit-instance count.
+| extend Verdict = case(
+    TargetCount >= 3 or HasTagTargets, "FLEET-WIDE SHELL EXECUTION — P0",
+    "SHELL EXECUTION BY NON-AUTOMATION PRINCIPAL — review")
+| order by TargetCount desc
+//
+// CommandId is the pivot into what actually ran: feed it to
+// `aws ssm list-command-invocations --command-id <id> --details`, or query the
+// SSM output logs. CloudTrail frequently omits the command body, so do not
+// conclude the commands were benign from its absence.

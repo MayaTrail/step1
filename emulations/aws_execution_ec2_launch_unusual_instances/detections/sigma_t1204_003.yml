@@ -1,8 +1,84 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Launch Unusual EC2 Instance Types for Cryptomining (T1204.003)
+# Launch Unusual EC2 Instance Types for Cryptomining (T1204.003)
+#
+# The original rule matched `eventName IN (DescribeImages, RunInstances,
+# TerminateInstances)` with a bare `condition: selection`. That is
+# catastrophically noisy: RunInstances fires on every autoscale event, every CI
+# job, every deploy, and DescribeImages/TerminateInstances add nothing but
+# volume. Both have been dropped as triggers.
+#
+# The discriminator is INSTANCE TYPE. Mining needs GPU/accelerated hardware,
+# which is exactly what an event-name match ignores.
+title: EC2 RunInstances with GPU/accelerated instance type
 id: 515804bd-cb0b-50a6-ae23-04c8bda79eda
 status: experimental
-description: ec2:RunInstances with unusual instance types (GPU, high-compute) not in baseline; GuardDuty CryptoCurrency:EC2/BitcoinTool.B if mining traffic detected
+description: >-
+  A GPU or accelerated-compute instance launched by a principal outside the
+  ML/CI allowlist. These families are expensive and rarely launched ad hoc,
+  which makes the type itself high-signal.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ec2-launch-unusual-instances/
+tags:
+  - attack.execution
+  - attack.t1204.003
+  - attack.t1496
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'RunInstances'
+  # TUNE TO YOUR BASELINE. Anchored at the start so `p3`/`g5` match but
+  # `m5.large` does not.
+  #
+  # NOTE: inf/trn/dl are ML ACCELERATORS and are not mining-capable — they are
+  # included as a cost-abuse signal, not a mining signal. f1/f2 are FPGA.
+  unusual_type:
+    requestParameters.instanceType|re: '^(p[0-9]|g[0-9]|f[0-9]|inf[0-9]|trn[0-9]|dl[0-9])'
+  allowlisted:
+    userIdentity.arn|contains:
+      - ':role/ml-training'
+      - ':role/ci-'
+  condition: selection and unusual_type and not allowlisted
+falsepositives:
+  - Genuine ML/rendering workloads launched by principals not yet allowlisted
+level: high
+---
+# The runtime confirmation. Everything above is inference from the control
+# plane; THIS is evidence that mining is actually happening.
+title: GuardDuty EC2 cryptomining finding
+id: e2749b05-3fd1-4c68-95a7-8b0e6c31da47
+status: stable
+description: >-
+  GuardDuty observed cryptocurrency-mining network activity from an EC2
+  instance. Confirms resource hijacking rather than merely suspicious capacity.
+references:
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-ec2.html
+tags:
+  - attack.execution
+  - attack.t1496
+logsource:
+  product: aws
+  service: guardduty
+detection:
+  selection:
+    type|startswith: 'CryptoCurrency:EC2/'
+  condition: selection
+level: critical
+---
+# Capability probing. An actor discovering which instance types they are
+# permitted to launch produces a burst of failures — a strong early signal that
+# the successful-launch rule above cannot see.
+#
+# The full failure set matters: a `LimitExceeded`-only substring match misses
+# the capacity/unsupported/invalid-parameter failures, which are equally strong
+# "probing what I can launch" signals.
+title: EC2 instance-launch capability probing
+id: 4b8c2071-6ae9-45d3-b8f2-903e17c5d64a
+status: experimental
+description: >-
+  Repeated failed RunInstances calls for accelerated instance types — the actor
+  is mapping which families and sizes the credential can launch.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ec2-launch-unusual-instances/
 tags:
@@ -14,6 +90,19 @@ logsource:
 detection:
   selection:
     eventSource: 'ec2.amazonaws.com'
-    eventName: ['DescribeImages', 'RunInstances', 'TerminateInstances']
-  condition: selection
+    eventName: 'RunInstances'
+    requestParameters.instanceType|re: '^(p[0-9]|g[0-9]|f[0-9]|inf[0-9]|trn[0-9]|dl[0-9])'
+  # EC2 prefixes CloudTrail error codes with `Client.` —
+  # `Client.VcpuLimitExceeded`, not `VcpuLimitExceeded`. `|contains` tolerates
+  # both; confirm the exact strings against a sample event.
+  failure:
+    errorCode|contains:
+      - 'VcpuLimitExceeded'
+      - 'InstanceLimitExceeded'
+      - 'InsufficientInstanceCapacity'
+      - 'Unsupported'
+      - 'InvalidParameterValue'
+  condition: selection and failure
+falsepositives:
+  - Capacity exhaustion during legitimate scaling in a constrained region
 level: medium

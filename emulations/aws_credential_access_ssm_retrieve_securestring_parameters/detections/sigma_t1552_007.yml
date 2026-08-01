@@ -1,8 +1,30 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Retrieve SSM Parameters from the Parameter Store (T1552.007)
+# Retrieve SSM Parameters from the Parameter Store (T1552.007)
+#
+# The original rule matched `eventName IN (DescribeParameters, GetParameters)`
+# with a bare `condition: selection`. Two problems:
+#
+#   1. GetParameters is extremely high-volume — every application reads its
+#      config constantly, mostly SecureStrings WITH decryption, legitimately.
+#   2. It ignored `withDecryption`, which is THE discriminator. Without it the
+#      rule cannot separate a metadata read from credential theft.
+#
+# DescribeParameters is enumeration context and is never a standalone trigger.
+# GetParameter (singular) is included below because an attacker looping the
+# singular call evades any GetParameters-only rule.
+#
+# NOTE ON COUNTING: `GetParameters` is a batch — one event decrypts up to 10
+# parameters. Counting the size of `requestParameters.names` inside a single
+# event is NOT expressible in Sigma; there is no `count` value-modifier in the
+# specification (`|count|gte` does not exist and fails conversion in pySigma
+# for every backend). The rule below is the coarse "a decrypting read happened"
+# signal; the real volume detection is `kql_t1552_007.kql`.
+title: SSM SecureString decryption
 id: b2293d06-1c00-52f0-b25a-0afabc786283
+name: ssm_getparameters_decrypt_base
 status: experimental
-description: ssm:GetParameters with withDecryption=true for large number of parameters from single principal
+description: >-
+  A Parameter Store read that decrypted SecureString values. Base rule for the
+  volume correlation and a coarse standalone signal.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.ssm-retrieve-securestring-parameters/
 tags:
@@ -14,6 +36,73 @@ logsource:
 detection:
   selection:
     eventSource: 'ssm.amazonaws.com'
-    eventName: ['DescribeParameters', 'GetParameters']
+    eventName:
+      - 'GetParameters'
+      - 'GetParameter'
+    requestParameters.withDecryption: true
+  success:
+    errorCode: null
+  condition: selection and success
+falsepositives:
+  - Applications reading their own SecureString configuration — the common case,
+    which is why this is `low` on its own and thresholded below
+level: low
+---
+# THE deployable detection where the backend supports correlations. Counts
+# distinct parameter NAMES, which is the measure of how much was exposed.
+#
+# Caveat: this counts distinct values of `requestParameters.names`, which for
+# batch calls is an array. Backends differ in whether they expand it. Where the
+# expansion is not reliable, use `kql_t1552_007.kql`, which does it explicitly.
+title: Mass SSM SecureString decryption by a single principal
+id: 5c8e1f47-3a29-4b60-9d18-2e7fa04c9b53
+status: experimental
+description: >-
+  One principal decrypted a large number of distinct SecureString parameters in
+  a short window — vault sweeping rather than an application reading its own
+  configuration.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.ssm-retrieve-securestring-parameters/
+tags:
+  - attack.credential_access
+  - attack.t1552.007
+correlation:
+  type: value_count
+  rules:
+    - ssm_getparameters_decrypt_base
+  group-by:
+    - userIdentity.arn
+  timespan: 5m
+  condition:
+    gt: 10
+    field: requestParameters.names
+level: high
+---
+# Corroborating signal. Every SecureString decryption drives a kms:Decrypt
+# against the key backing Parameter Store, so a decryption burst shows up
+# independently in KMS — useful when SSM events are unavailable or an attacker
+# is throttling to stay under the SSM threshold.
+#
+# SET THE KEY ARN. As written this fires on all KMS decrypts.
+title: High-volume KMS decrypt against the Parameter Store key
+id: a91b7d3e-64c5-4802-b7f9-1d0e58c3a726
+status: experimental
+description: >-
+  Corroborates mass SecureString decryption from the KMS side. Scope
+  `resources.ARN` to the key backing Parameter Store before deploying.
+tags:
+  - attack.credential_access
+  - attack.t1552.007
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'kms.amazonaws.com'
+    eventName: 'Decrypt'
+    requestParameters.encryptionContext.PARAMETER_ARN|contains: ':parameter/'
   condition: selection
-level: medium
+falsepositives:
+  - Normal application configuration reads — correlate with the SSM rules above
+    rather than alerting on this alone
+level: low

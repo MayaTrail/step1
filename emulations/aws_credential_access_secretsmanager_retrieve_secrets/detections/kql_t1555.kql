@@ -1,7 +1,27 @@
-// Retrieve a High Number of Secrets Manager Secrets (T1555) — eventName(s) auto-derived; verify casing.
-// Signal: High volume of secretsmanager:GetSecretValue from single principal in short window
+// Retrieve a High Number of Secrets Manager Secrets (T1555)
+//
+// Thresholds on DISTINCT SECRETS per principal per window. GetSecretValue is
+// far too frequent to alert on per-event — every application fetches its
+// config secret on startup and cache expiry.
+//
+// dcount(SecretId) also absorbs the batch-API variant: BatchGetSecretValue
+// emits one per-secret GetSecretValue event, so those are counted here once
+// each with no double-counting.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 AWSCloudTrail
-| where EventSource in ("secretsmanager.amazonaws.com")
-| where EventName in ("ListSecrets", "GetSecretValue")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
-| order by TimeGenerated desc
+| where TimeGenerated > ago(24h)
+| where EventSource == "secretsmanager.amazonaws.com"
+| where EventName == "GetSecretValue"
+| where isempty(ErrorCode)                          // disclosed, not denied
+| extend SecretId = tostring(parse_json(RequestParameters).secretId)
+| summarize
+    SecretsRetrieved = dcount(SecretId),            // DISTINCT secrets
+    Calls            = count(),
+    SourceIPs        = make_set(SourceIpAddress, 10),
+    FirstSeen        = min(TimeGenerated),
+    LastSeen         = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 10m)
+| where SecretsRetrieved > 15
+| extend Verdict = "MASS SECRET RETRIEVAL — P0"
+| order by SecretsRetrieved desc

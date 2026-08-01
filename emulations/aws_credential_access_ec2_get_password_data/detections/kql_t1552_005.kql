@@ -1,7 +1,37 @@
-// Retrieve EC2 Windows Password Data (T1552.005) — eventName(s) auto-derived; verify casing.
-// Signal: ec2:GetPasswordData called in rapid succession, especially with nonexistent or unexpected instance IDs
+// Retrieve EC2 Windows Password Data (T1552.005)
+//
+// Signal: ec2:GetPasswordData at RATE from one principal. A 1:1 rule on this
+// event fires on every legitimate Windows provisioning run, so the threshold
+// and the errorCode split below are what make this deployable.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT runnable in CloudWatch Logs
+// Insights — `summarize`, `make_set`, `case()`, `bin()` and the AWSCloudTrail
+// table do not exist there.
 AWSCloudTrail
-| where EventSource in ("ec2.amazonaws.com")
-| where EventName in ("GetPasswordData")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
-| order by TimeGenerated desc
+| where TimeGenerated > ago(24h)
+| where EventSource == "ec2.amazonaws.com"
+| where EventName == "GetPasswordData"
+| extend ProbedInstance = tostring(parse_json(column_ifexists("RequestParameters", "{}")).instanceId)
+| summarize
+    Calls          = count(),
+    NotFound       = countif(ErrorCode == "Client.InvalidInstanceID.NotFound"),
+    Unauthorized   = countif(ErrorCode == "Client.UnauthorizedOperation"),
+    Succeeded      = countif(isempty(ErrorCode)),
+    UniqueTargets  = dcount(ProbedInstance),
+    SourceIPs      = make_set(SourceIpAddress, 10),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 10m)
+| extend NotFoundRatio = round(todouble(NotFound) / todouble(Calls), 2)
+| where Calls > 3
+// Succeeded > 0 must be the SOLE first predicate. An actor who enumerates 40
+// IDs and lands on 3 real Windows hosts has Succeeded=3 AND NotFoundRatio=0.92;
+// any conjunction here misfiles a real disclosure as enumeration.
+| extend Verdict = case(
+    Succeeded > 0,                         "POSSIBLE RETRIEVAL — confirm the instance existed, then escalate",
+    NotFoundRatio >= 0.8 and Calls >= 10,  "ENUMERATION — P0",
+    Unauthorized > 0,                      "PERMISSION PROBING",
+    "REVIEW")
+| project TimeGenerated, UserIdentityArn, Calls, Succeeded, NotFound,
+          NotFoundRatio, UniqueTargets, SourceIPs, Verdict
+| order by Calls desc

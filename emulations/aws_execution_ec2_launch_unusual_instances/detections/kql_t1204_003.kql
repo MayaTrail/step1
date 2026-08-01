@@ -1,7 +1,52 @@
-// Launch Unusual EC2 Instance Types for Cryptomining (T1204.003) — eventName(s) auto-derived; verify casing.
-// Signal: ec2:RunInstances with unusual instance types (GPU, high-compute) not in baseline; GuardDuty CryptoCurrency:EC2/BitcoinTool.B if mining traffic detected
+// Launch Unusual EC2 Instance Types for Cryptomining (T1204.003)
+//
+// The discriminator is INSTANCE TYPE, not event name. RunInstances fires on
+// every autoscale event, CI job and deploy; DescribeImages and
+// TerminateInstances add nothing but volume and are excluded entirely.
+//
+// Family notes:
+//   p/g   - GPU, mining-capable. The real signal.
+//   f     - FPGA.
+//   inf/trn/dl - ML accelerators. NOT mining-capable; included as a
+//           cost-abuse signal only, and separated in the verdict below.
+//
+// EC2 prefixes CloudTrail error codes with `Client.`, so failures are matched
+// with `has`/`contains` rather than equality.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let AcceleratedFamily = @'^(p[0-9]|g[0-9]|f[0-9]|inf[0-9]|trn[0-9]|dl[0-9])';
+let MiningCapable     = @'^(p[0-9]|g[0-9])';
 AWSCloudTrail
-| where EventSource in ("ec2.amazonaws.com")
-| where EventName in ("DescribeImages", "RunInstances", "TerminateInstances")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
-| order by TimeGenerated desc
+| where TimeGenerated > ago(24h)
+| where EventSource == "ec2.amazonaws.com"
+| where EventName == "RunInstances"
+| extend Req = parse_json(RequestParameters)
+| extend InstanceType = tostring(Req.instanceType)
+| where InstanceType matches regex AcceleratedFamily
+// Allowlist legitimate ML/CI launchers — TUNE THIS.
+| where UserIdentityArn !contains ":role/ml-training"
+    and UserIdentityArn !contains ":role/ci-"
+| extend Failed = isnotempty(ErrorCode)
+| summarize
+    Launches      = countif(not(Failed)),
+    FailedProbes  = countif(Failed),
+    Types         = make_set(InstanceType, 20),
+    ErrorCodes    = make_set(ErrorCode, 10),
+    Regions       = make_set(AWSRegion, 10),
+    SourceIPs     = make_set(SourceIpAddress, 10),
+    MiningCapableLaunches = countif(not(Failed) and InstanceType matches regex MiningCapable),
+    FirstSeen     = min(TimeGenerated),
+    LastSeen      = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 30m)
+| extend Verdict = case(
+    MiningCapableLaunches > 0, "GPU INSTANCE LAUNCHED — probable resource hijacking, P0",
+    Launches > 0,              "ACCELERATED INSTANCE LAUNCHED — cost abuse, investigate",
+    FailedProbes >= 3,         "LAUNCH CAPABILITY PROBING — actor mapping permitted types",
+    "REVIEW")
+| project TimeGenerated, UserIdentityArn, Launches, MiningCapableLaunches, FailedProbes,
+          Types, ErrorCodes, Regions, SourceIPs, Verdict
+| order by MiningCapableLaunches desc, Launches desc
+//
+// CONFIRMATION, not inference: GuardDuty CryptoCurrency:EC2/* findings prove
+// mining traffic. Correlate any hit above against the GuardDuty findings table
+// for the launched instance ids, and against Cost Anomaly Detection for spend.

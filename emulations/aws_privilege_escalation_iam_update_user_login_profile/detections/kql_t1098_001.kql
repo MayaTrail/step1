@@ -1,7 +1,63 @@
-// Backdoor IAM User Console Login via UpdateLoginProfile (T1098.001) — eventName(s) auto-derived; verify casing.
-// Signal: iam:UpdateLoginProfile in CloudTrail where the caller is not an expected administrator or password-reset automation
-AWSCloudTrail
-| where EventSource in ("iam.amazonaws.com")
-| where EventName in ("GetLoginProfile", "UpdateLoginProfile")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
-| order by TimeGenerated desc
+// Backdoor IAM User Console Login via UpdateLoginProfile (T1098.001)
+//
+// GetLoginProfile is excluded — a read is not the attack, and it is routine.
+//
+// The reset alone is the alert; the CONSOLE LOGIN that follows is the
+// confirmation of takeover. Both are joined here.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let Resets =
+    AWSCloudTrail
+    | where TimeGenerated > ago(7d)
+    | where EventSource == "iam.amazonaws.com"
+    | where EventName == "UpdateLoginProfile"
+    | where isempty(ErrorCode)
+    | extend Req = parse_json(RequestParameters)
+    | extend TargetUser  = tostring(Req.userName)
+    | extend NoResetFlag = tostring(Req.passwordResetRequired) == "false"
+    | where UserIdentityArn !contains ":role/helpdesk-password-reset"
+        and UserIdentityArn !contains ":role/identity-admin"
+        and UserIdentityArn !contains ":role/BreakGlassAdmin"
+    | project ResetTime = TimeGenerated, Caller = UserIdentityArn, TargetUser,
+              NoResetFlag, ResetSourceIp = SourceIpAddress;
+let Logins =
+    AWSCloudTrail
+    | where TimeGenerated > ago(7d)
+    // Console sign-in is GLOBAL and lands in us-east-1 — a region-filtered
+    // workspace returns nothing here.
+    | where EventSource == "signin.amazonaws.com" and EventName == "ConsoleLogin"
+    | extend Result = tostring(parse_json(ResponseElements).ConsoleLogin)
+    | extend MFAUsed = tostring(parse_json(AdditionalEventData).MFAUsed)
+    | where Result == "Success"
+    | project LoginTime = TimeGenerated, TargetUser = UserIdentityUserName,
+              MFAUsed, LoginSourceIp = SourceIpAddress;
+Resets
+| join kind=leftouter Logins on TargetUser
+| extend UsedWithinHour = LoginTime between (ResetTime .. (ResetTime + 1h))
+| extend SelfTargeted = Caller has TargetUser
+| project ResetTime, Caller, TargetUser, SelfTargeted, NoResetFlag,
+          ResetSourceIp, LoginTime, MFAUsed, LoginSourceIp, UsedWithinHour
+| extend Verdict = case(
+    UsedWithinHour and MFAUsed == "No",
+        "PASSWORD RESET THEN LOGIN WITHOUT MFA — account takeover confirmed, P0",
+    UsedWithinHour,
+        "PASSWORD RESET THEN LOGIN — takeover (MFA satisfied; verify the device)",
+    SelfTargeted,
+        "SELF-TARGETED PASSWORD RESET — implies an over-broad grant, review",
+    "PASSWORD RESET BY NON-HELPDESK PRINCIPAL — contain before it is used")
+| order by ResetTime desc
+//
+// ============================================================================
+// MFA IS THE DECIDING MITIGANT
+// ============================================================================
+// A password reset does NOT touch the victim's MFA device. An MFA-enrolled
+// victim cannot be signed in with the new password alone, so the incident is
+// contained by a control that is already in place.
+//
+// The highest-risk combination is therefore: PRIVILEGED target + NO MFA.
+// Enrich this query against `iam list-mfa-devices` output (or a privileged-user
+// watchlist) and escalate that intersection first.
+//
+// CONTAINMENT: an explicit Deny on the victim kills an ACTIVE console session —
+// permissions are evaluated per request, not cached for the session's lifetime.
+// Then reset the password again and enrol MFA. Contain the caller separately.

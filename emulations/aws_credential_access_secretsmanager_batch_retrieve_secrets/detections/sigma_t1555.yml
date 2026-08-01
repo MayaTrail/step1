@@ -1,8 +1,23 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Retrieve a High Number of Secrets Manager Secrets via Batch (T1555)
+# Retrieve a High Number of Secrets Manager Secrets via Batch (T1555)
+#
+# The original rule ORed ListSecrets with BatchGetSecretValue under a bare
+# `condition: selection`. ListSecrets is routine and high-frequency (consoles,
+# IaC, inventory tooling), so the rule floods the queue, and the OR means the
+# alert cannot distinguish ENUMERATION from RETRIEVAL. They are separated here:
+# ListSecrets is correlation context only and never a standalone trigger.
+#
+# COUNTING RULE — this is the part that is easy to get wrong. A
+# BatchGetSecretValue call ALSO emits one per-secret GetSecretValue event. So
+# counting distinct `requestParameters.secretId` on GetSecretValue alone is
+# complete and self-deduplicating. Summing GetSecretValue with an expanded
+# `secretIdList` from the batch event double-counts roughly 2x.
+title: Secrets Manager batch retrieval by non-allowlisted principal
 id: c3bfc5fd-78ed-5ce0-88a7-c387726aeba5
 status: experimental
-description: secretsmanager:BatchGetSecretValue from a single principal — distinct from individual GetSecretValue pattern
+description: >-
+  secretsmanager:BatchGetSecretValue called by a principal outside the
+  allowlist of legitimate batch consumers. The batch API is rare in normal
+  operation, which makes it high-signal on its own.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.secretsmanager-batch-retrieve-secrets/
 tags:
@@ -14,6 +29,70 @@ logsource:
 detection:
   selection:
     eventSource: 'secretsmanager.amazonaws.com'
-    eventName: ['ListSecrets', 'BatchGetSecretValue']
-  condition: selection
-level: medium
+    eventName: 'BatchGetSecretValue'
+  # MAINTAIN THIS LIST — it is what keeps the rule quiet.
+  allowlisted:
+    userIdentity.arn|contains:
+      - ':role/app-secrets-consumer'
+      - ':role/secrets-rotation'
+  condition: selection and not allowlisted
+falsepositives:
+  - New batch-consuming applications not yet added to the allowlist
+level: high
+---
+# Volume detection. Counts DISTINCT secrets disclosed, not calls — severity
+# scales with secrets retrieved, which raw event-matching ignores.
+#
+# GetSecretValue only, by design (see the counting rule above). The
+# `errorCode: null` filter is load-bearing: without it a probe that racks up
+# 20 AccessDenied responses fires the same alert as a successful bulk
+# disclosure.
+#
+# Requires a backend supporting Sigma `value_count` correlations. Where that is
+# unavailable, deploy `kql_t1555.kql` instead — same logic.
+title: Secrets Manager mass secret disclosure
+id: e04a7c93-1b58-4d62-a7f1-3c9e5b840d17
+status: experimental
+description: >-
+  A single principal read more than 15 distinct secrets in 10 minutes. Includes
+  the looped-GetSecretValue variant, which a batch-API-only rule misses
+  entirely.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.secretsmanager-batch-retrieve-secrets/
+tags:
+  - attack.credential_access
+  - attack.t1555
+correlation:
+  type: value_count
+  rules:
+    - secretsmanager_getsecretvalue_success
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gt: 15
+    field: requestParameters.secretId     # count DISTINCT secrets, not events
+level: high
+---
+title: Secrets Manager secret successfully read
+id: 7b2e6f14-9d30-4a85-bc71-e5a0f38c692b
+name: secretsmanager_getsecretvalue_success
+status: experimental
+description: >-
+  Base rule for the volume correlation. Successful reads only. Not for direct
+  alerting.
+tags:
+  - attack.credential_access
+  - attack.t1555
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'secretsmanager.amazonaws.com'
+    eventName: 'GetSecretValue'
+  # Disclosed, not merely attempted.
+  success:
+    errorCode: null
+  condition: selection and success
+level: low

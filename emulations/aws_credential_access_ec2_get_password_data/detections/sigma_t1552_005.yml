@@ -1,8 +1,22 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Retrieve EC2 Windows Password Data (T1552.005)
+# Retrieve EC2 Windows Password Data (T1552.005)
+#
+# The signal for this technique is RATE, not occurrence. Retrieving a Windows
+# administrator password is a normal, documented operation, so a 1:1 rule on
+# GetPasswordData fires on every legitimate provisioning event. The deployable
+# detections are the correlation documents below; the base rules exist only to
+# be referenced by them.
+#
+# Rate logic lives in `correlation:` documents. The legacy Sigma v1 pipe form
+# (`condition: selection | count() by ... > 3` with `timeframe:` inside
+# `detection:`) was removed from the specification — pySigma rejects it and no
+# current backend compiles it.
+title: EC2 GetPasswordData invoked
 id: 62d0ec7a-4fb4-527d-ac80-deeddb5616e9
+name: ec2_getpassworddata_base
 status: experimental
-description: ec2:GetPasswordData called in rapid succession, especially with nonexistent or unexpected instance IDs
+description: >-
+  Base rule. Matches every ec2:GetPasswordData call by design and is NOT
+  intended for direct alerting — deploy the correlations that reference it.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.ec2-get-password-data/
 tags:
@@ -14,6 +28,76 @@ logsource:
 detection:
   selection:
     eventSource: 'ec2.amazonaws.com'
-    eventName: ['GetPasswordData']
+    eventName: 'GetPasswordData'
   condition: selection
-level: medium
+falsepositives:
+  - Routine Windows instance provisioning and administrator password retrieval
+level: low
+---
+title: EC2 GetPasswordData burst from a single principal
+id: 9f3c1a7e-2b64-4d18-9c05-7ae4d3b81f60
+status: experimental
+description: >-
+  A single principal retrieving Windows password data more than three times in
+  ten minutes. Mass retrieval discloses live administrator credentials.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.ec2-get-password-data/
+tags:
+  - attack.credential_access
+  - attack.t1552.005
+correlation:
+  type: event_count
+  rules:
+    - ec2_getpassworddata_base
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gt: 3
+level: high
+---
+# Enumeration variant. EC2 writes CloudTrail errorCode with a `Client.` prefix
+# (`Client.InvalidInstanceID.NotFound`). The unprefixed form is the boto3
+# Error.Code seen in attack.py; a CloudTrail rule keyed on it matches nothing.
+# `|contains` keeps this tolerant of the prefix — confirm the exact string
+# against a sample event in the target account before deploying.
+title: EC2 GetPasswordData against a nonexistent instance
+id: 4c8b62d9-51fa-4e37-bb90-1d6f2c94a3e7
+name: ec2_getpassworddata_notfound_base
+status: experimental
+description: >-
+  Base rule for the enumeration variant — GetPasswordData that failed because
+  the instance ID does not exist.
+tags:
+  - attack.credential_access
+  - attack.t1552.005
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'GetPasswordData'
+    errorCode|contains: 'InvalidInstanceID.NotFound'
+  condition: selection
+level: low
+---
+title: EC2 GetPasswordData instance-ID enumeration
+id: 7e15d048-9c3b-4a26-8f71-b0e5a2c6d914
+status: experimental
+description: >-
+  Repeated GetPasswordData calls against nonexistent instance IDs — the actor
+  is guessing instance IDs rather than working from a known inventory.
+tags:
+  - attack.credential_access
+  - attack.t1552.005
+correlation:
+  type: event_count
+  rules:
+    - ec2_getpassworddata_notfound_base
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gt: 5
+level: high

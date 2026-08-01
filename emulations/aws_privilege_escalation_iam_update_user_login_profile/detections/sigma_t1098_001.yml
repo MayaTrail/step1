@@ -1,12 +1,29 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Backdoor IAM User Console Login via UpdateLoginProfile (T1098.001)
+# Backdoor IAM User Console Login via UpdateLoginProfile (T1098.001)
+#
+# The original rule paired the action with a routine read and inspected neither
+# caller nor target. GetLoginProfile is noise and is dropped from alerting.
+#
+# The rule level was also `medium` while the MANIFEST severity was HIGH — and
+# the manifest was right, which is unusual in this catalogue. Raised to `high`.
+#
+# WHY THE CALLER MATTERS: console self-service password change is
+# iam:ChangePassword. UpdateLoginProfile is by CONVENTION an administrative
+# action — someone resetting another user's password. Note this is a console
+# convention, NOT an AWS-enforced invariant: a principal with broad
+# iam:UpdateLoginProfile CAN target itself, and a self-targeted reset is
+# suspicious in its own right (it implies an over-broad grant).
+title: IAM UpdateLoginProfile by non-password-reset principal
 id: 65378d45-993b-54a4-ad10-1dc7cabca464
+name: iam_updateloginprofile_nonhelpdesk
 status: experimental
-description: iam:UpdateLoginProfile in CloudTrail where the caller is not an expected administrator or password-reset automation
+description: >-
+  An existing user's console password was reset by a principal outside the
+  help-desk / identity-admin allowlist — account takeover rather than support.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.privilege-escalation.iam-update-user-login-profile/
 tags:
   - attack.privilege_escalation
+  - attack.persistence
   - attack.t1098.001
 logsource:
   product: aws
@@ -14,6 +31,56 @@ logsource:
 detection:
   selection:
     eventSource: 'iam.amazonaws.com'
-    eventName: ['GetLoginProfile', 'UpdateLoginProfile']
-  condition: selection
-level: medium
+    eventName: 'UpdateLoginProfile'
+  password_reset_role:
+    userIdentity.arn|contains:
+      - ':role/helpdesk-password-reset'
+      - ':role/identity-admin'
+      - ':role/BreakGlassAdmin'
+  condition: selection and not password_reset_role
+falsepositives:
+  - Password resets performed from roles not yet on the allowlist
+level: high
+---
+# The confirmation. A password reset only becomes a takeover when someone logs
+# in with it — and MFA is what usually prevents that.
+title: Console login shortly after a password reset
+id: 1c6b8f04-3e72-4a95-8d13-6b0e29ca7f45
+status: experimental
+description: >-
+  A successful console sign-in following an UpdateLoginProfile against the same
+  user. Correlate within roughly an hour of the reset.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.privilege-escalation.iam-update-user-login-profile/
+tags:
+  - attack.privilege_escalation
+  - attack.t1098.001
+correlation:
+  type: temporal_ordered
+  rules:
+    - iam_updateloginprofile_nonhelpdesk
+    - aws_console_login_success
+  group-by:
+    - requestParameters.userName      # the TARGET user, not the caller
+  timespan: 60m
+level: critical
+---
+title: AWS console login success
+id: 7d3f1a58-9c04-4b26-a5e7-08b2c96e41d3
+name: aws_console_login_success
+status: experimental
+description: Base rule — correlation component only, not for direct alerting.
+tags:
+  - attack.initial_access
+  - attack.t1078.004
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'signin.amazonaws.com'
+    eventName: 'ConsoleLogin'
+  success:
+    responseElements.ConsoleLogin: 'Success'
+  condition: selection and success
+level: low

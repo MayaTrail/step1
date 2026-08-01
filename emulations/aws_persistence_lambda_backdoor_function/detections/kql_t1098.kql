@@ -1,7 +1,68 @@
-// Backdoor Lambda Function via Resource Policy (T1098) — eventName(s) auto-derived; verify casing.
-// Signal: lambda:AddPermission granting cross-account or wildcard invoke access to a Lambda function
+// Backdoor Lambda Function via Resource Policy (T1098)
+//
+// Detects invoke permission granted to a principal outside the organisation.
+// `principal` is CLEARTEXT here (a request parameter, not a URL-encoded policy
+// document), so account IDs match directly — no decode step needed, unlike the
+// IAM trust-policy techniques.
+//
+// RemovePermission is excluded from the alerting condition: a permission
+// removal is not persistence, and it is the emulation's own cleanup.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let OrgAccounts = dynamic(["111111111111","222222222222"]);   // REPLACE with your org account IDs
 AWSCloudTrail
-| where EventSource in ("lambda.amazonaws.com")
-| where EventName in ("AddPermission", "RemovePermission")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| where TimeGenerated > ago(7d)
+| where EventSource == "lambda.amazonaws.com"
+| where EventName == "AddPermission"
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Principal    = tostring(Req.principal)
+| extend Action       = tostring(Req.action)
+| extend FunctionName = tostring(Req.functionName)
+// AddPermission uses functionUrlAuthType; CreateFunctionUrlConfig uses authType.
+| extend UrlAuthType  = tostring(coalesce(Req.functionUrlAuthType, Req.authType))
+| where Action has "Invoke"
+| extend IsPublic  = (Principal == "*")
+| extend IsService = Principal endswith ".amazonaws.com"
+// Principal may be a bare 12-digit account or an account-root ARN.
+| extend PrincipalAccount = extract(@"(\d{12})", 1, Principal)
+| extend IsExternal = isnotempty(PrincipalAccount) and PrincipalAccount !in (OrgAccounts)
+| where IsPublic or IsExternal or UrlAuthType == "NONE"
+| project TimeGenerated, UserIdentityArn, FunctionName, Principal, PrincipalAccount,
+          Action, UrlAuthType, IsPublic, IsExternal, SourceIpAddress
+| extend Verdict = case(
+    UrlAuthType == "NONE", "PUBLIC FUNCTION URL — invocable from the internet, P0",
+    IsPublic,              "INVOKE GRANTED TO ANY PRINCIPAL — P0",
+    IsExternal,            "INVOKE GRANTED TO EXTERNAL ACCOUNT — P0",
+    "REVIEW")
 | order by TimeGenerated desc
+//
+// ============================================================================
+// "WAS IT INVOKED?" — the trap that matters most here
+// ============================================================================
+// lambda:Invoke is a DATA-PLANE event. It is NOT in management events, so
+// nothing above shows use. You need Lambda data events enabled.
+//
+// AND, when you query them: a SYNCHRONOUS (RequestResponse) invoke — what the
+// default `aws lambda invoke` produces — records requestParameters as NULL and
+// carries the function identity ONLY in resources[].ARN. Filtering data events
+// on requestParameters.functionName therefore silently DROPS sync invokes and
+// returns zero even when the attacker invoked the function.
+//
+// Match on the resource ARN, treating requestParameters as optional:
+//
+//   AWSCloudTrail
+//   | where EventSource == "lambda.amazonaws.com" and EventName == "Invoke"
+//   | extend FnFromResource = tostring(parse_json(Resources)[0].ARN)
+//   | where FnFromResource matches regex @":function:MyFunction(:|$)"
+//        or tostring(parse_json(RequestParameters).functionName) == "MyFunction"
+//   | summarize Calls = count(), CallerAccounts = make_set(UserIdentityAccountId, 10)
+//
+// A cross-account invoke lands in the FUNCTION OWNER's trail with the external
+// caller's account id.
+//
+// Coarser but always-available fallback: the CloudWatch AWS/Lambda Invocations
+// metric for the function — it shows that invocations happened, though not by whom.
+//
+// Sweep for pre-existing backdoors with IAM Access Analyzer, which does analyse
+// Lambda resource policies.

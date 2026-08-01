@@ -1,7 +1,35 @@
-// Malicious Script Execution via SageMaker Lifecycle Config (T1059) — eventName(s) auto-derived; verify casing.
-// Signal: CloudTrail sagemaker:UpdateNotebookInstanceLifecycleConfig with a base64-encoded OnStart script from an unexpected principal
+// Malicious Script Execution via SageMaker Lifecycle Config (T1059)
+//
+// The script body is IN the event, base64-encoded, so content inspection costs
+// nothing and is by far the strongest signal. The original query neither
+// decoded it nor filtered the principal, and additionally matched the benign
+// Describe call — dropped here.
+//
+// Create* is included: an attacker can create a NEW malicious config and attach
+// it, evading any Update-only rule.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 AWSCloudTrail
-| where EventSource in ("sagemaker.amazonaws.com")
-| where EventName in ("UpdateNotebookInstanceLifecycleConfig", "DescribeNotebookInstanceLifecycleConfig")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| where TimeGenerated > ago(24h)
+| where EventSource == "sagemaker.amazonaws.com"
+| where EventName in ("UpdateNotebookInstanceLifecycleConfig", "CreateNotebookInstanceLifecycleConfig")
+| extend Req = parse_json(RequestParameters)
+| extend OnStartB64 = tostring(Req.onStart[0].content)
+| extend OnStart = base64_decode_tostring(OnStartB64)
+| extend Config = tostring(Req.notebookInstanceLifecycleConfigName)
+// Use `contains` (substring), NOT `has_any` (whole-term) — has_any won't reliably
+// match "/dev/tcp" or "base64 -d" (slash/space-delimited), the exact payloads here.
+| extend Suspicious = OnStart contains "curl" or OnStart contains "wget"
+                      or OnStart contains "/dev/tcp" or OnStart contains "base64 -d"
+                      or OnStart contains "bash -i"
+| project TimeGenerated, UserIdentityArn, EventName, Config, SourceIpAddress, Suspicious, OnStart
+| where Suspicious
+       or UserIdentityArn !has "role/provisioning"      // tune to your allowlist
+| extend Verdict = iff(Suspicious,
+                       "MALICIOUS LIFECYCLE SCRIPT — content-confirmed, P0",
+                       "LIFECYCLE CONFIG WRITTEN OUTSIDE PROVISIONING — review")
 | order by TimeGenerated desc
+//
+// Only onStart[0] is decoded above. A config may carry multiple entries and an
+// onCreate array as well; use mv-expand over Req.onStart and Req.onCreate if
+// you need exhaustive coverage.

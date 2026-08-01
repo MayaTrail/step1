@@ -1,8 +1,24 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Enumerate AWS Environment from EC2 Instance (T1580)
+# Enumerate AWS Environment from EC2 Instance (T1580)
+#
+# WRONG-EVENT-SOURCE DEFECT in the original rule: its selection matched
+# ssm.amazonaws.com (DescribeInstanceInformation / SendCommand /
+# GetCommandInvocation) while its OWN description said the signal is
+# ec2:Describe* / s3:ListBuckets / iam:ListUsers from an instance role. It
+# watched the delivery plumbing, not the reconnaissance. Consequences:
+#
+#   - an attacker on the instance via a plain shell (no SSM) was invisible
+#   - every legitimate SendCommand was a false positive
+#
+# Rewritten to key on the RECONNAISSANCE SURFACE. The signal is an instance
+# role behaving like an operator, measured as breadth of distinct actions
+# across services.
+title: IAM principal enumeration from an EC2 instance role
 id: 4c050717-8cdd-5510-a485-0a44b5665c41
 status: experimental
-description: Rapid ec2:Describe*, s3:ListBuckets, iam:ListUsers called from an EC2 instance role — especially if the instance is not a known bastion or operations server
+description: >-
+  An EC2 instance role enumerating IAM principals. Instance roles have no
+  legitimate reason to inventory the account's users and roles; this is the
+  narrow high-value case that a single-event rule can catch.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.discovery.ec2-enumerate-from-instance/
 tags:
@@ -13,7 +29,101 @@ logsource:
   service: cloudtrail
 detection:
   selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName:
+      - 'ListUsers'
+      - 'ListRoles'
+      - 'GetAccountAuthorizationDetails'
+  # ADJUST TO YOUR NAMING. This suffix match is what scopes the rule to
+  # instance roles; without it the rule fires on ordinary operator activity.
+  instance_role:
+    userIdentity.arn|contains: ':assumed-role/'
+    userIdentity.sessionContext.sessionIssuer.userName|endswith: '-instance-role'
+  condition: selection and instance_role
+falsepositives:
+  - Inventory or compliance agents running under an instance role — allowlist
+    the specific role
+level: high
+---
+# Breadth detection: an instance role touching many distinct actions across
+# multiple services. This is the general form of the technique; the IAM rule
+# above is the narrow high-confidence case.
+#
+# Deploy `kql_t1580.kql` where the backend does not support correlations — it
+# additionally distinguishes multi-service recon from single-service noise.
+title: Multi-action reconnaissance from an EC2 instance role
+id: 8b40e7c2-1f95-4d38-a06b-9e2c74f1538a
+status: experimental
+description: >-
+  An instance-role principal issued more than five distinct read actions in ten
+  minutes. Instance roles normally exercise a small, fixed set of calls; fan-out
+  indicates an interactive actor exploring the account.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.discovery.ec2-enumerate-from-instance/
+tags:
+  - attack.discovery
+  - attack.t1580
+correlation:
+  type: value_count
+  rules:
+    - ec2_instance_role_read_base
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gt: 5
+    field: eventName            # distinct ACTIONS, not call volume
+level: high
+---
+title: Read action by an EC2 instance role
+id: 2f6c98a1-7be4-40d5-9312-c0a8e5d47b69
+name: ec2_instance_role_read_base
+status: experimental
+description: >-
+  Base rule for the breadth correlation. Instance roles make read calls
+  constantly and legitimately — not for direct alerting.
+tags:
+  - attack.discovery
+  - attack.t1580
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventName|startswith:
+      - 'Describe'
+      - 'List'
+      - 'Get'
+  instance_role:
+    userIdentity.arn|contains: ':assumed-role/'
+    userIdentity.sessionContext.sessionIssuer.userName|endswith: '-instance-role'
+  condition: selection and instance_role
+level: low
+---
+# Supporting signal, demoted from its original position as a primary selector.
+# SSM Run Command is routine automation; it is only interesting as the possible
+# DELIVERY mechanism for recon detected by the rules above. Correlate — do not
+# alert on this alone.
+title: SSM Run Command delivery to an instance under investigation
+id: c7d5b031-8a26-4e94-b58f-30619da2c4e7
+status: experimental
+description: >-
+  SSM command dispatch. Supporting context for instance-role reconnaissance,
+  not an incident on its own.
+tags:
+  - attack.discovery
+  - attack.t1580
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
     eventSource: 'ssm.amazonaws.com'
-    eventName: ['DescribeInstanceInformation', 'SendCommand', 'GetCommandInvocation']
+    eventName:
+      - 'SendCommand'
+      - 'GetCommandInvocation'
+      - 'DescribeInstanceInformation'
   condition: selection
-level: medium
+falsepositives:
+  - Routine patch and configuration automation — the overwhelming majority
+level: low

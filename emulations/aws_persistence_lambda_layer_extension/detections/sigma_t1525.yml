@@ -1,8 +1,24 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Persist via Lambda Layer (T1525)
+# Persist via Lambda Layer (T1525)
+#
+# The original rule matched PublishLayerVersion / UpdateFunctionConfiguration /
+# DeleteLayerVersion with a bare `condition: selection`.
+# UpdateFunctionConfiguration fires on every memory, timeout, environment and
+# layer change; DeleteLayerVersion is teardown and the emulation's own cleanup.
+# Neither inspected WHICH layer was attached. DeleteLayerVersion is dropped from
+# alerting and kept only for the timeline.
+#
+# The load-bearing half of Rule A — the approved-layer allowlist — is a
+# per-environment set and CANNOT be a static Sigma value. Enforce it in the
+# rules engine: for each ARN in requestParameters.layers, alert unless the ARN,
+# or its owner account (the 5th ':'-delimited field), is approved. Deploy
+# `kql_t1525.kql` where that logic must live in the query itself.
+title: Lambda function configured with an unapproved layer
 id: eba83563-85c2-5fe1-a2d3-143478ea6587
+name: lambda_attach_unapproved_layer
 status: experimental
-description: lambda:PublishLayerVersion followed by lambda:UpdateFunctionConfiguration adding an unexpected layer — especially a newly created layer from an unknown principal
+description: >-
+  A layer set was supplied to a function configuration update. Attaching a layer
+  injects code that runs inside the function's execution environment.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.lambda-layer-extension/
 tags:
@@ -14,6 +30,77 @@ logsource:
 detection:
   selection:
     eventSource: 'lambda.amazonaws.com'
-    eventName: ['PublishLayerVersion', 'UpdateFunctionConfiguration', 'DeleteLayerVersion']
+    eventName: 'UpdateFunctionConfiguration'
+    requestParameters.layers|contains: 'arn:aws:lambda:'   # a layer set was supplied
   condition: selection
-level: medium
+falsepositives:
+  - Every legitimate layer attachment — this rule is only useful once the
+    approved-layer allowlist is applied in the rules engine
+level: high
+---
+title: Lambda publish-layer then attach sequence
+id: 4e0c7a32-8d59-4f26-b3e7-0a1c8d6f2b45
+status: experimental
+description: >-
+  A layer published and then attached to a function by the same principal within
+  fifteen minutes — the code-injection fingerprint.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.lambda-layer-extension/
+tags:
+  - attack.persistence
+  - attack.t1525
+correlation:
+  type: temporal_ordered
+  rules:
+    - lambda_publish_layer
+    - lambda_attach_unapproved_layer
+  group-by:
+    - userIdentity.arn
+  timespan: 15m
+level: high
+---
+title: Lambda PublishLayerVersion
+id: 5f1d8b43-9e60-4a37-b4f8-1b2d9e7a3c56
+name: lambda_publish_layer
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+tags:
+  - attack.persistence
+  - attack.t1525
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName: 'PublishLayerVersion'
+  condition: selection
+level: low
+---
+# Cross-account layer sharing. An attacker who shares their layer outward, or
+# attaches a layer owned by an account you do not control, has a supply-chain
+# foothold that survives changes to your own function code.
+title: Lambda layer version shared cross-account
+id: 7a2e9c64-3b18-4d05-96f2-8c0d5b71ea39
+status: experimental
+description: >-
+  Layer version permissions granted outside the account. Review the grantee and
+  whether the layer is attached to production functions.
+references:
+  - https://docs.aws.amazon.com/lambda/latest/dg/access-control-resource-based.html
+tags:
+  - attack.persistence
+  - attack.t1525
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName: 'AddLayerVersionPermission'
+  public:
+    requestParameters.principal: '*'
+  condition: selection and public
+falsepositives:
+  - Deliberately published public layers — should be inventoried
+level: high

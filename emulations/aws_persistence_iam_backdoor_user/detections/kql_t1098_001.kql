@@ -1,7 +1,49 @@
-// Backdoor IAM User with Additional Access Key (T1098.001) — eventName(s) auto-derived; verify casing.
-// Signal: iam:CreateAccessKey on an existing user where the requesting principal is NOT the user themselves — indicates an external actor creating credentials
+// Backdoor IAM User with Additional Access Key (T1098.001)
+//
+// Implements the caller-vs-target comparison the original rule described but
+// never performed. DeleteAccessKey is excluded — it is benign cleanup and the
+// emulation's own revert.
+//
+// CRITICAL FIELD PATH: CreateAccessKey nests the new key under
+//   responseElements.accessKey.accessKeyId
+// NOT responseElements.accessKeyId. A query using the flat path returns null
+// for every event, which breaks the entire identify -> contain -> hunt chain:
+// you cannot disable a key whose id you never captured.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 AWSCloudTrail
-| where EventSource in ("iam.amazonaws.com")
-| where EventName in ("CreateAccessKey", "DeleteAccessKey")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| where TimeGenerated > ago(7d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName == "CreateAccessKey"
+| where isempty(ErrorCode)
+| extend Req  = parse_json(RequestParameters)
+| extend Resp = parse_json(ResponseElements)
+| extend TargetUser = tostring(Req.userName)
+| extend CallerUser = tostring(UserIdentityUserName)
+| extend NewKeyId   = tostring(Resp.accessKey.accessKeyId)   // NESTED — see note above
+| extend TargetUserOfKey = tostring(Resp.accessKey.userName)
+// A target user was named AND it is not the caller. For role callers CallerUser
+// is empty, so the mismatch is a coarse flag rather than proof — triage those
+// against whether the role legitimately provisions users.
+| where isnotempty(TargetUser) and TargetUser != CallerUser
+| where UserIdentityArn !contains ":role/iac-deploy"
+    and UserIdentityArn !contains ":role/identity-admin"
+    and UserIdentityArn !contains ":role/BreakGlassAdmin"
+| project TimeGenerated, UserIdentityArn, CallerUser, TargetUser,
+          NewKeyId, TargetUserOfKey, SourceIpAddress, UserAgent
+| extend Verdict = "ACCESS KEY MINTED FOR ANOTHER USER — persistence, P0"
 | order by TimeGenerated desc
+//
+// FOLLOW-ON: feed NewKeyId back into CloudTrail to establish whether the
+// backdoor key has been USED, and from where:
+//
+//   AWSCloudTrail
+//   | where TimeGenerated > ago(7d)
+//   | where UserIdentityAccessKeyId == "<NewKeyId>"
+//   | summarize Calls = count(), Actions = make_set(EventName, 30),
+//               IPs = make_set(SourceIpAddress, 10),
+//               FirstUse = min(TimeGenerated), LastUse = max(TimeGenerated)
+//
+// Account-wide sweep for keys planted before logging: use the IAM CREDENTIAL
+// REPORT (not Access Analyzer, which does not cover user access keys) and look
+// for users with two active keys or keys far newer than the user.
