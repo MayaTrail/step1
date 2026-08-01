@@ -215,7 +215,12 @@ node_modules/
 .DS_Store
 
 # ── AI / Tool configs (local only) ──
-.claude/
+# Local Claude config stays local, but .claude/skills/ is SHARED tooling and is
+# tracked deliberately — see .claude/skills/*/SKILL.md.
+# NB: the pattern must be `.claude/*`, not `.claude/`. Git will not descend into
+# an excluded directory, so a `!` negation under `.claude/` would never apply.
+.claude/*
+!.claude/skills/
 .pulumi
 CLAUDE.md
 ENGINEERING_GUIDELINES.md
