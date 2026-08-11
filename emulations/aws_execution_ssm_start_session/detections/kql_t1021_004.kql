@@ -8,7 +8,7 @@
 // REMEMBER: this shows that sessions HAPPENED, never what was done in them.
 // Session content is not in CloudTrail at any verbosity. If Session Manager
 // logging is not configured, treat a confirmed intrusion as full host
-// compromise — there is no investigative path to what was typed.
+// compromise, there is no investigative path to what was typed.
 //
 // Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 AWSCloudTrail
@@ -28,11 +28,17 @@ AWSCloudTrail
     LastSeen        = max(TimeGenerated)
     by UserIdentityArn, bin(TimeGenerated, 15m)
 | where DistinctTargets >= 3 or PortForwarding > 0
-       or UserIdentityArn !has "role/ssm-operator"      // tune to your allowlist
+// REPLACE with the roles in YOUR account that legitimately open SSM sessions to
+// instances. The placeholder matches nothing, so until it is edited this rule
+// fires on every operator session.
+//
+// `contains` (substring), NOT `has` (whole-term): a role path is delimited by a
+// slash and hyphens, so `has` does not match it reliably.
+       or UserIdentityArn !contains "role/REPLACE-ME-ssm-operator"
 | extend Verdict = case(
-    PortForwarding > 0,     "SSM PORT-FORWARDING / PIVOT — P0",
-    DistinctTargets >= 3,   "SSM INTERACTIVE ACCESS SWEEP — P0",
-    "SSM SESSION BY NON-OPERATOR — review")
+    PortForwarding > 0,     "SSM PORT-FORWARDING / PIVOT - P0",
+    DistinctTargets >= 3,   "SSM INTERACTIVE ACCESS SWEEP - P0",
+    "SSM SESSION BY NON-OPERATOR, review")
 | order by DistinctTargets desc
 //
 // Companion check worth running standing: alert if Session Manager logging is

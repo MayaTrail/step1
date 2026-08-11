@@ -1,7 +1,7 @@
 // Backdoor IAM User with Additional Access Key (T1098.001)
 //
 // Implements the caller-vs-target comparison the original rule described but
-// never performed. DeleteAccessKey is excluded — it is benign cleanup and the
+// never performed. DeleteAccessKey is excluded, it is benign cleanup and the
 // emulation's own revert.
 //
 // CRITICAL FIELD PATH: CreateAccessKey nests the new key under
@@ -20,18 +20,21 @@ AWSCloudTrail
 | extend Resp = parse_json(ResponseElements)
 | extend TargetUser = tostring(Req.userName)
 | extend CallerUser = tostring(UserIdentityUserName)
-| extend NewKeyId   = tostring(Resp.accessKey.accessKeyId)   // NESTED — see note above
+| extend NewKeyId   = tostring(Resp.accessKey.accessKeyId)   // NESTED, see note above
 | extend TargetUserOfKey = tostring(Resp.accessKey.userName)
 // A target user was named AND it is not the caller. For role callers CallerUser
-// is empty, so the mismatch is a coarse flag rather than proof — triage those
+// is empty, so the mismatch is a coarse flag rather than proof, triage those
 // against whether the role legitimately provisions users.
 | where isnotempty(TargetUser) and TargetUser != CallerUser
-| where UserIdentityArn !contains ":role/iac-deploy"
-    and UserIdentityArn !contains ":role/identity-admin"
-    and UserIdentityArn !contains ":role/BreakGlassAdmin"
+// REPLACE these with the roles in YOUR account that legitimately create access
+// keys for other users. The placeholder values below match nothing, so until
+// they are edited this rule fires on all routine user provisioning.
+| where UserIdentityArn !contains ":role/REPLACE-ME-iac-deploy"
+    and UserIdentityArn !contains ":role/REPLACE-ME-identity-admin"
+    and UserIdentityArn !contains ":role/REPLACE-ME-break-glass"
 | project TimeGenerated, UserIdentityArn, CallerUser, TargetUser,
           NewKeyId, TargetUserOfKey, SourceIpAddress, UserAgent
-| extend Verdict = "ACCESS KEY MINTED FOR ANOTHER USER — persistence, P0"
+| extend Verdict = "ACCESS KEY MINTED FOR ANOTHER USER, persistence, P0"
 | order by TimeGenerated desc
 //
 // FOLLOW-ON: feed NewKeyId back into CloudTrail to establish whether the

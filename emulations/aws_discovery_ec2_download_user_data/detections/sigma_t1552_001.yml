@@ -1,16 +1,16 @@
 # Download EC2 Instance User Data (T1552.001)
 #
 # The original rule matched `eventName IN (DescribeInstances,
-# DescribeInstanceAttribute)` with a bare `condition: selection`. Two problems:
+# DescribeInstanceAttribute)` with a bare `condition - selection`. Two problems:
 #
-#   1. DescribeInstances is among the highest-volume calls in AWS — every
+#   1. DescribeInstances is among the highest-volume calls in AWS: every
 #      console load, every inventory tool. It is enumeration CONTEXT and has
 #      been dropped as a trigger entirely.
 #   2. No `attribute=userData` filter. DescribeInstanceAttribute is called for
 #      many benign attribute types, so without this the rule fires constantly
 #      on activity unrelated to credential harvesting.
 #
-# The technique is defined by BREADTH — reading many instances' user-data — so
+# The technique is defined by BREADTH - reading many instances' user-data: so
 # the deployable detection is the correlation below.
 title: EC2 DescribeInstanceAttribute userData read
 id: 4cdc9a3a-45c3-52f9-af5d-e61931ca8854
@@ -36,7 +36,7 @@ detection:
     errorCode: null          # Sigma: matches when errorCode is ABSENT (the read succeeded)
   condition: selection and success
 falsepositives:
-  - Patch and configuration tooling that legitimately reads user-data —
+  - Patch and configuration tooling that legitimately reads user-data,
     allowlist those principals
 level: low
 ---

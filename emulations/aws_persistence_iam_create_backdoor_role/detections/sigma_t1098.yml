@@ -5,7 +5,7 @@
 # suspicious; together they are a cross-account admin backdoor.
 #
 # The original rule matched CreateRole / AttachRolePolicy / DetachRolePolicy /
-# DeleteRole with a bare `condition: selection` — every IaC role change fires
+# DeleteRole with a bare `condition: selection` - every IaC role change fires
 # it, and DetachRolePolicy/DeleteRole are the benign cleanup and the
 # emulation's own revert. Both are dropped.
 #
@@ -13,14 +13,14 @@
 # assumeRolePolicyDocument is URL-encoded in the event, so '"AWS":"*"' never
 # matches the raw field ( " -> %22, * -> %2A ). Only 12-digit account IDs
 # survive verbatim, which is why Rule A is an IOC catcher. The general
-# external/wildcard case requires decoding — see `kql_t1098.kql`.
+# external/wildcard case requires decoding: see `kql_t1098.kql`.
 title: IAM CreateRole trust policy references a known-bad account
 id: a93c79c1-1109-50d5-96c6-939c06cf0a78
 name: iam_createrole_external
 status: experimental
 description: >-
   A role was created whose trust policy references an account on the known-bad
-  list. Covers enumerated IOC accounts only — see the KQL for the general case.
+  list. Covers enumerated IOC accounts only, see the KQL for the general case.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-backdoor-role/
 tags:
@@ -62,14 +62,17 @@ detection:
       - 'arn:aws:iam::aws:policy/AdministratorAccess'
       - 'arn:aws:iam::aws:policy/IAMFullAccess'
       - 'arn:aws:iam::aws:policy/PowerUserAccess'
+  # REPLACE these with the roles in YOUR account that legitimately create roles
+  # and set trust policies. The placeholder values below match nothing, so
+  # until they are edited this rule fires on every role your IaC creates.
   identity_admin:
     userIdentity.arn|contains:
-      - ':role/identity-admin'
-      - ':role/iac-deploy'
-      - ':role/BreakGlassAdmin'
+      - ':role/REPLACE-ME-identity-admin'
+      - ':role/REPLACE-ME-iac-deploy'
+      - ':role/REPLACE-ME-break-glass'
   condition: selection and not identity_admin
 falsepositives:
-  - Legitimate admin roles created outside the allowlisted principals — should
+  - Legitimate admin roles created outside the allowlisted principals, should
     be rare and traceable to a change request
 level: critical
 ---
@@ -99,7 +102,7 @@ title: IAM CreateRole
 id: 6d92f14b-38a0-4e75-b1c6-2f80e5a9c317
 name: iam_create_role_base
 status: experimental
-description: Base rule — sequence component only, not for direct alerting.
+description: Base rule, sequence component only, not for direct alerting.
 tags:
   - attack.persistence
   - attack.t1098
@@ -115,12 +118,12 @@ level: low
 ---
 # Detects the backdoor being USED. In this account, a cross-account assumption
 # records the external caller's account id while the role is local.
-# SET YOUR OWN ACCOUNT IDs — as shipped this fires on all cross-account use.
+# SET YOUR OWN ACCOUNT IDs: as shipped this fires on all cross-account use.
 title: Cross-account AssumeRole into a local role
 id: 4c8e0b76-2a39-4d51-97f0-8b6c1e50da34
 status: experimental
 description: >-
-  A principal outside the organisation assumed a role in this account —
+  A principal outside the organisation assumed a role in this account,
   confirmation that a backdoored trust policy was exercised.
 tags:
   - attack.persistence
@@ -138,5 +141,5 @@ detection:
       - '222222222222'
   condition: selection and not org_accounts
 falsepositives:
-  - Approved third-party integrations — allowlist their account IDs
+  - Approved third-party integrations, allowlist their account IDs
 level: high

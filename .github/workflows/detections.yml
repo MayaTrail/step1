@@ -1,0 +1,34 @@
+name: Detections
+
+# Gates every pull request on the shipped Sigma rules being deployable, not
+# merely parseable. Runs on all pull requests rather than only on changes under
+# emulations/, because the validator also checks that apps/emulations/
+# detections.py can still render the rules: a backend change can break the
+# detection library without touching a single rule file.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate-detections:
+    name: validate-detections
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # emulations/_kb is a private submodule. Leave it unfetched so the job
+        # runs for contributors without access to the authoring repository.
+        with:
+          submodules: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install validation toolchain
+        run: pip install -r backend/requirements-dev.txt
+
+      - name: Validate detection rules
+        run: python backend/scripts/validate_detections.py

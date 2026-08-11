@@ -2,7 +2,7 @@
 //
 // THE deployable detection. Two things make it work where the original did not:
 //
-//   1. `withDecryption == true` — the discriminator. Without it there is no
+//   1. `withDecryption == true`, the discriminator. Without it there is no
 //      way to separate a metadata read from credential theft, and the rule
 //      fires on every application config read in the account.
 //   2. Counting distinct PARAMETER NAMES, not events. GetParameters is a batch
@@ -31,5 +31,5 @@ AWSCloudTrail
     LastSeen        = max(TimeGenerated)
     by UserIdentityArn, bin(TimeGenerated, 5m)
 | where ParamsDecrypted > 10
-| extend Verdict = "MASS SECURESTRING DECRYPTION — P0"
+| extend Verdict = "MASS SECURESTRING DECRYPTION - P0"
 | order by ParamsDecrypted desc

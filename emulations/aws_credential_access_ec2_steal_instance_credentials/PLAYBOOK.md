@@ -1,4 +1,4 @@
-# IR Playbook: Steal EC2 Instance Credentials via IMDS — Role Credential Exfiltration through `ssm:SendCommand`
+# IR Playbook - Steal EC2 Instance Credentials via IMDS - Role Credential Exfiltration through `ssm:SendCommand`
 
 ## Classification
 
@@ -6,21 +6,21 @@
 |-------|-------|
 | Incident Type | Credential Access / Instance Credential Theft |
 | Emulation Tier | Atomic technique |
-| Threat Actor | N/A — single-technique emulation, not actor-attributed |
+| Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High — yields live, usable IAM role credentials (note: `MANIFEST.py` currently rates this MEDIUM; the IR view is High because a successful run hands the attacker working role credentials, not just a log signal) |
+| Severity | High, yields live, usable IAM role credentials (note: `MANIFEST.py` currently rates this MEDIUM; the IR view is High because a successful run hands the attacker working role credentials, not just a log signal) |
 | MITRE Tactics | Credential Access |
 | MITRE Techniques | T1552.005 |
 | Services in Scope | SSM, EC2, STS, IAM, GuardDuty, CloudTrail, VPC Flow Logs |
 | Infrastructure Created | 1 EC2 instance + IAM role/instance profile + VPC/subnet/IGW (via `infra/`) |
 
-**What the emulation does:** waits for the target EC2 instance to register with SSM, then calls `ssm:SendCommand` with the `AWS-RunShellScript` document to run a two-line `curl` against the Instance Metadata Service (IMDS) — first listing the attached role, then fetching its temporary credentials from `http://169.254.169.254/latest/meta-data/iam/security-credentials/<role>`. It retrieves the command output with `ssm:GetCommandInvocation`, builds a new boto3 session from the stolen `AccessKeyId`/`SecretAccessKey`/`Token`, and calls `sts:GetCallerIdentity` to prove the credentials work.
+**What the emulation does:** waits for the target EC2 instance to register with SSM, then calls `ssm:SendCommand` with the `AWS-RunShellScript` document to run a two-line `curl` against the Instance Metadata Service (IMDS), first listing the attached role, then fetching its temporary credentials from `http://169.254.169.254/latest/meta-data/iam/security-credentials/<role>`. It retrieves the command output with `ssm:GetCommandInvocation`, builds a new boto3 session from the stolen `AccessKeyId`/`SecretAccessKey`/`Token`, and calls `sts:GetCallerIdentity` to prove the credentials work.
 
-**Why this is high severity, unlike a failed enumeration:** this technique does not probe — it *succeeds*. At the end of a run the operator holds working credentials for the instance's IAM role. Everything that role can do, the attacker can now do, from anywhere, until the token expires (max ~6 hours for instance-profile credentials, but silently renewable by re-reading IMDS on the host).
+**Why this is high severity, unlike a failed enumeration:** this technique does not probe, it *succeeds*. At the end of a run the operator holds working credentials for the instance's IAM role. Everything that role can do, the attacker can now do, from anywhere, until the token expires (max ~6 hours for instance-profile credentials, but silently renewable by re-reading IMDS on the host).
 
 **The two-stage signature.** The theft (`ssm:SendCommand` → IMDS) and the *use* of the stolen credentials are separate, differently-observed events:
 - The **theft** is visible in CloudTrail as SSM API calls from the attacker's principal.
-- The **use** is visible only when the role credentials appear from an IP that is not the instance — this is what GuardDuty's `InstanceCredentialExfiltration` findings detect, and it is the single most reliable signal for this technique.
+- The **use** is visible only when the role credentials appear from an IP that is not the instance, this is what GuardDuty's `InstanceCredentialExfiltration` findings detect, and it is the single most reliable signal for this technique.
 
 A defender who watches only the SSM side misses exfiltration when the attacker steals credentials by other means (SSRF, a web shell, `GetConsoleOutput`); a defender who watches only credential use misses the theft when the attacker uses the credentials from inside AWS. Both are required.
 
@@ -32,14 +32,14 @@ A defender who watches only the SSM side misses exfiltration when the attacker s
 
 **Logging & Visibility**
 - CloudTrail multi-region trail, management events `ReadWriteType: All`, delivered to S3 (versioned, MFA delete) and to CloudWatch Logs / a log platform for rate queries
-- **GuardDuty enabled in all regions** — this technique's highest-value detection (`UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.InsideAWS` and `.OutsideAWS`) is GuardDuty-only; no CloudTrail rule reproduces it
-- VPC Flow Logs on all VPCs — needed to see the instance's own egress to mining/C2 or the absence of expected traffic
-- **Know where `ssm:SendCommand` command text lives.** For the standard `AWS-RunShellScript` / `AWS-RunPowerShellScript` documents used by this technique, the `commands` payload is plaintext and normally **does** appear in CloudTrail under `requestParameters.parameters.commands` — so grepping CloudTrail for `169.254.169.254` usually works here. It can be absent when a *custom* document marks parameters `NoEcho`, or where an org has restricted parameter logging. Validate against a sample event in your own account rather than assuming, and enable SSM RunCommand output logging to S3/CloudWatch as an authoritative fallback for command bodies
+- **GuardDuty enabled in all regions**, this technique's highest-value detection (`UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.InsideAWS` and `.OutsideAWS`) is GuardDuty-only; no CloudTrail rule reproduces it
+- VPC Flow Logs on all VPCs, needed to see the instance's own egress to mining/C2 or the absence of expected traffic
+- **Know where `ssm:SendCommand` command text lives.** For the standard `AWS-RunShellScript` / `AWS-RunPowerShellScript` documents used by this technique, the `commands` payload is plaintext and normally **does** appear in CloudTrail under `requestParameters.parameters.commands`, so grepping CloudTrail for `169.254.169.254` usually works here. It can be absent when a *custom* document marks parameters `NoEcho`, or where an org has restricted parameter logging. Validate against a sample event in your own account rather than assuming, and enable SSM RunCommand output logging to S3/CloudWatch as an authoritative fallback for command bodies
 - Enable SSM Run Command output logging to an S3 bucket or CloudWatch Logs group, account-wide, so command *content* is recoverable even when CloudTrail omits it
 
 **Alerting (must be pre-configured)**
 - GuardDuty `InstanceCredentialExfiltration.*` findings → SNS → on-call, at P0. This is the alert that catches the actual compromise
-- `ssm:SendCommand` targeting an instance, where the calling principal is **not** on the SSM-operations allowlist — medium confidence, high value as an early signal
+- `ssm:SendCommand` targeting an instance, where the calling principal is **not** on the SSM-operations allowlist, medium confidence, high value as an early signal
 - Correlation: role-session credentials (`userIdentity.type = AssumedRole`, ARN matching an *instance* role) seen with a `sourceIPAddress` that is **not** the instance's private IP or its NAT/EIP → this is credential exfiltration and should page
 - `ssm:SendCommand` with `DocumentName = AWS-RunShellScript` or `AWS-RunPowerShellScript` from an interactive user principal (as opposed to a CI/patch-automation role)
 
@@ -50,7 +50,7 @@ A defender who watches only the SSM side misses exfiltration when the attacker s
 - The instance-role trust and permission policies on hand, to scope blast radius the moment a role is implicated
 
 **Known IOC Baselines**
-- Baseline which principals legitimately call `ssm:SendCommand` — normally a small set of patch/automation roles, never interactive users
+- Baseline which principals legitimately call `ssm:SendCommand`, normally a small set of patch/automation roles, never interactive users
 - Baseline each instance role's normal `sourceIPAddress` set (its private IP, the VPC NAT). Anything else using those credentials is theft
 - **Enforce IMDSv2** (`HttpTokens: required`, `HttpPutResponseHopLimit: 1`) as the baseline. The emulation's plain `curl` succeeds only against IMDSv1; on an IMDSv2-only instance the token-less GET returns 401 and the theft fails. A fleet that is IMDSv2-only converts this High-severity technique into a non-event
 
@@ -60,7 +60,7 @@ A defender who watches only the SSM side misses exfiltration when the attacker s
 
 ### Detection Triggers (prioritized)
 
-#### HIGH-CONFIDENCE — Always Indicate Compromise
+#### HIGH-CONFIDENCE: Always Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
@@ -70,14 +70,14 @@ A defender who watches only the SSM side misses exfiltration when the attacker s
 | P1 | `ssm:SendCommand` whose recovered command body references `169.254.169.254`, `iam/security-credentials`, or `latest/meta-data` | SSM output logs / CloudTrail (if not redacted) | T1552.005 |
 | P1 | `ssm:SendCommand` (RunShellScript/RunPowerShellScript) from an interactive user principal not on the SSM-operations allowlist | CloudTrail | T1552.005 |
 
-#### MEDIUM-CONFIDENCE — May Indicate Compromise
+#### MEDIUM-CONFIDENCE: May Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
 | P2 | `ssm:SendCommand` → `ssm:GetCommandInvocation` pair from a principal with no prior SSM history | CloudTrail | T1552.005 |
 | P2 | Sudden `ssm:DescribeInstanceInformation` sweep followed by `SendCommand` to a returned instance | CloudTrail | T1552.005 |
 | P2 | Instance-role credentials performing actions the workload never performs (e.g. `iam:*`, `s3:ListAllMyBuckets`) even from the instance IP | CloudTrail | T1552.005 |
-| P3 | `sts:GetCallerIdentity` immediately after credential retrieval — attacker validating the loot (weak alone; `GetCallerIdentity` is extremely high-volume) | CloudTrail | T1552.005 |
+| P3 | `sts:GetCallerIdentity` immediately after credential retrieval, attacker validating the loot (weak alone; `GetCallerIdentity` is extremely high-volume) | CloudTrail | T1552.005 |
 
 ### Detection Rule Quality Notes
 
@@ -85,14 +85,14 @@ The rules in `detections/` are **too noisy to deploy as written.** These are cor
 
 | Issue | Impact | Correction |
 |-------|--------|-----------|
-| Sigma and KQL both match `eventName IN (DescribeInstanceInformation, SendCommand, GetCommandInvocation, GetCallerIdentity)` with `condition: selection` and no further qualifier | Unusable. `sts:GetCallerIdentity` is one of the highest-volume API calls in AWS — every SDK/CLI init, every CI job, every credential probe emits it. `ssm:SendCommand`/`GetCommandInvocation` are routine patch operations. This rule alerts thousands of times a day on entirely benign activity and will be muted immediately | Split into two targeted rules (below). Drop `GetCallerIdentity` and `GetCommandInvocation` as *primary* selectors — they are corroborating context, not triggers |
+| Sigma and KQL both match `eventName IN (DescribeInstanceInformation, SendCommand, GetCommandInvocation, GetCallerIdentity)` with `condition: selection` and no further qualifier | Unusable. `sts:GetCallerIdentity` is one of the highest-volume API calls in AWS, every SDK/CLI init, every CI job, every credential probe emits it. `ssm:SendCommand`/`GetCommandInvocation` are routine patch operations. This rule alerts thousands of times a day on entirely benign activity and will be muted immediately | Split into two targeted rules (below). Drop `GetCallerIdentity` and `GetCommandInvocation` as *primary* selectors, they are corroborating context, not triggers |
 | No use of `userIdentity.type`, principal allowlist, or `sourceIPAddress` | The rule cannot distinguish the patch-automation role (benign) from an interactive attacker, nor theft from normal role use | Filter `SendCommand` to interactive/non-allowlisted principals; add the off-instance-IP correlation as its own rule |
 | Neither rule inspects the command body for the IMDS string | The most specific single-event signal (`169.254.169.254` / `iam/security-credentials` in the `commands`) is unused | Add a `requestParameters.parameters.commands|contains` selection. For standard RunShellScript/RunPowerShellScript documents this is present in CloudTrail; where a custom `NoEcho` document hides it, source the body from SSM output logging |
-| GuardDuty `InstanceCredentialExfiltration` — the definitive signal — is not referenced by either rule | The best detection for this technique is absent from its own detection set | Add a GuardDuty finding-type detection at P0 |
+| GuardDuty `InstanceCredentialExfiltration`, the definitive signal, is not referenced by either rule | The best detection for this technique is absent from its own detection set | Add a GuardDuty finding-type detection at P0 |
 | Header TODO "verify acronym casing" unresolved | Event-name casing is correct; stale TODO implies the rule is unvalidated | Resolve or remove |
 | `level: medium` on a rule dominated by benign `GetCallerIdentity` | Guarantees alert fatigue | See per-rule levels below |
 
-**Rule A — suspicious `SendCommand` (early signal, medium).** Deploy as Sigma with a maintained principal allowlist:
+**Rule A, suspicious `SendCommand` (early signal, medium).** Deploy as Sigma with a maintained principal allowlist:
 
 ```yaml
 title: SSM SendCommand shell document from non-automation principal
@@ -136,7 +136,7 @@ detection:
 level: high
 ```
 
-**Rule B — credential exfiltration (the real detection, high/critical).** This is a **correlation over `sourceIPAddress`**, not a single-event match, and is best expressed in a log platform (see Query 5). Where GuardDuty is available, prefer its finding directly:
+**Rule B, credential exfiltration (the real detection, high/critical).** This is a **correlation over `sourceIPAddress`**, not a single-event match, and is best expressed in a log platform (see Query 5). Where GuardDuty is available, prefer its finding directly:
 
 ```yaml
 title: GuardDuty EC2 instance credential exfiltration
@@ -151,7 +151,7 @@ detection:
 level: critical
 ```
 
-**On the `Client.` error-prefix rule learned elsewhere:** it does not bite here — the emulation's SSM/STS calls succeed, so there is no `errorCode` to key on. If you build a variant detecting *failed* IMDS theft against IMDSv2-hardened hosts, that failure appears in the instance's own logs (HTTP 401 from IMDS), not in CloudTrail.
+**On the `Client.` error-prefix rule learned elsewhere:** it does not bite here, the emulation's SSM/STS calls succeed, so there is no `errorCode` to key on. If you build a variant detecting *failed* IMDS theft against IMDSv2-hardened hosts, that failure appears in the instance's own logs (HTTP 401 from IMDS), not in CloudTrail.
 
 ---
 
@@ -159,14 +159,18 @@ level: critical
 
 > All CloudTrail extraction below uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`, which is robust; piping `--output text` into `jq` relies on undocumented tab-delimiting and breaks on fields containing tabs/newlines.
 
-#### Query 1 — Find the `SendCommand` that drove the theft
+#### Query 1: Find the `SendCommand` that drove the theft
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '4 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-4H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=SendCommand \
-  --start-time "$(date -u -d '4 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" \
   --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
@@ -175,7 +179,7 @@ aws cloudtrail lookup-events \
      type: .userIdentity.type,
      document: .requestParameters.documentName,
      targets: (.requestParameters.instanceIds // .requestParameters.targets),
-     # commands may be absent/redacted — do not rely on this being populated
+     # commands may be absent/redacted: do not rely on this being populated
      commands: (.requestParameters.parameters.commands // "REDACTED_OR_ABSENT"),
      sourceIP: .sourceIPAddress,
      error: (.errorCode // "SUCCESS")}'
@@ -190,7 +194,7 @@ aws ssm list-command-invocations --command-id "$COMMAND_ID" --details \
   --query 'CommandInvocations[].CommandPlugins[].{Name:Name,Output:Output,Status:Status}'
 ```
 
-#### Query 2 — Identify the instance and the role that was on it
+#### Query 2: Identify the instance and the role that was on it
 
 ```bash
 REGION="us-east-1"
@@ -206,7 +210,7 @@ aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --region "$REGION" \
     State:State.Name}' \
   --output json
 
-# Resolve the instance profile to its role name — this is the credential that leaked
+# Resolve the instance profile to its role name: this is the credential that leaked
 PROFILE_NAME=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --region "$REGION" \
   --query 'Reservations[0].Instances[0].IamInstanceProfile.Arn' --output text | awk -F'/' '{print $NF}')
 
@@ -214,22 +218,26 @@ aws iam get-instance-profile --instance-profile-name "$PROFILE_NAME" \
   --query 'InstanceProfile.Roles[0].RoleName' --output text
 ```
 
-Note `IMDSv2`: if `HttpTokens = required`, the plain-`curl` theft should have **failed** — investigate how credentials were obtained, because it was not this path.
+Note `IMDSv2`: if `HttpTokens = required`, the plain-`curl` theft should have **failed**, investigate how credentials were obtained, because it was not this path.
 
-#### Query 3 — The decisive query: did the role's credentials appear off-instance?
+#### Query 3 - The decisive query: did the role's credentials appear off-instance?
 
 This distinguishes theft from normal use. Compare every `sourceIPAddress` that used the role against the instance's known IPs.
 
-**Lookup-attribute caveat — read before running.** `AttributeKey=Username` in
+**Lookup-attribute caveat, read before running.** `AttributeKey=Username` in
 `lookup-events` matches the CloudTrail *username*, which for an `AssumedRole`
 session is the **role session name**, not the role name. For EC2
 instance-profile credentials AWS sets the session name to the **instance ID**
 (the ARN is `assumed-role/<role>/<instance-id>`). So the lookup key is the
 instance ID, and the role name is matched by post-filtering on
 `.userIdentity.sessionContext.sessionIssuer.userName`. Keying the lookup on the
-role name returns **zero events** — do not do it.
+role name returns **zero events**, do not do it.
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-6H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 ROLE_NAME="<instance-role-name-from-Query-2>"
 INSTANCE_ID="<i-xxxxxxxxxxxx>"            # this is the session name for instance creds
@@ -238,7 +246,7 @@ INSTANCE_NAT_IP="<the-NAT/EIP-the-instance-egresses-through>"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=Username,AttributeValue="$INSTANCE_ID" \
-  --start-time "$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" \
   --output json | \
   jq -r --arg role "$ROLE_NAME" --arg priv "$INSTANCE_PRIVATE_IP" --arg nat "$INSTANCE_NAT_IP" '
@@ -253,7 +261,7 @@ aws cloudtrail lookup-events \
 ```
 
 The session name equals the instance ID whether the credentials are used on the
-host or exfiltrated, because it is fixed at issuance — so this lookup catches
+host or exfiltrated, because it is fixed at issuance, so this lookup catches
 off-instance use too. If you do not know the instance ID, drop
 `--lookup-attributes` for a broad time-bounded lookup and rely on the
 `sessionIssuer.userName` filter alone (heavier, but complete).
@@ -261,16 +269,20 @@ off-instance use too. If you do not know the instance ID, drop
 **A row here is a high-confidence exfiltration indicator, not automatic proof.**
 AWS-service-internal calls surface as `*.amazonaws.com` source values (filtered
 out above). Before declaring theft, rule out other legitimate holders of the
-same role session name / IP — a sibling instance in an HA group sharing the
+same role session name / IP, a sibling instance in an HA group sharing the
 profile, or your own responders reusing the role during investigation. A genuine
 external IP or another account's traffic is the finding. Record every
-`sourceIPAddress` — these are IOCs.
+`sourceIPAddress`, these are IOCs.
 
-#### Query 4 — Everything the stolen credentials did
+#### Query 4: Everything the stolen credentials did
 
 Enumerate the full blast radius of the role session so eradication is scoped correctly.
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-6H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 ROLE_NAME="<instance-role-name>"
 INSTANCE_ID="<i-xxxxxxxxxxxx>"            # session name for instance-profile creds
@@ -278,7 +290,7 @@ INSTANCE_ID="<i-xxxxxxxxxxxx>"            # session name for instance-profile cr
 # Key on the instance ID (= session name); post-filter on the role name to be safe
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=Username,AttributeValue="$INSTANCE_ID" \
-  --start-time "$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" \
   --output json | \
   jq -r --arg role "$ROLE_NAME" '.Events[].CloudTrailEvent | fromjson |
@@ -292,9 +304,9 @@ aws cloudtrail lookup-events \
 
 Flag anything outside the workload's normal behaviour: `iam:*`, `sts:AssumeRole` to other roles (pivot), `s3:GetObject`/`ListBucket` on sensitive buckets, `secretsmanager:GetSecretValue`, `ec2:RunInstances`.
 
-#### Query 5 — Deployable off-instance-use detection (log platform)
+#### Query 5: Deployable off-instance-use detection (log platform)
 
-**Dialect: Sentinel / Azure Log Analytics KQL** — not CloudWatch Logs Insights. This is Rule B expressed against stored logs; maintain a watchlist named `InstanceRoleIPs` (columns `RoleName`, `AllowedPrivateIp`, `AllowedNatIp`) mapping each instance role → its legitimate IPs. Reference it via `_GetWatchlist()`; a bare `_InstanceRoleIPs` identifier does not resolve.
+**Dialect: Sentinel / Azure Log Analytics KQL**, not CloudWatch Logs Insights. This is Rule B expressed against stored logs; maintain a watchlist named `InstanceRoleIPs` (columns `RoleName`, `AllowedPrivateIp`, `AllowedNatIp`) mapping each instance role → its legitimate IPs. Reference it via `_GetWatchlist()`; a bare `_InstanceRoleIPs` identifier does not resolve.
 
 ```kql
 let InstanceRoleIPs = _GetWatchlist('InstanceRoleIPs');   // columns: RoleName, AllowedPrivateIp, AllowedNatIp
@@ -309,7 +321,7 @@ AWSCloudTrail
 | summarize Calls = count(), Events = make_set(EventName, 20),
             FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated)
     by RoleName, SourceIpAddress
-| extend Verdict = "INSTANCE CREDENTIAL USED OFF-HOST — exfiltration"
+| extend Verdict = "INSTANCE CREDENTIAL USED OFF-HOST, exfiltration"
 | order by Calls desc
 ```
 
@@ -324,7 +336,7 @@ fields @timestamp, userIdentity.arn, sourceIPAddress, eventName
 | stats count(*) as calls by userIdentity.arn, sourceIPAddress
 ```
 
-#### Query 6 — GuardDuty findings for this instance/role
+#### Query 6: GuardDuty findings for this instance/role
 
 ```bash
 REGION="us-east-1"
@@ -336,16 +348,20 @@ aws guardduty list-findings --detector-id "$DETECTOR_ID" --region "$REGION" \
   xargs -r aws guardduty get-findings --detector-id "$DETECTOR_ID" --region "$REGION" --finding-ids
 ```
 
-#### Query 7 — Multi-region SSM sweep
+#### Query 7: Multi-region SSM sweep
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 for REGION in $(aws ec2 describe-regions --query 'Regions[*].RegionName' --output text); do
   COUNT=$(aws cloudtrail lookup-events \
     --lookup-attributes AttributeKey=EventName,AttributeValue=SendCommand \
-    --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+    --start-time "$START" \
     --region "$REGION" --query 'length(Events)' --output text 2>/dev/null)
   [ -n "$COUNT" ] && [ "$COUNT" != "0" ] && [ "$COUNT" != "None" ] && \
-    echo "[!] $REGION — $COUNT SendCommand events"
+    echo "[!] $REGION, $COUNT SendCommand events"
 done
 ```
 
@@ -356,20 +372,20 @@ done
 ### Immediate Actions (first 15 minutes)
 
 The stolen credentials are the emergency, not the instance. Instance-profile
-tokens keep working from anywhere until they expire — **revoking them is the
+tokens keep working from anywhere until they expire, **revoking them is the
 first priority**, ahead of touching the host.
 
-#### Step 1 — Revoke the leaked role's active sessions
+#### Step 1: Revoke the leaked role's active sessions
 
-`aws:TokenIssueTime` invalidates every credential **issued before** the cutoff —
-which includes the stolen tokens as they exist right now — without deleting the
+`aws:TokenIssueTime` invalidates every credential **issued before** the cutoff,
+which includes the stolen tokens as they exist right now, without deleting the
 role or breaking its legitimate use once the host is clean.
 
 **Understand exactly what this does and does not stop.** This policy kills only
 the tokens that already exist at the moment you apply it. It does **not** stop
 new theft: if the attacker still has code execution on the host, their next IMDS
 read returns a *fresh* token with a later `TokenIssueTime`, which the Deny
-condition does not match — so that credential works normally. This step buys
+condition does not match, so that credential works normally. This step buys
 time by killing the currently-exfiltrated tokens; it is **not** containment on
 its own. Continued theft is stopped by severing SSM (Step 3) and isolating the
 network (Step 4), which cut the attacker's ability to reach the host and mint
@@ -400,13 +416,13 @@ echo "[OK] All pre-existing sessions for $ROLE_NAME revoked (stolen tokens now d
 
 This also kills the *legitimate* workload's current credentials on the instance;
 that is acceptable and expected during containment. The instance will obtain a
-fresh token on its next IMDS read — and because that token is issued *after* the
+fresh token on its next IMDS read, and because that token is issued *after* the
 cutoff, it is **not** blocked by this policy (the workload keeps functioning, and
 so would an attacker still on the host). The role stays broadly usable; the
 `aws:TokenIssueTime` deny is a scalpel for the already-leaked tokens, not a gate
 on the role.
 
-#### Step 2 — Disable the attacker's own principal
+#### Step 2: Disable the attacker's own principal
 
 The role credentials were stolen *by* some principal via `ssm:SendCommand`
 (Query 1). Contain that principal too, or the theft simply repeats.
@@ -430,7 +446,7 @@ elif echo "$ATTACKER_ARN" | grep -q ":assumed-role/"; then
 fi
 ```
 
-#### Step 3 — Cut the instance's ability to receive more commands
+#### Step 3: Cut the instance's ability to receive more commands
 
 Deny SSM on the instance role so no further RunCommand can execute, without yet
 destroying forensic state on the host.
@@ -445,13 +461,13 @@ aws iam put-role-policy --role-name "$ROLE_NAME" \
     "Version": "2012-10-17",
     "Statement": [{"Effect":"Deny","Action":["ssm:*","ssmmessages:*","ec2messages:*"],"Resource":"*"}]
   }'
-echo "[OK] SSM denied for $ROLE_NAME — no further SendCommand can execute on the host"
+echo "[OK] SSM denied for $ROLE_NAME, no further SendCommand can execute on the host"
 ```
 
-#### Step 4 — Snapshot, then isolate the instance
+#### Step 4: Snapshot, then isolate the instance
 
 Preserve evidence before network isolation. Step 3 has already severed command
-execution, so a strict zero-egress quarantine is safe here — SSM-based on-host
+execution, so a strict zero-egress quarantine is safe here - SSM-based on-host
 forensics is already off the table.
 
 ```bash
@@ -483,7 +499,7 @@ if aws ec2 revoke-security-group-egress --group-id "$QSG" --region "$REGION" \
      --ip-permissions 'IpProtocol=-1,IpRanges=[{CidrIp=0.0.0.0/0}]'; then
   echo "[OK] Egress stripped from $QSG"
 else
-  echo "[FAIL] Egress not stripped — $QSG is not a quarantine SG"; exit 1
+  echo "[FAIL] Egress not stripped, $QSG is not a quarantine SG"; exit 1
 fi
 
 # Apply per-ENI (modify-instance-attribute --groups rejects multi-ENI instances)
@@ -508,11 +524,11 @@ role cannot be re-harvested into the same blast radius.
 ```bash
 ROLE_NAME="<instance-role-name>"
 
-# Review what the role can do — this bounded the attacker's reach
+# Review what the role can do: this bounded the attacker's reach
 aws iam list-attached-role-policies --role-name "$ROLE_NAME" --output table
 aws iam list-role-policies --role-name "$ROLE_NAME" --output table
 
-# If the role was over-privileged (it usually is — that is why this is High),
+# If the role was over-privileged (it usually is: that is why this is High),
 # scope it down NOW, before removing the emergency deny. Derive the minimal
 # policy from Query 4 / IAM Access Advisor.
 ```
@@ -520,7 +536,7 @@ aws iam list-role-policies --role-name "$ROLE_NAME" --output table
 #### Terminate and rebuild the instance from a known-good image
 
 An instance that ran attacker shell commands is untrusted. IMDS credential theft
-implies arbitrary code execution on the host, so do not clean in place — replace
+implies arbitrary code execution on the host, so do not clean in place, replace
 it.
 
 ```bash
@@ -539,9 +555,13 @@ aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" --region "$REGION" \
 The role session (Query 4) may have created backdoors. Check for and remove:
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-6H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 aws cloudtrail lookup-events \
-  --start-time "$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     select(.eventName | test("^(CreateUser|CreateAccessKey|CreateLoginProfile|CreateRole|PutUserPolicy|AttachRolePolicy|CreateFunction|ImportKeyPair)$")) |
@@ -576,7 +596,7 @@ ROLE_NAME="<instance-role-name>"
 INSTANCE_ID="<i-xxxxxxxxxxxx>"            # session name for instance-profile creds
 CONTAINED_AT="<iso8601-containment-timestamp>"
 
-# NOTE: key on the instance ID (the session name), NOT the role name — a role-name
+# NOTE: key on the instance ID (the session name), NOT the role name - a role-name
 # Username lookup returns zero events and would make this check ALWAYS print [OK].
 LEAKS=$(aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=Username,AttributeValue="$INSTANCE_ID" \
@@ -589,7 +609,7 @@ LEAKS=$(aws cloudtrail lookup-events \
     select(.sourceIPAddress | endswith("amazonaws.com") | not) | .eventTime' | grep -c .)
 
 [ "$LEAKS" -eq 0 ] && echo "[OK] No successful off-instance role activity since containment" \
-                   || echo "[FAIL] $LEAKS off-instance calls succeeded after containment — attacker still active or new tokens minted"
+                   || echo "[FAIL] $LEAKS off-instance calls succeeded after containment, attacker still active or new tokens minted"
 ```
 
 #### Verify the attacker principal is contained
@@ -669,7 +689,7 @@ echo "IMDSv1 host: expect exactly ONE Rule-B alert on off-instance credential us
 
 ### Recommended Guardrails
 
-**Service Control Policies (SCPs) — apply at OU level**
+**Service Control Policies (SCPs), apply at OU level**
 
 ```json
 // SCP 1: Deny launching/modifying instances that permit IMDSv1
@@ -718,7 +738,7 @@ echo "IMDSv1 host: expect exactly ONE Rule-B alert on off-instance credential us
 
 | Type | Value |
 |------|-------|
-| MITRE technique | T1552.005 — Unsecured Credentials: Cloud Instance Metadata API |
+| MITRE technique | T1552.005 - Unsecured Credentials: Cloud Instance Metadata API |
 | MITRE tactic | Credential Access (TA0006) |
 | Primary API path | `ssm:SendCommand` (AWS-RunShellScript) → IMDS `curl` → `ssm:GetCommandInvocation` → `sts:GetCallerIdentity` |
 | Event sources | `ssm.amazonaws.com`, `sts.amazonaws.com` |
@@ -730,9 +750,9 @@ echo "IMDSv1 host: expect exactly ONE Rule-B alert on off-instance credential us
 ### Revert
 
 `pulumi destroy` in `infra/` removes the EC2 instance, IAM role/instance
-profile, and VPC scaffolding. Nothing else is created by the emulation — the
+profile, and VPC scaffolding. Nothing else is created by the emulation, the
 stolen credentials expire on their own and are not persisted. After a real
 incident (as opposed to an emulation), do **not** rely on `pulumi destroy`
 alone: the instance must be treated as compromised and rebuilt, and the role
-scoped down, per §4 — the Pulumi teardown does not undo attacker persistence
+scoped down, per §4, the Pulumi teardown does not undo attacker persistence
 created with the stolen credentials.

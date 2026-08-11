@@ -1,6 +1,6 @@
 // Steal EC2 Instance Credentials via IMDS (T1552.005)
 //
-// This is Rule B — the real detection — expressed against stored logs:
+// This is Rule B, the real detection, expressed against stored logs:
 // instance-profile credentials used from an IP that is not the instance's.
 // The theft itself happens on the host and never reaches CloudTrail, so the
 // detectable event is the credential being USED somewhere else.
@@ -8,7 +8,7 @@
 // Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 //
 // PREREQUISITE: a Sentinel watchlist named `InstanceRoleIPs` with columns
-// RoleName, AllowedPrivateIp, AllowedNatIp — one row per instance role mapping
+// RoleName, AllowedPrivateIp, AllowedNatIp, one row per instance role mapping
 // it to the IPs it may legitimately call from. Without this the query returns
 // nothing useful; maintaining it is a standing task, not a one-off.
 let InstanceRoleIPs = _GetWatchlist('InstanceRoleIPs');
@@ -23,5 +23,5 @@ AWSCloudTrail
 | summarize Calls = count(), Events = make_set(EventName, 20),
             FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated)
     by RoleName, SourceIpAddress
-| extend Verdict = "INSTANCE CREDENTIAL USED OFF-HOST — exfiltration"
+| extend Verdict = "INSTANCE CREDENTIAL USED OFF-HOST, exfiltration"
 | order by Calls desc

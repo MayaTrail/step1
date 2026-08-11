@@ -1,7 +1,7 @@
 # Execute Commands on EC2 Instances via SSM (T1651)
 #
 # The original rule matched `eventName IN (DescribeInstanceInformation,
-# SendCommand, GetCommandInvocation)` with a bare `condition: selection` — the
+# SendCommand, GetCommandInvocation)` with a bare `condition: selection` - the
 # same broken pattern shipped with the SSM credential-theft and recon
 # techniques. SendCommand and GetCommandInvocation are routine patch
 # operations; DescribeInstanceInformation is pure noise. Matching them
@@ -32,13 +32,14 @@ detection:
     requestParameters.documentName:
       - 'AWS-RunShellScript'
       - 'AWS-RunPowerShellScript'
-  # MAINTAIN THIS LIST — it is the entire difference between a useful rule and
-  # an alert on every patch cycle.
+  # REPLACE these with the roles in YOUR account that legitimately run SSM
+  # commands on instances. The placeholder values below match nothing, so until
+  # they are edited this rule fires on every patch cycle.
   automation_principals:
     userIdentity.arn|contains:
-      - ':role/patch-automation'
-      - ':role/ssm-runner'
-      - ':role/BreakGlassAdmin'
+      - ':role/REPLACE-ME-patch-automation'
+      - ':role/REPLACE-ME-ssm-automation'
+      - ':role/REPLACE-ME-break-glass'
   condition: selection and not automation_principals
 falsepositives:
   - Break-glass administration via Run Command
@@ -50,7 +51,7 @@ level: high
 # IMPORTANT: CloudTrail OFTEN OMITS the command body. A rule keyed on
 # requestParameters.parameters.commands silently matches nothing wherever SSM
 # does not record it (and a custom document using NoEcho hides it deliberately).
-# Treat this as a bonus signal layered on the rule above — never as the primary
+# Treat this as a bonus signal layered on the rule above: never as the primary
 # detection. Where SSM output logging to S3/CloudWatch is enabled, run the
 # equivalent match against the logged command text instead, which is reliable.
 title: SSM SendCommand body contains download-and-execute tokens
@@ -80,7 +81,7 @@ detection:
       - '169.254.169.254'
   condition: selection
 falsepositives:
-  - Legitimate bootstrap and package-install commands using curl/wget — inspect
+  - Legitimate bootstrap and package-install commands using curl/wget, inspect
     the destination host
 level: high
 ---
@@ -90,7 +91,7 @@ title: SSM command enumeration and result retrieval
 id: c50a92e7-1b84-4f36-9d28-7ae3c0f61b5d
 status: experimental
 description: >-
-  Supporting context for SSM execution investigations — who looked up managed
+  Supporting context for SSM execution investigations, who looked up managed
   instances and who collected command output.
 tags:
   - attack.execution
@@ -107,5 +108,5 @@ detection:
       - 'ListCommandInvocations'
   condition: selection
 falsepositives:
-  - Routine automation — the overwhelming majority
+  - Routine automation, the overwhelming majority
 level: low

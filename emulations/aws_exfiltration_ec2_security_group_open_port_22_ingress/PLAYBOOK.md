@@ -1,4 +1,4 @@
-# IR Playbook: Open Ingress Port 22 on Security Group — Internet-Exposed SSH via `ec2:AuthorizeSecurityGroupIngress`
+# IR Playbook - Open Ingress Port 22 on Security Group - Internet-Exposed SSH via `ec2:AuthorizeSecurityGroupIngress`
 
 ## Classification
 
@@ -6,19 +6,19 @@
 |-------|-------|
 | Incident Type | Defense Evasion / Cloud Firewall Modification (internet-exposed admin port) |
 | Emulation Tier | Atomic technique |
-| Threat Actor | N/A — single-technique emulation, not actor-attributed |
+| Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High — exposes SSH on every instance in the group to the entire internet, enabling brute-force and direct access |
-| MITRE Tactics | Defense Evasion (MANIFEST tags Exfiltration — see mapping note in §6) |
+| Severity | High, exposes SSH on every instance in the group to the entire internet, enabling brute-force and direct access |
+| MITRE Tactics | Defense Evasion (MANIFEST tags Exfiltration, see mapping note in §6) |
 | MITRE Techniques | T1562.007 |
 | Services in Scope | EC2 (Security Groups), CloudTrail, GuardDuty, AWS Config, VPC Flow Logs |
 | Infrastructure Created | 1 EC2 Security Group with no initial ingress (via `infra/`) |
 
-**What the emulation does:** calls `ec2:AuthorizeSecurityGroupIngress` to add an inbound rule allowing TCP **port 22 from `0.0.0.0/0`** — SSH open to the entire internet — on the target security group. Its revert removes the rule with `ec2:RevokeSecurityGroupIngress`. Every EC2 instance associated with that group instantly becomes reachable on SSH from any IP on the planet.
+**What the emulation does:** calls `ec2:AuthorizeSecurityGroupIngress` to add an inbound rule allowing TCP **port 22 from `0.0.0.0/0`** - SSH open to the entire internet, on the target security group. Its revert removes the rule with `ec2:RevokeSecurityGroupIngress`. Every EC2 instance associated with that group instantly becomes reachable on SSH from any IP on the planet.
 
-**Why the rule content is the signal, not the API call.** `ec2:AuthorizeSecurityGroupIngress` is a routine operation — teams add ingress rules constantly. What makes *this* one an incident is the **combination inside `ipPermissions`**: a port range that includes an admin port (22 SSH, 3389 RDP), a source of `0.0.0.0/0` (or `::/0`), and a principal/context that isn't a reviewed infrastructure change. The shipped rule (§2) matches every authorize/revoke with no inspection of port or CIDR, so it is both noise and blind to the actual condition.
+**Why the rule content is the signal, not the API call.** `ec2:AuthorizeSecurityGroupIngress` is a routine operation, teams add ingress rules constantly. What makes *this* one an incident is the **combination inside `ipPermissions`**: a port range that includes an admin port (22 SSH, 3389 RDP), a source of `0.0.0.0/0` (or `::/0`), and a principal/context that isn't a reviewed infrastructure change. The shipped rule (§2) matches every authorize/revoke with no inspection of port or CIDR, so it is both noise and blind to the actual condition.
 
-**Generalise beyond literal port 22.** The emulation opens 22, but the same technique opens 3389 (RDP), a wide range (`0–65535`) that *contains* 22, or uses IPv6 `::/0`. A detection that matches only `fromPort == 22` and only `cidrIp` misses the range-containment and IPv6 variants. Match on **range-contains-admin-port AND world-CIDR (v4 or v6)**.
+**Generalise beyond literal port 22.** The emulation opens 22, but the same technique opens 3389 (RDP), a wide range (`0-65535`) that *contains* 22, or uses IPv6 `::/0`. A detection that matches only `fromPort == 22` and only `cidrIp` misses the range-containment and IPv6 variants. Match on **range-contains-admin-port AND world-CIDR (v4 or v6)**.
 
 **The exposure is the emergency; the follow-on is the damage.** The open rule is a door; brute-force or direct SSH through it is the intrusion. Close the door first (revoke), then determine who walked through it (Flow Logs / GuardDuty brute-force / on-host auth logs).
 
@@ -30,13 +30,13 @@
 
 **Logging & Visibility**
 - CloudTrail multi-region trail, management events `ReadWriteType: All`, delivered to S3 (versioned, MFA delete) and to a log platform. `AuthorizeSecurityGroupIngress` is a management event, so `lookup-events` works
-- CloudTrail records the full `ipPermissions` structure (ports, protocol, `ipRanges`/`ipv6Ranges` CIDRs) in `requestParameters` — so the port/CIDR discriminator is available in the event itself
-- GuardDuty enabled in all regions — `UnauthorizedAccess:EC2/SSHBruteForce` / `RDPBruteForce` confirm follow-on attacks through the opened port
-- **AWS Config** with the managed rules `restricted-ssh` (a.k.a. `INCOMING_SSH_DISABLED`) and `vpc-sg-open-only-to-authorized-ports` — detective control that flags any SG open to `0.0.0.0/0` on 22, and can drive auto-remediation
-- VPC Flow Logs on all VPCs — to see inbound connections on the exposed port
+- CloudTrail records the full `ipPermissions` structure (ports, protocol, `ipRanges`/`ipv6Ranges` CIDRs) in `requestParameters`, so the port/CIDR discriminator is available in the event itself
+- GuardDuty enabled in all regions, `UnauthorizedAccess:EC2/SSHBruteForce` / `RDPBruteForce` confirm follow-on attacks through the opened port
+- **AWS Config** with the managed rules `restricted-ssh` (a.k.a. `INCOMING_SSH_DISABLED`) and `vpc-sg-open-only-to-authorized-ports`, detective control that flags any SG open to `0.0.0.0/0` on 22, and can drive auto-remediation
+- VPC Flow Logs on all VPCs, to see inbound connections on the exposed port
 
 **Alerting (must be pre-configured)**
-- **`ec2:AuthorizeSecurityGroupIngress` where the new rule opens an admin port (22/3389) — or a range containing one, or all ports — to `0.0.0.0/0` or `::/0` → alert.** This is the primary control; it must inspect the `ipPermissions` content
+- **`ec2:AuthorizeSecurityGroupIngress` where the new rule opens an admin port (22/3389), or a range containing one, or all ports, to `0.0.0.0/0` or `::/0` → alert.** This is the primary control; it must inspect the `ipPermissions` content
 - The same for `ec2:ModifySecurityGroupRules` (the newer API that can achieve the same exposure) and `ec2:AuthorizeSecurityGroupIngress` referencing a prefix list that resolves to broad ranges
 - GuardDuty `UnauthorizedAccess:EC2/SSHBruteForce` → SNS → on-call
 - AWS Config `restricted-ssh` non-compliant → auto-remediation (revoke) + notify
@@ -48,9 +48,9 @@
 - On-host SSH auth-log access (or centralised auth logs) for the exposed instances, to see successful/failed logins
 
 **Known IOC Baselines**
-- Baseline which principals modify security groups — normally a small IaC/network-admin set; an ad-hoc world-open rule from anyone else is anomalous
+- Baseline which principals modify security groups, normally a small IaC/network-admin set; an ad-hoc world-open rule from anyone else is anomalous
 - Baseline the expected ingress of each SG so an added world-open rule is a diff, not a mystery
-- Prefer SSM Session Manager for shell access so **no** SG ever needs port 22 open — a world-open-22 rule is then unambiguously an incident
+- Prefer SSM Session Manager for shell access so **no** SG ever needs port 22 open, a world-open-22 rule is then unambiguously an incident
 
 ---
 
@@ -58,24 +58,24 @@
 
 ### Detection Triggers (prioritized)
 
-#### HIGH-CONFIDENCE — Always Indicate Compromise
+#### HIGH-CONFIDENCE: Always Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
-| P0 | `AuthorizeSecurityGroupIngress`/`ModifySecurityGroupRules` opening an admin port (22/3389) — or a range containing one — to `0.0.0.0/0` or `::/0` | CloudTrail | T1562.007 |
-| P0 | Any ingress rule opening **all ports** (`0–65535` or `-1`) to `0.0.0.0/0` | CloudTrail | T1562.007 |
+| P0 | `AuthorizeSecurityGroupIngress`/`ModifySecurityGroupRules` opening an admin port (22/3389), or a range containing one, to `0.0.0.0/0` or `::/0` | CloudTrail | T1562.007 |
+| P0 | Any ingress rule opening **all ports** (`0-65535` or `-1`) to `0.0.0.0/0` | CloudTrail | T1562.007 |
 | P1 | GuardDuty `UnauthorizedAccess:EC2/SSHBruteForce` on an instance in the newly-exposed group | GuardDuty | T1562.007 |
 | P1 | World-open ingress rule added by a principal not on the network-admin/IaC allowlist | CloudTrail | T1562.007 |
 | P1 | AWS Config `restricted-ssh` flips to NON_COMPLIANT | AWS Config | T1562.007 |
 
-#### MEDIUM-CONFIDENCE — May Indicate Compromise
+#### MEDIUM-CONFIDENCE: May Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
 | P2 | World-open ingress on a non-admin but sensitive port (databases: 3306/5432/6379/27017/9200) | CloudTrail | T1562.007 |
 | P2 | Inbound SSH connections on the exposed port from many distinct external IPs (scanning/brute force) | VPC Flow Logs | T1562.007 |
-| P2 | `AuthorizeSecurityGroupIngress` denied at volume (`errorCode = Client.UnauthorizedOperation`) — permission probing | CloudTrail | T1562.007 |
-| P3 | World-open ingress on 80/443 (often legitimate for public web tiers) — review against baseline | CloudTrail | T1562.007 |
+| P2 | `AuthorizeSecurityGroupIngress` denied at volume (`errorCode = Client.UnauthorizedOperation`), permission probing | CloudTrail | T1562.007 |
+| P3 | World-open ingress on 80/443 (often legitimate for public web tiers), review against baseline | CloudTrail | T1562.007 |
 
 ### Detection Rule Quality Notes
 
@@ -83,14 +83,14 @@ The rules in `detections/` are unusable as written. These are correctness/noise 
 
 | Issue | Impact | Correction |
 |-------|--------|-----------|
-| Sigma/KQL match `eventName IN (AuthorizeSecurityGroupIngress, RevokeSecurityGroupIngress)` with `condition: selection` | Noisy and blind. Adding ingress rules is routine; the rule fires on every SG change and inspects nothing. `RevokeSecurityGroupIngress` is the *cleanup*, not the attack — pure noise | Alert on `Authorize`/`ModifySecurityGroupRules` only, and inspect the `ipPermissions` for port + world-CIDR |
+| Sigma/KQL match `eventName IN (AuthorizeSecurityGroupIngress, RevokeSecurityGroupIngress)` with `condition: selection` | Noisy and blind. Adding ingress rules is routine; the rule fires on every SG change and inspects nothing. `RevokeSecurityGroupIngress` is the *cleanup*, not the attack, pure noise | Alert on `Authorize`/`ModifySecurityGroupRules` only, and inspect the `ipPermissions` for port + world-CIDR |
 | No port / CIDR inspection | The entire signal (admin port + `0.0.0.0/0`) is exactly what an event-name match ignores | Parse `ipPermissions`: `fromPort <= <admin-port> <= toPort` (range containment) AND `cidrIp == 0.0.0.0/0` or `cidrIpv6 == ::/0` |
 | Only literal port 22, only IPv4 (per the description) | Misses range-contains-22, all-ports, 3389/RDP, and IPv6 `::/0` variants | Check range containment for the admin-port set and both `ipRanges` and `ipv6Ranges` |
 | `ModifySecurityGroupRules` absent | The newer API achieves the same exposure and evades an Authorize-only rule | Include it |
 | No principal allowlist | Cannot separate a reviewed IaC change from an attacker | Compare against the network-admin/IaC allowlist |
 | Header TODO "verify acronym casing"; `level: medium` on a HIGH-severity exposure | Stale marker; under-rated | Resolve TODO; world-open admin port → `level: high` |
 
-**Recommended detection — inspect the rule content.** This needs field extraction over `ipPermissions`, best expressed in the log platform (Query 3). A single-event Sigma rule can approximate it where the backend supports nested field matching:
+**Recommended detection, inspect the rule content.** This needs field extraction over `ipPermissions`, best expressed in the log platform (Query 3). A single-event Sigma rule can approximate it where the backend supports nested field matching:
 
 ```yaml
 title: Security group ingress opened to the world on an admin port
@@ -118,12 +118,12 @@ detection:
 level: high
 ```
 
-The `|contains` substring approach is a pragmatic approximation — it can miss a
+The `|contains` substring approach is a pragmatic approximation, it can miss a
 range like `fromPort:20,toPort:23` that *contains* 22 without equalling it. The
 authoritative check is the structured range-containment logic in Query 3; deploy
 that as the real detection and treat the Sigma rule as a coarse first alert.
 
-**On error strings:** EC2 CloudTrail errors carry a `Client.` prefix —
+**On error strings:** EC2 CloudTrail errors carry a `Client.` prefix,
 `Client.UnauthorizedOperation`, `Client.InvalidPermission.Duplicate` (rule already
 exists). Match the prefixed form and confirm against a sample event.
 
@@ -131,16 +131,20 @@ exists). Match the prefixed form and confirm against a sample event.
 
 ### Key Investigation Queries
 
-> CloudTrail extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'` — robust, unlike `--output text | jq`.
+> CloudTrail extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`, robust, unlike `--output text | jq`.
 
-#### Query 1 — Find world-open ingress authorizations and inspect the rule content
+#### Query 1: Find world-open ingress authorizations and inspect the rule content
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-6H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=AuthorizeSecurityGroupIngress \
-  --start-time "$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     . as $e |
@@ -163,9 +167,9 @@ aws cloudtrail lookup-events \
 
 Flag any row whose `[fromPort,toPort]` range contains 22 or 3389, or where
 `protocol == "-1"` (all traffic). `fromPort: -1` with `protocol: -1` means **all
-ports, all protocols** to the world — the worst case.
+ports, all protocols** to the world, the worst case.
 
-#### Query 2 — Blast radius: which instances/ENIs are in the exposed group?
+#### Query 2 - Blast radius: which instances/ENIs are in the exposed group?
 
 ```bash
 REGION="us-east-1"
@@ -185,11 +189,11 @@ aws ec2 describe-network-interfaces --region "$REGION" \
 ```
 
 Instances with a **public IP** in this group are internet-reachable on the opened
-port *now* — prioritise those.
+port *now*, prioritise those.
 
-#### Query 3 — Deployable detection (log platform): range-aware content inspection
+#### Query 3 - Deployable detection (log platform): range-aware content inspection
 
-**Dialect: Sentinel / Azure Log Analytics KQL** — not CloudWatch Logs Insights. Expands `ipPermissions` and checks range-containment + world-CIDR.
+**Dialect: Sentinel / Azure Log Analytics KQL**, not CloudWatch Logs Insights. Expands `ipPermissions` and checks range-containment + world-CIDR.
 
 ```kql
 AWSCloudTrail
@@ -200,7 +204,7 @@ AWSCloudTrail
 | mv-expand Perm = Req.ipPermissions.items
 | extend FromPort = toint(Perm.fromPort), ToPort = toint(Perm.toPort),
          Proto = tostring(Perm.ipProtocol)
-// Use `contains` (substring), NOT `has` — `has` is whole-term and CIDR strings
+// Use `contains` (substring), NOT `has`, `has` is whole-term and CIDR strings
 // contain `.`/`/` delimiters, so `has "0.0.0.0/0"` silently never matches.
 | extend WorldV4 = tostring(Perm.ipRanges) contains "0.0.0.0/0"
 | extend WorldV6 = tostring(Perm.ipv6Ranges) contains "::/0"
@@ -214,7 +218,7 @@ AWSCloudTrail
 | where HitsAdminPort
 | project TimeGenerated, UserIdentityArn, SourceIpAddress,
           SG = tostring(Req.groupId), Proto, FromPort, ToPort, WorldV4, WorldV6, AllPorts
-| extend Verdict = iff(AllPorts, "ALL PORTS OPEN TO WORLD — P0", "ADMIN PORT OPEN TO WORLD — P0")
+| extend Verdict = iff(AllPorts, "ALL PORTS OPEN TO WORLD - P0", "ADMIN PORT OPEN TO WORLD - P0")
 | order by TimeGenerated desc
 ```
 
@@ -229,13 +233,15 @@ fields @timestamp, userIdentity.arn, requestParameters.groupId
 | filter @message like /"fromPort":(22|3389|0)/
 ```
 
-#### Query 4 — Did anyone connect through the open port? (the follow-on)
+#### Query 4: Did anyone connect through the open port? (the follow-on)
 
 ```bash
 # VPC Flow Logs (CloudWatch Logs): inbound ACCEPT on port 22 to an exposed ENI
 LOG_GROUP="/vpc/flowlogs"
 ENI_ID="<eni-of-an-exposed-instance-from-Query-2>"
-START=$(date -u -d '4 hours ago' +%s)
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '4 hours ago' +%s 2>/dev/null \
+        || date -u -v-4H +%s)
 
 aws logs filter-log-events --log-group-name "$LOG_GROUP" \
   --start-time "${START}000" --filter-pattern "\"$ENI_ID\"" \
@@ -245,17 +251,21 @@ aws logs filter-log-events --log-group-name "$LOG_GROUP" \
 ```
 
 Many distinct source IPs = internet scanning/brute force. Cross-check accepted
-sources against the on-host SSH auth logs for **successful** logins — a successful
+sources against the on-host SSH auth logs for **successful** logins, a successful
 login from an unrecognised IP escalates this to a host-compromise incident.
 
-#### Query 5 — Full session reconstruction of the principal
+#### Query 5: Full session reconstruction of the principal
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 ACCESS_KEY_ID="<access-key-from-Query-1>"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=AccessKeyId,AttributeValue="$ACCESS_KEY_ID" \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region us-east-1 --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, event: .eventName, source: .eventSource,
@@ -266,10 +276,10 @@ aws cloudtrail lookup-events \
 Look for *other* SG changes by the same principal (they may have opened more than
 one group / port) and for what they did next through the opened access.
 
-#### Query 6 — Multi-region + account-wide sweep for world-open admin ports
+#### Query 6: Multi-region + account-wide sweep for world-open admin ports
 
 Independent of this incident, find every SG currently exposing an admin port to
-the world — the attacker may have opened several, and legacy exposures may exist.
+the world, the attacker may have opened several, and legacy exposures may exist.
 
 ```bash
 for REGION in $(aws ec2 describe-regions --query 'Regions[*].RegionName' --output text); do
@@ -289,14 +299,14 @@ done
 
 ### Immediate Actions (first 15 minutes)
 
-The open rule is the emergency. **Revoke it first** — that closes the door
+The open rule is the emergency. **Revoke it first**, that closes the door
 instantly and is fully reversible if it turns out legitimate. Then contain the
 principal and assess who connected.
 
 > Run every command under the **break-glass responder credentials** from §1, not
 > under any principal being contained.
 
-#### Step 1 — Revoke the world-open rule (close the door)
+#### Step 1: Revoke the world-open rule (close the door)
 
 ```bash
 REGION="us-east-1"
@@ -318,7 +328,7 @@ aws ec2 describe-security-groups --group-ids "$SG_ID" --region "$REGION" \
   --output json
 ```
 
-#### Step 2 — Contain the principal that opened it
+#### Step 2: Contain the principal that opened it
 
 ```bash
 SUSPECT_ARN="<caller-arn-from-Query-1>"
@@ -338,7 +348,7 @@ elif echo "$SUSPECT_ARN" | grep -q ":assumed-role/"; then
 fi
 ```
 
-#### Step 3 — Deny further SG modification by the principal
+#### Step 3: Deny further SG modification by the principal
 
 The steps below (and the Eradication/Recovery cleanups that reference
 `SUSPECT_ROLE`) are for a **role** principal. If the suspect is an **IAM user**,
@@ -357,11 +367,11 @@ aws iam put-role-policy --role-name "$SUSPECT_ROLE" \
 echo "[OK] Security-group modification denied for $SUSPECT_ROLE"
 ```
 
-#### Step 4 — If instances were connected to, isolate them
+#### Step 4: If instances were connected to, isolate them
 
 If Query 4 shows accepted inbound SSH from unrecognised IPs (especially a
 *successful* login), isolate those instances into a no-egress quarantine SG and
-snapshot for forensics (per the credential-theft playbook's helper) — treat them
+snapshot for forensics (per the credential-theft playbook's helper), treat them
 as potentially compromised, not merely exposed.
 
 ```bash
@@ -372,7 +382,7 @@ for VOL in $(aws ec2 describe-instances --instance-ids "$CONNECTED_INSTANCE" --r
   aws ec2 create-snapshot --volume-id "$VOL" --region "$REGION" \
     --description "IR-T1562.007-$CONNECTED_INSTANCE-$(date -u +%Y%m%dT%H%M%SZ)" --query 'SnapshotId' --output text
 done
-echo "[OK] Snapshot started for $CONNECTED_INSTANCE — apply quarantine SG next"
+echo "[OK] Snapshot started for $CONNECTED_INSTANCE, apply quarantine SG next"
 ```
 
 ---
@@ -400,7 +410,7 @@ aws ec2 revoke-security-group-ingress --group-id "$SG_ID" --region "$REGION" \
 ```bash
 # For every exposed instance, correlate Query 4 accepted-inbound sources against
 # on-host SSH auth logs. A SUCCESSFUL login from an unrecognised IP means the host
-# is compromised — pivot to host IR and rebuild it.
+# is compromised: pivot to host IR and rebuild it.
 echo "For each exposed instance: review /var/log/auth.log (or secure) for 'Accepted'"
 echo "SSH logins from the Query 4 source IPs. Any success => host compromised => rebuild."
 ```
@@ -413,7 +423,7 @@ aws iam list-attached-role-policies --role-name "$SUSPECT_ROLE" --output table
 aws iam list-role-policies --role-name "$SUSPECT_ROLE" --output table
 # Remove ec2:AuthorizeSecurityGroupIngress / ModifySecurityGroupRules from principals
 # that are not network-admin/IaC. NOTE: IAM cannot condition these actions on the
-# CIDR/port of the rule (see Guardrails) — restriction is by principal, plus a
+# CIDR/port of the rule (see Guardrails): restriction is by principal, plus a
 # Config auto-remediation backstop.
 ```
 
@@ -460,7 +470,7 @@ COUNT=$(aws cloudtrail lookup-events \
     select(.userIdentity.arn == $arn) | select(.errorCode == null) | .eventTime' | grep -c .)
 
 [ "$COUNT" -eq 0 ] && echo "[OK] No further ingress authorizations from $SUSPECT_ARN since containment" \
-                   || echo "[FAIL] $COUNT further authorizations — containment did not hold"
+                   || echo "[FAIL] $COUNT further authorizations, containment did not hold"
 ```
 
 #### Verify the credential is dead
@@ -490,6 +500,10 @@ aws configservice get-compliance-details-by-config-rule \
 #### Confirm the corrected detection fires
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-30M +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 SG_ID="<test-sg-id>"
 
@@ -497,7 +511,7 @@ SG_ID="<test-sg-id>"
 # the port + CIDR content the corrected rule keys on
 HIT=$(aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=AuthorizeSecurityGroupIngress \
-  --start-time "$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r --arg sg "$SG_ID" '[.Events[].CloudTrailEvent | fromjson |
     select(.requestParameters.groupId == $sg) |
@@ -505,8 +519,8 @@ HIT=$(aws cloudtrail lookup-events \
       (.fromPort <= 22 and .toPort >= 22) and
       ((.ipRanges.items // []) | any(.cidrIp == "0.0.0.0/0")))] | length')
 
-[ -n "$HIT" ] && [ "$HIT" -gt 0 ] && echo "[OK] World-open-22 authorization captured — the rule has data to fire on" \
-                                  || echo "[FAIL] Not captured — check trail / ipPermissions field path"
+[ -n "$HIT" ] && [ "$HIT" -gt 0 ] && echo "[OK] World-open-22 authorization captured, the rule has data to fire on" \
+                                  || echo "[FAIL] Not captured, check trail / ipPermissions field path"
 echo "Confirm the deployed rule classified it ADMIN PORT OPEN TO WORLD, and did NOT"
 echo "fire on the benign RevokeSecurityGroupIngress cleanup."
 ```
@@ -528,7 +542,7 @@ echo "fire on the benign RevokeSecurityGroupIngress cleanup."
 ### Recommended Guardrails
 
 **Auto-remediate world-open admin ports (the primary control)**
-- IAM **cannot** condition `AuthorizeSecurityGroupIngress` on the rule's CIDR or port — there is no request-context key for the rule content. So prevention-by-IAM is not possible for the rule itself; the effective control is **detective + auto-remediation**:
+- IAM **cannot** condition `AuthorizeSecurityGroupIngress` on the rule's CIDR or port, there is no request-context key for the rule content. So prevention-by-IAM is not possible for the rule itself; the effective control is **detective + auto-remediation**:
   - AWS Config managed rule `restricted-ssh` (and `restricted-common-ports`) → **auto-remediation** (`AWS-DisablePublicAccessForSecurityGroup` / a Lambda) that revokes the offending rule within minutes
   - An EventBridge rule on `AuthorizeSecurityGroupIngress` → Lambda that inspects `ipPermissions` and auto-revokes world-open admin rules, alerting the owner
 
@@ -547,10 +561,10 @@ echo "fire on the benign RevokeSecurityGroupIngress cleanup."
 ```
 
 **Remove the need for open SSH entirely**
-- Use **SSM Session Manager** for shell access so no security group ever needs port 22 open to anything — this eliminates the attack's usefulness (and ties to the SSM-session playbook's guidance). If SSH is truly required, restrict source to a bastion/VPN CIDR, never `0.0.0.0/0`
+- Use **SSM Session Manager** for shell access so no security group ever needs port 22 open to anything, this eliminates the attack's usefulness (and ties to the SSM-session playbook's guidance). If SSH is truly required, restrict source to a bastion/VPN CIDR, never `0.0.0.0/0`
 
 **Detection improvements**
-- Deploy the content-inspection rule (Query 3): world-CIDR + admin-port range-containment on `Authorize`/`ModifySecurityGroupRules` — never the shipped all-event match
+- Deploy the content-inspection rule (Query 3): world-CIDR + admin-port range-containment on `Authorize`/`ModifySecurityGroupRules`, never the shipped all-event match
 - Alert GuardDuty `UnauthorizedAccess:EC2/SSHBruteForce` and correlate with the exposure event
 - Alert AWS Config `restricted-ssh` NON_COMPLIANT
 
@@ -558,14 +572,14 @@ echo "fire on the benign RevokeSecurityGroupIngress cleanup."
 
 | Type | Value |
 |------|-------|
-| MITRE technique | T1562.007 — Impair Defenses: Disable or Modify Cloud Firewall |
+| MITRE technique | T1562.007 - Impair Defenses: Disable or Modify Cloud Firewall |
 | MITRE tactic | Defense Evasion (TA0005) |
 | Primary API | `ec2:AuthorizeSecurityGroupIngress` (also `ec2:ModifySecurityGroupRules`); `Revoke...` on cleanup |
 | Event source | `ec2.amazonaws.com` |
-| Key discriminator | An `ipPermissions` rule whose port range contains an admin port (22/3389) — or all ports — with source `0.0.0.0/0` or `::/0`. The event name alone is not a signal |
+| Key discriminator | An `ipPermissions` rule whose port range contains an admin port (22/3389), or all ports, with source `0.0.0.0/0` or `::/0`. The event name alone is not a signal |
 | Generalise | Match range-containment (not `fromPort==22`), both IPv4 and IPv6, and the all-ports (`-1`) case |
 | Follow-on confirmation | GuardDuty `UnauthorizedAccess:EC2/SSHBruteForce`; inbound Flow Logs; on-host SSH auth logs |
-| IAM limitation | `AuthorizeSecurityGroupIngress` is NOT conditionable on CIDR/port — guardrail is Config auto-remediation + principal restriction, not an IAM condition on the rule |
+| IAM limitation | `AuthorizeSecurityGroupIngress` is NOT conditionable on CIDR/port, guardrail is Config auto-remediation + principal restriction, not an IAM condition on the rule |
 | Error strings (`Client.`-prefixed) | `Client.UnauthorizedOperation`, `Client.InvalidPermission.Duplicate` |
 | Resources created | 1 EC2 security group (no initial ingress) |
 | Follow-on to watch for | SSH brute force / successful login through the opened port → host compromise |
@@ -581,7 +595,7 @@ artefact. Recorded for the end-of-run MITRE-mapping finding.
 
 `pulumi destroy` in `infra/` removes the security group. The emulation's revert
 also calls `RevokeSecurityGroupIngress` to remove the world-open rule, so a normal
-run self-cleans. After a **real** incident, `pulumi destroy` is irrelevant — revoke
+run self-cleans. After a **real** incident, `pulumi destroy` is irrelevant, revoke
 the rule immediately (§3), sweep for other world-open rules (§4), and rebuild any
 instance that was successfully accessed through the opening; tearing down one SG
 does not address other exposures or a host that was logged into.

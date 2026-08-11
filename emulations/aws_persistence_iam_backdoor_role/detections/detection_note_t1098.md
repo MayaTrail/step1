@@ -1,4 +1,4 @@
-# Detection Note — T1098 (Backdoor IAM Role Trust Policy)
+# Detection Note: T1098 (Backdoor IAM Role Trust Policy)
 
 **Signal:** `iam:UpdateAssumeRolePolicy` (or `CreateRole`) adding an external
 account or a wildcard principal to a role's trust policy.
@@ -25,11 +25,11 @@ escapes the structural characters:
 So a substring pattern like `'"AWS":"*"'` **never matches the raw event**. A
 Sigma rule written that way detects nothing at all, silently.
 
-What survives encoding verbatim: **12-digit account IDs** — plain digits are
+What survives encoding verbatim: **12-digit account IDs**, plain digits are
 not escaped. That is the whole reason the Sigma rule here is scoped to
 *known-bad account IDs* and nothing more.
 
-The general case — *any* account outside the org, or a wildcard — **requires
+The general case, *any* account outside the org, or a wildcard, **requires
 decoding** the document. That is the KQL path, and it is the standing
 detection. The Sigma rule is an IOC catcher only.
 
@@ -39,8 +39,8 @@ detection. The Sigma rule is an IOC catcher only.
 `requestParameters.policyDocument`. `CreateRole` stores it in
 `requestParameters.assumeRolePolicyDocument`. **No single event has both.**
 
-They must be OR'd as sibling blocks. ANDing them inside one selection — which
-Sigma does implicitly for sibling keys — means the rule never fires for either
+They must be OR'd as sibling blocks. ANDing them inside one selection, which
+Sigma does implicitly for sibling keys, means the rule never fires for either
 event. This is an easy and completely silent failure.
 
 **Include `CreateRole`.** An attacker can create a *new* role trusting
@@ -68,18 +68,18 @@ account in `userIdentity.accountId` while the role belongs to yours.
 `AccessDeniedException`; a bad policy as `MalformedPolicyDocument`. Not
 `Client.`-prefixed like EC2.
 
-**MITRE:** T1098 (*Account Manipulation*) is correct — no caveat.
+**MITRE:** T1098 (*Account Manipulation*) is correct, no caveat.
 
-**Severity:** manifest MEDIUM; IR view **High** — durable cross-account
+**Severity:** manifest MEDIUM; IR view **High**, durable cross-account
 persistence that survives credential rotation.
 
 **GuardDuty:** no finding type specific to this technique.
 
 **Files here:**
-- `sigma_t1098.yml` — two documents: the known-bad-account IOC catcher
+- `sigma_t1098.yml`, two documents: the known-bad-account IOC catcher
   (`critical`) and cross-account `AssumeRole` usage (`high`). Replace the
   placeholder account IDs before deploying.
-- `kql_t1098.kql` — the authoritative decode-and-compare detection covering
+- `kql_t1098.kql`, the authoritative decode-and-compare detection covering
   wildcards and arbitrary external accounts.
 
 Full response procedure is in `../PLAYBOOK.md`.

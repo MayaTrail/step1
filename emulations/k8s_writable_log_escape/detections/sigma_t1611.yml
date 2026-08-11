@@ -16,7 +16,6 @@ date: 2026/06/28
 tags:
   - attack.privilege_escalation
   - attack.t1611
-  - kubernetes
 logsource:
   product: kubernetes
   service: audit

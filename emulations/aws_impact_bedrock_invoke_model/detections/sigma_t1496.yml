@@ -7,7 +7,7 @@
 #   1. No threshold. The technique is defined by VOLUME, not occurrence, so a
 #      1:1 rule fires on the constant legitimate traffic of any ML workload and
 #      gets muted.
-#   2. No eventSource scoping — a bare `InvokeModel` match across all sources
+#   2. No eventSource scoping: a bare `InvokeModel` match across all sources
 #      is imprecise and risks name collisions.
 #   3. Only the one event name; the streaming and Converse APIs achieve the
 #      same thing.
@@ -16,7 +16,7 @@ id: 778e06a0-fd6a-5354-bf6e-31d752f9117d
 name: bedrock_invoke_base
 status: experimental
 description: >-
-  A Bedrock model invocation. Base rule for the volume correlation — fires on
+  A Bedrock model invocation. Base rule for the volume correlation, fires on
   all legitimate traffic by design and is not for direct alerting.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.impact.bedrock-invoke-model/
@@ -61,7 +61,7 @@ correlation:
   condition:
     gt: 100          # tune to the workload baseline; the emulation loops rapidly
 falsepositives:
-  - Batch inference and evaluation jobs — allowlist those principals
+  - Batch inference and evaluation jobs, allowlist those principals
 level: high
 ---
 # The blinding precursor. Invocation logging is what captures prompt and
@@ -89,5 +89,5 @@ detection:
       - 'PutModelInvocationLoggingConfiguration'   # review: was logging weakened?
   condition: selection
 falsepositives:
-  - Legitimate logging reconfiguration — correlate with change management
+  - Legitimate logging reconfiguration, correlate with change management
 level: high

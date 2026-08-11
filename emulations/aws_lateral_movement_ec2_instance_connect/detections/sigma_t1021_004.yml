@@ -2,11 +2,11 @@
 #
 # The original rule matched a bare `eventName: SendSSHPublicKey` with no
 # eventSource and no other qualifier. Under-scoped rather than catastrophically
-# noisy — the API is rare — but it could not distinguish an operator's
+# noisy - the API is rare: but it could not distinguish an operator's
 # break-glass access from an attacker, and it missed the fan-out that the
 # technique is named for.
 #
-# KEY PROPERTY: the pushed key is ephemeral — valid for ~60 seconds, and it
+# KEY PROPERTY: the pushed key is ephemeral - valid for ~60 seconds, and it
 # leaves NO artifact in the instance's authorized_keys. Auditing host key files
 # after the fact finds nothing. Detection must be control-plane (this rule)
 # plus network (Flow Logs inbound 22).
@@ -16,7 +16,7 @@ name: eic_sendsshkey_base
 status: experimental
 description: >-
   An ephemeral SSH public key was pushed to an instance by a principal outside
-  the operator allowlist. Fires on a single instance — one push is enough to
+  the operator allowlist. Fires on a single instance, one push is enough to
   obtain an interactive shell.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.lateral-movement.ec2-instance-connect/
@@ -31,14 +31,17 @@ detection:
   selection:
     eventSource: 'ec2-instance-connect.amazonaws.com'
     eventName: 'SendSSHPublicKey'
+  # REPLACE these with the roles in YOUR account that legitimately push SSH
+  # keys through EC2 Instance Connect. The placeholder values below match
+  # nothing, so until they are edited this rule fires on every operator
+  # connection.
   operators:
     userIdentity.arn|contains:
-      - ':role/ssm-operator'
-      - ':role/break-glass'
-      - ':role/BreakGlassAdmin'
+      - ':role/REPLACE-ME-ssm-operator'
+      - ':role/REPLACE-ME-break-glass'
   condition: selection and not operators
 falsepositives:
-  - Engineers using Instance Connect outside the operator role — tune the
+  - Engineers using Instance Connect outside the operator role, tune the
     allowlist rather than removing the rule
 level: high
 ---
@@ -49,7 +52,7 @@ id: 6c1a8f42-3b70-4e95-a2d1-9f0c7b6e5a83
 status: experimental
 description: >-
   One principal pushed SSH keys to two or more distinct instances within
-  fifteen minutes — lateral movement across the fleet.
+  fifteen minutes, lateral movement across the fleet.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.lateral-movement.ec2-instance-connect/
 tags:
@@ -68,7 +71,7 @@ correlation:
 level: critical
 ---
 # The EIC Endpoint variant. OpenTunnel reaches instances in PRIVATE subnets
-# with no public IP and no bastion — a rule watching only SendSSHPublicKey
+# with no public IP and no bastion: a rule watching only SendSSHPublicKey
 # misses this path entirely.
 title: EC2 Instance Connect Endpoint tunnel opened
 id: 9a35f7c0-4e82-4b19-8d67-2c0b5a7e93f4
@@ -88,12 +91,15 @@ detection:
   selection:
     eventSource: 'ec2-instance-connect.amazonaws.com'
     eventName: 'OpenTunnel'
+  # REPLACE these with the roles in YOUR account that legitimately push SSH
+  # keys through EC2 Instance Connect. The placeholder values below match
+  # nothing, so until they are edited this rule fires on every operator
+  # connection.
   operators:
     userIdentity.arn|contains:
-      - ':role/ssm-operator'
-      - ':role/break-glass'
-      - ':role/BreakGlassAdmin'
+      - ':role/REPLACE-ME-ssm-operator'
+      - ':role/REPLACE-ME-break-glass'
   condition: selection and not operators
 falsepositives:
-  - Approved private-subnet access paths — allowlist the principal
+  - Approved private-subnet access paths, allowlist the principal
 level: high

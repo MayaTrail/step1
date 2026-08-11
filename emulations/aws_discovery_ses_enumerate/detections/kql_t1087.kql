@@ -1,13 +1,13 @@
 // Enumerate SES for Phishing Capability (T1087)
 //
-// The signal is a FINGERPRINT — several distinct SES capability-reads from one
-// principal in a short window — not any single call. GetSendQuota and
+// The signal is a FINGERPRINT, several distinct SES capability-reads from one
+// principal in a short window, not any single call. GetSendQuota and
 // GetAccountSendingEnabled are read by dashboards and health checks, so a 1:1
 // rule on them is pure noise.
 //
 // SESv2 names (GetAccount, ListEmailIdentities) are included. Without them the
 // detection is trivially evaded by using the v2 SDK. Both v1 and v2 log under
-// ses.amazonaws.com — there is no separate email.amazonaws.com source.
+// ses.amazonaws.com, there is no separate email.amazonaws.com source.
 //
 // IdentityEnum is required in the predicate: quota checks alone are monitoring,
 // but enumerating WHICH verified identities exist is the phishing-specific step.
@@ -28,5 +28,5 @@ AWSCloudTrail
     LastSeen      = max(TimeGenerated)
     by UserIdentityArn, bin(TimeGenerated, 10m)
 | where DistinctReads >= 3 and IdentityEnum > 0
-| extend Verdict = "SES PHISHING-CAPABILITY RECON — P0"
+| extend Verdict = "SES PHISHING-CAPABILITY RECON - P0"
 | order by DistinctReads desc

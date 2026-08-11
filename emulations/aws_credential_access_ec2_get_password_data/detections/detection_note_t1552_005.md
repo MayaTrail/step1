@@ -1,6 +1,6 @@
-# Detection Note — T1552.005 (Retrieve EC2 Windows Password Data)
+# Detection Note: T1552.005 (Retrieve EC2 Windows Password Data)
 
-**Signal:** `ec2:GetPasswordData` called at rate by a single principal —
+**Signal:** `ec2:GetPasswordData` called at rate by a single principal,
 especially against nonexistent or unexpected instance IDs.
 
 **Why occurrence alone is not the signal:** retrieving a Windows administrator
@@ -12,7 +12,7 @@ deployable detections threshold on *rate* and split on `errorCode`.
 
 | Observation | Reading |
 |---|---|
-| `errorCode` absent, at volume | Mass credential retrieval — passwords disclosed |
+| `errorCode` absent, at volume | Mass credential retrieval, passwords disclosed |
 | `Client.InvalidInstanceID.NotFound` at volume | Instance-ID enumeration (guessing, no inventory) |
 | `Client.UnauthorizedOperation` | Permission probing |
 
@@ -23,7 +23,7 @@ hosts shows a high NotFound ratio *and* real disclosures. Treat any
 **Error-string caveat:** EC2 writes CloudTrail `errorCode` with a `Client.`
 prefix. The unprefixed form (`InvalidInstanceID.NotFound`) is the *boto3*
 `Error.Code` seen in `attack.py`; a CloudTrail rule keyed on it matches
-nothing. The Sigma uses `errorCode|contains` to tolerate both — confirm the
+nothing. The Sigma uses `errorCode|contains` to tolerate both, confirm the
 exact string against a sample event before deploying.
 
 **MITRE note:** T1552.005 is canonically *Unsecured Credentials: Cloud Instance
@@ -34,10 +34,10 @@ imprecise; it is retained here for traceability.
 **GuardDuty:** no finding type specific to this technique.
 
 **Files here:**
-- `sigma_t1552_005.yml` — four documents: two base rules (`level: low`, not for
+- `sigma_t1552_005.yml`, four documents: two base rules (`level: low`, not for
   direct alerting) and the two `event_count` correlations that are the actual
   detections.
-- `kql_t1552_005.kql` — Sentinel / Log Analytics threshold query with triage
+- `kql_t1552_005.kql` - Sentinel / Log Analytics threshold query with triage
   fields projected. Not valid CloudWatch Logs Insights.
 
 Full response procedure, including the CLI hunt queries and the containment

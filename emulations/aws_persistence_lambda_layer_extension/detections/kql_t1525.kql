@@ -7,7 +7,7 @@
 // LAYER ARN STRUCTURE (':'-delimited):
 //   arn:aws:lambda:REGION:OWNER_ACCOUNT:layer:NAME:VERSION
 //     field 5 = owner account   field 7 = layer name   field 8 = version
-// The owner account is the strongest allowlist key — it survives layers being
+// The owner account is the strongest allowlist key, it survives layers being
 // renamed or re-versioned.
 //
 // DeleteLayerVersion is excluded from alerting; it is teardown, not persistence.
@@ -30,11 +30,11 @@ AWSCloudTrail
 | where LayerOwner !in (TrustedLayerOwners)
 | project TimeGenerated, UserIdentityArn, FunctionName, LayerArn,
           LayerOwner, LayerName, LayerVer, SourceIpAddress
-| extend Verdict = "UNAPPROVED LAYER ATTACHED — code injection into the function, P0"
+| extend Verdict = "UNAPPROVED LAYER ATTACHED, code injection into the function, P0"
 | order by TimeGenerated desc
 //
 // ============================================================================
-// CONTAINMENT GOTCHA — read before removing the layer
+// CONTAINMENT GOTCHA, read before removing the layer
 // ============================================================================
 // UpdateFunctionConfiguration --layers REPLACES THE ENTIRE LAYER LIST. It does
 // not remove one entry. Re-specify every legitimate layer you intend to keep,
@@ -61,6 +61,6 @@ AWSCloudTrail
 // credentials as compromised. Also delete-layer-version and remove any
 // AddLayerVersionPermission cross-account share.
 //
-// Invoke is DATA-PLANE — see the backdoor-function detection note for the
+// Invoke is DATA-PLANE, see the backdoor-function detection note for the
 // synchronous-invoke null-requestParameters trap when establishing whether the
 // function ran during the exposure window.

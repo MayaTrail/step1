@@ -33,14 +33,18 @@ detection:
       - 'arn:aws:iam::aws:policy/AdministratorAccess'
       - 'arn:aws:iam::aws:policy/IAMFullAccess'
       - 'arn:aws:iam::aws:policy/PowerUserAccess'
+  # REPLACE these with the roles in YOUR account that legitimately attach
+  # admin-equivalent policies to users. The placeholder values below match
+  # nothing, so until they are edited this rule fires on every admin grant you
+  # make yourself.
   identity_admin:
     userIdentity.arn|contains:
-      - ':role/identity-admin'
-      - ':role/iac-deploy'
-      - ':role/BreakGlassAdmin'
+      - ':role/REPLACE-ME-identity-admin'
+      - ':role/REPLACE-ME-iac-deploy'
+      - ':role/REPLACE-ME-break-glass'
   condition: selection and not identity_admin
 falsepositives:
-  - Legitimate privilege grants outside the allowlisted roles — should be rare
+  - Legitimate privilege grants outside the allowlisted roles, should be rare
     and traceable to a change request
 level: critical
 ---
@@ -75,7 +79,7 @@ detection:
       - '"Action":["*"]'
   condition: selection and admin_document
 falsepositives:
-  - Legitimate broad policies for automation identities — review the principal
+  - Legitimate broad policies for automation identities, review the principal
 level: critical
 ---
 title: IAM create-admin-user backdoor sequence
@@ -83,7 +87,7 @@ id: 9d4f2a83-6c15-4e07-b2d1-8a0c9b7e5f94
 status: experimental
 description: >-
   A net-new user created, granted admin, and issued programmatic credentials by
-  the same principal inside ten minutes — the full backdoor fingerprint.
+  the same principal inside ten minutes, the full backdoor fingerprint.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-admin-user/
 tags:
@@ -104,7 +108,7 @@ title: IAM CreateUser
 id: 5a91c7e4-2b60-4d38-9f15-7a0e3c86b241
 name: iam_create_user
 status: experimental
-description: Base rule — sequence component only, not for direct alerting.
+description: Base rule, sequence component only, not for direct alerting.
 tags:
   - attack.persistence
   - attack.t1136.003
@@ -122,7 +126,7 @@ title: IAM CreateAccessKey
 id: 3f80b2d6-7c41-49e5-a8b3-1d92e05fc748
 name: iam_create_access_key
 status: experimental
-description: Base rule — sequence component only, not for direct alerting.
+description: Base rule, sequence component only, not for direct alerting.
 tags:
   - attack.persistence
   - attack.t1136.003

@@ -5,7 +5,7 @@
 # GetFunction fires on every console view and CI read. Neither the principal
 # nor the code hash was checked. GetFunction is demoted to a sequence component.
 #
-# Unlike the layer technique, the overwritten code IS the handler — it runs
+# Unlike the layer technique, the overwritten code IS the handler: it runs
 # UNCONDITIONALLY on every invocation, so execution-role compromise is certain
 # rather than conditional.
 title: Lambda code overwritten by non-deploy principal
@@ -28,14 +28,17 @@ detection:
   selection:
     eventSource: 'lambda.amazonaws.com'
     eventName: 'UpdateFunctionCode'
+  # REPLACE these with the roles in YOUR account that legitimately deploy
+  # Lambda function code. The placeholder values below match nothing, so until
+  # they are edited this rule fires on every deployment.
   deploy_pipeline:
     userIdentity.arn|contains:
-      - ':role/iac-deploy'
-      - ':role/ci-cd'
-      - ':role/BreakGlassAdmin'
+      - ':role/REPLACE-ME-iac-deploy'
+      - ':role/REPLACE-ME-ci'
+      - ':role/REPLACE-ME-break-glass'
   condition: selection and not deploy_pipeline
 falsepositives:
-  - Manual hotfix deploys outside the pipeline — should be rare and traceable
+  - Manual hotfix deploys outside the pipeline, should be rare and traceable
 level: high
 ---
 title: Lambda GetFunction then UpdateFunctionCode sequence
@@ -43,7 +46,7 @@ id: 7b3e0d52-6f84-4a39-b2e7-9a1d8b4f3c58
 status: experimental
 description: >-
   Function code downloaded and then replaced by the same principal within ten
-  minutes — the actor read the original before overwriting it, typically to
+  minutes, the actor read the original before overwriting it, typically to
   preserve behaviour while adding their own.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.lambda-overwrite-code/
@@ -64,7 +67,7 @@ title: Lambda GetFunction
 id: 8c4f1e63-7a95-4b40-a3f8-0b2e9c5a4d69
 name: lambda_get_function
 status: experimental
-description: Base rule — sequence component only, not for direct alerting.
+description: Base rule, sequence component only, not for direct alerting.
 tags:
   - attack.persistence
   - attack.t1525

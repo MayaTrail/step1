@@ -1,4 +1,4 @@
-# IR Playbook: Retrieve a High Number of Secrets Manager Secrets via Batch — Bulk Secret Exfiltration through `secretsmanager:BatchGetSecretValue`
+# IR Playbook - Retrieve a High Number of Secrets Manager Secrets via Batch - Bulk Secret Exfiltration through `secretsmanager:BatchGetSecretValue`
 
 ## Classification
 
@@ -6,23 +6,23 @@
 |-------|-------|
 | Incident Type | Credential Access / Credentials from Password Stores |
 | Emulation Tier | Atomic technique |
-| Threat Actor | N/A — single-technique emulation, not actor-attributed |
+| Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High — every secret returned is disclosed plaintext and must be treated as compromised (`MANIFEST.py` rates MEDIUM; the IR view is High because this exfiltrates live secret material, not just a log signal) |
+| Severity | High, every secret returned is disclosed plaintext and must be treated as compromised (`MANIFEST.py` rates MEDIUM; the IR view is High because this exfiltrates live secret material, not just a log signal) |
 | MITRE Tactics | Credential Access |
 | MITRE Techniques | T1555 |
 | Services in Scope | Secrets Manager, CloudTrail, IAM, KMS, plus every downstream system whose credentials live in the retrieved secrets |
 | Infrastructure Created | 20 Secrets Manager secrets (via `infra/`) |
 
-**What the emulation does:** enumerates secrets with `secretsmanager:ListSecrets` (filtered by a tag), then calls `secretsmanager:BatchGetSecretValue` in batches of 10 to retrieve their plaintext values in bulk. Against the emulation's 20 test secrets that is two batch calls; the pattern is deliberately efficient — one API call pulls up to 20 secret values at once.
+**What the emulation does:** enumerates secrets with `secretsmanager:ListSecrets` (filtered by a tag), then calls `secretsmanager:BatchGetSecretValue` in batches of 10 to retrieve their plaintext values in bulk. Against the emulation's 20 test secrets that is two batch calls; the pattern is deliberately efficient, one API call pulls up to 20 secret values at once.
 
 **Why the batch API changes triage.** `BatchGetSecretValue` (released late 2023) lets an attacker retrieve many secrets per call instead of one `GetSecretValue` per secret. Two subtleties both matter, and they pull in opposite directions:
-- A naive rule that alerts once per `BatchGetSecretValue` **event** undercounts the blast radius — two events can be twenty secrets.
+- A naive rule that alerts once per `BatchGetSecretValue` **event** undercounts the blast radius, two events can be twenty secrets.
 - But Secrets Manager *also* emits a separate `GetSecretValue` CloudTrail entry for **each** secret in the batch. So a rule that sums the batch event's `secretIdList` size *plus* those per-secret `GetSecretValue` events **double-counts** by ~2×.
 
 The correct measure is neither: **count distinct `secretId` from `GetSecretValue` events, from that one source.** It is complete (the batch API emits it per secret) and self-deduplicating. Every query and threshold in this playbook uses that single-source distinct count.
 
-**Why this is High, not Medium.** Unlike an enumeration technique that only probes, this one *succeeds*: at the end of a run the attacker holds the plaintext of every secret returned. Those secrets are database passwords, API keys, and tokens for other systems. Rotation of all disclosed secrets is mandatory — the incident does not end when the AWS access is contained, because the leaked credentials remain valid on their downstream systems.
+**Why this is High, not Medium.** Unlike an enumeration technique that only probes, this one *succeeds*: at the end of a run the attacker holds the plaintext of every secret returned. Those secrets are database passwords, API keys, and tokens for other systems. Rotation of all disclosed secrets is mandatory, the incident does not end when the AWS access is contained, because the leaked credentials remain valid on their downstream systems.
 
 ---
 
@@ -32,14 +32,14 @@ The correct measure is neither: **count distinct `secretId` from `GetSecretValue
 
 **Logging & Visibility**
 - CloudTrail multi-region trail, management events `ReadWriteType: All`, delivered to S3 (versioned, MFA delete) and to CloudWatch Logs / a log platform for rate queries
-- **`GetSecretValue` and `BatchGetSecretValue` are management events and are captured by default** — no data-event configuration is required (unlike S3/Lambda data events). Confirm `ReadWriteType: All`; a `WriteOnly` trail drops both, since secret *reads* are read events
-- CloudTrail records `requestParameters.secretIdList` for `BatchGetSecretValue` and `requestParameters.secretId` for `GetSecretValue`, so the specific secrets touched are recoverable. Importantly, Secrets Manager also emits a **per-secret `GetSecretValue` entry for every secret in a batch call** — so a batch request for N secrets produces one `BatchGetSecretValue` event plus N `GetSecretValue` events. Those per-secret entries are the authoritative record of *which* secrets were accessed, and (per AWS behaviour, confirm in your account) a failed secret carries an `errorCode` on its spawned entry, so disclosed-vs-denied is at least partially recoverable. Count secrets from the per-secret `GetSecretValue` entries, not by summing across both event types
+- **`GetSecretValue` and `BatchGetSecretValue` are management events and are captured by default**, no data-event configuration is required (unlike S3/Lambda data events). Confirm `ReadWriteType: All`; a `WriteOnly` trail drops both, since secret *reads* are read events
+- CloudTrail records `requestParameters.secretIdList` for `BatchGetSecretValue` and `requestParameters.secretId` for `GetSecretValue`, so the specific secrets touched are recoverable. Importantly, Secrets Manager also emits a **per-secret `GetSecretValue` entry for every secret in a batch call**, so a batch request for N secrets produces one `BatchGetSecretValue` event plus N `GetSecretValue` events. Those per-secret entries are the authoritative record of *which* secrets were accessed, and (per AWS behaviour, confirm in your account) a failed secret carries an `errorCode` on its spawned entry, so disclosed-vs-denied is at least partially recoverable. Count secrets from the per-secret `GetSecretValue` entries, not by summing across both event types
 - Secrets Manager resource policies and KMS key grants inventoried, so "who could read this secret" is answerable
 
 **Alerting (must be pre-configured)**
-- Threshold alert on **distinct secrets retrieved per principal per window** — count distinct `secretId` from `GetSecretValue` events (a batch call emits one per secret, so this single source is complete): more than ~15 distinct secrets in 10 minutes from one principal → page. This is the primary control and it must count distinct secrets, not events, and must not sum the batch event against its per-secret entries
-- Any use of `BatchGetSecretValue` by a principal not on the small allowlist of applications/roles known to use the batch API — most workloads call `GetSecretValue` for the one secret they need; bulk retrieval is characteristic of exfiltration tooling
-- `ListSecrets` (broad enumeration) immediately followed by `BatchGetSecretValue` from the same session — the enumerate-then-sweep pattern
+- Threshold alert on **distinct secrets retrieved per principal per window**, count distinct `secretId` from `GetSecretValue` events (a batch call emits one per secret, so this single source is complete): more than ~15 distinct secrets in 10 minutes from one principal → page. This is the primary control and it must count distinct secrets, not events, and must not sum the batch event against its per-secret entries
+- Any use of `BatchGetSecretValue` by a principal not on the small allowlist of applications/roles known to use the batch API, most workloads call `GetSecretValue` for the one secret they need; bulk retrieval is characteristic of exfiltration tooling
+- `ListSecrets` (broad enumeration) immediately followed by `BatchGetSecretValue` from the same session, the enumerate-then-sweep pattern
 - Retrieval of secrets spanning multiple unrelated applications by a single principal in one window (a web app reading the DB and payments secrets is normal; one principal reading 20 secrets across every app is not)
 
 **Response Tooling**
@@ -49,7 +49,7 @@ The correct measure is neither: **count distinct `secretId` from `GetSecretValue
 - Rotation Lambdas configured and tested for high-value secrets, so mass rotation is a command, not a project
 
 **Known IOC Baselines**
-- Baseline which principals call `BatchGetSecretValue` at all — normally a very short list, often empty
+- Baseline which principals call `BatchGetSecretValue` at all, normally a very short list, often empty
 - Baseline the normal per-principal secret-read volume. Most principals read a small, stable set of secrets; a sudden broad sweep is the signal
 - Tag secrets by owning application so cross-application retrieval is detectable
 
@@ -59,23 +59,23 @@ The correct measure is neither: **count distinct `secretId` from `GetSecretValue
 
 ### Detection Triggers (prioritized)
 
-#### HIGH-CONFIDENCE — Always Indicate Compromise
+#### HIGH-CONFIDENCE: Always Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
-| P0 | > 15 distinct secrets retrieved (distinct `secretId` on `GetSecretValue` events — the per-secret entries a batch call also emits) by one principal in 10 min | CloudTrail | T1555 |
+| P0 | > 15 distinct secrets retrieved (distinct `secretId` on `GetSecretValue` events, the per-secret entries a batch call also emits) by one principal in 10 min | CloudTrail | T1555 |
 | P0 | `BatchGetSecretValue` from a principal not on the batch-API allowlist | CloudTrail | T1555 |
 | P1 | `ListSecrets` (or `ListSecrets` with broad/no filter) followed within minutes by `BatchGetSecretValue` from the same session | CloudTrail | T1555 |
 | P1 | Secrets spanning multiple unrelated applications retrieved by one principal in one window | CloudTrail | T1555 |
 | P1 | `BatchGetSecretValue`/`GetSecretValue` from an off-baseline ASN/geography for the principal | CloudTrail | T1555 |
 
-#### MEDIUM-CONFIDENCE — May Indicate Compromise
+#### MEDIUM-CONFIDENCE: May Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
 | P2 | Any single `BatchGetSecretValue` with a large `secretIdList` (≥ 10) | CloudTrail | T1555 |
 | P2 | `GetSecretValue` in a tight loop over many distinct `secretId`s (the pre-batch-API version of the same attack) | CloudTrail | T1555 |
-| P2 | `secretsmanager:GetSecretValue` denied at volume (`errorCode = AccessDenied` or `AccessDeniedException`) — permission probing across secrets | CloudTrail | T1555 |
+| P2 | `secretsmanager:GetSecretValue` denied at volume (`errorCode = AccessDenied` or `AccessDeniedException`), permission probing across secrets | CloudTrail | T1555 |
 | P3 | Single `BatchGetSecretValue` with a small list from an allowlisted application principal | CloudTrail | T1555 |
 
 ### Detection Rule Quality Notes
@@ -84,13 +84,13 @@ The rules in `detections/` are too coarse to deploy. These are correctness/noise
 
 | Issue | Impact | Correction |
 |-------|--------|-----------|
-| Sigma/KQL match `eventName IN (ListSecrets, BatchGetSecretValue)` with `condition: selection`, no threshold | Noisy and imprecise. `ListSecrets` is a routine, high-frequency call (consoles, IaC, inventory tooling) — a 1:1 rule on it floods the queue. Bundling it with `BatchGetSecretValue` as an OR means the alert cannot tell enumeration from retrieval | Separate the two. Alert `BatchGetSecretValue` on its own (rarer, higher signal); use `ListSecrets` only as correlation context, never as a standalone trigger |
-| No counting of **secrets**, only implicit event matching | The technique's severity scales with secrets retrieved, which raw event-matching ignores | Threshold on **distinct `secretId` from `GetSecretValue` events** per principal per window. A batch call emits one per-secret `GetSecretValue` entry per secret, so this single source is complete — never sum it with an expanded `secretIdList`, which double-counts |
-| `GetSecretValue` — the far more common variant of the same attack — is absent | A rule that watches only the batch API misses an attacker who loops `GetSecretValue`, and misses every pre-2023 tool | Include `GetSecretValue` in the volume threshold |
+| Sigma/KQL match `eventName IN (ListSecrets, BatchGetSecretValue)` with `condition: selection`, no threshold | Noisy and imprecise. `ListSecrets` is a routine, high-frequency call (consoles, IaC, inventory tooling), a 1:1 rule on it floods the queue. Bundling it with `BatchGetSecretValue` as an OR means the alert cannot tell enumeration from retrieval | Separate the two. Alert `BatchGetSecretValue` on its own (rarer, higher signal); use `ListSecrets` only as correlation context, never as a standalone trigger |
+| No counting of **secrets**, only implicit event matching | The technique's severity scales with secrets retrieved, which raw event-matching ignores | Threshold on **distinct `secretId` from `GetSecretValue` events** per principal per window. A batch call emits one per-secret `GetSecretValue` entry per secret, so this single source is complete, never sum it with an expanded `secretIdList`, which double-counts |
+| `GetSecretValue`, the far more common variant of the same attack, is absent | A rule that watches only the batch API misses an attacker who loops `GetSecretValue`, and misses every pre-2023 tool | Include `GetSecretValue` in the volume threshold |
 | No principal allowlist or `sourceIPAddress` context | Cannot distinguish the one legitimate batch-consumer app from an attacker | Add allowlist + off-baseline-IP as separate signals |
 | Header TODO "verify acronym casing" unresolved; `level: medium` on a rule dominated by benign `ListSecrets` | Stale validation marker; guaranteed alert fatigue | Resolve TODO; `ListSecrets`-inclusive rule → `level: low`; the volume rule → `level: high` |
 
-**Recommended detection — count secrets, not calls.** This is inherently a rate/aggregation rule and belongs in a log platform (Query 5). A single-event Sigma rule can only cover the coarse "batch API used by non-allowlisted principal" case:
+**Recommended detection, count secrets, not calls.** This is inherently a rate/aggregation rule and belongs in a log platform (Query 5). A single-event Sigma rule can only cover the coarse "batch API used by non-allowlisted principal" case:
 
 ```yaml
 title: Secrets Manager batch retrieval by non-allowlisted principal
@@ -110,7 +110,7 @@ detection:
 level: high
 ```
 
-The volume detection (distinct `secretId` per principal per window) cannot be expressed as a single-event Sigma rule — deploy it as the log-platform query in Query 5, or as a Sigma **correlation** (`type: value_count`, counting distinct `requestParameters.secretId` on `GetSecretValue` events) where the backend supports it. Count `GetSecretValue` only; the batch API emits a per-secret `GetSecretValue`, so adding `BatchGetSecretValue` to the count double-counts.
+The volume detection (distinct `secretId` per principal per window) cannot be expressed as a single-event Sigma rule, deploy it as the log-platform query in Query 5, or as a Sigma **correlation** (`type: value_count`, counting distinct `requestParameters.secretId` on `GetSecretValue` events) where the backend supports it. Count `GetSecretValue` only; the batch API emits a per-secret `GetSecretValue`, so adding `BatchGetSecretValue` to the count double-counts.
 
 **On error strings (learned from the EC2 techniques):** Secrets Manager errors are *not* `Client.`-prefixed the way EC2 errors are. Denials show up two different ways depending on where they are evaluated: an IAM-policy denial typically surfaces as `errorCode: AccessDenied` (no suffix), while a service-/resource-policy denial surfaces as `AccessDeniedException`. Match **both**, along with `ResourceNotFoundException` and `DecryptionFailure`, and confirm the exact strings against a real denied-call event in your account.
 
@@ -118,41 +118,49 @@ The volume detection (distinct `secretId` per principal per window) cannot be ex
 
 ### Key Investigation Queries
 
-> CloudTrail extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'` — robust, unlike `--output text | jq`.
+> CloudTrail extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`, robust, unlike `--output text | jq`.
 
-#### Query 1 — Find the batch retrieval and its request size
+#### Query 1: Find the batch retrieval and its request size
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-6H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=BatchGetSecretValue \
-  --start-time "$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" \
   --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime,
      caller: .userIdentity.arn,
      type: .userIdentity.type,
-     # count of secrets requested in THIS call — the blast-radius number, not "1"
+     # count of secrets requested in THIS call: the blast-radius number, not "1"
      secrets_requested: ((.requestParameters.secretIdList // []) | length),
      filters: .requestParameters.filters,
      sourceIP: .sourceIPAddress,
      error: (.errorCode // "SUCCESS")}'
 ```
 
-#### Query 2 — The decisive count: how many distinct secrets did the principal pull?
+#### Query 2 - The decisive count: how many distinct secrets did the principal pull?
 
-**Count from one source, deduplicated — do not sum two counts.** Secrets Manager
+**Count from one source, deduplicated, do not sum two counts.** Secrets Manager
 emits a separate `GetSecretValue` CloudTrail entry for **each** secret in a
 `BatchGetSecretValue` call, *in addition to* the single `BatchGetSecretValue`
-event. So `GetSecretValue` events already cover both attack styles — the
+event. So `GetSecretValue` events already cover both attack styles, the
 pre-2023 loop *and* every secret pulled via the batch API. Counting distinct
 `secretId` across `GetSecretValue` events alone is therefore the complete,
 non-double-counted blast radius. Summing "GetSecretValue count + expanded
 secretIdList" (an earlier, wrong approach) inflates the number roughly 2×.
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-6H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 SUSPECT_ARN="<principal-arn-from-Query-1>"
 
@@ -161,7 +169,7 @@ SUSPECT_ARN="<principal-arn-from-Query-1>"
 # the batch API, so this single source is complete and self-deduplicating.
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=GetSecretValue \
-  --start-time "$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r --arg arn "$SUSPECT_ARN" '.Events[].CloudTrailEvent | fromjson |
     select(.userIdentity.arn == $arn) |
@@ -179,19 +187,23 @@ echo "Total distinct secrets exposed: $(grep -c . ./ir-exposed-secrets.txt)"
 > `errorCode == null` filter correctly separates disclosed from denied). If the
 > spawned events do **not** populate `secretId`, fall back to expanding
 > `requestParameters.secretIdList` from the `BatchGetSecretValue` events **only**
-> (still a single source — never combined with the GetSecretValue count).
+> (still a single source, never combined with the GetSecretValue count).
 
-`./ir-exposed-secrets.txt` is the eradication work-list — every secret in it must be rotated.
+`./ir-exposed-secrets.txt` is the eradication work-list, every secret in it must be rotated.
 
-#### Query 3 — What was enumerated before the sweep?
+#### Query 3: What was enumerated before the sweep?
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-6H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 SUSPECT_ARN="<principal-arn>"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=ListSecrets \
-  --start-time "$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r --arg arn "$SUSPECT_ARN" '.Events[].CloudTrailEvent | fromjson |
     select(.userIdentity.arn == $arn) |
@@ -199,16 +211,20 @@ aws cloudtrail lookup-events \
      maxResults: .requestParameters.maxResults, ip: .sourceIPAddress}'
 ```
 
-A broad or unfiltered `ListSecrets` means the actor mapped the whole secret store before pulling — treat the full inventory as targeted.
+A broad or unfiltered `ListSecrets` means the actor mapped the whole secret store before pulling, treat the full inventory as targeted.
 
-#### Query 4 — Full session reconstruction
+#### Query 4: Full session reconstruction
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 ACCESS_KEY_ID="<AKIA-or-ASIA-key-from-Query-1>"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=AccessKeyId,AttributeValue="$ACCESS_KEY_ID" \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region us-east-1 --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, event: .eventName, source: .eventSource,
@@ -218,13 +234,13 @@ aws cloudtrail lookup-events \
 
 Watch for use of the stolen secrets *inside* AWS in the same session (e.g. the actor immediately using a retrieved DB credential via RDS Data API, or an IAM key found in a secret), and for exfiltration primitives.
 
-#### Query 5 — Deployable volume detection (log platform)
+#### Query 5: Deployable volume detection (log platform)
 
-**Dialect: Sentinel / Azure Log Analytics KQL** — not CloudWatch Logs Insights.
+**Dialect: Sentinel / Azure Log Analytics KQL**, not CloudWatch Logs Insights.
 
 Count from **one** event type. Because a batch call emits a per-secret
 `GetSecretValue` entry for every secret requested, `GetSecretValue` alone is the
-complete record — counting distinct `secretId` on it captures both the loop
+complete record, counting distinct `secretId` on it captures both the loop
 attack and the batch attack with no double-counting. `BatchGetSecretValue` is
 used only to flag that the batch API was involved, never added to the count.
 
@@ -250,13 +266,13 @@ AWSCloudTrail
     | summarize BatchCalls = count() by UserIdentityArn, bin(TimeGenerated, 10m)
   ) on UserIdentityArn, TimeGenerated
 | extend Verdict = case(
-    BatchCalls > 0, "BULK SECRET EXFILTRATION via batch API — P0",
-    "HIGH-VOLUME SECRET READ — review")
+    BatchCalls > 0, "BULK SECRET EXFILTRATION via batch API - P0",
+    "HIGH-VOLUME SECRET READ, review")
 | project TimeGenerated, UserIdentityArn, SecretsRetrieved, Calls, BatchCalls, SourceIPs, Verdict
 | order by SecretsRetrieved desc
 ```
 
-CloudWatch Logs Insights equivalent — count distinct secrets from
+CloudWatch Logs Insights equivalent, count distinct secrets from
 `GetSecretValue` (single source), flag batch usage separately:
 
 ```
@@ -269,16 +285,20 @@ fields @timestamp, userIdentity.arn, requestParameters.secretId, errorCode
 | filter secrets_retrieved > 15
 ```
 
-#### Query 6 — Multi-region sweep
+#### Query 6: Multi-region sweep
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 for REGION in $(aws ec2 describe-regions --query 'Regions[*].RegionName' --output text); do
   COUNT=$(aws cloudtrail lookup-events \
     --lookup-attributes AttributeKey=EventName,AttributeValue=BatchGetSecretValue \
-    --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+    --start-time "$START" \
     --region "$REGION" --query 'length(Events)' --output text 2>/dev/null)
   [ -n "$COUNT" ] && [ "$COUNT" != "0" ] && [ "$COUNT" != "None" ] && \
-    echo "[!] $REGION — $COUNT BatchGetSecretValue events"
+    echo "[!] $REGION, $COUNT BatchGetSecretValue events"
 done
 ```
 
@@ -289,11 +309,11 @@ done
 ### Immediate Actions (first 15 minutes)
 
 The disclosed secrets are the emergency. The attacker already has their
-plaintext — containing the AWS principal stops *further* theft but does nothing
+plaintext, containing the AWS principal stops *further* theft but does nothing
 about the credentials already taken. Do both: contain the principal now, and
 begin rotation (§4) in parallel rather than after.
 
-#### Step 1 — Disable the offending credential
+#### Step 1: Disable the offending credential
 
 ```bash
 SUSPECT_ARN="<principal-arn-from-Query-1>"
@@ -309,7 +329,7 @@ if echo "$SUSPECT_ARN" | grep -q ":user/"; then
 fi
 ```
 
-#### Step 2 — Revoke live STS sessions (assumed-role principals)
+#### Step 2: Revoke live STS sessions (assumed-role principals)
 
 ```bash
 SUSPECT_ROLE="<role-name>"     # from the assumed-role ARN
@@ -329,10 +349,10 @@ echo "[OK] Pre-existing sessions for $SUSPECT_ROLE revoked"
 
 As established for instance-profile roles: `aws:TokenIssueTime` kills only tokens
 issued before now. If the principal can mint fresh credentials (e.g. it is an
-instance role and the host is compromised), also cut that path — but for a
+instance role and the host is compromised), also cut that path, but for a
 stolen static key or a contained user session this fully stops the principal.
 
-#### Step 3 — Cut the principal off from Secrets Manager immediately
+#### Step 3: Cut the principal off from Secrets Manager immediately
 
 Faster and more targeted than full session revocation when the principal is a
 production role that must keep doing its other work.
@@ -354,7 +374,7 @@ aws iam put-role-policy \
 echo "[OK] Secrets Manager read denied for $SUSPECT_ROLE"
 ```
 
-#### Step 4 — Freeze the exposed secrets against tampering (optional, high-value secrets)
+#### Step 4: Freeze the exposed secrets against tampering (optional, high-value secrets)
 
 For the most sensitive disclosed secrets, attach a resource policy that denies
 everyone except the responder and the rotation role while you rotate, preventing
@@ -387,7 +407,7 @@ echo "[OK] Read-lock applied to $SECRET_ID during rotation"
 
 ## 4. Eradication
 
-### Remove Attacker Access — Rotate Every Disclosed Secret
+### Remove Attacker Access: Rotate Every Disclosed Secret
 
 This is the core of the incident. Each secret in `./ir-exposed-secrets.txt`
 (Query 2) had its plaintext returned to the attacker and is compromised on its
@@ -397,7 +417,7 @@ downstream credential is changed, not just the Secrets Manager version.
 > Run every command in §4 and §5 under the **break-glass responder
 > credentials** from §1, not under any principal still being contained. Step 3's
 > deny policy would make a suspect-principal run fail loudly (safe), but a second
-> compromised credential would not — use the responder identity explicitly.
+> compromised credential would not, use the responder identity explicitly.
 
 #### Rotate secrets that have a rotation Lambda configured
 
@@ -437,7 +457,7 @@ rm -f ./new-secret-value.json   # do not leave plaintext on disk
 ```
 
 **Any secret containing an AWS IAM access key** requires that key be deleted and
-reissued via IAM as well — storing a new value in Secrets Manager does not
+reissued via IAM as well, storing a new value in Secrets Manager does not
 invalidate the leaked key.
 
 #### Remove attacker persistence created with stolen secrets
@@ -446,11 +466,15 @@ If any retrieved secret was itself an AWS credential, the attacker may have used
 it. Enumerate actions by every access key found in the exposed secrets:
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 # For each AWS access key that was stored in an exposed secret:
 LEAKED_KEY="<AKIA...>"
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=AccessKeyId,AttributeValue="$LEAKED_KEY" \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region us-east-1 --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, event: .eventName, ip: .sourceIPAddress}'
@@ -487,7 +511,7 @@ while read -r SECRET; do
     --query 'LastChangedDate' --output text 2>/dev/null)
   # LastChangedDate must be AFTER the incident for rotation to count
   if [ -z "$LAST_CHANGED" ] || [ "$LAST_CHANGED" = "None" ]; then
-    echo "[FAIL] $SECRET — cannot read LastChangedDate"; FAIL=1
+    echo "[FAIL] $SECRET, cannot read LastChangedDate"; FAIL=1
   else
     echo "[OK] $SECRET last changed $LAST_CHANGED (confirm this is after $INCIDENT_START)"
   fi
@@ -510,7 +534,7 @@ COUNT=$(aws cloudtrail lookup-events \
     select(.userIdentity.arn == $arn) | .eventTime' | grep -c .)
 
 [ "$COUNT" -eq 0 ] && echo "[OK] No further BatchGetSecretValue from $SUSPECT_ARN since containment" \
-                   || echo "[FAIL] $COUNT further batch calls — containment did not hold"
+                   || echo "[FAIL] $COUNT further batch calls, containment did not hold"
 ```
 
 #### Verify the credential is dead
@@ -531,7 +555,7 @@ fi
 # Rotation in Secrets Manager is meaningless if the downstream system still
 # accepts the old password. For each rotated secret, confirm the OLD value fails
 # and the NEW value works against its target system (DB, API). This is
-# system-specific — example for an RDS database credential:
+# system-specific - example for an RDS database credential:
 echo "For each rotated DB secret: attempt a login with the OLD password and confirm it is REJECTED."
 echo "Automate per system; do not close the incident on Secrets Manager state alone."
 ```
@@ -543,7 +567,7 @@ echo "Automate per system; do not close the incident on Secrets Manager state al
 # reports the SECRET count, not the call count.
 echo "Expected: ONE alert reporting 20 DISTINCT secrets (dcount of secretId on"
 echo "GetSecretValue events), classified BULK SECRET EXFILTRATION via batch API."
-echo "It must read 20, NOT ~40 — a count near 40 means the query is double-counting"
+echo "It must read 20, NOT ~40, a count near 40 means the query is double-counting"
 echo "the batch event against its per-secret GetSecretValue entries."
 ```
 
@@ -563,7 +587,7 @@ echo "the batch event against its per-secret GetSecretValue entries."
 
 ### Recommended Guardrails
 
-**Service Control Policies (SCPs) — apply at OU level**
+**Service Control Policies (SCPs), apply at OU level**
 
 ```json
 // SCP 1: Restrict BatchGetSecretValue to approved batch-consumer roles
@@ -599,13 +623,13 @@ echo "the batch event against its per-secret GetSecretValue entries."
 
 | Type | Value |
 |------|-------|
-| MITRE technique | T1555 — Credentials from Password Stores |
+| MITRE technique | T1555 - Credentials from Password Stores |
 | MITRE tactic | Credential Access (TA0006) |
 | Primary API | `secretsmanager:BatchGetSecretValue` (up to 20 secrets/call); `ListSecrets` for enumeration |
 | Event source | `secretsmanager.amazonaws.com` |
-| Key detection insight | Count **secrets returned** (`secretIdList` size), not API calls — 2 calls can disclose 20 secrets |
-| Common variant | Loop of `GetSecretValue` (one secret/call) — pre-2023 form of the same attack; include in thresholds |
-| Error strings (not `Client.`-prefixed) | `AccessDenied` (IAM-policy denial) / `AccessDeniedException` (service/resource-policy denial) — match both; also `ResourceNotFoundException`, `DecryptionFailure` |
+| Key detection insight | Count **secrets returned** (`secretIdList` size), not API calls, 2 calls can disclose 20 secrets |
+| Common variant | Loop of `GetSecretValue` (one secret/call), pre-2023 form of the same attack; include in thresholds |
+| Error strings (not `Client.`-prefixed) | `AccessDenied` (IAM-policy denial) / `AccessDeniedException` (service/resource-policy denial), match both; also `ResourceNotFoundException`, `DecryptionFailure` |
 | Resources created | 20 Secrets Manager test secrets |
 | Follow-on to watch for | Use of retrieved credentials (DB logins, third-party APIs, leaked IAM keys), data exfiltration |
 
@@ -613,7 +637,7 @@ echo "the batch event against its per-secret GetSecretValue entries."
 
 `pulumi destroy` in `infra/` deletes the 20 test secrets. The infra sets
 `recovery_window_in_days=0`, so teardown **hard-deletes them immediately** with
-no recovery window (equivalent to `--force-delete-without-recovery`) — fine for
+no recovery window (equivalent to `--force-delete-without-recovery`), fine for
 disposable emulation secrets. Nothing else is created. After a **real** incident,
-`pulumi destroy` is irrelevant — the exposed secrets are your own production
+`pulumi destroy` is irrelevant, the exposed secrets are your own production
 secrets and must be rotated per §4, never deleted.

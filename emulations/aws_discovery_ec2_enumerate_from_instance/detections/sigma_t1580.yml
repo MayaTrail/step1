@@ -41,7 +41,7 @@ detection:
     userIdentity.sessionContext.sessionIssuer.userName|endswith: '-instance-role'
   condition: selection and instance_role
 falsepositives:
-  - Inventory or compliance agents running under an instance role — allowlist
+  - Inventory or compliance agents running under an instance role, allowlist
     the specific role
 level: high
 ---
@@ -49,7 +49,7 @@ level: high
 # multiple services. This is the general form of the technique; the IAM rule
 # above is the narrow high-confidence case.
 #
-# Deploy `kql_t1580.kql` where the backend does not support correlations — it
+# Deploy `kql_t1580.kql` where the backend does not support correlations: it
 # additionally distinguishes multi-service recon from single-service noise.
 title: Multi-action reconnaissance from an EC2 instance role
 id: 8b40e7c2-1f95-4d38-a06b-9e2c74f1538a
@@ -81,7 +81,7 @@ name: ec2_instance_role_read_base
 status: experimental
 description: >-
   Base rule for the breadth correlation. Instance roles make read calls
-  constantly and legitimately — not for direct alerting.
+  constantly and legitimately, not for direct alerting.
 tags:
   - attack.discovery
   - attack.t1580
@@ -102,7 +102,7 @@ level: low
 ---
 # Supporting signal, demoted from its original position as a primary selector.
 # SSM Run Command is routine automation; it is only interesting as the possible
-# DELIVERY mechanism for recon detected by the rules above. Correlate — do not
+# DELIVERY mechanism for recon detected by the rules above. Correlate: do not
 # alert on this alone.
 title: SSM Run Command delivery to an instance under investigation
 id: c7d5b031-8a26-4e94-b58f-30619da2c4e7
@@ -125,5 +125,5 @@ detection:
       - 'DescribeInstanceInformation'
   condition: selection
 falsepositives:
-  - Routine patch and configuration automation — the overwhelming majority
+  - Routine patch and configuration automation, the overwhelming majority
 level: low

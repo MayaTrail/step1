@@ -6,7 +6,7 @@
 # alert cannot distinguish ENUMERATION from RETRIEVAL. They are separated here:
 # ListSecrets is correlation context only and never a standalone trigger.
 #
-# COUNTING RULE — this is the part that is easy to get wrong. A
+# COUNTING RULE: this is the part that is easy to get wrong. A
 # BatchGetSecretValue call ALSO emits one per-secret GetSecretValue event. So
 # counting distinct `requestParameters.secretId` on GetSecretValue alone is
 # complete and self-deduplicating. Summing GetSecretValue with an expanded
@@ -30,26 +30,28 @@ detection:
   selection:
     eventSource: 'secretsmanager.amazonaws.com'
     eventName: 'BatchGetSecretValue'
-  # MAINTAIN THIS LIST — it is what keeps the rule quiet.
+  # REPLACE these with the roles in YOUR account that legitimately read secrets
+  # in bulk. The placeholder values below match nothing, so until they are
+  # edited this rule fires on every application start and scheduled rotation.
   allowlisted:
     userIdentity.arn|contains:
-      - ':role/app-secrets-consumer'
-      - ':role/secrets-rotation'
+      - ':role/REPLACE-ME-app-secrets-consumer'
+      - ':role/REPLACE-ME-secrets-rotation'
   condition: selection and not allowlisted
 falsepositives:
   - New batch-consuming applications not yet added to the allowlist
 level: high
 ---
-# Volume detection. Counts DISTINCT secrets disclosed, not calls — severity
+# Volume detection. Counts DISTINCT secrets disclosed, not calls: severity
 # scales with secrets retrieved, which raw event-matching ignores.
 #
 # GetSecretValue only, by design (see the counting rule above). The
-# `errorCode: null` filter is load-bearing: without it a probe that racks up
+# `errorCode - null` filter is load-bearing: without it a probe that racks up
 # 20 AccessDenied responses fires the same alert as a successful bulk
 # disclosure.
 #
 # Requires a backend supporting Sigma `value_count` correlations. Where that is
-# unavailable, deploy `kql_t1555.kql` instead — same logic.
+# unavailable, deploy `kql_t1555.kql` instead: same logic.
 title: Secrets Manager mass secret disclosure
 id: e04a7c93-1b58-4d62-a7f1-3c9e5b840d17
 status: experimental

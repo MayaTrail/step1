@@ -1,4 +1,4 @@
-# IR Playbook: Execute Malicious Code via EC2 User Data — Root Code Execution via `ec2:ModifyInstanceAttribute`
+# IR Playbook - Execute Malicious Code via EC2 User Data - Root Code Execution via `ec2:ModifyInstanceAttribute`
 
 ## Classification
 
@@ -6,23 +6,23 @@
 |-------|-------|
 | Incident Type | Execution / Command & Scripting Interpreter (root code execution on an instance) |
 | Emulation Tier | Atomic technique |
-| Threat Actor | N/A — single-technique emulation, not actor-attributed |
+| Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High — successful execution runs attacker-controlled code **as root** on the instance at boot; the host must be treated as compromised (`MANIFEST.py` rates MEDIUM; the IR view is High because this is arbitrary root code execution, not just a control-plane change) |
+| Severity | High, successful execution runs attacker-controlled code **as root** on the instance at boot; the host must be treated as compromised (`MANIFEST.py` rates MEDIUM; the IR view is High because this is arbitrary root code execution, not just a control-plane change) |
 | MITRE Tactics | Execution |
 | MITRE Techniques | T1059 |
 | Services in Scope | EC2, CloudTrail, IAM, GuardDuty, VPC Flow Logs |
 | Infrastructure Created | 1 EC2 instance + IAM role (SSM core) + instance profile + VPC (via `infra/`) |
 
-**What the emulation does:** performs the three-step sequence — `ec2:StopInstances`, then `ec2:ModifyInstanceAttribute` replacing the instance's user-data with a malicious shell script (a C2 callback), then `ec2:StartInstances`. The intent is code execution **as root** via cloud-init, without ever needing SSH, SSM, or a session on the host.
+**What the emulation does:** performs the three-step sequence, `ec2:StopInstances`, then `ec2:ModifyInstanceAttribute` replacing the instance's user-data with a malicious shell script (a C2 callback), then `ec2:StartInstances`. The intent is code execution **as root** via cloud-init, without ever needing SSH, SSM, or a session on the host.
 
-**Important caveat on whether it actually runs.** By default, cloud-init executes a user-data *script* **once per instance**, keyed on the instance-id — and a stop/start does **not** change the instance-id. So on a stock Amazon Linux AMI, the emulation's plain stop→start does **not**, by itself, re-run the freshly-injected script. The technique becomes real execution when any of these holds: the injected user-data uses a **`#cloud-boothook`** shebang (the `cc_boothook` module runs on every boot, not once), or cloud-init's script-module frequency is overridden to `always` in `/etc/cloud/cloud.cfg`; the attacker resets cloud-init state (`cloud-init clean`) before the start so the once-per-instance guard is cleared; or the injected user-data is later consumed by a **fresh** instance (a rebuild, an autoscaling launch, or an AMI baked from this instance). Treat the injected user-data as a latent root-code-execution payload regardless of whether it fired on this particular boot — the IR response is the same, and the detection fires on the *write* either way.
+**Important caveat on whether it actually runs.** By default, cloud-init executes a user-data *script* **once per instance**, keyed on the instance-id, and a stop/start does **not** change the instance-id. So on a stock Amazon Linux AMI, the emulation's plain stop→start does **not**, by itself, re-run the freshly-injected script. The technique becomes real execution when any of these holds: the injected user-data uses a **`#cloud-boothook`** shebang (the `cc_boothook` module runs on every boot, not once), or cloud-init's script-module frequency is overridden to `always` in `/etc/cloud/cloud.cfg`; the attacker resets cloud-init state (`cloud-init clean`) before the start so the once-per-instance guard is cleared; or the injected user-data is later consumed by a **fresh** instance (a rebuild, an autoscaling launch, or an AMI baked from this instance). Treat the injected user-data as a latent root-code-execution payload regardless of whether it fired on this particular boot, the IR response is the same, and the detection fires on the *write* either way.
 
 **Why the SEQUENCE is the signal, not any single call.** `StopInstances` and `StartInstances` are routine operations (patching, cost management, maintenance). `ModifyInstanceAttribute` is called for many attributes. None is alarming alone. The attack fingerprint is the *ordered correlation* on one instance by one principal: **Stop → Modify(userData) → Start** in a short window. The shipped rule matches each event independently with no correlation (§2), so it both floods on benign stop/start and never keys on the pattern that matters.
 
-**Why `ModifyInstanceAttribute(userData)` is inherently suspicious.** User-data is normally set **once at launch** via `RunInstances`. Modifying the user-data of an *existing* instance afterward is rare in most environments — so `ModifyInstanceAttribute` carrying a `userData` change is a high-signal event on its own, and the pre-requisite `StopInstances` (user-data can only be modified while stopped — the same constraint the user-data *read* playbook documents) narrows it further.
+**Why `ModifyInstanceAttribute(userData)` is inherently suspicious.** User-data is normally set **once at launch** via `RunInstances`. Modifying the user-data of an *existing* instance afterward is rare in most environments, so `ModifyInstanceAttribute` carrying a `userData` change is a high-signal event on its own, and the pre-requisite `StopInstances` (user-data can only be modified while stopped, the same constraint the user-data *read* playbook documents) narrows it further.
 
-**The malicious script is recoverable even though CloudTrail doesn't log it.** CloudTrail records that user-data was modified but not the (base64) value. The injected script is still sitting in the instance's current user-data — retrieve and decode it (§2 Query 2) to obtain the C2 IOCs.
+**The malicious script is recoverable even though CloudTrail doesn't log it.** CloudTrail records that user-data was modified but not the (base64) value. The injected script is still sitting in the instance's current user-data, retrieve and decode it (§2 Query 2) to obtain the C2 IOCs.
 
 **Assume host compromise.** If the script executed, an attacker ran code as root: treat the instance as fully compromised (C2, on-host persistence, credential theft from IMDS, lateral movement via the instance role), not merely as an instance with a bad config. A cloud-init caveat matters for *whether it ran this boot* (see §2), but the user-data is attacker-controlled regardless and will execute on any future boot/rebuild that runs it.
 
@@ -35,11 +35,11 @@
 **Logging & Visibility**
 - CloudTrail multi-region trail, management events `ReadWriteType: All`, delivered to S3 (versioned, MFA delete) and to CloudWatch Logs / a log platform for the sequence correlation. `Stop`/`Modify`/`Start` are all management events, so `lookup-events` works
 - CloudTrail logs the `ModifyInstanceAttribute` call and that user-data was the modified attribute; it does **not** log the user-data value. Confirm the exact request-parameter shape (`userData` present) against a sample event in your account
-- GuardDuty enabled in all regions, and VPC Flow Logs on all VPCs — to catch the C2 callback the injected script makes
+- GuardDuty enabled in all regions, and VPC Flow Logs on all VPCs, to catch the C2 callback the injected script makes
 - Instance boot/console logs (or CloudWatch Logs agent) so on-host script execution is visible independent of the control plane
 
 **Alerting (must be pre-configured)**
-- **`ec2:ModifyInstanceAttribute` modifying `userData` on an existing instance → alert.** This is the primary control — the write is rare and high-signal. Weight higher if the caller is not the provisioning pipeline
+- **`ec2:ModifyInstanceAttribute` modifying `userData` on an existing instance → alert.** This is the primary control, the write is rare and high-signal. Weight higher if the caller is not the provisioning pipeline
 - **Sequence alert: `StopInstances` → `ModifyInstanceAttribute(userData)` → `StartInstances` on the same `instanceId` by the same principal within ~15 min → page.** This is the attack fingerprint
 - `ec2:ModifyInstanceAttribute(userData)` from any principal not on the provisioning/IaC allowlist
 - GuardDuty backdoor/C2 findings (`Backdoor:EC2/C&CActivity.B`, `Trojan:EC2/*`) on the instance after a start
@@ -47,12 +47,12 @@
 **Response Tooling**
 - AWS CLI v2 with break-glass responder credentials, separate from any principal under investigation
 - `jq` and `base64` for decoding the injected user-data
-- A golden-AMI / rebuild path for the affected workload — the remediation is rebuild, not clean-in-place
+- A golden-AMI / rebuild path for the affected workload, the remediation is rebuild, not clean-in-place
 - The instance role's policies on hand, to scope blast radius if the root code used the role's IMDS credentials
-- A maintained known-good user-data per instance/launch-template, saved for the responder (e.g. `known-good-userdata.txt`) — §4 restores from it when scrubbing
+- A maintained known-good user-data per instance/launch-template, saved for the responder (e.g. `known-good-userdata.txt`), §4 restores from it when scrubbing
 
 **Known IOC Baselines**
-- Baseline which principals modify user-data at all — in most environments this is only the provisioning pipeline, or no one after launch
+- Baseline which principals modify user-data at all, in most environments this is only the provisioning pipeline, or no one after launch
 - Baseline the expected user-data per instance/launch-template, so an injected script is a diff, not a mystery
 
 ---
@@ -61,7 +61,7 @@
 
 ### Detection Triggers (prioritized)
 
-#### HIGH-CONFIDENCE — Always Indicate Compromise
+#### HIGH-CONFIDENCE: Always Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
@@ -70,13 +70,13 @@
 | P1 | GuardDuty `Backdoor:EC2/C&CActivity.B` / `Trojan:EC2/*` on an instance shortly after a start | GuardDuty | T1059 |
 | P1 | Outbound connection from the instance to an unrecognised host/port right after boot (C2 callback) | VPC Flow Logs | T1059 |
 
-#### MEDIUM-CONFIDENCE — May Indicate Compromise
+#### MEDIUM-CONFIDENCE: May Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
 | P2 | `ec2:ModifyInstanceAttribute(userData)` on any running/stopped production instance (rare outside provisioning) | CloudTrail | T1059 |
 | P2 | `StopInstances` immediately followed by `ModifyInstanceAttribute` on the same instance, even if the attribute isn't clearly userData in the log | CloudTrail | T1059 |
-| P2 | `ec2:ModifyInstanceAttribute(userData)` denied at volume (`errorCode = Client.UnauthorizedOperation`) — permission probing | CloudTrail | T1059 |
+| P2 | `ec2:ModifyInstanceAttribute(userData)` denied at volume (`errorCode = Client.UnauthorizedOperation`), permission probing | CloudTrail | T1059 |
 | P3 | Provisioning-pipeline principal setting user-data during a known deployment window | CloudTrail | T1059 |
 
 ### Detection Rule Quality Notes
@@ -91,10 +91,10 @@ The rules in `detections/` do not detect this technique. These are correctness d
 | No principal allowlist | Cannot separate the provisioning pipeline (which legitimately sets user-data at launch) from an attacker modifying it later | Add a provisioning/IaC allowlist |
 | Header TODO "verify acronym casing"; `level: medium` on a rule matching all stop/start | Stale marker; alert fatigue | Resolve TODO; the `ModifyInstanceAttribute(userData)` rule → `level: high`; sequence correlation → `level: high` |
 
-**Recommended detection — the write, plus the sequence.** The single-event rule catches the user-data write; a temporal correlation catches the full fingerprint.
+**Recommended detection, the write, plus the sequence.** The single-event rule catches the user-data write; a temporal correlation catches the full fingerprint.
 
 ```yaml
-# Rule A — user-data modification of an existing instance (single-event, high value)
+# Rule A: user-data modification of an existing instance (single-event, high value)
 title: EC2 ModifyInstanceAttribute changing user-data
 id: 3f8c2d51-7a90-4e62-b1c4-9d6f0a2e5b83
 name: ec2_modify_userdata
@@ -107,7 +107,7 @@ detection:
     eventSource: 'ec2.amazonaws.com'
     eventName: 'ModifyInstanceAttribute'
   userdata:
-    # Confirm the exact field against a sample event — userData present in the
+    # Confirm the exact field against a sample event: userData present in the
     # request is the modified-attribute signal.
     requestParameters.userData|exists: true
   allowlisted:
@@ -120,7 +120,7 @@ level: high
 ```
 
 ```yaml
-# Rule B — the Stop -> Modify(userData) -> Start sequence (temporal correlation)
+# Rule B: the Stop -> Modify(userData) -> Start sequence (temporal correlation)
 title: EC2 user-data injection sequence
 status: experimental
 correlation:
@@ -140,7 +140,7 @@ as single-event selections on their event names. `temporal_ordered` is the moder
 Sigma correlation type for an ordered sequence; if a backend lacks it, implement
 Rule B as the log-platform query in Query 3.)
 
-**On error strings:** EC2 CloudTrail errors carry a `Client.` prefix —
+**On error strings:** EC2 CloudTrail errors carry a `Client.` prefix,
 `Client.UnauthorizedOperation`, `Client.IncorrectInstanceState` (a userData modify
 attempted on a running instance). Match the prefixed form and confirm against a
 sample event.
@@ -149,16 +149,20 @@ sample event.
 
 ### Key Investigation Queries
 
-> CloudTrail extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'` — robust, unlike `--output text | jq`.
+> CloudTrail extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`, robust, unlike `--output text | jq`.
 
-#### Query 1 — Find the user-data modification and the surrounding sequence
+#### Query 1: Find the user-data modification and the surrounding sequence
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-6H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=ModifyInstanceAttribute \
-  --start-time "$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     select(.requestParameters | has("userData")) |     # userData modifications only
@@ -174,13 +178,17 @@ aws cloudtrail lookup-events \
 For each suspect `instance`, confirm the bracketing Stop/Start by the same caller:
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-6H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 INSTANCE_ID="<i-from-above>"
 
 for EV in StopInstances StartInstances; do
   aws cloudtrail lookup-events \
     --lookup-attributes AttributeKey=EventName,AttributeValue=$EV \
-    --start-time "$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+    --start-time "$START" \
     --region "$REGION" --output json
 done | \
   jq -r --arg iid "$INSTANCE_ID" '.Events[].CloudTrailEvent | fromjson |
@@ -192,29 +200,32 @@ done | \
 A Stop → Modify(userData) → Start ordering on one instance by one principal is the
 confirmed attack.
 
-#### Query 2 — Retrieve and decode the injected user-data (get the C2 IOCs)
+#### Query 2: Retrieve and decode the injected user-data (get the C2 IOCs)
 
 The malicious script is not in CloudTrail, but it is in the instance's current
 user-data.
 
 ```bash
+# GNU base64 decodes with -d, older BSD/macOS with -D. Probe, then decode.
+b64d() { if base64 -d </dev/null >/dev/null 2>&1; then base64 -d; else base64 -D; fi; }
+
 REGION="us-east-1"
 INSTANCE_ID="<i-xxxxxxxxxxxx>"
 
 aws ec2 describe-instance-attribute --instance-id "$INSTANCE_ID" --attribute userData \
-  --region "$REGION" --query 'UserData.Value' --output text | base64 -d | tee ./ir-injected-userdata.txt
+  --region "$REGION" --query 'UserData.Value' --output text | b64d | tee ./ir-injected-userdata.txt
 
 echo "=== IOC scan of the injected script ==="
 grep -Ein 'curl|wget|nc |/dev/tcp|bash -i|http[s]?://|[0-9]{1,3}(\.[0-9]{1,3}){3}|AKIA[0-9A-Z]{16}' \
   ./ir-injected-userdata.txt
 ```
 
-Extract every URL, IP, and domain — these are the C2 IOCs to block and hunt for
+Extract every URL, IP, and domain, these are the C2 IOCs to block and hunt for
 across the environment. **Handle this file as attacker-controlled content.**
 
-#### Query 3 — Deployable sequence detection (log platform)
+#### Query 3: Deployable sequence detection (log platform)
 
-**Dialect: Sentinel / Azure Log Analytics KQL** — not CloudWatch Logs Insights. Finds the Stop→Modify(userData)→Start ordering per instance within 15 minutes.
+**Dialect: Sentinel / Azure Log Analytics KQL**, not CloudWatch Logs Insights. Finds the Stop→Modify(userData)→Start ordering per instance within 15 minutes.
 
 ```kql
 let window = 15m;
@@ -238,7 +249,7 @@ AWSCloudTrail
     LastSeen  = max(TimeGenerated)
     by InstanceId, bin(TimeGenerated, window)
 | where ModUD > 0 and Stops > 0 and Starts > 0
-| extend Verdict = "EC2 USER-DATA INJECTION SEQUENCE — P0"
+| extend Verdict = "EC2 USER-DATA INJECTION SEQUENCE - P0"
 | order by LastSeen desc
 ```
 
@@ -246,14 +257,16 @@ The `ModUD > 0 and Stops > 0 and Starts > 0` within one 15-minute bin approximat
 the ordered sequence; for strict ordering, use the Sigma `temporal_ordered`
 correlation (Rule B) where the backend supports it.
 
-#### Query 4 — Did the instance call out? (C2 confirmation)
+#### Query 4: Did the instance call out? (C2 confirmation)
 
 ```bash
 # Query VPC Flow Logs (CloudWatch Logs) for outbound from the instance's ENI
 # right after the StartInstances timestamp. Adjust log group + ENI.
 LOG_GROUP="/vpc/flowlogs"
 ENI_ID="<eni-of-the-instance>"
-START=$(date -u -d '2 hours ago' +%s)
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '2 hours ago' +%s 2>/dev/null \
+        || date -u -v-2H +%s)
 
 aws logs filter-log-events --log-group-name "$LOG_GROUP" \
   --start-time "${START}000" \
@@ -264,14 +277,18 @@ aws logs filter-log-events --log-group-name "$LOG_GROUP" \
 
 Cross-reference destination IPs against the IOCs from Query 2.
 
-#### Query 5 — Full session reconstruction of the injecting principal
+#### Query 5: Full session reconstruction of the injecting principal
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 ACCESS_KEY_ID="<access-key-from-Query-1>"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=AccessKeyId,AttributeValue="$ACCESS_KEY_ID" \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region us-east-1 --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, event: .eventName, source: .eventSource,
@@ -279,16 +296,20 @@ aws cloudtrail lookup-events \
   jq -s 'sort_by(.time)'
 ```
 
-#### Query 6 — Multi-region sweep for user-data modifications
+#### Query 6: Multi-region sweep for user-data modifications
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 for REGION in $(aws ec2 describe-regions --query 'Regions[*].RegionName' --output text); do
   N=$(aws cloudtrail lookup-events \
     --lookup-attributes AttributeKey=EventName,AttributeValue=ModifyInstanceAttribute \
-    --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+    --start-time "$START" \
     --region "$REGION" --output json 2>/dev/null | \
     jq -r '[.Events[].CloudTrailEvent | fromjson | select(.requestParameters | has("userData"))] | length')
-  [ -n "$N" ] && [ "$N" != "0" ] && echo "[!] $REGION — $N user-data modifications"
+  [ -n "$N" ] && [ "$N" != "0" ] && echo "[!] $REGION, $N user-data modifications"
 done
 ```
 
@@ -299,13 +320,13 @@ done
 ### Immediate Actions (first 15 minutes)
 
 The instance has (or may have) executed attacker code as root. Contain the
-principal, then isolate the instance — do not reboot it into the malicious
+principal, then isolate the instance, do not reboot it into the malicious
 user-data again.
 
 > Run every command under the **break-glass responder credentials** from §1, not
 > under any principal being contained.
 
-#### Step 1 — Contain the injecting principal
+#### Step 1: Contain the injecting principal
 
 ```bash
 SUSPECT_ARN="<caller-arn-from-Query-1>"
@@ -325,10 +346,10 @@ elif echo "$SUSPECT_ARN" | grep -q ":assumed-role/"; then
 fi
 ```
 
-#### Step 2 — Isolate the instance (do NOT stop/start it through the bad user-data)
+#### Step 2: Isolate the instance (do NOT stop/start it through the bad user-data)
 
 Network-isolate to sever C2 while preserving the running state for forensics.
-**Do not reboot** — a reboot may re-run the malicious user-data.
+**Do not reboot**, a reboot may re-run the malicious user-data.
 
 ```bash
 REGION="us-east-1"
@@ -357,7 +378,7 @@ for ENI in $(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --region "
 done
 ```
 
-#### Step 3 — Snapshot for forensics
+#### Step 3: Snapshot for forensics
 
 ```bash
 REGION="us-east-1"
@@ -370,7 +391,7 @@ for VOL in $(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --region "
 done
 ```
 
-#### Step 4 — Strip user-data modification from the principal pending investigation
+#### Step 4: Strip user-data modification from the principal pending investigation
 
 ```bash
 SUSPECT_ROLE="<role-name>"
@@ -387,7 +408,7 @@ echo "[OK] ModifyInstanceAttribute/StartInstances denied for $SUSPECT_ROLE"
 
 ## 4. Eradication
 
-### Remove Attacker Access — Rebuild, Don't Clean
+### Remove Attacker Access: Rebuild, Don't Clean
 
 The instance ran attacker code as root. Cleaning in place cannot be trusted;
 the durable fix is to scrub the user-data, capture forensics, and rebuild.
@@ -396,7 +417,7 @@ the durable fix is to scrub the user-data, capture forensics, and rebuild.
 
 Modifying user-data requires the instance stopped. To be safe against any
 per-boot cloud-init configuration (which *would* re-run the payload), scrub the
-user-data **while stopped** and only start once it is clean — or skip straight to
+user-data **while stopped** and only start once it is clean, or skip straight to
 rebuild.
 
 ```bash
@@ -408,7 +429,7 @@ aws ec2 wait instance-stopped --instance-ids "$INSTANCE_ID" --region "$REGION"
 
 # Replace with the known-good user-data (or empty it). --value is file:// base64
 # for CLI v2 (cli_binary_format=base64 passes it through unmodified).
-base64 -w0 ./known-good-userdata.txt > ./clean-userdata.b64
+base64 < ./known-good-userdata.txt | tr -d '\n' > ./clean-userdata.b64
 aws ec2 modify-instance-attribute --instance-id "$INSTANCE_ID" --region "$REGION" \
   --attribute userData --value "file://./clean-userdata.b64"
 echo "[OK] User-data scrubbed on $INSTANCE_ID"
@@ -432,12 +453,16 @@ The root script may have established persistence and used the instance role's
 IMDS credentials. Enumerate the role's activity (session name = instance ID):
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 INSTANCE_ID="<i-xxxxxxxxxxxx>"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=Username,AttributeValue="$INSTANCE_ID" \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, event: .eventName, source: .eventSource,
@@ -446,7 +471,7 @@ aws cloudtrail lookup-events \
 ```
 
 Off-instance use of the role's credentials, or any IAM/persistence primitive,
-means the incident extends beyond the host — pivot to the credential-theft and
+means the incident extends beyond the host, pivot to the credential-theft and
 persistence playbooks. Block the Query 2 C2 IOCs at the network edge and hunt for
 them across other instances.
 
@@ -468,11 +493,14 @@ echo "[OK] Emergency policies removed"
 #### Verify the user-data is clean on any surviving instance
 
 ```bash
+# GNU base64 decodes with -d, older BSD/macOS with -D. Probe, then decode.
+b64d() { if base64 -d </dev/null >/dev/null 2>&1; then base64 -d; else base64 -D; fi; }
+
 REGION="us-east-1"
 INSTANCE_ID="<i-xxxxxxxxxxxx>"
 
 BODY=$(aws ec2 describe-instance-attribute --instance-id "$INSTANCE_ID" --attribute userData \
-  --region "$REGION" --query 'UserData.Value' --output text 2>/dev/null | base64 -d 2>/dev/null)
+  --region "$REGION" --query 'UserData.Value' --output text 2>/dev/null | b64d 2>/dev/null)
 if echo "$BODY" | grep -qEi 'curl|wget|/dev/tcp|bash -i|http[s]?://|AKIA[0-9A-Z]{16}'; then
   echo "[FAIL] $INSTANCE_ID user-data still contains suspicious content"
 else
@@ -495,7 +523,7 @@ COUNT=$(aws cloudtrail lookup-events \
     select(.errorCode == null) | .eventTime' | grep -c .)
 
 [ "$COUNT" -eq 0 ] && echo "[OK] No further user-data modifications from $SUSPECT_ARN since containment" \
-                   || echo "[FAIL] $COUNT further user-data modifications — containment did not hold"
+                   || echo "[FAIL] $COUNT further user-data modifications, containment did not hold"
 ```
 
 #### Verify the credential is dead
@@ -521,20 +549,24 @@ echo "Confirm each Query 2 IOC is blocked and does not appear in any other insta
 #### Confirm the corrected detection fires
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-30M +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 INSTANCE_ID="<i-xxxxxxxxxxxx>"
 
 # Re-run the emulation and assert the user-data modification event is captured
 N=$(aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=ModifyInstanceAttribute \
-  --start-time "$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r --arg iid "$INSTANCE_ID" '[.Events[].CloudTrailEvent | fromjson |
     select(.requestParameters.instanceId == $iid) |
     select(.requestParameters | has("userData"))] | length')
 
-[ -n "$N" ] && [ "$N" -gt 0 ] && echo "[OK] userData modification captured — Rule A has data to fire on" \
-                              || echo "[FAIL] No userData modification captured — check trail / request-param field name"
+[ -n "$N" ] && [ "$N" -gt 0 ] && echo "[OK] userData modification captured - Rule A has data to fire on" \
+                              || echo "[FAIL] No userData modification captured, check trail / request-param field name"
 echo "Confirm the sequence rule (Rule B / Query 3) fired ONE alert for the Stop->Modify->Start ordering."
 ```
 
@@ -579,7 +611,7 @@ action wholesale for non-provisioning principals.
 - Enforce IMDSv2 (limits what root code can do with the instance role) and keep instance roles least-privilege
 
 **Detection improvements**
-- Deploy Rule A (user-data modification) and Rule B (Stop→Modify→Start temporal correlation) — never the shipped independent stop/start match
+- Deploy Rule A (user-data modification) and Rule B (Stop→Modify→Start temporal correlation), never the shipped independent stop/start match
 - Alert GuardDuty `Backdoor:EC2/C&CActivity.*` and egress anomalies at P0
 - Baseline expected user-data per launch template so an injected script is a diff
 
@@ -587,12 +619,12 @@ action wholesale for non-provisioning principals.
 
 | Type | Value |
 |------|-------|
-| MITRE technique | T1059 — Command and Scripting Interpreter |
+| MITRE technique | T1059 - Command and Scripting Interpreter |
 | MITRE tactic | Execution (TA0002) |
 | Attack sequence | `ec2:StopInstances` → `ec2:ModifyInstanceAttribute(userData=malicious)` → `ec2:StartInstances` |
 | Event source | `ec2.amazonaws.com` |
 | Key discriminator | `ModifyInstanceAttribute` carrying a `userData` change (rare post-launch), and the ordered Stop→Modify→Start sequence on one instance |
-| Recover the payload | Decode the instance's current user-data (`describe-instance-attribute … --attribute userData | base64 -d`) — not in CloudTrail |
+| Recover the payload | Decode the instance's current user-data (`describe-instance-attribute … --attribute userData | base64 -d`), not in CloudTrail |
 | Execution context | Runs as **root** via cloud-init on boot. User-data runs once per instance-id by default; re-executes only via a `#cloud-boothook` payload, a module-frequency `always` override, `cloud-init clean`, or a fresh instance |
 | Error strings (`Client.`-prefixed) | `Client.UnauthorizedOperation`, `Client.IncorrectInstanceState` (modify attempted while running) |
 | Resources created | 1 EC2 instance + IAM role + instance profile + VPC scaffolding |
@@ -603,7 +635,7 @@ action wholesale for non-provisioning principals.
 `pulumi destroy` in `infra/` removes the EC2 instance, IAM role/instance profile,
 and VPC. The emulation leaves the instance running with modified user-data;
 `pulumi destroy` tears it down cleanly for an emulation run. After a **real**
-incident, `pulumi destroy` is irrelevant — the host executed attacker root code
+incident, `pulumi destroy` is irrelevant, the host executed attacker root code
 and must be rebuilt (§4), the user-data scrubbed, and the C2 IOCs blocked and
 hunted; tearing down the stack does not undo on-host persistence or
 credentials the attacker exfiltrated during the boot.

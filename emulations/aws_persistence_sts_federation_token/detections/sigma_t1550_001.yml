@@ -2,7 +2,7 @@
 #
 # The original rule paired the rare signal with the NOISIEST CALL IN AWS.
 # sts:GetCallerIdentity fires on every SDK/CLI init, every credential check,
-# every CI job — bundling it buried GetFederationToken completely. It was only
+# every CI job: bundling it buried GetFederationToken completely. It was only
 # the emulation's proof-of-access step and is dropped entirely.
 # (Same defect class as the EC2 credential-theft rule.)
 title: STS GetFederationToken called
@@ -27,7 +27,7 @@ detection:
     eventName: 'GetFederationToken'
   condition: selection
 falsepositives:
-  - Environments that legitimately use federation — keep the rule but downgrade
+  - Environments that legitimately use federation, keep the rule but downgrade
     to `medium` and add a principal allowlist
 level: high
 ---
@@ -52,7 +52,7 @@ detection:
     userIdentity.type: 'FederatedUser'
   condition: selection
 falsepositives:
-  - Legitimate federation use — allowlist by federated-user name
+  - Legitimate federation use, allowlist by federated-user name
 level: high
 ---
 # Probing signal. GetFederationToken is IAM-user-only (root can also call it,
@@ -62,7 +62,7 @@ title: STS GetFederationToken denied
 id: 8f0b4d61-2c95-4a37-be48-15a70cd39e26
 status: experimental
 description: >-
-  Failed GetFederationToken attempts — typically a role session trying an
+  Failed GetFederationToken attempts, typically a role session trying an
   IAM-user-only API. Probing rather than success.
 references:
   - https://docs.aws.amazon.com/STS/latest/APIReference/API_GetFederationToken.html

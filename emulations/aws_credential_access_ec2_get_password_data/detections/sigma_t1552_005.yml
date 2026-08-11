@@ -7,8 +7,8 @@
 # be referenced by them.
 #
 # Rate logic lives in `correlation:` documents. The legacy Sigma v1 pipe form
-# (`condition: selection | count() by ... > 3` with `timeframe:` inside
-# `detection:`) was removed from the specification — pySigma rejects it and no
+# (`condition - selection | count() by ... > 3` with `timeframe:` inside
+# `detection:`) was removed from the specification - pySigma rejects it and no
 # current backend compiles it.
 title: EC2 GetPasswordData invoked
 id: 62d0ec7a-4fb4-527d-ac80-deeddb5616e9
@@ -16,7 +16,7 @@ name: ec2_getpassworddata_base
 status: experimental
 description: >-
   Base rule. Matches every ec2:GetPasswordData call by design and is NOT
-  intended for direct alerting — deploy the correlations that reference it.
+  intended for direct alerting, deploy the correlations that reference it.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.ec2-get-password-data/
 tags:
@@ -59,14 +59,14 @@ level: high
 # Enumeration variant. EC2 writes CloudTrail errorCode with a `Client.` prefix
 # (`Client.InvalidInstanceID.NotFound`). The unprefixed form is the boto3
 # Error.Code seen in attack.py; a CloudTrail rule keyed on it matches nothing.
-# `|contains` keeps this tolerant of the prefix — confirm the exact string
+# `|contains` keeps this tolerant of the prefix: confirm the exact string
 # against a sample event in the target account before deploying.
 title: EC2 GetPasswordData against a nonexistent instance
 id: 4c8b62d9-51fa-4e37-bb90-1d6f2c94a3e7
 name: ec2_getpassworddata_notfound_base
 status: experimental
 description: >-
-  Base rule for the enumeration variant — GetPasswordData that failed because
+  Base rule for the enumeration variant - GetPasswordData that failed because
   the instance ID does not exist.
 tags:
   - attack.credential_access
@@ -86,7 +86,7 @@ title: EC2 GetPasswordData instance-ID enumeration
 id: 7e15d048-9c3b-4a26-8f71-b0e5a2c6d914
 status: experimental
 description: >-
-  Repeated GetPasswordData calls against nonexistent instance IDs — the actor
+  Repeated GetPasswordData calls against nonexistent instance IDs, the actor
   is guessing instance IDs rather than working from a known inventory.
 tags:
   - attack.credential_access

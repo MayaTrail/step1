@@ -1,7 +1,7 @@
-# Detection Note — T1525 / T1554 (Overwrite Lambda Function Code)
+# Detection Note: T1525 / T1554 (Overwrite Lambda Function Code)
 
 **Signal:** `lambda:UpdateFunctionCode` by a principal outside the deployment
-pipeline — especially preceded by a `GetFunction` download of the original.
+pipeline, especially preceded by a `GetFunction` download of the original.
 
 **Certain, not conditional.** Unlike the layer technique, the overwritten code
 **is** the handler. It runs on **every** invocation, so compromise of the
@@ -17,7 +17,7 @@ the code hash was inspected.
 `responseElements.codeSha256` is the base64 SHA-256 of the deployed package. It
 is the field that tells you the code actually changed, and to what.
 
-**Field shape — returns `null` if you use the wrong one:**
+**Field shape, returns `null` if you use the wrong one:**
 
 ```
 get-function-configuration  ->  CodeSha256                  (FLAT)
@@ -29,7 +29,7 @@ wrong prose gets `null` for every function and silently passes everything.
 
 ## Why a drift detector is not optional
 
-The principal allowlist exempts the deploy pipeline — necessarily, or the rule
+The principal allowlist exempts the deploy pipeline, necessarily, or the rule
 fires on every release. But that means **if the pipeline itself is
 compromised, the CloudTrail rule stays silent.**
 
@@ -43,14 +43,14 @@ one.
 
 **Rollback is clean, if you published versions.** `UpdateFunctionCode` only
 changes `$LATEST`. Published numbered versions are **immutable**, so a prior
-published version is a trustworthy rollback target — repoint the alias to it
+published version is a trustworthy rollback target, repoint the alias to it
 rather than trying to reconstruct code.
 
 **Prevention:** Lambda **code signing** with
 `UntrustedArtifactOnDeployment = Enforce` rejects unsigned deployments outright.
 
 **Eradication scope:** emergency deny policies may have been attached to either
-a role *or* a user depending on the suspect principal type — clean up both
+a role *or* a user depending on the suspect principal type, clean up both
 `delete-role-policy` and `delete-user-policy` paths.
 
 **Invoke is data-plane.** To establish whether the tampered code ran, see the
@@ -64,16 +64,46 @@ Not `Client.`-prefixed like EC2.
 defensible, but **T1554** (*Compromise Host Software Binary*) is arguably
 closer for overwriting a function's own code. Both tags are carried.
 
-**Severity:** manifest MEDIUM; IR view **High** — certain code execution under
+**Severity:** manifest MEDIUM; IR view **High**, certain code execution under
 the execution role.
 
 **GuardDuty:** no finding type specific to this technique.
 
+## Tuning the allowlist
+
+The rule ships `:role/REPLACE-ME-*` placeholders, not defaults. They match
+nothing, so an unedited rule has no exclusions at all and alerts on the routine
+activity it is supposed to ignore.
+
+Derive the real list from your own trail. The principals that show up
+repeatedly, across weeks rather than once, are your automation:
+
+```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '90 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-90d +%Y-%m-%dT%H:%M:%SZ)
+
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=UpdateFunctionCode \
+  --start-time "$START" \
+  --output json | \
+  jq -r '.Events[].CloudTrailEvent | fromjson | .userIdentity.arn' | \
+  sort | uniq -c | sort -rn
+```
+
+Keep the recurring service and pipeline roles. Leave out anything human unless
+it is a documented break-glass path, since a human name on the allowlist is a
+standing hole in the rule.
+
+Re-check the list when provisioning changes. A retired pipeline role left in
+place is dead weight; a new one missing from it produces the false-positive
+wave that gets a rule muted.
+
 **Files here:**
-- `sigma_t1525.yml` — three documents: non-deploy code overwrite (`high`), the
+- `sigma_t1525.yml`, three documents: non-deploy code overwrite (`high`), the
   download-then-overwrite sequence (`high`), and the `GetFunction` base rule
   (`low`).
-- `kql_t1525.kql` — both signals plus the drift-detector, rollback and code
+- `kql_t1525.kql`, both signals plus the drift-detector, rollback and code
   signing guidance inline.
 
 Full response procedure is in `../PLAYBOOK.md`.

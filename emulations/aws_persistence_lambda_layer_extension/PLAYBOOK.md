@@ -1,4 +1,4 @@
-# IR Playbook: Persist via Lambda Layer — Code Injection via `lambda:PublishLayerVersion` + `lambda:UpdateFunctionConfiguration`
+# IR Playbook - Persist via Lambda Layer - Code Injection via `lambda:PublishLayerVersion` + `lambda:UpdateFunctionConfiguration`
 
 ## Classification
 
@@ -6,21 +6,21 @@
 |-------|-------|
 | Incident Type | Persistence / Implant reusable component (malicious Lambda layer injected into a function) |
 | Emulation Tier | Atomic technique |
-| Threat Actor | N/A — single-technique emulation, not actor-attributed |
+| Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High — a layer attached to a function ships attacker code that can run **inside the function, under the function's execution role**. If it executes, the execution-role credentials must be treated as compromised and everything that role can reach is in scope — a materially worse outcome than a mere invoke grant. As emulated the target is a hello-world handler with only `AWSLambdaBasicExecutionRole`, and (see below) the layer as shipped would not actually execute — but the technique in a real account is High. `MANIFEST.py` rates MEDIUM |
+| Severity | High, a layer attached to a function ships attacker code that can run **inside the function, under the function's execution role**. If it executes, the execution-role credentials must be treated as compromised and everything that role can reach is in scope, a materially worse outcome than a mere invoke grant. As emulated the target is a hello-world handler with only `AWSLambdaBasicExecutionRole`, and (see below) the layer as shipped would not actually execute, but the technique in a real account is High. `MANIFEST.py` rates MEDIUM |
 | MITRE Tactics | Persistence |
 | MITRE Techniques | T1525 |
 | Services in Scope | Lambda, CloudTrail (management + Lambda data events), CloudWatch, IAM |
 | Infrastructure Created | A target Lambda function (`stratus-red-team-layer-lambda`) + its execution role, via `pulumi up`. The malicious **layer** is published, attached, then detached/deleted by the attack script |
 
-**What the emulation does:** with a pre-created target function, it (1) `lambda:PublishLayerVersion` — publishes a layer `stratus-red-team-malicious-layer` containing `python/malicious_layer.py`, then (2) `lambda:UpdateFunctionConfiguration` with `Layers=[<layer-arn>]` — attaches that layer to the function. On cleanup it detaches the layer (`UpdateFunctionConfiguration` with `Layers=[]`) and deletes the layer version. A normal run leaves only the CloudTrail trail; a real intrusion leaves the layer attached, running on every invocation.
+**What the emulation does:** with a pre-created target function, it (1) `lambda:PublishLayerVersion`, publishes a layer `stratus-red-team-malicious-layer` containing `python/malicious_layer.py`, then (2) `lambda:UpdateFunctionConfiguration` with `Layers=[<layer-arn>]`, attaches that layer to the function. On cleanup it detaches the layer (`UpdateFunctionConfiguration` with `Layers=[]`) and deletes the layer version. A normal run leaves only the CloudTrail trail; a real intrusion leaves the layer attached, running on every invocation.
 
-**Why this is persistence, and why code-redeploy does not fix it.** The function's own code/ZIP is never modified — so redeploying the function from source (the usual "clean the function" reflex) leaves the layer attached and the injection intact. The malicious code lives in a *separate* versioned artifact (the layer) that the function references. Removing it requires editing the function's **layer list**, not its code.
+**Why this is persistence, and why code-redeploy does not fix it.** The function's own code/ZIP is never modified, so redeploying the function from source (the usual "clean the function" reflex) leaves the layer attached and the injection intact. The malicious code lives in a *separate* versioned artifact (the layer) that the function references. Removing it requires editing the function's **layer list**, not its code.
 
-**Detection is the layer, not the event name.** `UpdateFunctionConfiguration` is one of the most routine Lambda calls (every memory/timeout/env-var/layer change). The signal is **a new, unexpected layer ARN being attached** — especially one published moments earlier by a non-deploy principal, or owned by an account that is not yours/a trusted vendor. The shipped rule matches `PublishLayerVersion`/`UpdateFunctionConfiguration`/`DeleteLayerVersion` with no layer inspection (§2), so it fires on every config change and every layer cleanup.
+**Detection is the layer, not the event name.** `UpdateFunctionConfiguration` is one of the most routine Lambda calls (every memory/timeout/env-var/layer change). The signal is **a new, unexpected layer ARN being attached**, especially one published moments earlier by a non-deploy principal, or owned by an account that is not yours/a trusted vendor. The shipped rule matches `PublishLayerVersion`/`UpdateFunctionConfiguration`/`DeleteLayerVersion` with no layer inspection (§2), so it fires on every config change and every layer cleanup.
 
-**Important accuracy note — does the injected code actually run?** A Lambda **layer** unpacks to `/opt`; `python/` is added to `sys.path` *after* the function's own package. So a `python/<module>.py` layer file executes only if the function **imports that module name** — either because the function already imports it, or because the attacker **shadows a third-party dependency** the function imports (the layer's copy on the path wins over site-packages, though not over the function's own top-level modules). Code that must run on *every* invocation regardless of imports belongs in a true **Lambda extension** (`/opt/extensions/<exe>`), which the runtime launches as a separate process automatically. The emulation ships code under `python/` (a code layer, **not** an `/opt/extensions/` extension) and the hello-world handler does not import it, so **as emulated the code would not actually execute** — but detection and response must assume a real attacker chose an executing path (shadowed dependency or a genuine extension). Treat any unexpected attached layer as live until you have inspected its contents.
+**Important accuracy note, does the injected code actually run?** A Lambda **layer** unpacks to `/opt`; `python/` is added to `sys.path` *after* the function's own package. So a `python/<module>.py` layer file executes only if the function **imports that module name**, either because the function already imports it, or because the attacker **shadows a third-party dependency** the function imports (the layer's copy on the path wins over site-packages, though not over the function's own top-level modules). Code that must run on *every* invocation regardless of imports belongs in a true **Lambda extension** (`/opt/extensions/<exe>`), which the runtime launches as a separate process automatically. The emulation ships code under `python/` (a code layer, **not** an `/opt/extensions/` extension) and the hello-world handler does not import it, so **as emulated the code would not actually execute**, but detection and response must assume a real attacker chose an executing path (shadowed dependency or a genuine extension). Treat any unexpected attached layer as live until you have inspected its contents.
 
 ---
 
@@ -29,7 +29,7 @@
 ### Prerequisites Before This Incident
 
 **Logging & Visibility**
-- CloudTrail multi-region trail capturing Lambda **management** events. `PublishLayerVersion` carries `requestParameters.layerName`, `.compatibleRuntimes`, and `responseElements.layerVersionArn`/`.version` (the layer **content ZIP is not logged**). `UpdateFunctionConfiguration` carries `requestParameters.functionName` and `requestParameters.layers` (the **full new** layer-ARN list — this call *replaces* the list, it does not append)
+- CloudTrail multi-region trail capturing Lambda **management** events. `PublishLayerVersion` carries `requestParameters.layerName`, `.compatibleRuntimes`, and `responseElements.layerVersionArn`/`.version` (the layer **content ZIP is not logged**). `UpdateFunctionConfiguration` carries `requestParameters.functionName` and `requestParameters.layers` (the **full new** layer-ARN list, this call *replaces* the list, it does not append)
 - **Lambda data events** enabled for the functions that matter, so invocations during the layer's exposure window are recorded
 - An **approved-layer allowlist** (the layer ARNs / owner accounts your functions are supposed to use), so an attach outside it is a concrete match
 
@@ -46,7 +46,7 @@
 
 **Known IOC Baselines**
 - The emulation's layer name `stratus-red-team-malicious-layer`, function `stratus-red-team-layer-lambda`, tag `StratusRedTeam=true`
-- Baseline which functions use which layers, and which principals publish layers — a new layer/publisher is the signal
+- Baseline which functions use which layers, and which principals publish layers, a new layer/publisher is the signal
 - Baseline each function's execution role, so a compromised one is immediately scoped
 
 ---
@@ -55,7 +55,7 @@
 
 ### Detection Triggers (prioritized)
 
-#### HIGH-CONFIDENCE — Always Indicate Compromise
+#### HIGH-CONFIDENCE: Always Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
@@ -64,13 +64,13 @@
 | P1 | `lambda:PublishLayerVersion` by a non-IaC principal | CloudTrail (management) | T1525 |
 | P1 | `lambda:AddLayerVersionPermission` sharing a layer to an external account | CloudTrail (management) | T1525 |
 
-#### MEDIUM-CONFIDENCE — May Indicate Compromise
+#### MEDIUM-CONFIDENCE: May Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
 | P2 | `UpdateFunctionConfiguration` layer change outside a deployment window | CloudTrail (management) | T1525 |
 | P2 | Invocations of the function during the interval its layer set included an unapproved layer | CloudWatch / data events | T1525 |
-| P2 | `PublishLayerVersion`/`UpdateFunctionConfiguration` denied at volume (`errorCode = AccessDenied`) — probing | CloudTrail (management) | T1525 |
+| P2 | `PublishLayerVersion`/`UpdateFunctionConfiguration` denied at volume (`errorCode = AccessDenied`), probing | CloudTrail (management) | T1525 |
 | P3 | IaC/deploy pipeline attaching a known, allowlisted layer during a deployment | CloudTrail (management) | T1525 |
 
 ### Detection Rule Quality Notes
@@ -80,15 +80,15 @@ The shipped rule matches config changes and layer cleanup, and inspects no layer
 | Issue | Impact | Correction |
 |-------|--------|-----------|
 | Sigma/KQL match `eventName IN (PublishLayerVersion, UpdateFunctionConfiguration, DeleteLayerVersion)` with `condition: selection` | Unusable. `UpdateFunctionConfiguration` fires on every memory/timeout/env/layer change; `DeleteLayerVersion` is teardown (and here the emulation's own cleanup). The rule never inspects *which layer* was attached | Match `UpdateFunctionConfiguration` where `requestParameters.layers` includes an unapproved ARN; add the `Publish → Update` sequence; drop `DeleteLayerVersion` from the alert |
-| No layer/allowlist inspection | The entire signal — *which* layer — is exactly what the event-name match ignores | Compare each ARN in `requestParameters.layers` against the approved-layer allowlist / owner-account allowlist |
+| No layer/allowlist inspection | The entire signal, *which* layer, is exactly what the event-name match ignores | Compare each ARN in `requestParameters.layers` against the approved-layer allowlist / owner-account allowlist |
 | `DeleteLayerVersion` bundled in | Deleting a layer is not persistence; it inverts the signal and adds noise | Keep only for the forensic timeline |
 | No `PublishLayerVersion → attach` correlation | Misses the publish-then-attach fingerprint | Add a temporal correlation grouped by principal |
 | Header TODO "verify acronym casing"; `level: medium` | Stale; code injection under a role is higher | Resolve TODO; unapproved-layer attach → `level: high` |
 
-**Recommended detection — unapproved layer attached, plus the publish-then-attach sequence.**
+**Recommended detection, unapproved layer attached, plus the publish-then-attach sequence.**
 
 ```yaml
-# Rule A — a layer outside the approved set attached to a function
+# Rule A: a layer outside the approved set attached to a function
 title: Lambda function configured with an unapproved layer
 id: 3d9b6f21-7c48-4e15-a2d6-9f0b7c5e1a34
 name: lambda_attach_unapproved_layer
@@ -108,7 +108,7 @@ detection:
   condition: selection
 level: high
 ---
-# Rule B — the publish-then-attach fingerprint (temporal, ordered)
+# Rule B: the publish-then-attach fingerprint (temporal, ordered)
 title: Lambda publish-layer then attach sequence
 id: 4e0c7a32-8d59-4f26-b3e7-0a1c8d6f2b45
 status: experimental
@@ -138,8 +138,8 @@ detection:
 level: informational
 ```
 
-All three documents deploy together. The **layer-allowlist** decision — the load-bearing
-half of Rule A — must run in your rules engine against the live approved-layer list, since
+All three documents deploy together. The **layer-allowlist** decision, the load-bearing
+half of Rule A, must run in your rules engine against the live approved-layer list, since
 it is a per-environment set, not a static value. **On error strings:** denials surface as
 `AccessDenied` / `AccessDeniedException`, not `Client.`-prefixed.
 
@@ -147,17 +147,21 @@ it is a per-environment set, not a static value. **On error strings:** denials s
 
 ### Key Investigation Queries
 
-> Lambda management events are regional — run these in the function's region (default `us-east-1`). Extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`. **`lookup-events` returns ≤50 events per page** — paginate on `NextToken` or use your log platform for busy windows.
+> Lambda management events are regional, run these in the function's region (default `us-east-1`). Extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`. **`lookup-events` returns ≤50 events per page**, paginate on `NextToken` or use your log platform for busy windows.
 
-#### Query 1 — Reconstruct the injection: who published a layer and attached it where
+#### Query 1 - Reconstruct the injection: who published a layer and attached it where
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 
 for EV in PublishLayerVersion UpdateFunctionConfiguration AddLayerVersionPermission; do
   aws cloudtrail lookup-events \
     --lookup-attributes AttributeKey=EventName,AttributeValue=$EV \
-    --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+    --start-time "$START" \
     --region "$REGION" --output json 2>/dev/null
 done | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
@@ -175,10 +179,10 @@ done | \
 Read per caller: a `PublishLayerVersion` (record `published_arn`) immediately followed
 by an `UpdateFunctionConfiguration` whose `layers` includes that ARN is the injection.
 Record the `function`, the layer ARN, and `caller` (IOCs). Note the layer's **owner
-account** is the 5th `:`-field of the ARN — if it is not yours/a trusted vendor, that
+account** is the 5th `:`-field of the ARN, if it is not yours/a trusted vendor, that
 alone is suspicious.
 
-#### Query 2 — Sweep ALL functions for unapproved layers (find every injection)
+#### Query 2: Sweep ALL functions for unapproved layers (find every injection)
 
 The attacker may have attached the layer to more than one function, or one you did not
 see in Query 1's window. List every function's current layer set and flag any ARN not
@@ -195,10 +199,10 @@ aws lambda list-functions --region "$REGION" --output json | \
 while IFS=$'\t' read -r FN LAYERS; do
   for ARN in $(echo "$LAYERS" | tr ',' ' '); do
     case " $APPROVED " in
-      *" $ARN "*) : ;;                                  # exact allowlisted ARN — ok
+      *" $ARN "*) : ;;                                  # exact allowlisted ARN, ok
       *) OWNER=$(echo "$ARN" | awk -F: '{print $5}')     # owner account = 5th field
          case " $APPROVED " in
-           *" $OWNER "*) : ;;                            # trusted owner account — ok
+           *" $OWNER "*) : ;;                            # trusted owner account, ok
            *) echo "[!] $FN uses unapproved layer $ARN (owner $OWNER)" ;;
          esac ;;
     esac
@@ -207,10 +211,10 @@ done
 echo "[OK] Layer sweep complete"
 ```
 
-Cross-check each flagged function's layer ARN against Query 1 — a layer published by a
+Cross-check each flagged function's layer ARN against Query 1, a layer published by a
 non-deploy principal and attached out-of-band is the injection.
 
-#### Query 3 — Inspect the layer's contents (the code is NOT in CloudTrail)
+#### Query 3: Inspect the layer's contents (the code is NOT in CloudTrail)
 
 ```bash
 REGION="us-east-1"
@@ -224,7 +228,7 @@ mkdir -p /tmp/suspect-layer && unzip -o -q /tmp/suspect-layer.zip -d /tmp/suspec
 
 echo "== Layer file tree =="; find /tmp/suspect-layer -type f
 echo "== /opt/extensions present? (auto-run extension = executes every invoke) =="
-ls /tmp/suspect-layer/extensions 2>/dev/null && echo "[!] EXTENSION present — auto-runs" || echo "[i] no extensions/ dir"
+ls /tmp/suspect-layer/extensions 2>/dev/null && echo "[!] EXTENSION present, auto-runs" || echo "[i] no extensions/ dir"
 echo "== Suspicious patterns in layer code =="
 grep -rInE 'urllib|requests|socket|/dev/tcp|subprocess|os\.system|boto3|exec\(|eval\(|base64' /tmp/suspect-layer 2>/dev/null
 ```
@@ -232,17 +236,21 @@ grep -rInE 'urllib|requests|socket|/dev/tcp|subprocess|os\.system|boto3|exec\(|e
 Determine the execution path: an `extensions/` entry **auto-runs** every invocation; a
 `python/<name>.py` runs only if the function imports `<name>` (or the name shadows a
 third-party dependency the function imports). Any network/subprocess/credential code is
-the payload — preserve `/tmp/suspect-layer.zip` as evidence.
+the payload, preserve `/tmp/suspect-layer.zip` as evidence.
 
-#### Query 4 — Full session reconstruction of the principal that planted the layer
+#### Query 4: Full session reconstruction of the principal that planted the layer
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 ACCESS_KEY_ID="<access-key-from-Query-1>"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=AccessKeyId,AttributeValue="$ACCESS_KEY_ID" \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, event: .eventName, source: .eventSource,
@@ -250,9 +258,9 @@ aws cloudtrail lookup-events \
   jq -s 'sort_by(.time)'
 ```
 
-Look for other persistence/tampering by the same principal — more layer attaches,
+Look for other persistence/tampering by the same principal, more layer attaches,
 `UpdateFunctionCode` (code overwrite), `AddPermission` (resource-policy backdoor),
-`CreateFunctionUrlConfig`, IAM backdoors — and remediate each with the relevant playbook.
+`CreateFunctionUrlConfig`, IAM backdoors, and remediate each with the relevant playbook.
 
 ---
 
@@ -267,7 +275,7 @@ privileged, and contain the planting principal and the possibly-compromised role
 > Run every command under the **break-glass responder credentials** from §1, not under
 > any principal being contained.
 
-#### Step 1 — Detach the malicious layer (re-specifying the layers to KEEP)
+#### Step 1: Detach the malicious layer (re-specifying the layers to KEEP)
 
 ```bash
 REGION="us-east-1"
@@ -275,7 +283,7 @@ FUNCTION="<function-from-Query-1>"
 BAD_LAYER="<published_arn-from-Query-1>"   # exact ARN incl. version, or a prefix to drop
 
 # UpdateFunctionConfiguration --layers REPLACES the entire list. Compute the layers to
-# keep (everything except the malicious one) and set exactly those — do NOT pass an empty
+# keep (everything except the malicious one) and set exactly those: do NOT pass an empty
 # list unless the bad layer was the only one, or you will strip legitimate layers too.
 KEEP=$(aws lambda get-function-configuration --function-name "$FUNCTION" --region "$REGION" \
         --query 'Layers[].Arn' --output text | tr '\t' '\n' | grep -vF "$BAD_LAYER" | tr '\n' ' ')
@@ -285,7 +293,7 @@ aws lambda update-function-configuration --function-name "$FUNCTION" --region "$
   --layers $KEEP && echo "[OK] Detached $BAD_LAYER from $FUNCTION (kept: ${KEEP:-none})"
 ```
 
-#### Step 2 — Freeze the function if its execution role is privileged
+#### Step 2: Freeze the function if its execution role is privileged
 
 ```bash
 REGION="us-east-1"; FUNCTION="<function-from-Query-1>"
@@ -296,10 +304,10 @@ aws lambda put-function-concurrency --function-name "$FUNCTION" \
   echo "[OK] Froze $FUNCTION (reserved concurrency 0)"
 ```
 
-#### Step 3 — Treat the function's execution role as compromised
+#### Step 3: Treat the function's execution role as compromised
 
 If the layer could have executed (an `extensions/` entry, or a `python/` module the
-function imports/shadows — see Query 3), the execution-role credentials were exposed to
+function imports/shadows, see Query 3), the execution-role credentials were exposed to
 attacker code. Revoke its live sessions and review its reach.
 
 ```bash
@@ -317,7 +325,7 @@ aws iam list-attached-role-policies --role-name "$EXEC_ROLE" --output table   # 
 > function is frozen (Step 2), no new credentials are being minted. Review what the role
 > could access (S3, Secrets Manager, DynamoDB, etc.) and rotate any secret it could read.
 
-#### Step 4 — Contain the principal that planted the layer
+#### Step 4: Contain the principal that planted the layer
 
 ```bash
 SUSPECT_ARN="<caller-arn-from-Query-1>"
@@ -335,7 +343,7 @@ elif echo "$SUSPECT_ARN" | grep -q ":assumed-role/"; then
     --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"*","Resource":"*","Condition":{"DateLessThan":{"aws:TokenIssueTime":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}}}]}'
   echo "[OK] Revoked sessions for role $R"
 else
-  echo "[i] $SUSPECT_ARN is neither an IAM user nor an assumed-role — root/federated: contain manually"
+  echo "[i] $SUSPECT_ARN is neither an IAM user nor an assumed-role, root/federated: contain manually"
 fi
 ```
 
@@ -369,9 +377,9 @@ Repeat detach + delete for every function/layer Query 2 surfaced.
 
 #### Remove other persistence / tampering by the principal
 
-From Query 4, remediate anything else — code overwrite (`UpdateFunctionCode` → redeploy
+From Query 4, remediate anything else, code overwrite (`UpdateFunctionCode` → redeploy
 from a trusted source), a resource-policy backdoor (`AddPermission`), function URLs, IAM
-backdoors — using the relevant playbook for each.
+backdoors, using the relevant playbook for each.
 
 #### Right-size layer/config permissions
 
@@ -430,14 +438,14 @@ REGION="us-east-1"
 FUNCTION="<function-from-Query-1>"
 CONTAINED_AT="<iso8601-containment-timestamp>"
 
-# Invoke is DATA-plane — use the CloudWatch metric (management events won't show it).
+# Invoke is DATA-plane: use the CloudWatch metric (management events won't show it).
 INVOKED=$(aws cloudwatch get-metric-statistics --namespace AWS/Lambda --metric-name Invocations \
   --dimensions Name=FunctionName,Value="$FUNCTION" \
   --start-time "$CONTAINED_AT" --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --period 3600 --statistics Sum --region "$REGION" \
   --query 'Datapoints[?Sum>`0`]' --output json | jq 'length')
 [ "$INVOKED" -eq 0 ] && echo "[OK] No invocations since containment (layer detached; role revoked)" \
-                     || echo "[i] $INVOKED invocation window(s) since containment — confirm they post-date layer removal"
+                     || echo "[i] $INVOKED invocation window(s) since containment, confirm they post-date layer removal"
 ```
 
 #### Restore normal concurrency (if frozen in Step 2)
@@ -453,7 +461,7 @@ aws lambda delete-function-concurrency --function-name "$FUNCTION" --region "$RE
 ```bash
 echo "Re-run the emulation and confirm Rule A fires HIGH on the UpdateFunctionConfiguration"
 echo "attaching the unapproved layer, and Rule B fires on the PublishLayerVersion->attach"
-echo "sequence — and that NEITHER fires on the DeleteLayerVersion / layer-detach cleanup."
+echo "sequence, and that NEITHER fires on the DeleteLayerVersion / layer-detach cleanup."
 ```
 
 ---
@@ -466,7 +474,7 @@ echo "sequence — and that NEITHER fires on the DeleteLayerVersion / layer-deta
 |---------|------------------------------|
 | A principal could publish a layer and attach it to a function | `lambda:PublishLayerVersion` + `lambda:UpdateFunctionConfiguration` available outside the IaC pipeline; no allowlist of permitted layers |
 | Injection undetected | Shipped rule matched config-change and layer-delete events with no layer inspection; no approved-layer allowlist to compare against |
-| Persistence survives a function code redeploy | The payload lives in a *layer*, not the function ZIP — redeploying code leaves it attached |
+| Persistence survives a function code redeploy | The payload lives in a *layer*, not the function ZIP, redeploying code leaves it attached |
 | Execution role possibly compromised | If the layer executed, it ran under the function's role; roles were over-privileged and their sessions not revoked on suspicion |
 | Blast radius under-appreciated | Per-function execution roles were not baselined, so the reach of a compromised one was not immediately known |
 
@@ -488,14 +496,14 @@ echo "sequence — and that NEITHER fires on the DeleteLayerVersion / layer-deta
 ```
 
 (Note this denies *all* `UpdateFunctionConfiguration` for non-pipeline principals, not
-only layer changes — Lambda has no request-context condition key for the specific layer
+only layer changes - Lambda has no request-context condition key for the specific layer
 ARN being attached, so the config-change action cannot be narrowed to "layer changes
 only" in IAM. If that is too broad, drop `UpdateFunctionConfiguration` from this deny and
 rely on the approved-layer detection + code signing below.)
 
 **Structural controls**
-- **Code signing for Lambda** (`lambda:CreateCodeSigningConfig` + a Signer profile): with a code-signing config that enforces on deploy, only layers/packages signed by a trusted profile can be attached — the strongest structural control against an unapproved layer
-- **Least-privilege execution roles** per function — the blast-radius reducer if a layer does execute
+- **Code signing for Lambda** (`lambda:CreateCodeSigningConfig` + a Signer profile): with a code-signing config that enforces on deploy, only layers/packages signed by a trusted profile can be attached, the strongest structural control against an unapproved layer
+- **Least-privilege execution roles** per function, the blast-radius reducer if a layer does execute
 - Maintain an **approved-layer allowlist** and reconcile function layer sets against it on a schedule
 - Manage all layers and function config through reviewed IaC; treat any out-of-band publish/attach as an incident
 
@@ -508,21 +516,21 @@ rely on the approved-layer detection + code signing below.)
 
 | Type | Value |
 |------|-------|
-| MITRE technique | T1525 — Implant Internal Image |
+| MITRE technique | T1525 - Implant Internal Image |
 | MITRE tactic | Persistence (TA0003) |
 | Primary API | `lambda:PublishLayerVersion` → `lambda:UpdateFunctionConfiguration` (`Layers=[...]`) |
-| Event source | `lambda.amazonaws.com` (regional — query the function's region) |
-| Key discriminator | An **unapproved layer ARN** attached (owner account = 5th ARN field), and the publish→attach sequence — not the event names |
+| Event source | `lambda.amazonaws.com` (regional, query the function's region) |
+| Key discriminator | An **unapproved layer ARN** attached (owner account = 5th ARN field), and the publish→attach sequence, not the event names |
 | `UpdateFunctionConfiguration` gotcha | `requestParameters.layers` is the **full replacement** list; detach by re-specifying the layers to KEEP, never blindly `--layers []` |
-| Content inspection | Layer ZIP is **not** in CloudTrail — download via `get-layer-version-by-arn` (presigned `Content.Location`) and scan |
+| Content inspection | Layer ZIP is **not** in CloudTrail, download via `get-layer-version-by-arn` (presigned `Content.Location`) and scan |
 | Execution path | `python/<mod>.py` runs only if imported/shadows a dependency; `/opt/extensions/<exe>` auto-runs every invocation. The emulation ships `python/` code the handler never imports → would not execute as-shipped |
-| "Was it used" pivot | **Data-plane** invocation — NOT in `lookup-events`; use CloudWatch `AWS/Lambda Invocations` + Lambda data events |
-| Blast radius | The function's **execution role** — treat its credentials as compromised if the layer executed |
+| "Was it used" pivot | **Data-plane** invocation - NOT in `lookup-events`; use CloudWatch `AWS/Lambda Invocations` + Lambda data events |
+| Blast radius | The function's **execution role**, treat its credentials as compromised if the layer executed |
 | Error strings (not `Client.`-prefixed) | `AccessDenied` / `AccessDeniedException` |
 | Resources created | The target function persists (created by `pulumi up`); the layer is published/attached/deleted by the script (a real attack leaves it attached) |
 
 **MITRE mapping note:** T1525 (Implant Internal Image), Persistence, is a defensible
-mapping — a Lambda layer is a reusable component implanted with malicious code. The
+mapping, a Lambda layer is a reusable component implanted with malicious code. The
 MANIFEST's technique *name* ("Persist via Lambda Layer") is the upstream Stratus label,
 not a canonical MITRE technique name; cosmetic, not a mis-mapping.
 
@@ -531,8 +539,7 @@ not a canonical MITRE technique name; cosmetic, not a mis-mapping.
 The emulation detaches and deletes its own layer on cleanup, so a normal run leaves the
 function with no extra layer; `pulumi destroy` in `infra/` then removes the function and
 its role. After a **real** incident, `pulumi destroy` is irrelevant to layers attached to
-*other* functions — detach every unapproved layer (re-specifying the keep-list), delete
+*other* functions, detach every unapproved layer (re-specifying the keep-list), delete
 the layer versions and any cross-account shares, treat every affected execution role as
 compromised, and restrict layer publish/attach via SCP + code signing; the layer persists
 on each function until you detach it, regardless of any stack teardown.
-```

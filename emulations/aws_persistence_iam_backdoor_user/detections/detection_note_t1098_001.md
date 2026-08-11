@@ -1,23 +1,23 @@
-# Detection Note — T1098.001 (Backdoor IAM User with Additional Access Key)
+# Detection Note: T1098.001 (Backdoor IAM User with Additional Access Key)
 
 **Signal:** `iam:CreateAccessKey` where the target user is **not** the caller,
 by a principal outside the provisioning allowlist.
 
 **Why this is persistence:** the minted key belongs to the *victim*, not the
-attacker. Revoking the attacker's own credentials — the standard first response
-— leaves the backdoor key fully functional.
+attacker. Revoking the attacker's own credentials, the standard first response
+- leaves the backdoor key fully functional.
 
 ## The field path that breaks everything if you get it wrong
 
 `CreateAccessKey` nests the new key id:
 
 ```
-responseElements.accessKey.accessKeyId      ✅ correct
-responseElements.accessKeyId                ❌ always null
+responseElements.accessKey.accessKeyId      correct
+responseElements.accessKeyId                always null
 ```
 
 A query using the flat path returns `null` for every event. That does not fail
-loudly — it silently produces empty results, which breaks the whole
+loudly, it silently produces empty results, which breaks the whole
 identify → contain → hunt chain. You cannot disable a key whose id you never
 captured, and you cannot hunt for its use.
 
@@ -29,10 +29,10 @@ performed it, matching `CreateAccessKey` and `DeleteAccessKey` with a bare
 
 Two things make the comparison work in practice:
 
-1. **Self-service creation omits `userName`** — the key is minted for the
+1. **Self-service creation omits `userName`**, the key is minted for the
    caller implicitly. So requiring `userName` to exist already excludes most
    benign traffic.
-2. The residual case — a user passing their *own* name — needs a field-to-field
+2. The residual case, a user passing their *own* name, needs a field-to-field
    comparison (`requestParameters.userName == userIdentity.userName`). Sigma
    cannot express that portably; the KQL does it explicitly.
 
@@ -41,7 +41,7 @@ session, so "created for another user" is a **coarse flag** in that case, not
 proof. Triage those against whether the role legitimately provisions users.
 
 **Drop `DeleteAccessKey`.** It is benign cleanup and the emulation's own
-revert — signal-inverted as a trigger.
+revert, signal-inverted as a trigger.
 
 ## Coverage beyond the event
 
@@ -50,7 +50,7 @@ revert — signal-inverted as a trigger.
 That is the difference between "a backdoor exists" and "a backdoor is active".
 
 **Account-wide sweep** for keys planted before logging: use the **IAM
-credential report**, not Access Analyzer — Access Analyzer covers resource
+credential report**, not Access Analyzer - Access Analyzer covers resource
 policies and external access, not user access keys. Look for users with two
 active keys, or a key materially newer than its user.
 
@@ -64,17 +64,47 @@ every role-based call.
 `LimitExceeded`. Not `Client.`-prefixed like EC2.
 
 **MITRE:** T1098.001 (*Account Manipulation: Additional Cloud Credentials*) is
-precise — no caveat.
+precise, no caveat.
 
-**Severity:** manifest MEDIUM; IR view **High** — durable credential
+**Severity:** manifest MEDIUM; IR view **High**, durable credential
 persistence surviving rotation.
 
 **GuardDuty:** no finding type specific to this technique.
 
+## Tuning the allowlist
+
+The rule ships `:role/REPLACE-ME-*` placeholders, not defaults. They match
+nothing, so an unedited rule has no exclusions at all and alerts on the routine
+activity it is supposed to ignore.
+
+Derive the real list from your own trail. The principals that show up
+repeatedly, across weeks rather than once, are your automation:
+
+```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '90 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-90d +%Y-%m-%dT%H:%M:%SZ)
+
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=CreateAccessKey \
+  --start-time "$START" \
+  --output json | \
+  jq -r '.Events[].CloudTrailEvent | fromjson | .userIdentity.arn' | \
+  sort | uniq -c | sort -rn
+```
+
+Keep the recurring service and pipeline roles. Leave out anything human unless
+it is a documented break-glass path, since a human name on the allowlist is a
+standing hole in the rule.
+
+Re-check the list when provisioning changes. A retired pipeline role left in
+place is dead weight; a new one missing from it produces the false-positive
+wave that gets a rule muted.
+
 **Files here:**
-- `sigma_t1098_001.yml` — one rule (`high`) covering the "for another user by
+- `sigma_t1098_001.yml`, one rule (`high`) covering the "for another user by
   non-provisioning principal" shape.
-- `kql_t1098_001.kql` — the full caller-vs-target comparison with the correct
+- `kql_t1098_001.kql`, the full caller-vs-target comparison with the correct
   nested key path, plus the key-usage hunt query.
 
 Full response procedure is in `../PLAYBOOK.md`.

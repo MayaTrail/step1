@@ -4,11 +4,11 @@
 #
 #   1. It matched any ONE of four SES reads with a bare `condition: selection`.
 #      GetSendQuota and GetAccountSendingEnabled are read by dashboards and
-#      health checks, so it fired on benign monitoring — and matching a single
+#      health checks, so it fired on benign monitoring: and matching a single
 #      call cannot express the recon FINGERPRINT, which is the whole set of
 #      reads appearing together.
 #   2. v1 event names only. An attacker using the SESv2 SDK produces
-#      `GetAccount` and `ListEmailIdentities`, which the rule never matched —
+#      `GetAccount` and `ListEmailIdentities`, which the rule never matched,
 #      trivially evadable. Both are included below.
 #
 # NOTE: SES v1 and SESv2 both log under `ses.amazonaws.com`. There is no
@@ -19,7 +19,7 @@ name: ses_read_base
 status: experimental
 description: >-
   Any SES capability-read API, v1 or v2. Base rule for the fingerprint
-  correlation — individually these are routine monitoring calls, so this is not
+  correlation, individually these are routine monitoring calls, so this is not
   for direct alerting.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.discovery.ses-enumerate/
@@ -45,14 +45,14 @@ falsepositives:
 level: low
 ---
 # THE deployable detection. The fingerprint is BREADTH of distinct SES read
-# APIs from one principal — an actor establishing whether the account can send
+# APIs from one principal: an actor establishing whether the account can send
 # phishing mail, and from which verified identities.
 title: SES phishing-capability reconnaissance fingerprint
 id: 6e0a92b4-8d17-4c53-b9f6-215e7c48a0d3
 status: experimental
 description: >-
   A single principal exercised three or more distinct SES capability-read APIs
-  within ten minutes — the reconnaissance pattern that precedes send abuse.
+  within ten minutes, the reconnaissance pattern that precedes send abuse.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.discovery.ses-enumerate/
 tags:
@@ -69,15 +69,15 @@ correlation:
     gte: 3
     field: eventName                   # count DISTINCT SES read APIs
 falsepositives:
-  - SES operations tooling that polls several APIs together — allowlist by
+  - SES operations tooling that polls several APIs together, allowlist by
     principal
 level: high
 ---
 # Follow-on abuse. The recon above is the precursor; THIS is the damage, and
 # the original rule set had nothing covering it.
 #
-# IMPORTANT: ses:SendEmail / SendRawEmail are DATA-plane events. They are NOT
-# in CloudTrail management events and cannot be detected here — monitor the
+# IMPORTANT - ses:SendEmail / SendRawEmail are DATA-plane events. They are NOT
+# in CloudTrail management events and cannot be detected here: monitor the
 # CloudWatch AWS/SES `Send` metric or SES event publishing for send spikes.
 # What IS visible in CloudTrail is the account being prepared for sending.
 title: SES account prepared for bulk sending
@@ -105,6 +105,6 @@ detection:
       - 'CreateEmailIdentity'
   condition: selection
 falsepositives:
-  - Legitimate onboarding of new sending domains — correlate with change
+  - Legitimate onboarding of new sending domains, correlate with change
     management
 level: high

@@ -1,6 +1,6 @@
 // Create IAM Roles Anywhere Trust Anchor (T1550.001)
 //
-// Covers the whole CHAIN, not just the anchor. A trust anchor alone is INERT —
+// Covers the whole CHAIN, not just the anchor. A trust anchor alone is INERT,
 // credential vending needs anchor + profile + a role trusting
 // rolesanywhere.amazonaws.com. Detecting any link catches the scheme.
 //
@@ -8,7 +8,7 @@
 // anchor created anywhere else. Run this across all regions, and sweep all
 // regions during hunts (the IAM role-trust half is global).
 //
-// Disable/Delete are retained for the forensic timeline only — removing an
+// Disable/Delete are retained for the forensic timeline only, removing an
 // anchor is remediation, not attack.
 //
 // Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
@@ -27,16 +27,16 @@ AWSCloudTrail
 | extend ProfileArn  = tostring(Req.profileArn)
 | extend RoleName    = tostring(Req.roleName)
 // The CA certificate PEM is logged in cleartext (it is public material, not
-// redacted) — extract and inspect the issuer/subject with openssl.
+// redacted), extract and inspect the issuer/subject with openssl.
 | extend CertPem = tostring(Req.source.sourceData.x509CertificateData)
 | project TimeGenerated, AWSRegion, EventSource, EventName, UserIdentityArn,
           AnchorName, ProfileArn, RoleName, TrustsRolesAnywhere,
           HasCert = isnotempty(CertPem), SourceIpAddress
 | extend Verdict = case(
-    EventName == "CreateTrustAnchor",  "ROLES ANYWHERE TRUST ANCHOR CREATED — external CA registered as identity source, P0",
-    EventName == "CreateProfile",      "ROLES ANYWHERE PROFILE CREATED — links the anchor to assumable roles, P0",
-    TrustsRolesAnywhere,               "ROLE NOW TRUSTS ROLES ANYWHERE — the gate, P0",
-    EventName == "CreateSession",      "ROLES ANYWHERE SESSION VENDED — anchor in use",
+    EventName == "CreateTrustAnchor",  "ROLES ANYWHERE TRUST ANCHOR CREATED, external CA registered as identity source, P0",
+    EventName == "CreateProfile",      "ROLES ANYWHERE PROFILE CREATED, links the anchor to assumable roles, P0",
+    TrustsRolesAnywhere,               "ROLE NOW TRUSTS ROLES ANYWHERE, the gate, P0",
+    EventName == "CreateSession",      "ROLES ANYWHERE SESSION VENDED, anchor in use",
     EventName in ("DisableTrustAnchor","DeleteTrustAnchor"), "anchor removed (timeline only)",
     "REVIEW")
 | order by TimeGenerated desc
@@ -49,7 +49,7 @@ AWSCloudTrail
 // - profileId is the trailing segment of the profile ARN.
 // - get-role returns the trust policy DECODED (unlike the CloudTrail event).
 //
-// CONTAINMENT ORDER: disable before delete — a deleted anchor takes its
+// CONTAINMENT ORDER: disable before delete, a deleted anchor takes its
 // evidence with it.
 //
 // PREVENTION: aws:SourceArn binds a role to a specific trust anchor, so a role

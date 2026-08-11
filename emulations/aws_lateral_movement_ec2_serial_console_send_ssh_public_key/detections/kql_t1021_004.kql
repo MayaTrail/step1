@@ -5,7 +5,7 @@
 // downgrade affecting every instance, and it is the earliest point at which
 // this technique becomes visible.
 //
-// NO NETWORK CORROBORATION EXISTS. The serial console is out-of-band — it
+// NO NETWORK CORROBORATION EXISTS. The serial console is out-of-band, it
 // bypasses security groups and NACLs, and the session does not appear in VPC
 // Flow Logs. Unlike EC2 Instance Connect, there is no inbound-22 correlation to
 // confirm the access. The control plane is the only record.
@@ -24,16 +24,16 @@ AWSCloudTrail
           SourceIpAddress, UserAgent, AWSRegion, ErrorCode, Succeeded
 | extend Verdict = case(
     EventName == "EnableSerialConsoleAccess" and Succeeded,
-        "ACCOUNT SERIAL CONSOLE ENABLED — account-wide downgrade, P0",
+        "ACCOUNT SERIAL CONSOLE ENABLED, account-wide downgrade, P0",
     EventName == "SendSerialConsoleSSHPublicKey" and Succeeded,
-        "SERIAL CONSOLE KEY PUSHED — out-of-band foothold, P0",
+        "SERIAL CONSOLE KEY PUSHED, out-of-band foothold, P0",
     ErrorCode == "SerialConsoleAccessDisabled",
-        "BLOCKED BY ACCOUNT GATE — attempt made; investigate the principal",
-    "SERIAL CONSOLE ACTIVITY — review")
+        "BLOCKED BY ACCOUNT GATE, attempt made; investigate the principal",
+    "SERIAL CONSOLE ACTIVITY, review")
 | order by TimeGenerated desc
 //
 // A `SerialConsoleAccessDisabled` error means the account gate stopped the
-// attempt. That is a successful control, not a non-event — the principal still
+// attempt. That is a successful control, not a non-event, the principal still
 // tried, and should be investigated.
 //
 // The 7-day window is deliberate: EnableSerialConsoleAccess may precede the key

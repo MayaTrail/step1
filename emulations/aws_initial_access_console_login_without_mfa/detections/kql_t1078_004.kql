@@ -1,10 +1,10 @@
-// AWS Console login without MFA (T1078.004) — canonical ConsoleLogin signal.
+// AWS Console login without MFA (T1078.004), canonical ConsoleLogin signal.
 //
 // The original query was already correct: right event source, right event, and
 // it parsed AdditionalEventData/ResponseElements properly. What is added below
 // is the SSO/SAML exclusion and triage enrichment.
 //
-// Parse with parse_json and compare with `==`. Do NOT use `has` — it is
+// Parse with parse_json and compare with `==`. Do NOT use `has`, it is
 // whole-term and unreliable for these values.
 //
 // A note on regions: console sign-in events are global and are recorded in
@@ -21,7 +21,7 @@ AWSCloudTrail
 | where MFAUsed == "No" and LoginResult == "Success"
 // For SAML / IAM Identity Center sessions MFA is enforced at the IdP and AWS
 // may still record MFAUsed=No. Excluding them keeps the rule trustworthy.
-// ADD YOUR OWN custom permission-set role names — the AWSReservedSSO_ prefix
+// ADD YOUR OWN custom permission-set role names, the AWSReservedSSO_ prefix
 // covers Identity Center defaults only.
 | where UserIdentityArn !contains ":assumed-role/AWSReservedSSO_"
 | where UserIdentityType != "SAMLUser"
@@ -29,11 +29,11 @@ AWSCloudTrail
 | project TimeGenerated, UserIdentityArn, UserIdentityType, IsRoot,
           SourceIpAddress, UserAgent, AWSRegion, MFAUsed
 | extend Verdict = iff(IsRoot,
-                       "ROOT CONSOLE LOGIN WITHOUT MFA — P0",
-                       "CONSOLE LOGIN WITHOUT MFA — investigate")
+                       "ROOT CONSOLE LOGIN WITHOUT MFA - P0",
+                       "CONSOLE LOGIN WITHOUT MFA, investigate")
 | order by IsRoot desc, TimeGenerated desc
 //
-// Brute-force companion — the failures that may have preceded the success:
+// Brute-force companion, the failures that may have preceded the success:
 //
 //   AWSCloudTrail
 //   | where TimeGenerated > ago(24h)

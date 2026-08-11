@@ -226,32 +226,6 @@ Each emulation packages a documented threat-actor campaign or a disclosed CVE/mi
 > Without submodule access `emulations/_kb/` stays empty — the public emulation packages still build and run;
 > only the authoring methodology is gated.
 
-### Writing playbooks and detection rules
-
-`emulations/_kb/` covers the *package* contracts — MANIFEST, readiness, naming, secrets. For the two
-artifacts inside a package that are easiest to get subtly wrong — `PLAYBOOK.md` and `detections/` — there
-is a skill in this repo:
-
-```
-.claude/skills/write-emulation-playbook/
-```
-
-Invoke it as `/write-emulation-playbook emulations/<name>` in Claude Code, or just read it. It contains:
-
-| File | What it gives you |
-|---|---|
-| `SKILL.md` | The six-phase playbook structure and the process for writing the `detections/` trio |
-| `reference/authoring-rules.md` | ~50 rules, each from a real review defect — the traps that make a rule match zero events |
-| `reference/detection-templates.md` | Canonical Sigma/KQL/note shapes, and how to pick a correlation type |
-| `scripts/validate_sigma.py` | Mechanical validator — run it before you open a PR |
-
-```bash
-python .claude/skills/write-emulation-playbook/scripts/validate_sigma.py "emulations/<name>/detections/*.yml"
-```
-
-The short version of why it exists: a detection rule that parses is not the same as a detection rule that
-fires. Most of `authoring-rules.md` is about the difference.
-
 <p align="center">
   <img src="docs/assets/aws-platform-overview.png" alt="MayaTrail dashboard" width="820"/>
 </p>

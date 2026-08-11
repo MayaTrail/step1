@@ -3,12 +3,12 @@
 # The original rule paired the action with a routine read and inspected neither
 # caller nor target. GetLoginProfile is noise and is dropped from alerting.
 #
-# The rule level was also `medium` while the MANIFEST severity was HIGH — and
+# The rule level was also `medium` while the MANIFEST severity was HIGH: and
 # the manifest was right, which is unusual in this catalogue. Raised to `high`.
 #
 # WHY THE CALLER MATTERS: console self-service password change is
 # iam:ChangePassword. UpdateLoginProfile is by CONVENTION an administrative
-# action — someone resetting another user's password. Note this is a console
+# action: someone resetting another user's password. Note this is a console
 # convention, NOT an AWS-enforced invariant: a principal with broad
 # iam:UpdateLoginProfile CAN target itself, and a self-targeted reset is
 # suspicious in its own right (it implies an over-broad grant).
@@ -18,7 +18,7 @@ name: iam_updateloginprofile_nonhelpdesk
 status: experimental
 description: >-
   An existing user's console password was reset by a principal outside the
-  help-desk / identity-admin allowlist — account takeover rather than support.
+  help-desk / identity-admin allowlist, account takeover rather than support.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.privilege-escalation.iam-update-user-login-profile/
 tags:
@@ -32,18 +32,21 @@ detection:
   selection:
     eventSource: 'iam.amazonaws.com'
     eventName: 'UpdateLoginProfile'
+  # REPLACE these with the roles in YOUR account that legitimately reset user
+  # passwords. The placeholder values below match nothing, so until they are
+  # edited this rule fires on every helpdesk password reset.
   password_reset_role:
     userIdentity.arn|contains:
-      - ':role/helpdesk-password-reset'
-      - ':role/identity-admin'
-      - ':role/BreakGlassAdmin'
+      - ':role/REPLACE-ME-helpdesk'
+      - ':role/REPLACE-ME-identity-admin'
+      - ':role/REPLACE-ME-break-glass'
   condition: selection and not password_reset_role
 falsepositives:
   - Password resets performed from roles not yet on the allowlist
 level: high
 ---
 # The confirmation. A password reset only becomes a takeover when someone logs
-# in with it — and MFA is what usually prevents that.
+# in with it: and MFA is what usually prevents that.
 title: Console login shortly after a password reset
 id: 1c6b8f04-3e72-4a95-8d13-6b0e29ca7f45
 status: experimental
@@ -69,7 +72,7 @@ title: AWS console login success
 id: 7d3f1a58-9c04-4b26-a5e7-08b2c96e41d3
 name: aws_console_login_success
 status: experimental
-description: Base rule — correlation component only, not for direct alerting.
+description: Base rule, correlation component only, not for direct alerting.
 tags:
   - attack.initial_access
   - attack.t1078.004

@@ -1,4 +1,4 @@
-# Detection Note — T1078.004 (Console Login Without MFA)
+# Detection Note: T1078.004 (Console Login Without MFA)
 
 **Signal:** a CloudTrail `ConsoleLogin` event with
 `additionalEventData.MFAUsed = No` and `responseElements.ConsoleLogin =
@@ -28,9 +28,9 @@ rule until it gets muted.
 
 Exclusions must cover **three** things, not one:
 
-1. Identity Center default roles — `:assumed-role/AWSReservedSSO_`
-2. External SAML federation — `userIdentity.type: SAMLUser`
-3. **Your own custom-named permission sets** — the `AWSReservedSSO_` prefix
+1. Identity Center default roles, `:assumed-role/AWSReservedSSO_`
+2. External SAML federation, `userIdentity.type: SAMLUser`
+3. **Your own custom-named permission sets**, the `AWSReservedSSO_` prefix
    only matches Identity Center defaults. Renamed permission sets will not
    match it and must be enumerated locally.
 
@@ -40,7 +40,7 @@ Treat MFA posture for all of these as an IdP-side control.
 
 - `responseElements.ConsoleLogin` is `Success` or `Failure`.
 - `additionalEventData.MFAUsed` is `Yes` or `No`.
-- Match these exact strings. In KQL, `parse_json` then compare with `==` —
+- Match these exact strings. In KQL, `parse_json` then compare with `==`,
   do **not** use `has`, which is whole-term and unreliable here.
 - Console sign-in is a **global** event, recorded in **us-east-1**. A
   region-filtered workspace or query returns nothing.
@@ -49,18 +49,18 @@ Treat MFA posture for all of these as an IdP-side control.
   `userIdentity.type` and the ARN.
 
 **Containment note:** `aws:TokenIssueTime` conditions do not constrain
-long-lived IAM user access keys — that lever works on STS sessions, not static
+long-lived IAM user access keys, that lever works on STS sessions, not static
 credentials.
 
-**MITRE:** T1078.004 (*Valid Accounts: Cloud Accounts*) is correct — no caveat.
+**MITRE:** T1078.004 (*Valid Accounts: Cloud Accounts*) is correct, no caveat.
 
 **GuardDuty:** no finding type specific to this technique.
 
 **Files here:**
-- `sigma_t1078_004.yml` — four documents: the original success rule with the
+- `sigma_t1078_004.yml`, four documents: the original success rule with the
   SSO/SAML exclusion added (`medium`), the root variant (`critical`), the
   brute-force correlation (`high`), and its failure base rule (`low`).
-- `kql_t1078_004.kql` — the enriched success query plus the brute-force
+- `kql_t1078_004.kql`, the enriched success query plus the brute-force
   companion query in comments.
 
 Full response procedure is in `../PLAYBOOK.md`.

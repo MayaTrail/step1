@@ -18,8 +18,7 @@ tags:
   - attack.credential_access
   - attack.collection
   - attack.t1557
-  - kubernetes
-  - cve-2020-8554
+  - cve.2020-8554
 logsource:
   product: kubernetes
   service: audit

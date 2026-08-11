@@ -7,7 +7,7 @@
 // Field-shape gotcha: instanceId is a direct request parameter on
 // ModifyInstanceAttribute, but on Stop/StartInstances it is nested in
 // instancesSet.items[]. The coalesce below normalises the two so the grouping
-// key actually lines up — without it the sequence never assembles.
+// key actually lines up, without it the sequence never assembles.
 //
 // Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 let window = 15m;
@@ -31,7 +31,7 @@ AWSCloudTrail
     LastSeen  = max(TimeGenerated)
     by InstanceId, bin(TimeGenerated, window)
 | where ModUD > 0 and Stops > 0 and Starts > 0
-| extend Verdict = "EC2 USER-DATA INJECTION SEQUENCE — P0"
+| extend Verdict = "EC2 USER-DATA INJECTION SEQUENCE - P0"
 | order by LastSeen desc
 //
 // To catch the write on its own (an actor who rewrites user-data and waits for

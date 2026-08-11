@@ -7,7 +7,7 @@
 # Neither inspected WHICH layer was attached. DeleteLayerVersion is dropped from
 # alerting and kept only for the timeline.
 #
-# The load-bearing half of Rule A — the approved-layer allowlist — is a
+# The load-bearing half of Rule A - the approved-layer allowlist: is a
 # per-environment set and CANNOT be a static Sigma value. Enforce it in the
 # rules engine: for each ARN in requestParameters.layers, alert unless the ARN,
 # or its owner account (the 5th ':'-delimited field), is approved. Deploy
@@ -34,7 +34,7 @@ detection:
     requestParameters.layers|contains: 'arn:aws:lambda:'   # a layer set was supplied
   condition: selection
 falsepositives:
-  - Every legitimate layer attachment — this rule is only useful once the
+  - Every legitimate layer attachment, this rule is only useful once the
     approved-layer allowlist is applied in the rules engine
 level: high
 ---
@@ -43,7 +43,7 @@ id: 4e0c7a32-8d59-4f26-b3e7-0a1c8d6f2b45
 status: experimental
 description: >-
   A layer published and then attached to a function by the same principal within
-  fifteen minutes — the code-injection fingerprint.
+  fifteen minutes, the code-injection fingerprint.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.lambda-layer-extension/
 tags:
@@ -63,7 +63,7 @@ title: Lambda PublishLayerVersion
 id: 5f1d8b43-9e60-4a37-b4f8-1b2d9e7a3c56
 name: lambda_publish_layer
 status: experimental
-description: Base rule — sequence component only, not for direct alerting.
+description: Base rule, sequence component only, not for direct alerting.
 tags:
   - attack.persistence
   - attack.t1525
@@ -102,5 +102,5 @@ detection:
     requestParameters.principal: '*'
   condition: selection and public
 falsepositives:
-  - Deliberately published public layers — should be inventoried
+  - Deliberately published public layers, should be inventoried
 level: high

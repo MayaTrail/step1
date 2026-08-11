@@ -31,14 +31,17 @@ detection:
   # TUNE TO YOUR BASELINE. Anchored at the start so `p3`/`g5` match but
   # `m5.large` does not.
   #
-  # NOTE: inf/trn/dl are ML ACCELERATORS and are not mining-capable — they are
+  # NOTE: inf/trn/dl are ML ACCELERATORS and are not mining-capable - they are
   # included as a cost-abuse signal, not a mining signal. f1/f2 are FPGA.
   unusual_type:
     requestParameters.instanceType|re: '^(p[0-9]|g[0-9]|f[0-9]|inf[0-9]|trn[0-9]|dl[0-9])'
+  # REPLACE these with the roles in YOUR account that legitimately launch large
+  # or GPU instance types. The placeholder values below match nothing, so until
+  # they are edited this rule fires on every legitimate batch and training job.
   allowlisted:
     userIdentity.arn|contains:
-      - ':role/ml-training'
-      - ':role/ci-'
+      - ':role/REPLACE-ME-ml-workload'
+      - ':role/REPLACE-ME-ci-'
   condition: selection and unusual_type and not allowlisted
 falsepositives:
   - Genuine ML/rendering workloads launched by principals not yet allowlisted
@@ -67,7 +70,7 @@ detection:
 level: critical
 ---
 # Capability probing. An actor discovering which instance types they are
-# permitted to launch produces a burst of failures — a strong early signal that
+# permitted to launch produces a burst of failures: a strong early signal that
 # the successful-launch rule above cannot see.
 #
 # The full failure set matters: a `LimitExceeded`-only substring match misses
@@ -77,7 +80,7 @@ title: EC2 instance-launch capability probing
 id: 4b8c2071-6ae9-45d3-b8f2-903e17c5d64a
 status: experimental
 description: >-
-  Repeated failed RunInstances calls for accelerated instance types — the actor
+  Repeated failed RunInstances calls for accelerated instance types, the actor
   is mapping which families and sizes the credential can launch.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ec2-launch-unusual-instances/
@@ -92,7 +95,7 @@ detection:
     eventSource: 'ec2.amazonaws.com'
     eventName: 'RunInstances'
     requestParameters.instanceType|re: '^(p[0-9]|g[0-9]|f[0-9]|inf[0-9]|trn[0-9]|dl[0-9])'
-  # EC2 prefixes CloudTrail error codes with `Client.` —
+  # EC2 prefixes CloudTrail error codes with `Client.`,
   # `Client.VcpuLimitExceeded`, not `VcpuLimitExceeded`. `|contains` tolerates
   # both; confirm the exact strings against a sample event.
   failure:

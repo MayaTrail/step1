@@ -23,9 +23,12 @@ AWSCloudTrail
 | extend Req = parse_json(RequestParameters)
 | extend InstanceType = tostring(Req.instanceType)
 | where InstanceType matches regex AcceleratedFamily
-// Allowlist legitimate ML/CI launchers — TUNE THIS.
-| where UserIdentityArn !contains ":role/ml-training"
-    and UserIdentityArn !contains ":role/ci-"
+// Allowlist legitimate ML/CI launchers - TUNE THIS.
+// REPLACE these with the roles in YOUR account that legitimately launch large
+// or GPU instance types. The placeholder values below match nothing, so until
+// they are edited this rule fires on every legitimate batch and training job.
+| where UserIdentityArn !contains ":role/REPLACE-ME-ml-workload"
+    and UserIdentityArn !contains ":role/REPLACE-ME-ci-"
 | extend Failed = isnotempty(ErrorCode)
 | summarize
     Launches      = countif(not(Failed)),
@@ -39,9 +42,9 @@ AWSCloudTrail
     LastSeen      = max(TimeGenerated)
     by UserIdentityArn, bin(TimeGenerated, 30m)
 | extend Verdict = case(
-    MiningCapableLaunches > 0, "GPU INSTANCE LAUNCHED — probable resource hijacking, P0",
-    Launches > 0,              "ACCELERATED INSTANCE LAUNCHED — cost abuse, investigate",
-    FailedProbes >= 3,         "LAUNCH CAPABILITY PROBING — actor mapping permitted types",
+    MiningCapableLaunches > 0, "GPU INSTANCE LAUNCHED, probable resource hijacking, P0",
+    Launches > 0,              "ACCELERATED INSTANCE LAUNCHED, cost abuse, investigate",
+    FailedProbes >= 3,         "LAUNCH CAPABILITY PROBING, actor mapping permitted types",
     "REVIEW")
 | project TimeGenerated, UserIdentityArn, Launches, MiningCapableLaunches, FailedProbes,
           Types, ErrorCodes, Regions, SourceIPs, Verdict

@@ -1,4 +1,4 @@
-# IR Playbook: Retrieve EC2 Windows Password Data — Credential Harvesting via `ec2:GetPasswordData`
+# IR Playbook - Retrieve EC2 Windows Password Data - Credential Harvesting via `ec2:GetPasswordData`
 
 ## Classification
 
@@ -6,21 +6,21 @@
 |-------|-------|
 | Incident Type | Credential Access / Unsecured Credentials |
 | Emulation Tier | Atomic technique |
-| Threat Actor | N/A — single-technique emulation, not actor-attributed |
+| Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
 | Severity | Medium (High if the principal is non-human or the calls resolve to real Windows instances) |
 | MITRE Tactics | Credential Access |
 | MITRE Techniques | T1552.005 |
 | Services in Scope | EC2, CloudTrail, IAM, SSM (Parameter Store, for key-pair private material) |
-| Infrastructure Created | None — this technique provisions no resources |
+| Infrastructure Created | None, this technique provisions no resources |
 
 **What the emulation does:** issues 30 sequential `ec2:GetPasswordData` calls (~0.3 s apart, ~9 s total) against randomly generated, nonexistent instance IDs of the form `i-<17 hex chars>`. Every call fails with `Client.InvalidInstanceID.NotFound`, but each one is recorded in CloudTrail as a management event. The emulation therefore reproduces the *telemetry signature* of Windows credential hunting without ever retrieving a real password.
 
-**Why the failures matter:** a defender must be able to detect this technique when it fails, because a real attacker enumerating instance IDs blindly produces exactly this pattern — and an attacker who has *already* enumerated valid instance IDs produces the same API call with `errorCode` absent. Detections keyed only on success will miss the reconnaissance phase entirely.
+**Why the failures matter:** a defender must be able to detect this technique when it fails, because a real attacker enumerating instance IDs blindly produces exactly this pattern, and an attacker who has *already* enumerated valid instance IDs produces the same API call with `errorCode` absent. Detections keyed only on success will miss the reconnaissance phase entirely.
 
-**Why retrieval is terminal evidence:** `GetPasswordData` returns the administrator password encrypted with the **public half of the instance's EC2 key pair**. Decryption happens entirely **client-side**, using the PEM private key the operator downloaded at key-pair creation. AWS KMS is not in that path, and no AWS API call is made to decrypt. There is therefore **no follow-on telemetry to wait for** — the `GetPasswordData` call is the last thing you will ever see. Do not build detections that require a confirming downstream event, and never downgrade a retrieval because no such event appeared.
+**Why retrieval is terminal evidence:** `GetPasswordData` returns the administrator password encrypted with the **public half of the instance's EC2 key pair**. Decryption happens entirely **client-side**, using the PEM private key the operator downloaded at key-pair creation. AWS KMS is not in that path, and no AWS API call is made to decrypt. There is therefore **no follow-on telemetry to wait for**, the `GetPasswordData` call is the last thing you will ever see. Do not build detections that require a confirming downstream event, and never downgrade a retrieval because no such event appeared.
 
-**Why an absent `errorCode` is not proof of disclosure:** the API returns HTTP 200 with an **empty** `PasswordData` field for a Linux instance, for a Windows instance less than ~4 minutes old, and for an instance whose password data is no longer retained. CloudTrail records no `errorCode` in any of those cases and does **not** record whether the response body was populated. A "successful" call is a *candidate* disclosure, to be confirmed against instance facts (Query 3) — not a confirmed one.
+**Why an absent `errorCode` is not proof of disclosure:** the API returns HTTP 200 with an **empty** `PasswordData` field for a Linux instance, for a Windows instance less than ~4 minutes old, and for an instance whose password data is no longer retained. CloudTrail records no `errorCode` in any of those cases and does **not** record whether the response body was populated. A "successful" call is a *candidate* disclosure, to be confirmed against instance facts (Query 3), not a confirmed one.
 
 ---
 
@@ -31,22 +31,22 @@
 **Logging & Visibility**
 - CloudTrail multi-region trail enabled and delivering to S3 with object versioning and MFA delete
 - CloudTrail log file validation enabled
-- `ec2:GetPasswordData` is a **management event** — it is captured by a default management-events trail with no data-event configuration required. Confirm management events are set to `ReadWriteType: All`; a trail scoped to `WriteOnly` will silently drop this technique entirely
-- CloudTrail delivered to CloudWatch Logs (or an equivalent log analytics platform) so that count-over-time queries are possible — point-in-time `lookup-events` alone cannot express the threshold logic this technique requires
+- `ec2:GetPasswordData` is a **management event**, it is captured by a default management-events trail with no data-event configuration required. Confirm management events are set to `ReadWriteType: All`; a trail scoped to `WriteOnly` will silently drop this technique entirely
+- CloudTrail delivered to CloudWatch Logs (or an equivalent log analytics platform) so that count-over-time queries are possible, point-in-time `lookup-events` alone cannot express the threshold logic this technique requires
 - GuardDuty enabled in all regions
-- A standing answer to “which principals hold `ec2:GetPasswordData`?” — from IAM Access Advisor, or the policy-scan loop in §4. (IAM **Access Analyzer** does not answer this; it surfaces external/unused access and validates policies)
+- A standing answer to “which principals hold `ec2:GetPasswordData`?”, from IAM Access Advisor, or the policy-scan loop in §4. (IAM **Access Analyzer** does not answer this; it surfaces external/unused access and validates policies)
 
 **Alerting (must be pre-configured)**
-- Threshold alert: **more than 3 `ec2:GetPasswordData` calls from a single `userIdentity.arn` within 10 minutes**. This threshold is the single most important control for this technique — see §2 for why an unthresholded rule is unusable
+- Threshold alert: **more than 3 `ec2:GetPasswordData` calls from a single `userIdentity.arn` within 10 minutes**. This threshold is the single most important control for this technique, see §2 for why an unthresholded rule is unusable
 - High-severity alert: any `ec2:GetPasswordData` where `errorCode = Client.InvalidInstanceID.NotFound` occurs **more than 5 times in 10 minutes** from one principal. Legitimate operators query instances that exist; sustained NotFound is enumeration
 - Alert on `ec2:GetPasswordData` invoked by any principal in the non-human/service-account inventory. Automation that manages Windows hosts should be an explicit, short allowlist
-- Alert on retrieval of key-pair **private** material: `ssm:GetParameter` where `requestParameters.name` begins `/ec2/keypair/` (where the key pair was created via `ec2:CreateKeyPair`, AWS stores the private key there as a SecureString). This is the one genuinely correlated signal — an actor holding both the ciphertext and the private key has the plaintext password
+- Alert on retrieval of key-pair **private** material: `ssm:GetParameter` where `requestParameters.name` begins `/ec2/keypair/` (where the key pair was created via `ec2:CreateKeyPair`, AWS stores the private key there as a SecureString). This is the one genuinely correlated signal, an actor holding both the ciphertext and the private key has the plaintext password
 - Do **not** build an alert on `kms:Decrypt` for this technique. EC2 password decryption is client-side and produces no KMS event; such a rule can never fire
 
 **Response Tooling**
 - AWS CLI v2 configured with break-glass responder credentials, separate from any principal under investigation
 - `jq` installed for JSON parsing
-- A current inventory of Windows EC2 instances per account and region — needed to answer "did any of these instance IDs actually exist?" in minutes rather than hours
+- A current inventory of Windows EC2 instances per account and region, needed to answer "did any of these instance IDs actually exist?" in minutes rather than hours
 - A documented allowlist of principals expected to call `ec2:GetPasswordData` (typically: the Windows provisioning pipeline role, and named platform engineers)
 
 **Known IOC Baselines**
@@ -59,7 +59,7 @@
 
 ### Detection Triggers (prioritized)
 
-#### HIGH-CONFIDENCE — Always Indicate Compromise
+#### HIGH-CONFIDENCE: Always Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
@@ -69,13 +69,13 @@
 | P1 | `ec2:GetPasswordData` preceded by `ec2:DescribeInstances` filtered on `platform=windows`, and followed by `ssm:GetParameter` on `/ec2/keypair/*` or `ec2:DescribeKeyPairs`, from the same session | CloudTrail | T1552.005 |
 | P1 | `ec2:GetPasswordData` called against instance IDs spanning multiple accounts' ID space, or against IDs never present in any Describe response | CloudTrail | T1552.005 |
 
-#### MEDIUM-CONFIDENCE — May Indicate Compromise
+#### MEDIUM-CONFIDENCE: May Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
 | P2 | > 3 `ec2:GetPasswordData` calls from one `userIdentity.arn` in 10 min (the baseline threshold) | CloudTrail | T1552.005 |
 | P2 | `ec2:GetPasswordData` in a region with no Windows instances | CloudTrail | T1552.005 |
-| P2 | `ec2:GetPasswordData` with `errorCode = Client.UnauthorizedOperation` — permission probing; the actor lacks the right but is testing for it | CloudTrail | T1552.005 |
+| P2 | `ec2:GetPasswordData` with `errorCode = Client.UnauthorizedOperation`, permission probing; the actor lacks the right but is testing for it | CloudTrail | T1552.005 |
 | P2 | `ec2:GetPasswordData` from a long-lived IAM user access key rather than an assumed role | CloudTrail | T1552.005 |
 | P3 | Single `ec2:GetPasswordData` call, allowlisted principal, successful, business hours | CloudTrail | T1552.005 |
 
@@ -93,10 +93,10 @@ The rules in `detections/` require the following corrections before production d
 
 **Recommended thresholded Sigma logic** (replaces `condition: selection`).
 
-Note the pipe-aggregation form — `condition: selection | count() by userIdentity.arn > 3`, and `timeframe:` inside `detection:` — is **legacy Sigma v1 and was removed from the specification**. pySigma rejects it and no current backend will compile it. Rate logic now lives in a separate *correlation* document:
+Note the pipe-aggregation form, `condition: selection | count() by userIdentity.arn > 3`, and `timeframe:` inside `detection:`, is **legacy Sigma v1 and was removed from the specification**. pySigma rejects it and no current backend will compile it. Rate logic now lives in a separate *correlation* document:
 
 ```yaml
-# Document 1 — base rule. Low severity: this fires on every call by design.
+# Document 1 - base rule. Low severity: this fires on every call by design.
 title: EC2 GetPasswordData invoked
 id: 62d0ec7a-4fb4-527d-ac80-deeddb5616e9
 name: ec2_getpassworddata_base
@@ -111,7 +111,7 @@ detection:
   condition: selection
 level: low
 ---
-# Document 2 — correlation. This is the deployable detection.
+# Document 2: correlation. This is the deployable detection.
 title: EC2 GetPasswordData burst from a single principal
 status: experimental
 correlation:
@@ -131,7 +131,7 @@ For the enumeration variant, add a third document: a base rule that also matches
 `event_count` correlation with `condition: {gt: 5}` at `level: high`.
 
 **On the error string:** EC2 writes CloudTrail `errorCode` with a `Client.`
-prefix — `Client.InvalidInstanceID.NotFound`. The unprefixed form is the *boto3*
+prefix, `Client.InvalidInstanceID.NotFound`. The unprefixed form is the *boto3*
 `Error.Code` (visible in `attack.py`), and a CloudTrail rule keyed on it matches
 nothing. Use `errorCode|contains: 'InvalidInstanceID.NotFound'` so the rule is
 tolerant of the prefix, and confirm the exact string against a sample event in
@@ -141,14 +141,18 @@ the target account before deploying.
 
 ### Key Investigation Queries
 
-#### Query 1 — Confirm the technique fired and scope the burst
+#### Query 1: Confirm the technique fired and scope the burst
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '4 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-4H +%Y-%m-%dT%H:%M:%SZ)
+
 # All GetPasswordData events in the last 4 hours, with the pivot fields an
 # analyst actually needs: who, which instance, did it succeed
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=GetPasswordData \
-  --start-time "$(date -u -d '4 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region us-east-1 \
   --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson' | jq -r '{time: .eventTime,
@@ -160,15 +164,19 @@ aws cloudtrail lookup-events \
           agent: .userAgent}'
 ```
 
-#### Query 2 — Count calls per principal and compute the NotFound ratio
+#### Query 2: Count calls per principal and compute the NotFound ratio
 
 This is the query that separates the technique from benign use. A principal with
 a high call count *and* a high NotFound ratio is enumerating.
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=GetPasswordData \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region us-east-1 \
   --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson' | \
@@ -193,19 +201,23 @@ Interpretation:
 - `succeeded` > 0 for a non-allowlisted principal → the ciphertext **may** have been returned. CloudTrail cannot distinguish a populated response from an empty one, so this is not yet proof. Cross-reference each probed instance ID via Query 3 and treat as credential-exposed only those that resolve to a **Windows** instance, **older than ~5 minutes**, **launched with a key pair**. Those, escalate and rotate
 - `unauthorized` > 0 → the actor lacked the permission; check what else that session probed
 
-#### Query 3 — Did any probed instance ID ever exist?
+#### Query 3: Did any probed instance ID ever exist?
 
 The emulation uses fabricated IDs. A real intrusion may not. Confirm which
-probed IDs correspond to real instances — those are the hosts to treat as
+probed IDs correspond to real instances, those are the hosts to treat as
 credential-compromised.
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 
 # Extract the probed instance IDs from CloudTrail
 PROBED=$(aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=GetPasswordData \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" \
   --query 'Events[*].CloudTrailEvent' \
   --output text | jq -r '.requestParameters.instanceId' | sort -u)
@@ -220,23 +232,27 @@ for IID in $PROBED; do
     echo "[!] REAL INSTANCE PROBED: $IID"
     echo "$RESULT" | jq -r '.'
   else
-    echo "[OK] $IID — does not exist (consistent with blind enumeration)"
+    echo "[OK] $IID, does not exist (consistent with blind enumeration)"
   fi
 done
 ```
 
-#### Query 4 — Reconstruct the full session around the burst
+#### Query 4: Reconstruct the full session around the burst
 
 `GetPasswordData` rarely appears alone. Pull every action taken by the same
 access key to establish whether this was reconnaissance inside a broader
 intrusion.
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 ACCESS_KEY_ID="<AKIA-or-ASIA-key-from-Query-1>"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=AccessKeyId,AttributeValue="$ACCESS_KEY_ID" \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region us-east-1 \
   --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson' | jq -r '{time: .eventTime, event: .eventName, source: .eventSource,
@@ -248,9 +264,9 @@ Look specifically for, in order: `ec2:DescribeInstances`, `ssm:DescribeInstanceI
 `ec2:GetPasswordData`, `ssm:GetParameter` on `/ec2/keypair/*`, then any lateral-movement primitive
 (`ec2:GetConsoleScreenshot`, `ssm:SendCommand`, `ec2-instance-connect:SendSSHPublicKey`).
 
-#### Query 5 — Did the actor also obtain the private key?
+#### Query 5: Did the actor also obtain the private key?
 
-Retrieval of the ciphertext alone does not equal plaintext compromise — the
+Retrieval of the ciphertext alone does not equal plaintext compromise, the
 actor also needs the key pair's private key. **Decryption itself is invisible:**
 it happens client-side with the PEM file and generates no AWS event. So there is
 no "was it decrypted?" query to run. What you *can* determine is whether the
@@ -261,12 +277,16 @@ SSM Parameter Store as a SecureString under `/ec2/keypair/<key-pair-id>`.
 Retrieval of that parameter is the observable event.
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 SUSPECT_ARN="<principal-arn-from-Query-2>"
 
 # Private key material pulled from Parameter Store
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=GetParameter \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region us-east-1 \
   --output json | \
   jq -r --arg arn "$SUSPECT_ARN" '
@@ -276,10 +296,10 @@ aws cloudtrail lookup-events \
     {time: .eventTime, parameter: .requestParameters.name,
      decrypted: .requestParameters.withDecryption, ip: .sourceIPAddress}'
 
-# Key-pair enumeration — reconnaissance for which keys are worth stealing
+# Key-pair enumeration: reconnaissance for which keys are worth stealing
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=DescribeKeyPairs \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region us-east-1 \
   --output json | \
   jq -r --arg arn "$SUSPECT_ARN" '
@@ -289,49 +309,53 @@ aws cloudtrail lookup-events \
 ```
 
 If the key pair was created outside AWS and imported (`ec2:ImportKeyPair`), AWS
-never held the private key and this query returns nothing — which tells you
+never held the private key and this query returns nothing, which tells you
 nothing about the actor's access. In that case, fall back to evidence of *use*:
 VPC Flow Logs showing inbound 3389/RDP to the probed instance from an
 unrecognised source after the retrieval timestamp.
 
 **Treat the absence of all of the above as inconclusive, never as exoneration.**
 
-#### Query 6 — Multi-region sweep
+#### Query 6: Multi-region sweep
 
 The emulation targets one region, but a real actor enumerates broadly and
 CloudTrail management events are per-region.
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGIONS=$(aws ec2 describe-regions --query 'Regions[*].RegionName' --output text)
 
 for REGION in $REGIONS; do
   COUNT=$(aws cloudtrail lookup-events \
     --lookup-attributes AttributeKey=EventName,AttributeValue=GetPasswordData \
-    --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+    --start-time "$START" \
     --region "$REGION" \
     --query 'length(Events)' --output text 2>/dev/null)
 
   if [ -n "$COUNT" ] && [ "$COUNT" != "0" ] && [ "$COUNT" != "None" ]; then
-    echo "[!] $REGION — $COUNT GetPasswordData events"
+    echo "[!] $REGION, $COUNT GetPasswordData events"
 
     # Flag regions with no Windows footprint: any call here is anomalous
     WIN=$(aws ec2 describe-instances --region "$REGION" \
       --filters "Name=platform,Values=windows" \
                 "Name=instance-state-name,Values=running,stopped" \
       --query 'length(Reservations[].Instances[])' --output text 2>/dev/null)
-    [ "$WIN" = "0" ] && echo "    [!!] No Windows instances in $REGION — calls are unexplained"
+    [ "$WIN" = "0" ] && echo "    [!!] No Windows instances in $REGION, calls are unexplained"
   fi
 done
 ```
 
-#### Query 7 — Log-analytics threshold query (deployable detection)
+#### Query 7: Log-analytics threshold query (deployable detection)
 
 Point-in-time CLI lookups cannot express the rate condition, so the standing
 detection has to live in a log platform.
 
 **Dialect warning:** the query below is **Sentinel / Azure Log Analytics KQL**.
 It is *not* runnable in CloudWatch Logs Insights, which uses a different query
-language entirely — `summarize`, `make_set`, `case()`, `bin()` and the
+language entirely, `summarize`, `make_set`, `case()`, `bin()` and the
 `AWSCloudTrail` table do not exist there. Run it on the matching engine, or use
 the CloudWatch Logs Insights equivalent that follows.
 
@@ -357,8 +381,8 @@ AWSCloudTrail
 // IDs and lands on 3 real Windows hosts has Succeeded=3 AND NotFoundRatio=0.92;
 // any conjunction here misfiles a real disclosure as enumeration.
 | extend Verdict = case(
-    Succeeded > 0,                         "POSSIBLE RETRIEVAL — confirm via Query 3, then escalate",
-    NotFoundRatio >= 0.8 and Calls >= 10,  "ENUMERATION — P0",
+    Succeeded > 0,                         "POSSIBLE RETRIEVAL, confirm via Query 3, then escalate",
+    NotFoundRatio >= 0.8 and Calls >= 10,  "ENUMERATION - P0",
     Unauthorized > 0,                      "PERMISSION PROBING",
     "REVIEW")
 | project TimeGenerated, UserIdentityArn, Calls, Succeeded, NotFound,
@@ -373,14 +397,14 @@ AWSCloudTrail
 ### Immediate Actions (first 15 minutes)
 
 Containment scope depends on what Query 2 returned. **If `succeeded = 0` and all
-errors are `Client.InvalidInstanceID.NotFound`, no password was disclosed** — contain the
+errors are `Client.InvalidInstanceID.NotFound`, no password was disclosed**, contain the
 principal, but do not trigger a Windows-wide password rotation.
 
 If `succeeded > 0`, do **not** jump straight to isolation and rotation. A 200
 response with an empty body looks identical in CloudTrail to a real disclosure.
 First run Query 3 and keep only the probed instance IDs that resolve to a
 **Windows** instance **older than ~5 minutes** that was **launched with a key
-pair** — those are genuinely credential-exposed. Steps 4 and 5 apply to that
+pair**, those are genuinely credential-exposed. Steps 4 and 5 apply to that
 filtered set only. Isolating and snapshotting a host on an empty-response false
 positive costs an outage for nothing.
 
@@ -389,7 +413,7 @@ which severs the SSM Agent's outbound 443. The password rotation in §4 depends
 on SSM. Either perform the §4 rotation **before** Step 4, or use the
 SSM-permitting variant of the quarantine SG given in Step 4.
 
-#### Step 1 — Identify and disable the offending credential
+#### Step 1: Identify and disable the offending credential
 
 ```bash
 SUSPECT_ARN="<principal-arn-from-Query-2>"
@@ -406,7 +430,7 @@ if [ "$SESSION_TYPE" == "user" ]; then
     --query 'AccessKeyMetadata[*].{KeyId:AccessKeyId,Status:Status,Created:CreateDate}' \
     --output table
 
-  # Disable, do NOT delete — the key is forensic evidence
+  # Disable, do NOT delete: the key is forensic evidence
   COMPROMISED_KEY_ID="<key-id-from-above>"
   aws iam update-access-key \
     --user-name "$VICTIM_USER" \
@@ -417,7 +441,7 @@ if [ "$SESSION_TYPE" == "user" ]; then
 fi
 ```
 
-#### Step 2 — Revoke live STS sessions
+#### Step 2: Revoke live STS sessions
 
 Disabling an access key does **not** invalidate STS tokens already minted from
 it. Those remain valid for their full TTL (up to 12 hours) and will continue to
@@ -469,7 +493,7 @@ aws iam put-role-policy \
   }'
 ```
 
-#### Step 3 — Strip `ec2:GetPasswordData` from the principal pending investigation
+#### Step 3 - Strip `ec2:GetPasswordData` from the principal pending investigation
 
 A narrower alternative to full session revocation when the principal is a
 production automation role that must keep running.
@@ -496,9 +520,9 @@ aws iam put-role-policy \
 echo "[OK] GetPasswordData denied for $SUSPECT_ROLE"
 ```
 
-#### Step 4 — Isolate any Windows instance confirmed credential-exposed
+#### Step 4: Isolate any Windows instance confirmed credential-exposed
 
-Only for instances that survived the Query 3 filter above — Windows, older than
+Only for instances that survived the Query 3 filter above - Windows, older than
 ~5 minutes, launched with a key pair. Move each to a quarantine security group,
 preserving it for forensics.
 
@@ -506,7 +530,7 @@ preserving it for forensics.
 
 | Profile | Egress | Trade-off |
 |---------|--------|-----------|
-| `strict` | none | Maximum containment. **Forfeits SSM-based remediation** — the §4 password rotation will hang in `Pending` and time out. Use only when rotating out of band |
+| `strict` | none | Maximum containment. **Forfeits SSM-based remediation**, the §4 password rotation will hang in `Pending` and time out. Use only when rotating out of band |
 | `ssm-permitting` | 443 to SSM endpoints only | Retains remote remediation. The instance can still reach the AWS control plane, which is a residual risk if the host itself is attacker-controlled |
 
 The script below builds `ssm-permitting`, because the documented remediation
@@ -520,7 +544,7 @@ ALLOW_SSM=true   # false => strict, zero-egress quarantine
 VPC_ID=$(aws ec2 describe-instances --instance-ids "$COMPROMISED_INSTANCE" \
   --region "$REGION" --query 'Reservations[0].Instances[0].VpcId' --output text)
 
-# RECORD the original security groups BEFORE overwriting them — §5's restore
+# RECORD the original security groups BEFORE overwriting them: §5's restore
 # step has nothing to restore to otherwise
 aws ec2 describe-instances --instance-ids "$COMPROMISED_INSTANCE" \
   --region "$REGION" \
@@ -539,14 +563,14 @@ if [ "$QUARANTINE_SG" = "None" ] || [ -z "$QUARANTINE_SG" ]; then
     --vpc-id "$VPC_ID" --region "$REGION" \
     --query 'GroupId' --output text) || { echo "[FAIL] Could not create SG"; exit 1; }
 
-  # Strip the implicit allow-all egress. Check the exit status — a silent
+  # Strip the implicit allow-all egress. Check the exit status: a silent
   # failure here leaves a "quarantine" SG with full internet egress.
   if aws ec2 revoke-security-group-egress --group-id "$QUARANTINE_SG" \
        --region "$REGION" \
        --ip-permissions 'IpProtocol=-1,IpRanges=[{CidrIp=0.0.0.0/0}]'; then
     echo "[OK] Default egress removed from $QUARANTINE_SG"
   else
-    echo "[FAIL] Default egress NOT removed — $QUARANTINE_SG is not a quarantine SG"
+    echo "[FAIL] Default egress NOT removed, $QUARANTINE_SG is not a quarantine SG"
     exit 1
   fi
 
@@ -587,7 +611,7 @@ else
 fi
 ```
 
-#### Step 5 — Snapshot before any further change
+#### Step 5: Snapshot before any further change
 
 ```bash
 REGION="us-east-1"
@@ -613,7 +637,7 @@ done
 #### Rotate the local Windows administrator password on affected instances
 
 `GetPasswordData` returns the password generated at first boot. That value is
-static for the life of the instance unless rotated — so a successful retrieval
+static for the life of the instance unless rotated, so a successful retrieval
 means the credential remains valid indefinitely. This step is mandatory for
 every instance where `succeeded > 0`.
 
@@ -622,7 +646,7 @@ REGION="us-east-1"
 COMPROMISED_INSTANCE="<i-xxxxxxxxxxxx>"
 
 # 1. Pre-create the new password in Secrets Manager. Generate it HERE, not on
-#    the host — a password generated in-guest and not written anywhere locks you
+#    the host: a password generated in-guest and not written anywhere locks you
 #    out of the very account you are trying to recover.
 SECRET_NAME="ir/t1552-005/$COMPROMISED_INSTANCE/administrator"
 
@@ -691,7 +715,7 @@ aws ec2 delete-key-pair --key-name "$KEY_NAME" --region "$REGION" && \
   echo "[OK] Key pair $KEY_NAME deleted"
 ```
 
-**Be precise about what this achieves — it is less than it appears.**
+**Be precise about what this achieves, it is less than it appears.**
 `ec2:delete-key-pair` removes only AWS's stored record of the **public** key. It
 does not touch any copy of the private key the attacker holds, and any password
 ciphertext already retrieved remains decryptable offline **forever**. Deleting
@@ -767,7 +791,7 @@ if echo "$SUSPECT_ARN" | grep -q ":assumed-role/"; then
        --policy-name "EmergencyDenyPasswordData" >/dev/null 2>&1; then
     echo "[OK] EmergencyDenyPasswordData still attached to $SUSPECT_ROLE"
   else
-    echo "[FAIL] Deny policy missing from $SUSPECT_ROLE — role is unconstrained"
+    echo "[FAIL] Deny policy missing from $SUSPECT_ROLE, role is unconstrained"
   fi
 
   # b) No successful AssumeRole for this role since containment
@@ -803,11 +827,15 @@ fi
 #### Verify no further `GetPasswordData` from the suspect principal
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)
+
 SUSPECT_ARN="<principal-arn>"
 
 COUNT=$(aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=GetPasswordData \
-  --start-time "$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region us-east-1 \
   --output json | \
   jq -r --arg arn "$SUSPECT_ARN" '
@@ -817,7 +845,7 @@ COUNT=$(aws cloudtrail lookup-events \
 if [ "$COUNT" -eq 0 ]; then
   echo "[OK] No GetPasswordData activity from $SUSPECT_ARN in the last hour"
 else
-  echo "[FAIL] $COUNT further calls from $SUSPECT_ARN — containment did not hold"
+  echo "[FAIL] $COUNT further calls from $SUSPECT_ARN, containment did not hold"
 fi
 ```
 
@@ -837,7 +865,7 @@ STATUS=$(aws ssm get-command-invocation \
 if [ "$STATUS" == "Success" ]; then
   echo "[OK] Administrator password rotated on $COMPROMISED_INSTANCE"
 else
-  echo "[FAIL] Rotation status: $STATUS — rotate out of band before restoring the host"
+  echo "[FAIL] Rotation status: $STATUS, rotate out of band before restoring the host"
 fi
 ```
 
@@ -853,7 +881,7 @@ for TRAIL in $(aws cloudtrail describe-trails \
   aws cloudtrail get-trail-status --name "$TRAIL" \
     --query '{IsLogging:IsLogging,LatestDeliveryError:LatestDeliveryError}'
 
-  # Confirm read events are captured — WriteOnly trails miss this technique
+  # Confirm read events are captured: WriteOnly trails miss this technique
   # entirely. Trails using ADVANCED event selectors return an EMPTY
   # EventSelectors list, so both shapes must be queried or this check silently
   # passes on the exact misconfiguration it exists to catch.
@@ -879,7 +907,7 @@ SG_BACKUP="./ir-original-sgs-$COMPROMISED_INSTANCE.json"   # written by Containm
 
 # Only after: password rotated, key pair replaced, host forensics complete
 if [ ! -f "$SG_BACKUP" ]; then
-  echo "[FAIL] No SG backup at $SG_BACKUP — original groups unknown; restore manually"
+  echo "[FAIL] No SG backup at $SG_BACKUP, original groups unknown; restore manually"
   exit 1
 fi
 
@@ -896,6 +924,10 @@ done"
 #### Confirm the corrected detections are live
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-30M +%Y-%m-%dT%H:%M:%SZ)
+
 # Re-run the emulation in a controlled window, then ASSERT the telemetry it
 # should have produced. A detection never tested against its own technique is
 # unproven, and an echo of expectations proves nothing.
@@ -904,7 +936,7 @@ REGION="us-east-1"
 
 RESULT=$(aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=GetPasswordData \
-  --start-time "$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r --arg arn "$TEST_PRINCIPAL" '
     [ .Events[].CloudTrailEvent | fromjson | select(.userIdentity.arn == $arn) ] |
@@ -921,9 +953,9 @@ UNIQUE=$(echo "$RESULT"    | jq -r '.unique')
 echo "Observed: total=$TOTAL not_found=$NOTFOUND unique_targets=$UNIQUE"
 
 [ "$TOTAL" -eq 30 ]    && echo "[OK] 30 events captured" \
-                       || echo "[FAIL] Expected 30 events, saw $TOTAL — trail may be WriteOnly or delayed"
+                       || echo "[FAIL] Expected 30 events, saw $TOTAL, trail may be WriteOnly or delayed"
 [ "$NOTFOUND" -eq 30 ] && echo "[OK] errorCode matching works (30/30 NotFound)" \
-                       || echo "[FAIL] Only $NOTFOUND/30 matched — verify the Client. prefix in your rules"
+                       || echo "[FAIL] Only $NOTFOUND/30 matched, verify the Client. prefix in your rules"
 [ "$UNIQUE" -eq 30 ]   && echo "[OK] 30 distinct instance IDs probed" \
                        || echo "[FAIL] Expected 30 unique targets, saw $UNIQUE"
 
@@ -947,7 +979,7 @@ echo "One alert => the correlation threshold works. 30 => still unthresholded."
 
 ### Recommended Guardrails
 
-**Service Control Policies (SCPs) — apply at OU level**
+**Service Control Policies (SCPs), apply at OU level**
 
 ```json
 // SCP 1: Restrict GetPasswordData to the Windows provisioning role
@@ -991,8 +1023,8 @@ echo "One alert => the correlation threshold works. 30 => still unthresholded."
 
 **Detection improvements**
 - Deploy the thresholded rule (> 3 calls / 10 min / principal) and the enumeration rule (> 5 `Client.InvalidInstanceID.NotFound` / 10 min / principal) as **separate** detections at different severities
-- Add `errorCode` to every EC2 credential-access detection — failed reconnaissance is the earliest available signal
-- Add a correlation rule: `ec2:GetPasswordData` (no `errorCode`) followed within 15 minutes by `ssm:GetParameter` on `/ec2/keypair/*` from the same principal → P0. Do **not** write the equivalent rule against `kms:Decrypt` — that event does not occur for this technique
+- Add `errorCode` to every EC2 credential-access detection, failed reconnaissance is the earliest available signal
+- Add a correlation rule: `ec2:GetPasswordData` (no `errorCode`) followed within 15 minutes by `ssm:GetParameter` on `/ec2/keypair/*` from the same principal → P0. Do **not** write the equivalent rule against `kms:Decrypt`, that event does not occur for this technique
 - Alert on any `ec2:GetPasswordData` in a region with zero Windows instances, at any volume
 - Dashboard the per-principal daily call count so that a baseline exists to threshold against
 
@@ -1000,21 +1032,21 @@ echo "One alert => the correlation threshold works. 30 => still unthresholded."
 
 | Type | Value |
 |------|-------|
-| MITRE technique | T1552.005 — Unsecured Credentials: Cloud Instance Metadata API |
+| MITRE technique | T1552.005 - Unsecured Credentials: Cloud Instance Metadata API |
 | MITRE tactic | Credential Access (TA0006) |
 | API call | `ec2:GetPasswordData` |
 | Event source | `ec2.amazonaws.com` |
 | Emulation signature | 30 calls, ~0.3 s apart, instance IDs matching `i-[0-9a-f]{17}` |
-| Expected error | `Client.InvalidInstanceID.NotFound` — effectively all emulated calls (a collision with a live instance ID is negligible but not impossible) |
+| Expected error | `Client.InvalidInstanceID.NotFound`, effectively all emulated calls (a collision with a live instance ID is negligible but not impossible) |
 | Alternate error | `Client.UnauthorizedOperation` (principal lacks the permission) |
-| Resources created | None — no infrastructure, no cost, nothing to destroy |
+| Resources created | None, no infrastructure, no cost, nothing to destroy |
 | Recommended threshold | > 3 calls per principal per 10 minutes |
 | Follow-on to watch for | `ssm:GetParameter` on `/ec2/keypair/*`, `ec2:DescribeKeyPairs`, `ec2:GetConsoleScreenshot`, `ssm:SendCommand`, `ec2-instance-connect:SendSSHPublicKey` |
-| No-telemetry gap | Decryption of the password blob is client-side — it produces **no** AWS event. Retrieval is the last observable signal |
+| No-telemetry gap | Decryption of the password blob is client-side, it produces **no** AWS event. Retrieval is the last observable signal |
 
 ### Revert
 
 This emulation creates no AWS resources. `pulumi destroy` is a no-op beyond
 tearing down the empty stack. No cleanup of attacker artifacts is required after
-an emulation run — the only residue is the CloudTrail events themselves, which
+an emulation run, the only residue is the CloudTrail events themselves, which
 should be **retained** as detection-validation evidence.

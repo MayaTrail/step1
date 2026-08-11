@@ -1,4 +1,4 @@
-# IR Playbook: Create IAM Backdoor Role with Admin Access — Persistence via `iam:CreateRole` + `iam:AttachRolePolicy`
+# IR Playbook - Create IAM Backdoor Role with Admin Access - Persistence via `iam:CreateRole` + `iam:AttachRolePolicy`
 
 ## Classification
 
@@ -6,19 +6,19 @@
 |-------|-------|
 | Incident Type | Persistence / Account Manipulation (external-trust admin role) |
 | Emulation Tier | Atomic technique |
-| Threat Actor | N/A — single-technique emulation, not actor-attributed |
+| Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High — a new role trusting a foreign account and holding `AdministratorAccess` is a standing, cross-account admin foothold that survives password/key/MFA changes on the compromised identity (`MANIFEST.py` rates MEDIUM; the IR view is High) |
+| Severity | High, a new role trusting a foreign account and holding `AdministratorAccess` is a standing, cross-account admin foothold that survives password/key/MFA changes on the compromised identity (`MANIFEST.py` rates MEDIUM; the IR view is High) |
 | MITRE Tactics | Persistence |
 | MITRE Techniques | T1098 (see mapping note in §6) |
 | Services in Scope | IAM, STS, CloudTrail, IAM Access Analyzer, GuardDuty |
-| Infrastructure Created | None — the emulation creates and then deletes its own backdoor role |
+| Infrastructure Created | None, the emulation creates and then deletes its own backdoor role |
 
-**What the emulation does:** the backdoor-admin-role sequence — `iam:CreateRole` with an `AssumeRolePolicyDocument` that trusts an **external AWS account** (the Stratus marker **`193672423079`**), then `iam:AttachRolePolicy` attaching the AWS-managed **`AdministratorAccess`**. The foreign account can now `sts:AssumeRole` into a full-admin role at will. The emulation cleans up (detaches, deletes the role); a real intrusion leaves the role in place.
+**What the emulation does:** the backdoor-admin-role sequence, `iam:CreateRole` with an `AssumeRolePolicyDocument` that trusts an **external AWS account** (the Stratus marker **`193672423079`**), then `iam:AttachRolePolicy` attaching the AWS-managed **`AdministratorAccess`**. The foreign account can now `sts:AssumeRole` into a full-admin role at will. The emulation cleans up (detaches, deletes the role); a real intrusion leaves the role in place.
 
-**Why this is durable, cross-account persistence.** It combines the two backdoor primitives: a **cross-account trust** (an external account is allowed to assume the role) *and* **admin privilege** on that role. It is independent of any of the attacker's own credentials — rotating the compromised user's key, resetting its password, or adding MFA does nothing. And because the trusted principal is a *different account*, the attacker retains access even if their foothold inside your account is fully evicted.
+**Why this is durable, cross-account persistence.** It combines the two backdoor primitives: a **cross-account trust** (an external account is allowed to assume the role) *and* **admin privilege** on that role. It is independent of any of the attacker's own credentials, rotating the compromised user's key, resetting its password, or adding MFA does nothing. And because the trusted principal is a *different account*, the attacker retains access even if their foothold inside your account is fully evicted.
 
-**Detection is content + sequence — the two discriminators from the sibling techniques, together.** `CreateRole` and `AttachRolePolicy` are routine (IaC creates roles constantly). The signals are (1) the new role's **trust policy trusts an external/non-org account or a `*` wildcard** — decode the URL-encoded `assumeRolePolicyDocument`; and (2) **`AdministratorAccess` (or admin-equivalent) attached** to it, ideally as the ordered sequence `CreateRole(external trust) → AttachRolePolicy(admin)` by one principal. The shipped rule matches `CreateRole`/`AttachRolePolicy`/`DetachRolePolicy`/`DeleteRole` with no content or sequence inspection (§2).
+**Detection is content + sequence, the two discriminators from the sibling techniques, together.** `CreateRole` and `AttachRolePolicy` are routine (IaC creates roles constantly). The signals are (1) the new role's **trust policy trusts an external/non-org account or a `*` wildcard**, decode the URL-encoded `assumeRolePolicyDocument`; and (2) **`AdministratorAccess` (or admin-equivalent) attached** to it, ideally as the ordered sequence `CreateRole(external trust) → AttachRolePolicy(admin)` by one principal. The shipped rule matches `CreateRole`/`AttachRolePolicy`/`DetachRolePolicy`/`DeleteRole` with no content or sequence inspection (§2).
 
 **Two purpose-built controls apply.** **IAM Access Analyzer** flags the external-trust half (a role trusting an outside principal); an **SCP blocking `AdministratorAccess` attachment by non-admins** (the AMBERSQUID guardrail) blocks the admin half.
 
@@ -29,9 +29,9 @@
 ### Prerequisites Before This Incident
 
 **Logging & Visibility**
-- CloudTrail multi-region trail (IAM is global → events land in `us-east-1`). `CreateRole` → `requestParameters.assumeRolePolicyDocument` (**URL-encoded** trust policy) + `responseElements.role.roleName`/`.arn`; `AttachRolePolicy` → `requestParameters.roleName` + `requestParameters.policyArn`. **`lookup-events` returns ≤50 events/page** — paginate or use the log platform for busy accounts/long windows
-- **IAM Access Analyzer** enabled (account + org) — it flags any role trusting an external principal, which is half of this backdoor. Alarm its findings
-- GuardDuty enabled — corroborating persistence findings
+- CloudTrail multi-region trail (IAM is global → events land in `us-east-1`). `CreateRole` → `requestParameters.assumeRolePolicyDocument` (**URL-encoded** trust policy) + `responseElements.role.roleName`/`.arn`; `AttachRolePolicy` → `requestParameters.roleName` + `requestParameters.policyArn`. **`lookup-events` returns ≤50 events/page**, paginate or use the log platform for busy accounts/long windows
+- **IAM Access Analyzer** enabled (account + org), it flags any role trusting an external principal, which is half of this backdoor. Alarm its findings
+- GuardDuty enabled, corroborating persistence findings
 - The org account-ID allowlist (so "external principal" is a concrete comparison) and the admin-managed-policy ARN list (`AdministratorAccess`, `IAMFullAccess`, `PowerUserAccess`)
 - An allowlist of principals that legitimately create roles and attach admin (identity-admin / IaC)
 
@@ -40,7 +40,7 @@
 - **`iam:AttachRolePolicy` attaching `AdministratorAccess`/admin-equivalent by a non-identity-admin principal → P0**
 - **Sequence: `CreateRole(external trust) → AttachRolePolicy(admin)` by one principal within minutes → P0** (the fresh-backdoor-admin-role fingerprint)
 - IAM Access Analyzer new finding for external role trust → P0
-- **`sts:AssumeRole` where the assuming principal is an external account** — the backdoor being *used* (logged in your account)
+- **`sts:AssumeRole` where the assuming principal is an external account**, the backdoor being *used* (logged in your account)
 
 **Response Tooling**
 - AWS CLI v2 with break-glass responder credentials, separate from any principal under investigation
@@ -57,7 +57,7 @@
 
 ### Detection Triggers (prioritized)
 
-#### HIGH-CONFIDENCE — Always Indicate Compromise
+#### HIGH-CONFIDENCE: Always Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
@@ -67,13 +67,13 @@
 | P1 | IAM Access Analyzer finding: role trust grants access to an external principal | Access Analyzer | T1098 |
 | P1 | `sts:AssumeRole` into the role by an **external account** (backdoor in use) | CloudTrail | T1098 |
 
-#### MEDIUM-CONFIDENCE — May Indicate Compromise
+#### MEDIUM-CONFIDENCE: May Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
 | P2 | `iam:CreateRole` by a non-provisioning principal, or trust policy adding an external account **without** an `ExternalId`/condition | CloudTrail | T1098 |
 | P2 | `iam:AttachRolePolicy` with `IAMFullAccess`/`PowerUserAccess` (self-escalation-capable) | CloudTrail | T1098 |
-| P2 | `iam:CreateRole`/`AttachRolePolicy` denied at volume (`errorCode = AccessDenied`) — probing | CloudTrail | T1098 |
+| P2 | `iam:CreateRole`/`AttachRolePolicy` denied at volume (`errorCode = AccessDenied`), probing | CloudTrail | T1098 |
 | P3 | IaC creating a role with a same-account trust and a scoped policy during a known deployment | CloudTrail | T1098 |
 
 ### Detection Rule Quality Notes
@@ -89,10 +89,10 @@ The shipped rule matches every role-lifecycle event and inspects neither the tru
 | No detection of the role being *assumed* cross-account | Catches the plant, not the use | Add an external-account `AssumeRole`-into-the-role rule |
 | Header TODO "verify acronym casing"; `level: medium` | Stale; a cross-account admin backdoor is higher | Resolve TODO; both content rules → `level: critical` |
 
-**Recommended detection — external-trust create, admin attach, and the sequence.** The trust-policy content needs a decode (Query 1). A Sigma rule can catch the encoding-safe pieces:
+**Recommended detection, external-trust create, admin attach, and the sequence.** The trust-policy content needs a decode (Query 1). A Sigma rule can catch the encoding-safe pieces:
 
 ```yaml
-# Rule A — CreateRole trusting a KNOWN-BAD account (digits survive URL-encoding)
+# Rule A: CreateRole trusting a KNOWN-BAD account (digits survive URL-encoding)
 title: IAM CreateRole trust policy references a known-bad account
 id: 7b3c1a92-8d64-4e05-9f12-3a0c8b7e6f14
 name: iam_createrole_external
@@ -110,7 +110,7 @@ detection:
   condition: selection and known_bad_account
 level: critical
 ---
-# Rule B — AdministratorAccess attached to a role by non-identity-admin
+# Rule B: AdministratorAccess attached to a role by non-identity-admin
 title: IAM AdministratorAccess attached to a role by non-identity-admin
 id: 8c4f2a83-9d15-4e07-b2d1-6a0c9b7e5f24
 name: iam_attach_role_admin
@@ -137,7 +137,7 @@ level: critical
 
 Because the trust policy is **URL-encoded** in the event, a substring like
 `"AWS":"*"` never matches (only bare account-ID digits survive encoding). The
-general "external/wildcard trust" detection MUST decode the document — deploy
+general "external/wildcard trust" detection MUST decode the document, deploy
 Query 1 (and Access Analyzer) as the standing detection; Rule A is a known-IOC
 catcher. Combine A + B (and the base `CreateRole`) into a `temporal_ordered`
 correlation grouped by `userIdentity.arn` for the full sequence.
@@ -148,18 +148,22 @@ correlation grouped by `userIdentity.arn` for the full sequence.
 
 ### Key Investigation Queries
 
-> IAM events are global → query **`us-east-1`**. Extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`. The `assumeRolePolicyDocument` in the event is **URL-encoded** (decode it); `responseElements.role.*` is **nested**. `lookup-events` is ≤50/page — paginate or use the log platform for long windows.
+> IAM events are global → query **`us-east-1`**. Extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`. The `assumeRolePolicyDocument` in the event is **URL-encoded** (decode it); `responseElements.role.*` is **nested**. `lookup-events` is ≤50/page, paginate or use the log platform for long windows.
 
-#### Query 1 — Find role creations, decode the trust, and pair with admin attaches
+#### Query 1: Find role creations, decode the trust, and pair with admin attaches
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 ORG_ACCOUNTS="111111111111 222222222222"   # your org account IDs; anything else is external
 
 for EV in CreateRole AttachRolePolicy; do
   aws cloudtrail lookup-events \
     --lookup-attributes AttributeKey=EventName,AttributeValue=$EV \
-    --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+    --start-time "$START" \
     --region "$REGION" --output json 2>/dev/null
 done | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
@@ -198,7 +202,7 @@ A `CreateRole` with an external trust, followed by an `AttachRolePolicy` with
 `policy_arn` = `.../AdministratorAccess` on the same `role` by the same `caller`,
 is the backdoor. Record the `role` (IOC).
 
-#### Query 2 — Sweep ALL roles for external-trust AND admin (find every backdoor role)
+#### Query 2: Sweep ALL roles for external-trust AND admin (find every backdoor role)
 
 ```bash
 ORG_ACCOUNTS="111111111111 222222222222"
@@ -224,19 +228,23 @@ done
 echo "[OK] Backdoor-role sweep complete"
 ```
 
-A role appearing in **both** lists — external trust *and* admin — is a confirmed
+A role appearing in **both** lists, external trust *and* admin, is a confirmed
 backdoor.
 
-#### Query 3 — Was the backdoor role USED? (external account assumed it)
+#### Query 3: Was the backdoor role USED? (external account assumed it)
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 ROLE_NAME="<backdoor-role-name>"
 EXTERNAL_ACCT="193672423079"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRole \
-  --start-time "$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r --arg role "$ROLE_NAME" --arg acct "$EXTERNAL_ACCT" '
     .Events[].CloudTrailEvent | fromjson |
@@ -248,13 +256,17 @@ aws cloudtrail lookup-events \
 Any result = the backdoor was exercised. The resulting session's actions
 (`roleSessionName`) are part of the incident.
 
-#### Query 4 — What did an assumed session do?
+#### Query 4: What did an assumed session do?
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=Username,AttributeValue="<roleSessionName-from-Query-3>" \
-  --start-time "$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, event: .eventName, source: .eventSource,
@@ -262,14 +274,18 @@ aws cloudtrail lookup-events \
   jq -s 'sort_by(.time)'
 ```
 
-#### Query 5 — Full session reconstruction of the principal that planted the backdoor
+#### Query 5: Full session reconstruction of the principal that planted the backdoor
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 ACCESS_KEY_ID="<access-key-from-Query-1>"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=AccessKeyId,AttributeValue="$ACCESS_KEY_ID" \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region us-east-1 --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, event: .eventName, source: .eventSource,
@@ -277,7 +293,7 @@ aws cloudtrail lookup-events \
   jq -s 'sort_by(.time)'
 ```
 
-Look for *other* persistence — more backdoor roles/users, backdoored existing
+Look for *other* persistence, more backdoor roles/users, backdoored existing
 trust policies, access keys, login profiles.
 
 ---
@@ -292,7 +308,7 @@ then delete), revoke any live sessions, and contain the planting principal.
 > Run every command under the **break-glass responder credentials** from §1, not
 > under any principal being contained.
 
-#### Step 1 — Strip admin from and revoke sessions on the backdoor role
+#### Step 1: Strip admin from and revoke sessions on the backdoor role
 
 ```bash
 ROLE_NAME="<backdoor-role-name>"
@@ -309,12 +325,12 @@ aws iam put-role-policy --role-name "$ROLE_NAME" \
 echo "[OK] Sessions revoked on $ROLE_NAME"
 ```
 
-#### Step 2 — Contain the principal that planted the backdoor
+#### Step 2: Contain the principal that planted the backdoor
 
 The `:user/` and `:assumed-role/` branches below cover the common cases. A **root**
-or **federated** caller (`SAMLUser`/`WebIdentityUser`) needs manual handling — root
+or **federated** caller (`SAMLUser`/`WebIdentityUser`) needs manual handling, root
 via password rotation + key removal (see the console-login-without-MFA playbook),
-federated via the IdP — since the script silently no-ops for those principal types.
+federated via the IdP, since the script silently no-ops for those principal types.
 
 ```bash
 SUSPECT_ARN="<caller-arn-from-Query-1>"
@@ -334,7 +350,7 @@ elif echo "$SUSPECT_ARN" | grep -q ":assumed-role/"; then
 fi
 ```
 
-#### Step 3 — Deny further role/privilege creation by the principal
+#### Step 3: Deny further role/privilege creation by the principal
 
 ```bash
 DENY_DOC='{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":["iam:CreateRole","iam:AttachRolePolicy","iam:PutRolePolicy","iam:UpdateAssumeRolePolicy"],"Resource":"*"}]}'
@@ -375,8 +391,8 @@ Repeat for every backdoor role Query 2 surfaced.
 
 #### Remove other persistence planted by the principal
 
-From Query 5, remediate anything else — more backdoor roles/users, backdoored
-existing trust policies, keys, login profiles — via the relevant persistence
+From Query 5, remediate anything else, more backdoor roles/users, backdoored
+existing trust policies, keys, login profiles, via the relevant persistence
 playbook for each.
 
 #### Right-size role/privilege-creation permissions
@@ -456,7 +472,7 @@ done | \
   jq -r --arg arn "$SUSPECT_ARN" '.Events[].CloudTrailEvent | fromjson |
     select(.userIdentity.arn == $arn) | .eventTime' | grep -c .)
 [ "$COUNT" -eq 0 ] && echo "[OK] No further role creation / admin attach from $SUSPECT_ARN since containment" \
-                   || echo "[FAIL] $COUNT further events — containment did not hold"
+                   || echo "[FAIL] $COUNT further events, containment did not hold"
 ```
 
 #### Confirm the corrected detection fires
@@ -478,12 +494,12 @@ echo "DeleteRole cleanup events."
 |---------|------------------------------|
 | A principal could create an externally-trusted admin role | `iam:CreateRole` + `iam:AttachRolePolicy` (esp. admin) available outside identity-admin/IaC; no SCP on external trust or admin attachment |
 | Backdoor undetected | Shipped rule matched all role events and inspected neither the trust nor the attached policy; IAM Access Analyzer not alarmed |
-| Persistence survives credential remediation and account eviction | The trusted principal is a *different account* — independent of the attacker's foothold in yours |
+| Persistence survives credential remediation and account eviction | The trusted principal is a *different account*, independent of the attacker's foothold in yours |
 | Possibly more than one backdoor role | No account-wide sweep of role trust + admin holdings |
 
 ### Recommended Guardrails
 
-**Block admin attachment by non-admins (adapts the AMBERSQUID guardrail — that one denies unconditionally; this adds a break-glass carve-out, and covers roles too)**
+**Block admin attachment by non-admins (adapts the AMBERSQUID guardrail, that one denies unconditionally; this adds a break-glass carve-out, and covers roles too)**
 
 ```json
 {
@@ -498,19 +514,19 @@ echo "DeleteRole cleanup events."
 ```
 
 **Constrain external trust**
-- Enable **IAM Access Analyzer** and alarm every role external-trust finding — the standing control for the cross-account half
+- Enable **IAM Access Analyzer** and alarm every role external-trust finding, the standing control for the cross-account half
 - Consider an SCP requiring `aws:PrincipalOrgID` on role trust for internal roles, so a backdoor trust to a foreign account can't be assumed cross-org
 - Restrict `iam:CreateRole` to identity-admin/IaC; manage all roles through reviewed IaC
 
 **Detection improvements**
-- Deploy Rule A (external-trust create — decode), Rule B (admin attach), and the sequence correlation — never the shipped all-events match
+- Deploy Rule A (external-trust create, decode), Rule B (admin attach), and the sequence correlation, never the shipped all-events match
 - Alarm Access Analyzer role findings and external-account `AssumeRole` into internal roles
 
 ### Technique Reference
 
 | Type | Value |
 |------|-------|
-| MITRE technique | T1098 — Account Manipulation |
+| MITRE technique | T1098 - Account Manipulation |
 | MITRE tactic | Persistence (TA0003) |
 | Primary API | `iam:CreateRole` (external trust) → `iam:AttachRolePolicy` (`AdministratorAccess`) |
 | Event source | `iam.amazonaws.com` (global → events in `us-east-1`) |
@@ -520,11 +536,11 @@ echo "DeleteRole cleanup events."
 | Emulation IOC | External account **`193672423079`** in the trust policy |
 | "Was it used?" signal | Cross-account `sts:AssumeRole` into the role, logged in the role-owner's account with the external `userIdentity.accountId` |
 | Error strings (not `Client.`-prefixed) | `AccessDenied` / `AccessDeniedException`, `MalformedPolicyDocument` |
-| Resources created | None persisted — the emulation deletes its own backdoor role |
-| Related | The modify-existing-role-trust backdoor (#19 sibling) and the create-admin-**user** backdoor (#21 sibling) — this technique is their combination |
+| Resources created | None persisted, the emulation deletes its own backdoor role |
+| Related | The modify-existing-role-trust backdoor (#19 sibling) and the create-admin-**user** backdoor (#21 sibling), this technique is their combination |
 
 **MITRE mapping note:** the MANIFEST maps this to **T1098 (Account Manipulation)**,
-Persistence — a sound fit for adding a backdoor role. A case could be made for
+Persistence, a sound fit for adding a backdoor role. A case could be made for
 **T1136.003 (Create Account: Cloud Account)** since it creates a new principal;
 either is defensible. The parent T1098 mapping is accurate and not a stretch.
 Recorded for the end-of-run MITRE-mapping finding.
@@ -533,7 +549,7 @@ Recorded for the end-of-run MITRE-mapping finding.
 
 The emulation creates and then deletes its own role, so a normal run self-cleans;
 `pulumi destroy` has nothing to remove (no infra). After a **real** incident,
-`pulumi destroy` is irrelevant — delete every backdoor role (§3–§4), revoke any
+`pulumi destroy` is irrelevant, delete every backdoor role (§3-§4), revoke any
 sessions assumed via it, remove other persistence, and enforce the external-trust
 + admin-attach guardrails; the attacker's cross-account admin role persists until
 you delete it.

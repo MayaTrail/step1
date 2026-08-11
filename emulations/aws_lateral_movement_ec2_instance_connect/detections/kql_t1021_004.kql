@@ -1,13 +1,13 @@
 // Usage of EC2 Instance Connect on Multiple Instances (T1021.004 / T1021.008)
 //
 // The pushed key lives ~60 seconds and leaves NO artifact in the instance's
-// authorized_keys — auditing host key files after the fact finds nothing. The
+// authorized_keys, auditing host key files after the fact finds nothing. The
 // control plane is the only durable record that access was granted.
 //
 // instanceOSUser is the escalation discriminator: a key pushed for `root`
 // (rather than ec2-user/ubuntu) is a direct privileged foothold.
 //
-// os_users is scoped to SUCCESSFUL pushes only — including denied attempts
+// os_users is scoped to SUCCESSFUL pushes only, including denied attempts
 // inflates the set with users the actor never actually reached.
 //
 // Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
@@ -33,10 +33,10 @@ AWSCloudTrail
     by UserIdentityArn, bin(TimeGenerated, 15m)
 | where DistinctTargets >= 1
 | extend Verdict = case(
-    DistinctTargets >= 2, "EC2 INSTANCE CONNECT FAN-OUT — lateral movement, P0",
-    RootPushes > 0,       "KEY PUSHED FOR ROOT — privileged foothold, P0",
-    Tunnels > 0,          "EIC ENDPOINT TUNNEL — private-subnet access",
-    "INSTANCE CONNECT KEY PUSH — verify against operator allowlist")
+    DistinctTargets >= 2, "EC2 INSTANCE CONNECT FAN-OUT, lateral movement, P0",
+    RootPushes > 0,       "KEY PUSHED FOR ROOT, privileged foothold, P0",
+    Tunnels > 0,          "EIC ENDPOINT TUNNEL, private-subnet access",
+    "INSTANCE CONNECT KEY PUSH, verify against operator allowlist")
 | project TimeGenerated, UserIdentityArn, Pushes, Tunnels, Denied,
           DistinctTargets, TargetSet, OSUsers, RootPushes, SourceIPs, Verdict
 | order by DistinctTargets desc
@@ -48,4 +48,4 @@ AWSCloudTrail
 //
 // Flow Log field caution: in the DEFAULT format, $13 is the action
 // (ACCEPT/REJECT) and the final field is the log status. If you use a custom
-// format, the positions differ — check your format string rather than assuming.
+// format, the positions differ, check your format string rather than assuming.

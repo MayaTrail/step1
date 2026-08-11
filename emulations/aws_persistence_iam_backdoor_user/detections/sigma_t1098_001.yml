@@ -1,7 +1,7 @@
 # Backdoor IAM User with Additional Access Key (T1098.001)
 #
-# The original rule's DESCRIPTION was correct — "where the requesting principal
-# is NOT the user themselves" — but the rule never implemented it. It matched
+# The original rule's DESCRIPTION was correct: "where the requesting principal
+# is NOT the user themselves": but the rule never implemented it. It matched
 # CreateAccessKey + DeleteAccessKey with a bare `condition: selection`, so it
 # fired on every routine self-service key creation and on the benign revert.
 # DeleteAccessKey is dropped as a trigger.
@@ -31,14 +31,17 @@ detection:
     # caller), so requiring it here already excludes most benign activity.
     # Verify your backend supports the `exists` modifier.
     requestParameters.userName|exists: true
+  # REPLACE these with the roles in YOUR account that legitimately create
+  # access keys for other users. The placeholder values below match nothing, so
+  # until they are edited this rule fires on all routine user provisioning.
   provisioning:
     userIdentity.arn|contains:
-      - ':role/iac-deploy'
-      - ':role/identity-admin'
-      - ':role/BreakGlassAdmin'
+      - ':role/REPLACE-ME-iac-deploy'
+      - ':role/REPLACE-ME-identity-admin'
+      - ':role/REPLACE-ME-break-glass'
   # RESIDUAL FALSE POSITIVE: a user passing their OWN name. Removing it needs a
   # field-to-field comparison (requestParameters.userName ==
-  # userIdentity.userName) that Sigma cannot express portably — `kql_t1098_001.kql`
+  # userIdentity.userName) that Sigma cannot express portably: `kql_t1098_001.kql`
   # does it explicitly.
   #
   # Note also that for ROLE callers there is no userIdentity.userName to compare

@@ -28,13 +28,17 @@ detection:
     eventName:
       - 'UpdateNotebookInstanceLifecycleConfig'
       - 'CreateNotebookInstanceLifecycleConfig'
+  # REPLACE these with the roles in YOUR account that legitimately update
+  # SageMaker lifecycle configurations. The placeholder values below match
+  # nothing, so until they are edited this rule fires on every notebook
+  # provisioning change.
   allowlisted:
     userIdentity.arn|contains:
-      - ':role/provisioning'
-      - ':role/ci-'
+      - ':role/REPLACE-ME-provisioning'
+      - ':role/REPLACE-ME-ci-'
   condition: selection and not allowlisted
 falsepositives:
-  - Data scientists editing their own notebook bootstrap outside CI — common
+  - Data scientists editing their own notebook bootstrap outside CI, common
     enough to warrant tuning by team role
 level: high
 ---
@@ -78,5 +82,5 @@ detection:
   condition: selection and suspicious_decoded
 falsepositives:
   - Legitimate bootstrap scripts that pip-install from an internal mirror via
-    curl — inspect the destination host before dismissing
+    curl, inspect the destination host before dismissing
 level: critical

@@ -2,7 +2,7 @@
 #
 # The original rule matched AuthorizeSecurityGroupIngress and
 # RevokeSecurityGroupIngress with a bare `condition: selection`. It inspected
-# nothing — not the port, not the CIDR — so it fired on every routine SG change
+# nothing - not the port, not the CIDR: so it fired on every routine SG change
 # while being unable to identify the actual exposure. Revoke is the attacker's
 # CLEANUP, not the attack, and is dropped entirely.
 #
@@ -11,7 +11,7 @@
 #
 # LIMITATION, STATED PLAINLY: the `|contains` substring matching below is a
 # pragmatic approximation. It cannot express range containment, so a rule like
-# fromPort:20,toPort:23 — which exposes 22 without naming it — slips past. The
+# fromPort:20,toPort:23 - which exposes 22 without naming it - slips past. The
 # authoritative check is the structured logic in `kql_t1562_007.kql`. Deploy
 # that as the real detection and treat this as a coarse first alert.
 title: Security group ingress opened to the world on an admin port
@@ -46,6 +46,6 @@ detection:
       - '"fromPort":0'      # all-ports range start
   condition: selection and (world_v4 or world_v6) and admin_port
 falsepositives:
-  - Reviewed IaC changes opening a bastion — allowlist the network-admin and
+  - Reviewed IaC changes opening a bastion, allowlist the network-admin and
     pipeline principals
 level: high

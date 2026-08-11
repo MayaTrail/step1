@@ -1,7 +1,7 @@
 # Create IAM Roles Anywhere Trust Anchor (T1550.001)
 #
-# The original rule got the primary signal RIGHT — CreateTrustAnchor is rare and
-# high-fidelity — but bundled DisableTrustAnchor and DeleteTrustAnchor, the
+# The original rule got the primary signal RIGHT: CreateTrustAnchor is rare and
+# high-fidelity: but bundled DisableTrustAnchor and DeleteTrustAnchor, the
 # teardown (and the emulation's own cleanup). That adds noise and inverts the
 # signal: removing a trust anchor is remediation, not attack. Both are dropped
 # from alerting and kept only for the forensic timeline.
@@ -11,14 +11,14 @@
 #   1. a trust anchor  (registers their CA as an identity source)
 #   2. a profile       (says which roles may be assumed)
 #   3. a role trusting rolesanywhere.amazonaws.com
-# Breaking any link breaks the persistence — and detecting any link catches it.
+# Breaking any link breaks the persistence: and detecting any link catches it.
 title: IAM Roles Anywhere trust anchor or profile created
 id: 3d37c32d-30a8-58c7-a9f5-5d3227fb1b0c
 name: rolesanywhere_create_chain
 status: experimental
 description: >-
   A Roles Anywhere trust anchor or profile was created. Registering an external
-  CA as an AWS identity source enables credential-free persistence — no access
+  CA as an AWS identity source enables credential-free persistence, no access
   key exists to rotate.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.rolesanywhere-create-trust-anchor/
@@ -36,7 +36,7 @@ detection:
       - 'CreateProfile'
   condition: selection
 falsepositives:
-  - Genuine initial Roles Anywhere setup — rare, and worth confirming anyway
+  - Genuine initial Roles Anywhere setup, rare, and worth confirming anyway
 level: high
 ---
 # The third link: a role that trusts the service.
@@ -44,7 +44,7 @@ title: IAM role trust policy trusts rolesanywhere.amazonaws.com
 id: 0b4f2d85-3c69-4e70-9d2a-7b1e8c6f4a32
 status: experimental
 description: >-
-  A role was created or updated to trust the Roles Anywhere service — the gate
+  A role was created or updated to trust the Roles Anywhere service, the gate
   the whole scheme depends on.
 references:
   - https://docs.aws.amazon.com/rolesanywhere/latest/userguide/introduction.html
@@ -63,19 +63,19 @@ detection:
   # UpdateAssumeRolePolicy carries policyDocument; CreateRole carries
   # assumeRolePolicyDocument. NO SINGLE EVENT HAS BOTH, so these MUST be OR'd as
   # sibling blocks. Putting both keys in one selection block ANDs them and the
-  # rule NEVER FIRES for either event — a silent false negative on a P0 rule.
+  # rule NEVER FIRES for either event: a silent false negative on a P0 rule.
   trust_update:
     requestParameters.policyDocument|contains: 'rolesanywhere.amazonaws.com'
   trust_create:
     requestParameters.assumeRolePolicyDocument|contains: 'rolesanywhere.amazonaws.com'
   # The trust policy is URL-encoded, but the service principal survives as a
-  # literal substring — it is only letters and dots, nothing percent-encodes.
+  # literal substring: it is only letters and dots, nothing percent-encodes.
   condition: selection and (trust_create or trust_update)
 falsepositives:
   - Legitimate Roles Anywhere onboarding
 level: high
 ---
-# Credential vending — the anchor being USED.
+# Credential vending: the anchor being USED.
 title: IAM Roles Anywhere session vended
 id: 6c8a0e29-4d71-4f35-b096-3e5c1a72d84b
 status: experimental
@@ -96,6 +96,6 @@ detection:
     eventName: 'CreateSession'
   condition: selection
 falsepositives:
-  - Normal Roles Anywhere use in environments that legitimately deploy it —
+  - Normal Roles Anywhere use in environments that legitimately deploy it,
     baseline against the known profiles and trust anchors
 level: medium

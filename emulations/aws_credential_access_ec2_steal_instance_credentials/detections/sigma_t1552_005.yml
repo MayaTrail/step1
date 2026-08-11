@@ -3,15 +3,15 @@
 # The original single rule matched
 #   eventName IN (DescribeInstanceInformation, SendCommand,
 #                 GetCommandInvocation, GetCallerIdentity)
-# with `condition: selection`. That is undeployable: sts:GetCallerIdentity is
+# with `condition - selection`. That is undeployable: sts:GetCallerIdentity is
 # among the highest-volume calls in AWS (every SDK/CLI init, every CI job) and
 # SSM SendCommand/GetCommandInvocation are routine patching. GetCallerIdentity
 # and GetCommandInvocation are corroborating CONTEXT, not triggers, and have
 # been dropped as primary selectors.
 #
-# Rule A  — suspicious SendCommand (early signal, medium)
-# Rule A2 — command body targets IMDS (high, most specific single event)
-# Rule B  — GuardDuty exfiltration finding (critical, the definitive signal)
+# Rule A : suspicious SendCommand (early signal, medium)
+# Rule A2: command body targets IMDS (high, most specific single event)
+# Rule B : GuardDuty exfiltration finding (critical, the definitive signal)
 #
 # The off-instance-IP correlation that completes Rule B is a join against a
 # role→IP lookup and cannot be expressed in Sigma; it lives in
@@ -21,7 +21,7 @@ id: 8133764f-a9ee-56ef-9579-38555b5f7ea3
 status: experimental
 description: >-
   A shell-execution SSM document dispatched by a principal outside the patch
-  automation allowlist. Early signal — the credential theft itself happens on
+  automation allowlist. Early signal, the credential theft itself happens on
   the instance and is not in CloudTrail.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.credential-access.ec2-steal-instance-credentials/
@@ -38,12 +38,13 @@ detection:
     requestParameters.documentName:
       - 'AWS-RunShellScript'
       - 'AWS-RunPowerShellScript'
-  # MAINTAIN THIS LIST. It is the entire difference between a useful rule and
-  # an alert on every patch cycle.
+  # REPLACE these with the roles in YOUR account that legitimately run SSM
+  # automation against instances. The placeholder values below match nothing,
+  # so until they are edited this rule fires on every patch cycle.
   automation_principals:
     userIdentity.arn|contains:
-      - ':role/patch-automation'
-      - ':role/ssm-runner'
+      - ':role/REPLACE-ME-patch-automation'
+      - ':role/REPLACE-ME-ssm-automation'
   condition: selection and not automation_principals
 falsepositives:
   - Break-glass administration via Run Command

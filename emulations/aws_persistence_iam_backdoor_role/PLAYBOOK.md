@@ -1,4 +1,4 @@
-# IR Playbook: Backdoor IAM Role Trust Policy — Persistence via `iam:UpdateAssumeRolePolicy`
+# IR Playbook - Backdoor IAM Role Trust Policy - Persistence via `iam:UpdateAssumeRolePolicy`
 
 ## Classification
 
@@ -6,21 +6,21 @@
 |-------|-------|
 | Incident Type | Persistence / Account Manipulation (cross-account role backdoor) |
 | Emulation Tier | Atomic technique |
-| Threat Actor | N/A — single-technique emulation, not actor-attributed |
+| Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High — a trust-policy backdoor grants a foreign account standing access to the role that **survives rotation of the original credentials**; it is durable, quiet persistence (`MANIFEST.py` rates MEDIUM; the IR view is High because it is an enduring cross-account foothold) |
+| Severity | High, a trust-policy backdoor grants a foreign account standing access to the role that **survives rotation of the original credentials**; it is durable, quiet persistence (`MANIFEST.py` rates MEDIUM; the IR view is High because it is an enduring cross-account foothold) |
 | MITRE Tactics | Persistence |
 | MITRE Techniques | T1098 |
 | Services in Scope | IAM, STS, CloudTrail, IAM Access Analyzer |
 | Infrastructure Created | 1 IAM role with a same-account trust policy (via `infra/`) |
 
-**What the emulation does:** calls `iam:UpdateAssumeRolePolicy` to rewrite an existing role's **trust policy** (the `AssumeRolePolicyDocument`), adding an external AWS account — the Stratus marker account **`193672423079`** — as a trusted principal. That external account can then `sts:AssumeRole` into the role at will. The emulation's revert restores the original trust policy.
+**What the emulation does:** calls `iam:UpdateAssumeRolePolicy` to rewrite an existing role's **trust policy** (the `AssumeRolePolicyDocument`), adding an external AWS account, the Stratus marker account **`193672423079`**, as a trusted principal. That external account can then `sts:AssumeRole` into the role at will. The emulation's revert restores the original trust policy.
 
-**Why this is potent persistence.** The backdoor is on the *role's trust relationship*, not on any credential. Rotating the access keys the attacker originally used, deleting their IAM user, or revoking their sessions does **nothing** to the backdoor — the foreign account keeps its standing right to assume the role until the trust policy is fixed. It is also quiet: there is no new user, no new key, just one line changed in a JSON document that few teams monitor.
+**Why this is potent persistence.** The backdoor is on the *role's trust relationship*, not on any credential. Rotating the access keys the attacker originally used, deleting their IAM user, or revoking their sessions does **nothing** to the backdoor, the foreign account keeps its standing right to assume the role until the trust policy is fixed. It is also quiet: there is no new user, no new key, just one line changed in a JSON document that few teams monitor.
 
-**The detection is content inspection, not the event name.** `iam:UpdateAssumeRolePolicy` is a legitimate operation (IaC updates trust policies routinely). The signal is *what the new policy contains*: a Principal referencing an **account outside your organization**, or a **wildcard `*`** principal (world-assumable — catastrophic). CloudTrail records the new `policyDocument` (URL-encoded) in `requestParameters`, so the added principal is inspectable in the event. The shipped rule matches the event name and even bundles the benign `GetRole` read (§2) — it never inspects the policy.
+**The detection is content inspection, not the event name.** `iam:UpdateAssumeRolePolicy` is a legitimate operation (IaC updates trust policies routinely). The signal is *what the new policy contains*: a Principal referencing an **account outside your organization**, or a **wildcard `*`** principal (world-assumable, catastrophic). CloudTrail records the new `policyDocument` (URL-encoded) in `requestParameters`, so the added principal is inspectable in the event. The shipped rule matches the event name and even bundles the benign `GetRole` read (§2), it never inspects the policy.
 
-**IAM Access Analyzer is the purpose-built control.** Access Analyzer continuously evaluates role trust policies and raises a finding for any that grant access to a principal outside your account/organization. A trust-policy backdoor produces an Access Analyzer finding — the highest-value standing detection for this technique.
+**IAM Access Analyzer is the purpose-built control.** Access Analyzer continuously evaluates role trust policies and raises a finding for any that grant access to a principal outside your account/organization. A trust-policy backdoor produces an Access Analyzer finding, the highest-value standing detection for this technique.
 
 ---
 
@@ -30,7 +30,7 @@
 
 **Logging & Visibility**
 - CloudTrail multi-region trail (IAM is global → events land in `us-east-1`). `UpdateAssumeRolePolicy` is a management event with `requestParameters.roleName` and `requestParameters.policyDocument` (URL-encoded new trust policy)
-- **IAM Access Analyzer enabled** with an account- or organization-level analyzer — it flags any role trusting an external principal, which is exactly this backdoor. Alarm its findings
+- **IAM Access Analyzer enabled** with an account- or organization-level analyzer, it flags any role trusting an external principal, which is exactly this backdoor. Alarm its findings
 - A maintained list of your **organization's account IDs** (and any intentionally-trusted third-party accounts), so "external principal" is a concrete comparison rather than a guess
 - CloudTrail delivered to a log platform so trust-policy content can be decoded and matched at scale
 
@@ -39,7 +39,7 @@
 - **`iam:CreateRole` whose initial trust policy trusts an external/wildcard principal** (the create-new variant of the same backdoor)
 - IAM Access Analyzer new finding for external access to a role → P0
 - `iam:UpdateAssumeRolePolicy` by a principal not on the IaC/identity-admin allowlist
-- **`sts:AssumeRole` where the *assuming* principal belongs to an external account** — the backdoor being *used* (see §2 Query 3)
+- **`sts:AssumeRole` where the *assuming* principal belongs to an external account**, the backdoor being *used* (see §2 Query 3)
 
 **Response Tooling**
 - AWS CLI v2 with break-glass responder credentials, separate from any principal under investigation
@@ -48,8 +48,8 @@
 - The org account allowlist on hand
 
 **Known IOC Baselines**
-- Baseline which principals modify trust policies — normally only IaC/identity-admin
-- The Stratus emulation marker account **`193672423079`** — its appearance in any trust policy is an unambiguous emulation/attack indicator
+- Baseline which principals modify trust policies, normally only IaC/identity-admin
+- The Stratus emulation marker account **`193672423079`**, its appearance in any trust policy is an unambiguous emulation/attack indicator
 - Baseline the set of roles that *intentionally* trust external accounts (cross-account integrations), so a *new* external trust stands out
 
 ---
@@ -58,23 +58,23 @@
 
 ### Detection Triggers (prioritized)
 
-#### HIGH-CONFIDENCE — Always Indicate Compromise
+#### HIGH-CONFIDENCE: Always Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
 | P0 | `iam:UpdateAssumeRolePolicy` whose new trust policy adds a Principal in an **external/non-org account** or a `*` wildcard | CloudTrail | T1098 |
-| P0 | Trust policy trusting account **`193672423079`** (the Stratus marker) — or any unknown external account | CloudTrail / Access Analyzer | T1098 |
+| P0 | Trust policy trusting account **`193672423079`** (the Stratus marker), or any unknown external account | CloudTrail / Access Analyzer | T1098 |
 | P0 | IAM Access Analyzer finding: role trust policy grants access to an external principal | Access Analyzer | T1098 |
 | P1 | `iam:CreateRole` with an initial external/wildcard trust policy | CloudTrail | T1098 |
 | P1 | `sts:AssumeRole` into the role where the assuming principal is an **external account** (backdoor in use) | CloudTrail | T1098 |
 
-#### MEDIUM-CONFIDENCE — May Indicate Compromise
+#### MEDIUM-CONFIDENCE: May Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
 | P2 | `iam:UpdateAssumeRolePolicy` by a principal not on the IaC/identity-admin allowlist | CloudTrail | T1098 |
 | P2 | Trust policy adding an external account **without** an `ExternalId`/condition (no confused-deputy protection) | CloudTrail | T1098 |
-| P2 | `iam:UpdateAssumeRolePolicy` denied at volume (`errorCode = AccessDenied`) — permission probing | CloudTrail | T1098 |
+| P2 | `iam:UpdateAssumeRolePolicy` denied at volume (`errorCode = AccessDenied`), permission probing | CloudTrail | T1098 |
 | P3 | IaC principal updating a trust policy during a known deployment, staying same-account | CloudTrail | T1098 |
 
 ### Detection Rule Quality Notes
@@ -90,11 +90,11 @@ The shipped rules match the event but not the malicious content. These are corre
 | No detection of the backdoor being *used* | Catches the plant but not the cross-account `AssumeRole` that follows | Add a rule for external-account `AssumeRole` into the role |
 | Header TODO "verify acronym casing"; `level: medium` | Stale; durable cross-account persistence is higher | Resolve TODO; external-principal rule → `level: critical` |
 
-**Recommended detection — decode the trust policy and match an external principal.** The `policyDocument` is **URL-encoded** in the CloudTrail event, which constrains what a static Sigma rule can match: percent-encoding escapes quotes/colons/`*` (`"`→`%22`, `*`→`%2A`), so substring patterns like `"AWS":"*"` **never match the raw event**. Only **12-digit account IDs pass through URL-encoding verbatim**, so a Sigma rule can reliably catch *known-bad account IDs* (the Stratus marker and your own threat-intel accounts) — but the general "wildcard or any non-org account" detection MUST decode the document, which is the log-platform / Query 1 path.
+**Recommended detection, decode the trust policy and match an external principal.** The `policyDocument` is **URL-encoded** in the CloudTrail event, which constrains what a static Sigma rule can match: percent-encoding escapes quotes/colons/`*` (`"`→`%22`, `*`→`%2A`), so substring patterns like `"AWS":"*"` **never match the raw event**. Only **12-digit account IDs pass through URL-encoding verbatim**, so a Sigma rule can reliably catch *known-bad account IDs* (the Stratus marker and your own threat-intel accounts), but the general "wildcard or any non-org account" detection MUST decode the document, which is the log-platform / Query 1 path.
 
 ```yaml
-# Sigma — catches KNOWN-BAD account IDs in a trust-policy change (digits survive
-# URL-encoding). It does NOT catch wildcards or arbitrary external accounts — use
+# Sigma: catches KNOWN-BAD account IDs in a trust-policy change (digits survive
+# URL-encoding). It does NOT catch wildcards or arbitrary external accounts: use
 # Query 1 (decode) for those.
 title: IAM role trust policy references a known-bad account
 id: 7a2c9f41-6b83-4e50-9d17-3c0b8a7e6f92
@@ -121,7 +121,7 @@ level: critical
 ```
 
 The general "any account not in the org, or a wildcard" case cannot be a static
-substring against the encoded event — the authoritative check is the decode +
+substring against the encoded event, the authoritative check is the decode +
 org-allowlist comparison in Query 1 (and its account-wide equivalent in Query 2).
 Deploy those as the standing detection; the Sigma above is a known-IOC-account
 catcher only.
@@ -132,21 +132,25 @@ catcher only.
 
 ### Key Investigation Queries
 
-> IAM events are global → query **`us-east-1`**. Extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`. The `policyDocument` in the event is **URL-encoded** — decode it before matching.
+> IAM events are global → query **`us-east-1`**. Extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`. The `policyDocument` in the event is **URL-encoded**, decode it before matching.
 
-#### Query 1 — Find trust-policy changes and decode the added principals
+#### Query 1: Find trust-policy changes and decode the added principals
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 # Your org's account IDs (space-separated). Used by the manual decode step below
-# (and wired into Query 2's automated sweep) — NOT filtered inside this Query 1 jq,
+# (and wired into Query 2's automated sweep): NOT filtered inside this Query 1 jq,
 # which just surfaces every trust change for you to inspect.
 ORG_ACCOUNTS="111111111111 222222222222"
 
 for EV in UpdateAssumeRolePolicy CreateRole; do
   aws cloudtrail lookup-events \
     --lookup-attributes AttributeKey=EventName,AttributeValue=$EV \
-    --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+    --start-time "$START" \
     --region "$REGION" --output json 2>/dev/null
 done | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
@@ -176,7 +180,7 @@ python3 -c 'import urllib.parse,sys,json; d=json.loads(urllib.parse.unquote(sys.
 # Any account ID here NOT in ORG_ACCOUNTS, or a "*", is the backdoor.
 ```
 
-#### Query 2 — Sweep ALL roles for external/wildcard trust (find every backdoor)
+#### Query 2: Sweep ALL roles for external/wildcard trust (find every backdoor)
 
 The attacker may have backdoored more than the one role. Enumerate every role's
 current trust policy and flag external/wildcard principals.
@@ -207,20 +211,24 @@ aws iam list-roles --query 'Roles[].{Name:RoleName,Trust:AssumeRolePolicyDocumen
 Every line here is a role to remediate. Note `list-roles` returns the trust policy
 as decoded JSON (no URL-decoding needed, unlike the CloudTrail event).
 
-#### Query 3 — Was the backdoor USED? (external account assumed the role)
+#### Query 3: Was the backdoor USED? (external account assumed the role)
 
 Cross-account `AssumeRole` is logged in your (the role-owner's) account. This tells
-you whether the foreign account has already taken the role — which escalates the
+you whether the foreign account has already taken the role, which escalates the
 incident from "planted" to "active."
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 ROLE_NAME="<backdoored-role-name>"
 EXTERNAL_ACCT="193672423079"    # or the external account from Query 1
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRole \
-  --start-time "$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r --arg role "$ROLE_NAME" --arg acct "$EXTERNAL_ACCT" '
     .Events[].CloudTrailEvent | fromjson |
@@ -234,16 +242,20 @@ aws cloudtrail lookup-events \
 Any result = the backdoor was exercised. Everything the resulting session did (its
 `roleSessionName` in subsequent events) is now part of the incident.
 
-#### Query 4 — What did an assumed session do?
+#### Query 4: What did an assumed session do?
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 ROLE_NAME="<backdoored-role-name>"
 
 # Actions performed under the role (session name from Query 3 / assume events)
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=Username,AttributeValue="<roleSessionName-from-Query-3>" \
-  --start-time "$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, event: .eventName, source: .eventSource,
@@ -251,14 +263,18 @@ aws cloudtrail lookup-events \
   jq -s 'sort_by(.time)'
 ```
 
-#### Query 5 — Full session reconstruction of the principal that planted the backdoor
+#### Query 5: Full session reconstruction of the principal that planted the backdoor
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 ACCESS_KEY_ID="<access-key-from-Query-1>"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=AccessKeyId,AttributeValue="$ACCESS_KEY_ID" \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region us-east-1 --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, event: .eventName, source: .eventSource,
@@ -266,7 +282,7 @@ aws cloudtrail lookup-events \
   jq -s 'sort_by(.time)'
 ```
 
-Look for *other* persistence the same principal planted — more backdoored roles,
+Look for *other* persistence the same principal planted, more backdoored roles,
 new users/keys, login profiles.
 
 ---
@@ -281,7 +297,7 @@ used and contain the planting principal.
 > Run every command under the **break-glass responder credentials** from §1, not
 > under any principal being contained.
 
-#### Step 1 — Restore the role's trust policy (close the backdoor)
+#### Step 1: Restore the role's trust policy (close the backdoor)
 
 ```bash
 ROLE_NAME="<backdoored-role-name>"
@@ -296,7 +312,7 @@ aws iam get-role --role-name "$ROLE_NAME" \
   --query 'Role.AssumeRolePolicyDocument.Statement[].Principal' --output json
 ```
 
-#### Step 2 — Revoke any live sessions already obtained via the backdoor
+#### Step 2: Revoke any live sessions already obtained via the backdoor
 
 Restoring the trust policy stops *new* assumptions, but STS sessions already
 minted from the backdoor remain valid for their TTL. Cut them with a
@@ -314,7 +330,7 @@ aws iam put-role-policy --role-name "$ROLE_NAME" \
 echo "[OK] Pre-existing sessions for $ROLE_NAME revoked"
 ```
 
-#### Step 3 — Contain the principal that planted the backdoor
+#### Step 3: Contain the principal that planted the backdoor
 
 ```bash
 SUSPECT_ARN="<caller-arn-from-Query-1>"
@@ -334,7 +350,7 @@ elif echo "$SUSPECT_ARN" | grep -q ":assumed-role/"; then
 fi
 ```
 
-#### Step 4 — Deny further trust-policy changes by the principal
+#### Step 4: Deny further trust-policy changes by the principal
 
 ```bash
 SUSPECT_ROLE="<role-name>"    # role principals; for an IAM user use put-user-policy
@@ -355,7 +371,7 @@ echo "[OK] Trust/role modification denied for $SUSPECT_ROLE"
 
 #### Fix every backdoored role (from Query 2)
 
-Restore the correct same-account trust policy for **each** role Query 2 flagged —
+Restore the correct same-account trust policy for **each** role Query 2 flagged,
 do not assume only the one role from Query 1 was touched.
 
 ```bash
@@ -368,8 +384,8 @@ aws iam update-assume-role-policy --role-name "$ROLE_NAME" \
 
 #### Remove other persistence planted by the principal
 
-From Query 5, remediate anything else the principal created — extra backdoored
-roles, new IAM users/access keys, login profiles, attached admin policies — using
+From Query 5, remediate anything else the principal created, extra backdoored
+roles, new IAM users/access keys, login profiles, attached admin policies, using
 the relevant persistence playbook for each.
 
 #### Right-size trust-policy permissions
@@ -440,7 +456,7 @@ COUNT=$(aws cloudtrail lookup-events \
   jq -r --arg arn "$SUSPECT_ARN" '.Events[].CloudTrailEvent | fromjson |
     select(.userIdentity.arn == $arn) | .eventTime' | grep -c .)
 [ "$COUNT" -eq 0 ] && echo "[OK] No further trust-policy changes from $SUSPECT_ARN since containment" \
-                   || echo "[FAIL] $COUNT further changes — containment did not hold"
+                   || echo "[FAIL] $COUNT further changes, containment did not hold"
 ```
 
 #### Verify the credential is dead
@@ -460,7 +476,7 @@ fi
 ```bash
 echo "Re-run the emulation and confirm the corrected rule fires on the UpdateAssumeRolePolicy"
 echo "whose decoded policyDocument trusts account 193672423079 (external), classified"
-echo "P0 — and that it does NOT fire on a benign same-account trust update or on GetRole."
+echo "P0, and that it does NOT fire on a benign same-account trust update or on GetRole."
 ```
 
 ---
@@ -473,14 +489,14 @@ echo "P0 — and that it does NOT fire on a benign same-account trust update or 
 |---------|------------------------------|
 | A principal could add an external account to a role's trust policy | `iam:UpdateAssumeRolePolicy` granted outside IaC/identity-admin; no guardrail on cross-account trust |
 | Backdoor undetected | Shipped rule matched the event but never decoded/inspected the policy for an external principal; IAM Access Analyzer not alarmed |
-| Persistence survives credential rotation | Trust-policy backdoors are independent of the attacker's own credentials — rotating keys does not remove them |
+| Persistence survives credential rotation | Trust-policy backdoors are independent of the attacker's own credentials, rotating keys does not remove them |
 | Possibly more than one role backdoored | No account-wide sweep of role trust policies for external principals |
 | Cross-account use unnoticed | No alert on external-account `AssumeRole` into internal roles |
 
 ### Recommended Guardrails
 
 **Detect external trust continuously**
-- Enable **IAM Access Analyzer** (account + org) and alarm every finding of a role trusting an external principal — this is the standing control that catches this exact backdoor
+- Enable **IAM Access Analyzer** (account + org) and alarm every finding of a role trusting an external principal, this is the standing control that catches this exact backdoor
 - A scheduled sweep (Query 2 logic) as defence-in-depth
 
 **Restrict who can change trust, and to whom**
@@ -501,27 +517,27 @@ echo "P0 — and that it does NOT fire on a benign same-account trust update or 
 - Manage all trust policies through reviewed IaC; treat any out-of-band `UpdateAssumeRolePolicy` as an incident
 
 **Detection improvements**
-- Deploy the content-inspection rule (decode `policyDocument`, match external/wildcard principal) — never the shipped event-name match
+- Deploy the content-inspection rule (decode `policyDocument`, match external/wildcard principal), never the shipped event-name match
 - Alarm Access Analyzer role findings and external-account `AssumeRole` into internal roles
 
 ### Technique Reference
 
 | Type | Value |
 |------|-------|
-| MITRE technique | T1098 — Account Manipulation |
+| MITRE technique | T1098 - Account Manipulation |
 | MITRE tactic | Persistence (TA0003) |
 | Primary API | `iam:UpdateAssumeRolePolicy` (also `iam:CreateRole` for the create-new variant) |
 | Event source | `iam.amazonaws.com` (global → events in `us-east-1`) |
-| Key discriminator | The new trust policy's Principal references an **external/non-org account** or a `*` wildcard — decode `requestParameters.policyDocument` (URL-encoded); the event name alone is benign |
-| Purpose-built control | **IAM Access Analyzer** — flags roles trusting external principals |
+| Key discriminator | The new trust policy's Principal references an **external/non-org account** or a `*` wildcard, decode `requestParameters.policyDocument` (URL-encoded); the event name alone is benign |
+| Purpose-built control | **IAM Access Analyzer**, flags roles trusting external principals |
 | Emulation IOC | External account **`193672423079`** (Stratus marker) added as a trusted principal |
-| Persistence property | Independent of the attacker's own credentials — survives key rotation / user deletion until the trust policy is fixed |
+| Persistence property | Independent of the attacker's own credentials, survives key rotation / user deletion until the trust policy is fixed |
 | "Was it used?" signal | Cross-account `sts:AssumeRole` is logged in the role-owner's account with the external `userIdentity.accountId` |
 | Error strings (not `Client.`-prefixed) | `AccessDenied` / `AccessDeniedException`, `MalformedPolicyDocument` |
 | Resources created | 1 IAM role (same-account trust) |
 
 **MITRE mapping note:** T1098 (Account Manipulation), Persistence, is a sound
-mapping for backdooring a role's trust relationship — a good fit, unlike the
+mapping for backdooring a role's trust relationship, a good fit, unlike the
 T1021.004/T1204.003/T1087 stretches elsewhere in this catalogue. (The parent
 technique is used here, consistent with the MANIFEST; a case could be made for a
 sub-technique, but the parent is accurate and not a stretch.)
@@ -530,7 +546,7 @@ sub-technique, but the parent is accurate and not a stretch.)
 
 `pulumi destroy` in `infra/` removes the IAM role; the emulation's own revert
 restores the original same-account trust policy, so a normal run self-cleans. After
-a **real** incident, `pulumi destroy` is irrelevant — restore the correct trust
-policy on every backdoored role (§3–§4), remove any sessions/other persistence, and
+a **real** incident, `pulumi destroy` is irrelevant, restore the correct trust
+policy on every backdoored role (§3-§4), remove any sessions/other persistence, and
 tighten who can change trust; deleting a stack does not un-plant a backdoor the
 attacker placed on a role you still need.

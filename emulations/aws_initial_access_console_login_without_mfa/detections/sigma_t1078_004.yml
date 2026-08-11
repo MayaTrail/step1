@@ -1,6 +1,6 @@
 # AWS Console Login Without MFA (T1078.004)
 #
-# NOTE: the original rule in this file was GOOD — correctly scoped to
+# NOTE: the original rule in this file was GOOD - correctly scoped to
 # signin.amazonaws.com/ConsoleLogin, filtering MFAUsed=No and
 # ConsoleLogin=Success, with a falsepositives note. It is the exception in this
 # catalogue and is retained below essentially unchanged.
@@ -13,7 +13,7 @@ title: AWS Console Login Without MFA (T1078.004)
 id: 561a4908-847c-58cd-94db-27320778dcc1
 status: experimental
 description: >
-  Detects an AWS console sign-in where MFA was not used — valid-account access
+  Detects an AWS console sign-in where MFA was not used, valid-account access
   without MFA.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.initial-access.console-login-without-mfa/
@@ -51,7 +51,7 @@ level: medium
 # Root without MFA is categorically worse than an IAM user without MFA. It
 # warrants its own severity rather than being blended into `medium`.
 #
-# Note `success` is a SIBLING of `selection`, not nested inside it — nesting it
+# Note `success` is a SIBLING of `selection`, not nested inside it: nesting it
 # would break the rule's own condition.
 title: Root console login without MFA
 id: 8e2c1f47-9a05-4b63-8d12-6f3a0c7b9e24
@@ -78,7 +78,7 @@ detection:
     responseElements.ConsoleLogin: 'Success'
   condition: selection and success
 falsepositives:
-  - Break-glass root access — should be pre-announced and time-boxed
+  - Break-glass root access, should be pre-announced and time-boxed
 level: critical
 ---
 # The success rule cannot see the brute force that PRECEDED a successful
@@ -110,7 +110,7 @@ id: f206b8d1-3c94-4e57-a081-95bd7e0f4c38
 name: aws_console_login_failure
 status: experimental
 description: >-
-  Base rule for the brute-force correlation. Individual failures are routine —
+  Base rule for the brute-force correlation. Individual failures are routine,
   not for direct alerting.
 tags:
   - attack.initial_access

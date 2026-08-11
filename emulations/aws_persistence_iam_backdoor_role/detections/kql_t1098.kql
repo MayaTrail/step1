@@ -7,7 +7,7 @@
 // Percent-encoding escapes the structural characters ( " -> %22, * -> %2A ),
 // so substring patterns like '"AWS":"*"' never match the raw field. Only
 // 12-digit account IDs survive verbatim. Any rule hoping to catch WILDCARD or
-// ARBITRARY-EXTERNAL principals must decode first — as below.
+// ARBITRARY-EXTERNAL principals must decode first, as below.
 //
 // GetRole is excluded: it is a benign read that only dilutes the signal.
 //
@@ -26,7 +26,7 @@ AWSCloudTrail
 | extend RoleName = tostring(coalesce(Req.roleName, Req.RoleName))
 | mv-expand Stmt = Trust.Statement          // Statement may be an object or an array
 | extend PrincipalBlob = tostring(Stmt.Principal)
-// Wildcard trust — anyone, anywhere. Always critical.
+// Wildcard trust, anyone, anywhere. Always critical.
 | extend HasWildcard = PrincipalBlob contains "\"*\"" or PrincipalBlob == "*"
 // Any 12-digit account referenced in the principal block
 | extend RefAccounts = extract_all(@"(\d{12})", PrincipalBlob)
@@ -35,8 +35,8 @@ AWSCloudTrail
 | project TimeGenerated, UserIdentityArn, EventName, RoleName,
           HasWildcard, ExternalAccounts, PrincipalBlob, SourceIpAddress
 | extend Verdict = case(
-    HasWildcard,                          "TRUST POLICY OPEN TO ANY PRINCIPAL — P0",
-    array_length(ExternalAccounts) > 0,   "TRUST POLICY GRANTS EXTERNAL ACCOUNT — P0",
+    HasWildcard,                          "TRUST POLICY OPEN TO ANY PRINCIPAL - P0",
+    array_length(ExternalAccounts) > 0,   "TRUST POLICY GRANTS EXTERNAL ACCOUNT - P0",
     "REVIEW")
 | order by TimeGenerated desc
 //

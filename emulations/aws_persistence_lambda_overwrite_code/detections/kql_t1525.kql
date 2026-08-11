@@ -2,7 +2,7 @@
 //
 // Two signals: a code overwrite by a non-deploy principal, and the
 // download-then-overwrite sequence. GetFunction alone is excluded from
-// alerting — a read is not tampering.
+// alerting, a read is not tampering.
 //
 // CodeSha256 is the ground-truth field. responseElements.codeSha256 is the hash
 // of what was just deployed; comparing it against the known-good build hash
@@ -30,31 +30,38 @@ AWSCloudTrail
     LastSeen    = max(TimeGenerated)
     by FunctionName, bin(TimeGenerated, 10m)
 | where Overwrites > 0
-| where not(Callers has "role/iac-deploy" or Callers has "role/ci-cd")   // tune allowlist
+// REPLACE these with the roles in YOUR account that legitimately deploy Lambda
+// function code. The placeholder values match nothing, so until they are edited
+// this rule fires on every deployment.
+//
+// `contains` (substring), NOT `has` (whole-term): a role path is delimited by a
+// slash and hyphens, so `has` does not match it reliably.
+| where not(Callers contains "role/REPLACE-ME-iac-deploy"
+            or Callers contains "role/REPLACE-ME-ci")
 | extend Verdict = case(
     Reads > 0 and Overwrites > 0,
-        "CODE DOWNLOADED THEN OVERWRITTEN — deliberate tampering, P0",
-    "LAMBDA CODE OVERWRITTEN OUTSIDE PIPELINE — P0")
+        "CODE DOWNLOADED THEN OVERWRITTEN, deliberate tampering, P0",
+    "LAMBDA CODE OVERWRITTEN OUTSIDE PIPELINE - P0")
 | project FirstSeen, LastSeen, FunctionName, Overwrites, Reads, NewHashes,
           Versions, Callers, SourceIPs, Verdict
 | order by LastSeen desc
 //
 // ============================================================================
-// THE DRIFT DETECTOR — deploy this alongside, it catches what the rule cannot
+// THE DRIFT DETECTOR, deploy this alongside, it catches what the rule cannot
 // ============================================================================
 // The allowlist above exempts the deploy pipeline. If the PIPELINE ITSELF is
 // compromised, this query stays silent. A CodeSha256 baseline check does not:
 // compare each function's live hash against its known-good build hash on a
 // schedule (Config custom rule or scheduled job).
 //
-// FIELD SHAPE — easy to get wrong, returns null if you do:
+// FIELD SHAPE, easy to get wrong, returns null if you do:
 //   get-function-configuration  -> CodeSha256               (FLAT)
 //   get-function                -> Configuration.CodeSha256 (NESTED)
 // Use the shape matching the call you actually make.
 //
 // ROLLBACK: UpdateFunctionCode only changes $LATEST. Published numbered
 // versions are IMMUTABLE, so a prior published version is a clean rollback
-// target — repoint the alias to it rather than trying to reconstruct code.
+// target, repoint the alias to it rather than trying to reconstruct code.
 //
 // PREVENTION: Lambda code signing with
 // UntrustedArtifactOnDeployment = Enforce rejects unsigned deployments outright.

@@ -16,7 +16,6 @@ date: 2026/06/28
 tags:
   - attack.defense_evasion
   - attack.t1211
-  - kubernetes
 logsource:
   product: kubernetes
   service: audit

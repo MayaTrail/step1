@@ -1,7 +1,7 @@
 // Enumerate AWS Environment from EC2 Instance (T1580)
 //
-// THE deployable detection. The original query watched ssm.amazonaws.com — the
-// delivery plumbing — and so missed any actor working from a plain shell on the
+// THE deployable detection. The original query watched ssm.amazonaws.com, the
+// delivery plumbing, and so missed any actor working from a plain shell on the
 // instance while alerting on every legitimate Run Command. This one keys on the
 // reconnaissance surface instead: an instance role behaving like an operator.
 //
@@ -11,7 +11,7 @@
 //
 // PREREQUISITE: a Sentinel watchlist named `InstanceRoles` whose SearchKey
 // column holds the role names attached to instance profiles. Maintaining it is
-// a standing task — a stale list silently narrows the detection.
+// a standing task, a stale list silently narrows the detection.
 //
 // Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 AWSCloudTrail
@@ -35,7 +35,7 @@ AWSCloudTrail
     by RoleName, bin(TimeGenerated, 10m)
 | where (DistinctActions > 5 and Services >= 2) or IamEnum > 0
 | extend Verdict = case(
-    IamEnum > 0,                          "IAM ENUMERATION FROM INSTANCE ROLE — P0",
-    DistinctActions > 5 and Services >= 2, "MULTI-SERVICE RECON FROM INSTANCE ROLE — P0",
+    IamEnum > 0,                          "IAM ENUMERATION FROM INSTANCE ROLE - P0",
+    DistinctActions > 5 and Services >= 2, "MULTI-SERVICE RECON FROM INSTANCE ROLE - P0",
     "REVIEW")
 | order by DistinctActions desc

@@ -1,6 +1,6 @@
 // Backdoor IAM User Console Login via UpdateLoginProfile (T1098.001)
 //
-// GetLoginProfile is excluded — a read is not the attack, and it is routine.
+// GetLoginProfile is excluded, a read is not the attack, and it is routine.
 //
 // The reset alone is the alert; the CONSOLE LOGIN that follows is the
 // confirmation of takeover. Both are joined here.
@@ -15,15 +15,18 @@ let Resets =
     | extend Req = parse_json(RequestParameters)
     | extend TargetUser  = tostring(Req.userName)
     | extend NoResetFlag = tostring(Req.passwordResetRequired) == "false"
-    | where UserIdentityArn !contains ":role/helpdesk-password-reset"
-        and UserIdentityArn !contains ":role/identity-admin"
-        and UserIdentityArn !contains ":role/BreakGlassAdmin"
+    // REPLACE these with the roles in YOUR account that legitimately reset
+    // user passwords. The placeholder values below match nothing, so until
+    // they are edited this rule fires on every helpdesk password reset.
+    | where UserIdentityArn !contains ":role/REPLACE-ME-helpdesk"
+        and UserIdentityArn !contains ":role/REPLACE-ME-identity-admin"
+        and UserIdentityArn !contains ":role/REPLACE-ME-break-glass"
     | project ResetTime = TimeGenerated, Caller = UserIdentityArn, TargetUser,
               NoResetFlag, ResetSourceIp = SourceIpAddress;
 let Logins =
     AWSCloudTrail
     | where TimeGenerated > ago(7d)
-    // Console sign-in is GLOBAL and lands in us-east-1 — a region-filtered
+    // Console sign-in is GLOBAL and lands in us-east-1, a region-filtered
     // workspace returns nothing here.
     | where EventSource == "signin.amazonaws.com" and EventName == "ConsoleLogin"
     | extend Result = tostring(parse_json(ResponseElements).ConsoleLogin)
@@ -39,12 +42,12 @@ Resets
           ResetSourceIp, LoginTime, MFAUsed, LoginSourceIp, UsedWithinHour
 | extend Verdict = case(
     UsedWithinHour and MFAUsed == "No",
-        "PASSWORD RESET THEN LOGIN WITHOUT MFA — account takeover confirmed, P0",
+        "PASSWORD RESET THEN LOGIN WITHOUT MFA, account takeover confirmed, P0",
     UsedWithinHour,
-        "PASSWORD RESET THEN LOGIN — takeover (MFA satisfied; verify the device)",
+        "PASSWORD RESET THEN LOGIN, takeover (MFA satisfied; verify the device)",
     SelfTargeted,
-        "SELF-TARGETED PASSWORD RESET — implies an over-broad grant, review",
-    "PASSWORD RESET BY NON-HELPDESK PRINCIPAL — contain before it is used")
+        "SELF-TARGETED PASSWORD RESET, implies an over-broad grant, review",
+    "PASSWORD RESET BY NON-HELPDESK PRINCIPAL, contain before it is used")
 | order by ResetTime desc
 //
 // ============================================================================
@@ -58,6 +61,6 @@ Resets
 // Enrich this query against `iam list-mfa-devices` output (or a privileged-user
 // watchlist) and escalate that intersection first.
 //
-// CONTAINMENT: an explicit Deny on the victim kills an ACTIVE console session —
+// CONTAINMENT: an explicit Deny on the victim kills an ACTIVE console session,
 // permissions are evaluated per request, not cached for the session's lifetime.
 // Then reset the password again and enrol MFA. Contain the caller separately.

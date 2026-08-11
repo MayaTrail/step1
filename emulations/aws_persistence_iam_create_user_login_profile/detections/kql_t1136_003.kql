@@ -1,6 +1,6 @@
 // Create IAM User with Console Access (T1136.003)
 //
-// Grouped by TARGET USER, not by caller — the question is "which identity now
+// Grouped by TARGET USER, not by caller, the question is "which identity now
 // has console access it should not have", and the privilege grant may come from
 // a different principal than the one that created the profile.
 //
@@ -40,20 +40,27 @@ AWSCloudTrail
     LastSeen       = max(TimeGenerated)
     by TargetUser, bin(TimeGenerated, 15m)
 | where ProfileCreated > 0
-| where not(Callers has "role/identity-admin" or Callers has "role/onboarding")   // tune allowlist
+// REPLACE these with the roles in YOUR account that legitimately create IAM
+// users and login profiles. The placeholder values match nothing, so until they
+// are edited this rule fires on every onboarding.
+//
+// `contains` (substring), NOT `has` (whole-term): a role path is delimited by a
+// slash and hyphens, so `has` does not match it reliably.
+| where not(Callers contains "role/REPLACE-ME-identity-admin"
+            or Callers contains "role/REPLACE-ME-onboarding")
 | extend Verdict = case(
     ProfileCreated > 0 and PrivGrants > 0,
-        "CONSOLE BACKDOOR WITH PRIVILEGES — P0",
+        "CONSOLE BACKDOOR WITH PRIVILEGES - P0",
     UserCreated > 0 and ProfileCreated > 0,
-        "NET-NEW CONSOLE USER — investigate (powerless until granted)",
-    "CONSOLE ACCESS ADDED TO EXISTING USER — investigate")
+        "NET-NEW CONSOLE USER, investigate (powerless until granted)",
+    "CONSOLE ACCESS ADDED TO EXISTING USER, investigate")
 | project FirstSeen, LastSeen, TargetUser, UserCreated, ProfileCreated, PrivGrants,
           GrantDetail, Groups, NoResetFlag, CleanedUp, Callers, SourceIPs, Verdict
 | order by LastSeen desc
 //
 // `passwordResetRequired == false` is a SUPPORTING discriminator only. Some
 // legitimate flows also set it false. Never gate a containment action on it
-// alone — it colours the triage, it does not decide it.
+// alone, it colours the triage, it does not decide it.
 //
 // "Was it used?" pivot is ConsoleLogin, not access-key activity:
 //   AWSCloudTrail

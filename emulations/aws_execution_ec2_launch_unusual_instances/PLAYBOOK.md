@@ -1,4 +1,4 @@
-# IR Playbook: Launch Unusual EC2 Instance Types for Cryptomining — Resource Hijacking via `ec2:RunInstances`
+# IR Playbook - Launch Unusual EC2 Instance Types for Cryptomining - Resource Hijacking via `ec2:RunInstances`
 
 ## Classification
 
@@ -6,26 +6,26 @@
 |-------|-------|
 | Incident Type | Execution / Resource Hijacking (cryptomining) |
 | Emulation Tier | Atomic technique |
-| Threat Actor | N/A — single-technique emulation (the AMBERSQUID campaign playbook covers a full actor version of this) |
+| Threat Actor | N/A, single-technique emulation (the AMBERSQUID campaign playbook covers a full actor version of this) |
 | Platform | aws |
-| Severity | Medium–High — Medium as the atomic launch signal; High once mining is confirmed or the launch is at scale/across regions, given direct billing loss and reputational risk |
+| Severity | Medium-High - Medium as the atomic launch signal; High once mining is confirmed or the launch is at scale/across regions, given direct billing loss and reputational risk |
 | MITRE Tactics | Execution |
-| MITRE Techniques | T1204.003 (as mapped by Stratus — a poor fit; T1496 Resource Hijacking is closer, see §6) |
+| MITRE Techniques | T1204.003 (as mapped by Stratus, a poor fit; T1496 Resource Hijacking is closer, see §6) |
 | Services in Scope | EC2, GuardDuty, CloudTrail, Cost Explorer / Budgets, Auto Scaling, EC2 Fleet/Spot |
-| Infrastructure Created | None — the emulation launches and then terminates its own instance in a `finally` block |
+| Infrastructure Created | None, the emulation launches and then terminates its own instance in a `finally` block |
 
-**What the emulation does:** calls `ec2:RunInstances` trying a list of GPU / compute-dense instance types (p2/p3/g4 families) associated with mining, falling back to a small instance if those are unavailable, then terminates whatever it launched. Even when the GPU launches fail (quota/availability), the *attempt* is recorded in CloudTrail — which is itself the detection signal.
+**What the emulation does:** calls `ec2:RunInstances` trying a list of GPU / compute-dense instance types (p2/p3/g4 families) associated with mining, falling back to a small instance if those are unavailable, then terminates whatever it launched. Even when the GPU launches fail (quota/availability), the *attempt* is recorded in CloudTrail, which is itself the detection signal.
 
-**Why the instance TYPE is the signal, not the `RunInstances` call.** `ec2:RunInstances` is one of the most frequent management calls in any active account — autoscaling, CI, deployments, batch jobs all launch instances constantly. Matching the call is useless. What marks this technique is `requestParameters.instanceType` landing in a **GPU / accelerated / expensive-compute family** that the account does not normally run:
+**Why the instance TYPE is the signal, not the `RunInstances` call.** `ec2:RunInstances` is one of the most frequent management calls in any active account, autoscaling, CI, deployments, batch jobs all launch instances constantly. Matching the call is useless. What marks this technique is `requestParameters.instanceType` landing in a **GPU / accelerated / expensive-compute family** that the account does not normally run:
 
-- **GPU (`p2/p3/p4/p5`, `g3/g4/g4ad/g5/g6`) and FPGA (`f1/f2`)** — the families actually useful for cryptomining hash-work, and the highest-value signal.
-- **ML-accelerator families (`inf1/inf2` Inferentia, `trn1` Trainium, `dl1` Habana Gaudi)** — these are ASIC ML accelerators, **not effective for classic proof-of-work mining**. Include them as an *expensive-compute abuse / cost* signal, but do not label their presence as cryptomining specifically; the likely abuse there is cost-theft, not mining.
+- **GPU (`p2/p3/p4/p5`, `g3/g4/g4ad/g5/g6`) and FPGA (`f1/f2`)**, the families actually useful for cryptomining hash-work, and the highest-value signal.
+- **ML-accelerator families (`inf1/inf2` Inferentia, `trn1` Trainium, `dl1` Habana Gaudi)**, these are ASIC ML accelerators, **not effective for classic proof-of-work mining**. Include them as an *expensive-compute abuse / cost* signal, but do not label their presence as cryptomining specifically; the likely abuse there is cost-theft, not mining.
 
 The shipped rule matches every `RunInstances` (§2) and is unusable.
 
-**Why failed launches matter.** The emulation tries several GPU types before falling back. Those attempts fail with `Client.VcpuLimitExceeded` / `Client.InstanceLimitExceeded` / an unsupported-type error — and a burst of *failed* `RunInstances` across large instance types from one principal is an attacker probing what they can spin up. A detection keyed only on successful launches misses the probing phase.
+**Why failed launches matter.** The emulation tries several GPU types before falling back. Those attempts fail with `Client.VcpuLimitExceeded` / `Client.InstanceLimitExceeded` / an unsupported-type error, and a burst of *failed* `RunInstances` across large instance types from one principal is an attacker probing what they can spin up. A detection keyed only on successful launches misses the probing phase.
 
-**Three detection layers, because one is not enough.** Control-plane (`RunInstances` + unusual type — immediate, but evadable by using a permitted family), runtime (GuardDuty `CryptoCurrency:EC2/BitcoinTool.B` — confirms actual mining traffic), and billing (Cost Anomaly Detection — lagging, but catches mining on *normal-looking* instance types that the first two miss). A mature program runs all three.
+**Three detection layers, because one is not enough.** Control-plane (`RunInstances` + unusual type, immediate, but evadable by using a permitted family), runtime (GuardDuty `CryptoCurrency:EC2/BitcoinTool.B`, confirms actual mining traffic), and billing (Cost Anomaly Detection, lagging, but catches mining on *normal-looking* instance types that the first two miss). A mature program runs all three.
 
 **The relaunch trap.** Terminating the miner instance is not containment. Real cryptomining intrusions launch miners via an **Auto Scaling group, EC2 Fleet, or Spot Fleet** so that terminated instances are automatically replaced. Containment must remove the *launch mechanism* first, or the miners respawn faster than you can kill them (the AMBERSQUID pattern).
 
@@ -37,14 +37,14 @@ The shipped rule matches every `RunInstances` (§2) and is unusable.
 
 **Logging & Visibility**
 - CloudTrail multi-region trail, management events `ReadWriteType: All`, delivered to S3 (versioned, MFA delete) and to CloudWatch Logs / a log platform. `RunInstances`/`TerminateInstances` are management events, so `lookup-events` works for them
-- **GuardDuty enabled in all regions** — `CryptoCurrency:EC2/BitcoinTool.B` and `!DNS` variants are the runtime confirmation and are GuardDuty-only
-- **AWS Cost Anomaly Detection** (or a Budgets anomaly alert) configured on EC2 spend — the billing layer that catches mining the control-plane and GuardDuty rules miss
+- **GuardDuty enabled in all regions**, `CryptoCurrency:EC2/BitcoinTool.B` and `!DNS` variants are the runtime confirmation and are GuardDuty-only
+- **AWS Cost Anomaly Detection** (or a Budgets anomaly alert) configured on EC2 spend, the billing layer that catches mining the control-plane and GuardDuty rules miss
 - A baseline of instance-type families the account legitimately runs, per region, so "unusual" is a concrete list rather than a guess
 - VPC Flow Logs, to see outbound mining-pool connections from a suspect instance
 
 **Alerting (must be pre-configured)**
 - `ec2:RunInstances` with an `instanceType` in a GPU/accelerated family not in the account baseline → alert (control-plane, immediate). This is the primary control
-- A burst of **failed** `RunInstances` across large instance types from one principal → alert (the probing signal). Match the full failure set the attack produces — `VcpuLimitExceeded`, `InstanceLimitExceeded`, `InsufficientInstanceCapacity`, `Unsupported`, `InvalidParameterValue` — not just `*LimitExceeded`
+- A burst of **failed** `RunInstances` across large instance types from one principal → alert (the probing signal). Match the full failure set the attack produces, `VcpuLimitExceeded`, `InstanceLimitExceeded`, `InsufficientInstanceCapacity`, `Unsupported`, `InvalidParameterValue`, not just `*LimitExceeded`
 - GuardDuty `CryptoCurrency:EC2/*` → SNS → on-call at P0
 - Cost Anomaly Detection: >X% day-over-day EC2 spend increase → alert
 - `ec2:CreateFleet` / `ec2:RequestSpotFleet` / `autoscaling:CreateAutoScalingGroup` launching GPU/compute types from a non-CI principal → alert (the relaunch mechanism)
@@ -52,7 +52,7 @@ The shipped rule matches every `RunInstances` (§2) and is unusable.
 **Response Tooling**
 - AWS CLI v2 with break-glass responder credentials, separate from any principal under investigation
 - `jq` installed
-- The account's Service Quotas for GPU families on hand — low quotas are both a control and a triage aid
+- The account's Service Quotas for GPU families on hand, low quotas are both a control and a triage aid
 - A current inventory of legitimate Auto Scaling groups / fleets, so an attacker-created one is distinguishable
 
 **Known IOC Baselines**
@@ -66,17 +66,17 @@ The shipped rule matches every `RunInstances` (§2) and is unusable.
 
 ### Detection Triggers (prioritized)
 
-#### HIGH-CONFIDENCE — Always Indicate Compromise
+#### HIGH-CONFIDENCE: Always Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
 | P0 | GuardDuty `CryptoCurrency:EC2/BitcoinTool.B` or `...BitcoinTool.B!DNS` on any instance | GuardDuty | T1204.003 |
 | P0 | `ec2:RunInstances` succeeding with a GPU/accelerated type (`p*`,`g*`,`inf*`,`trn*`,`dl*`) not in the account baseline, from a non-CI principal | CloudTrail | T1204.003 |
-| P1 | Burst of failed `RunInstances` (`Client.VcpuLimitExceeded`/`InstanceLimitExceeded`) across large types from one principal — capability probing | CloudTrail | T1204.003 |
+| P1 | Burst of failed `RunInstances` (`Client.VcpuLimitExceeded`/`InstanceLimitExceeded`) across large types from one principal, capability probing | CloudTrail | T1204.003 |
 | P1 | Attacker-created Auto Scaling group / EC2 Fleet / Spot Fleet launching GPU/compute types | CloudTrail | T1204.003 |
 | P1 | EC2 cost anomaly (Cost Anomaly Detection) not explained by a known deployment | Cost Explorer | T1204.003 |
 
-#### MEDIUM-CONFIDENCE — May Indicate Compromise
+#### MEDIUM-CONFIDENCE: May Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
@@ -94,10 +94,10 @@ The rules in `detections/` are unusable as written. These are correctness/noise 
 | Sigma/KQL match `eventName IN (DescribeImages, RunInstances, TerminateInstances)` with `condition: selection`, no `instanceType` filter | Catastrophically noisy. `RunInstances` fires on every autoscale/CI/deploy; `DescribeImages`/`TerminateInstances` are pure noise. The rule cannot distinguish a mining launch from normal capacity | Drop `DescribeImages`/`TerminateInstances` as triggers; filter `RunInstances` to unusual `instanceType` families |
 | No instance-type discriminator | The defining signal (GPU/accelerated family) is exactly what an event-name match ignores | Match `requestParameters.instanceType` against the GPU/accelerated family patterns |
 | No `errorCode` handling | Loses the capability-probing signal (failed large-type launches) and cannot separate a successful hijack from a blocked attempt | Add both a success rule and a failed-attempt rule |
-| GuardDuty `CryptoCurrency` finding — the definitive runtime signal — not referenced | The best confirmation of *actual* mining is absent from the detection set | Add a GuardDuty finding rule at P0 |
+| GuardDuty `CryptoCurrency` finding, the definitive runtime signal, not referenced | The best confirmation of *actual* mining is absent from the detection set | Add a GuardDuty finding rule at P0 |
 | Header TODO "verify acronym casing"; `level: medium` on a rule matching all `RunInstances` | Stale marker; alert fatigue | Resolve TODO; unusual-type rule → `level: high`; GuardDuty rule → `level: critical` |
 
-**Recommended detection — `RunInstances` with an unusual instance type.**
+**Recommended detection, `RunInstances` with an unusual instance type.**
 
 ```yaml
 title: EC2 RunInstances with GPU/accelerated instance type
@@ -111,7 +111,7 @@ detection:
     eventSource: 'ec2.amazonaws.com'
     eventName: 'RunInstances'
   unusual_type:
-    # GPU / accelerated-compute families — tune to your account baseline
+    # GPU / accelerated-compute families: tune to your account baseline
     requestParameters.instanceType|re: '^(p[0-9]|g[0-9]|f[0-9]|inf[0-9]|trn[0-9]|dl[0-9])'
   allowlisted:
     userIdentity.arn|contains:
@@ -137,14 +137,14 @@ level: critical
 ```
 
 Add a third rule for failed capability probing: same `selection` plus a match on
-the full set of `RunInstances` failure codes the attack actually produces —
+the full set of `RunInstances` failure codes the attack actually produces,
 `errorCode|contains` any of `VcpuLimitExceeded`, `InstanceLimitExceeded`,
 `InsufficientInstanceCapacity`, `Unsupported`, `InvalidParameterValue` (a
 `LimitExceeded`-only substring match misses the capacity/unsupported/invalid-param
-failures, which are equally strong "probing what I can launch" signals) —
+failures, which are equally strong "probing what I can launch" signals),
 grouped/counted per principal, at `level: medium`.
 
-**On error strings:** EC2 CloudTrail errors carry a `Client.` prefix —
+**On error strings:** EC2 CloudTrail errors carry a `Client.` prefix,
 `Client.VcpuLimitExceeded`, `Client.InstanceLimitExceeded`,
 `Client.UnauthorizedOperation`. Match the prefixed form (or `contains`) and
 confirm against a sample event.
@@ -153,16 +153,20 @@ confirm against a sample event.
 
 ### Key Investigation Queries
 
-> CloudTrail extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'` — robust, unlike `--output text | jq`.
+> CloudTrail extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`, robust, unlike `--output text | jq`.
 
-#### Query 1 — Find the unusual `RunInstances` calls and who made them
+#### Query 1: Find the unusual `RunInstances` calls and who made them
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-6H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=RunInstances \
-  --start-time "$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime,
@@ -181,7 +185,7 @@ Rows with a GPU/accelerated `type` are the hits. `SUCCESS` + a real
 `instances` id = a live miner to kill; a `Client.*LimitExceeded` error =
 a blocked probe (still investigate the principal).
 
-#### Query 2 — Locate the running miner instances to terminate
+#### Query 2: Locate the running miner instances to terminate
 
 ```bash
 REGION="us-east-1"
@@ -196,11 +200,15 @@ aws ec2 describe-instances --region "$REGION" \
   --output table
 ```
 
-#### Query 3 — Find the relaunch mechanism (before killing instances)
+#### Query 3: Find the relaunch mechanism (before killing instances)
 
 Kill the launcher first, or terminated miners respawn.
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 
 # Auto Scaling groups launching GPU/compute types
@@ -219,7 +227,7 @@ aws ec2 describe-spot-fleet-requests --region "$REGION" \
 # Recently created ASGs (attacker infra)
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=CreateAutoScalingGroup \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, caller: .userIdentity.arn, asg: .requestParameters.autoScalingGroupName}'
@@ -227,7 +235,7 @@ aws cloudtrail lookup-events \
 # Recently created launch templates (surfaces the ID and NAME for §4 deletion)
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=CreateLaunchTemplate \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, caller: .userIdentity.arn,
@@ -235,7 +243,7 @@ aws cloudtrail lookup-events \
      lt_name: .requestParameters.CreateLaunchTemplateRequest.launchTemplateName}'
 ```
 
-#### Query 4 — GuardDuty cryptomining findings
+#### Query 4: GuardDuty cryptomining findings
 
 ```bash
 REGION="us-east-1"
@@ -247,14 +255,18 @@ aws guardduty list-findings --detector-id "$DETECTOR_ID" --region "$REGION" \
   xargs -r aws guardduty get-findings --detector-id "$DETECTOR_ID" --region "$REGION" --finding-ids
 ```
 
-#### Query 5 — Full session reconstruction of the launching principal
+#### Query 5: Full session reconstruction of the launching principal
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 ACCESS_KEY_ID="<access-key-from-Query-1>"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=AccessKeyId,AttributeValue="$ACCESS_KEY_ID" \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region us-east-1 --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, event: .eventName, source: .eventSource,
@@ -262,7 +274,7 @@ aws cloudtrail lookup-events \
   jq -s 'sort_by(.time)'
 ```
 
-#### Query 6 — Multi-region sweep (miners spread across regions)
+#### Query 6: Multi-region sweep (miners spread across regions)
 
 ```bash
 for REGION in $(aws ec2 describe-regions --query 'Regions[*].RegionName' --output text); do
@@ -272,7 +284,7 @@ for REGION in $(aws ec2 describe-regions --query 'Regions[*].RegionName' --outpu
                starts_with(InstanceType, `g`) || starts_with(InstanceType, `inf`) ||
                starts_with(InstanceType, `trn`) || starts_with(InstanceType, `dl`) || starts_with(InstanceType, `f`)][])' \
     --output text 2>/dev/null)
-  [ -n "$N" ] && [ "$N" != "0" ] && echo "[!] $REGION — $N GPU/accelerated instances running"
+  [ -n "$N" ] && [ "$N" != "0" ] && echo "[!] $REGION, $N GPU/accelerated instances running"
 done
 ```
 
@@ -288,7 +300,7 @@ principal.** Terminating instances first just triggers auto-replacement.
 > Run every command under the **break-glass responder credentials** from §1, not
 > under any principal being contained.
 
-#### Step 1 — Remove the relaunch mechanism (from Query 3)
+#### Step 1: Remove the relaunch mechanism (from Query 3)
 
 ```bash
 REGION="us-east-1"
@@ -306,7 +318,7 @@ aws ec2 cancel-spot-fleet-requests --spot-fleet-request-ids "$SFR" \
   --terminate-instances --region "$REGION" 2>/dev/null && echo "[OK] Cancelled spot fleet $SFR"
 ```
 
-#### Step 2 — Terminate the miner instances (from Query 2 / Query 6, per region)
+#### Step 2: Terminate the miner instances (from Query 2 / Query 6, per region)
 
 ```bash
 REGION="us-east-1"
@@ -327,7 +339,7 @@ done
 [ -z "$MINERS" ] && echo "[OK] No running miners in $REGION" || echo "[OK] Termination issued in $REGION"
 ```
 
-#### Step 3 — Contain the launching principal
+#### Step 3: Contain the launching principal
 
 ```bash
 SUSPECT_ARN="<caller-arn-from-Query-1>"
@@ -347,7 +359,7 @@ elif echo "$SUSPECT_ARN" | grep -q ":assumed-role/"; then
 fi
 ```
 
-#### Step 4 — Block further large-instance launches immediately
+#### Step 4: Block further large-instance launches immediately
 
 ```bash
 SUSPECT_ROLE="<role-name>"
@@ -377,7 +389,7 @@ for REGION in $(aws ec2 describe-regions --query 'Regions[*].RegionName' --outpu
                starts_with(InstanceType, `g`) || starts_with(InstanceType, `inf`) ||
                starts_with(InstanceType, `trn`) || starts_with(InstanceType, `dl`) || starts_with(InstanceType, `f`)][])' \
     --output text 2>/dev/null)
-  [ -n "$N" ] && [ "$N" != "0" ] && echo "[!] $REGION still has $N GPU instances — terminate"
+  [ -n "$N" ] && [ "$N" != "0" ] && echo "[!] $REGION still has $N GPU instances, terminate"
   # Any active ASG/fleet that could relaunch
   aws autoscaling describe-auto-scaling-groups --region "$REGION" \
     --query 'AutoScalingGroups[?DesiredCapacity>`0`].AutoScalingGroupName' --output text 2>/dev/null
@@ -400,7 +412,7 @@ aws ec2 delete-launch-template --launch-template-id "$LT" --region "$REGION" 2>/
 
 ```bash
 SUSPECT_ROLE="<role-name>"
-# Review and scope RunInstances — most principals should be limited to an
+# Review and scope RunInstances: most principals should be limited to an
 # allowlist of instance types via the ec2:InstanceType condition key (see Guardrails).
 aws iam list-attached-role-policies --role-name "$SUSPECT_ROLE" --output table
 aws iam list-role-policies --role-name "$SUSPECT_ROLE" --output table
@@ -466,15 +478,19 @@ COUNT=$(aws cloudtrail lookup-events \
     select(.errorCode == null) | .eventTime' | grep -c .)
 
 [ "$COUNT" -eq 0 ] && echo "[OK] No further unusual launches from $SUSPECT_ARN since containment" \
-                   || echo "[FAIL] $COUNT further GPU launches — containment did not hold"
+                   || echo "[FAIL] $COUNT further GPU launches, containment did not hold"
 ```
 
 #### Verify billing has returned to baseline
 
 ```bash
-# EC2 daily unblended cost — confirm the spike is over
+# GNU date first, BSD/macOS date second. The two take different flags.
+START_DATE=$(date -u -d '7 days ago' +%Y-%m-%d 2>/dev/null \
+        || date -u -v-7d +%Y-%m-%d)
+
+# EC2 daily unblended cost: confirm the spike is over
 aws ce get-cost-and-usage --granularity DAILY \
-  --time-period Start=$(date -u -d '7 days ago' +%Y-%m-%d),End=$(date -u +%Y-%m-%d) \
+  --time-period Start=$START_DATE,End=$(date -u +%Y-%m-%d) \
   --metrics UnblendedCost \
   --filter '{"Dimensions":{"Key":"SERVICE","Values":["Amazon Elastic Compute Cloud - Compute"]}}' \
   --query 'ResultsByTime[].{Date:TimePeriod.Start,Cost:Total.UnblendedCost.Amount}' \
@@ -508,11 +524,11 @@ echo "[OK] GuardDuty sweep complete"
 
 ### Recommended Guardrails
 
-**Service Control Policies (SCPs) — apply at OU level**
+**Service Control Policies (SCPs), apply at OU level**
 
 ```json
 // SCP 1: Allow RunInstances only for approved instance types.
-// NOTE: ec2:InstanceType is a SINGLE-valued condition key — use plain
+// NOTE: ec2:InstanceType is a SINGLE-valued condition key, use plain
 // StringNotLike, NOT the ForAnyValue:/ForAllValues: set-operator prefix
 // (applying a set operator to a single-valued key evaluates inconsistently and
 // can fail open).
@@ -541,7 +557,7 @@ echo "[OK] GuardDuty sweep complete"
 ```
 
 **Keep GPU quotas at zero unless needed**
-- Set Service Quotas for GPU/accelerated families (`p`, `g`, `inf`, `trn`, `dl`) to 0 in accounts/regions with no ML workload — an attacker's launch then fails at the quota, and the failed attempt is itself an alert
+- Set Service Quotas for GPU/accelerated families (`p`, `g`, `inf`, `trn`, `dl`) to 0 in accounts/regions with no ML workload, an attacker's launch then fails at the quota, and the failed attempt is itself an alert
 
 **Detection improvements**
 - Deploy the unusual-`instanceType` `RunInstances` rule and the GuardDuty `CryptoCurrency:EC2/*` rule as separate detections (high / critical)
@@ -553,20 +569,20 @@ echo "[OK] GuardDuty sweep complete"
 
 | Type | Value |
 |------|-------|
-| MITRE technique | T1204.003 (as mapped by Stratus) — see caveat below |
+| MITRE technique | T1204.003 (as mapped by Stratus), see caveat below |
 | MITRE tactic | Execution (TA0002) |
 | Primary API | `ec2:RunInstances` with a GPU/accelerated `instanceType`; `TerminateInstances` on cleanup |
 | Event source | `ec2.amazonaws.com` |
-| Key discriminator | `requestParameters.instanceType` in a GPU/accelerated family (`p*`,`g*`,`inf*`,`trn*`,`dl*`) not in the account baseline — the call alone is not a signal |
+| Key discriminator | `requestParameters.instanceType` in a GPU/accelerated family (`p*`,`g*`,`inf*`,`trn*`,`dl*`) not in the account baseline, the call alone is not a signal |
 | Runtime confirmation | GuardDuty `CryptoCurrency:EC2/BitcoinTool.B` / `!DNS` |
 | Billing backstop | Cost Anomaly Detection on EC2 compute spend |
 | Error strings (`Client.`-prefixed) | `Client.VcpuLimitExceeded`, `Client.InstanceLimitExceeded`, `Client.UnauthorizedOperation` |
-| Relaunch mechanisms | Auto Scaling group, EC2 Fleet, Spot Fleet — kill these BEFORE terminating instances |
-| Resources created | None — the emulation launches then self-terminates |
+| Relaunch mechanisms | Auto Scaling group, EC2 Fleet, Spot Fleet, kill these BEFORE terminating instances |
+| Resources created | None, the emulation launches then self-terminates |
 | Related | The AMBERSQUID campaign playbook is the full multi-service actor version of cryptomining |
 
 **MITRE mapping caveat:** the MANIFEST maps this to **T1204.003**, whose canonical
-MITRE name is *User Execution: Malicious Image* — which describes a user deploying
+MITRE name is *User Execution: Malicious Image*, which describes a user deploying
 a malicious container/VM image, not launching stock instances of an expensive
 type to mine. The behaviour is squarely **T1496 (Resource Hijacking)** under the
 Impact tactic. The mapping is inherited from Stratus Red Team; treat the
@@ -577,8 +593,8 @@ as approximate. Recorded for the end-of-run MITRE-mapping finding.
 
 The emulation launches an instance and terminates it in a `finally` block, so a
 normal run leaves nothing; `pulumi destroy` is a no-op (no infra). **Verify the
-self-termination actually succeeded** — if the GPU launch happened to succeed and
+self-termination actually succeeded**, if the GPU launch happened to succeed and
 the terminate call failed, a genuinely expensive instance could be left running.
 Run Query 2 after any emulation to confirm no GPU/accelerated instance survives.
-After a **real** incident, `pulumi destroy` is irrelevant — terminate the miners
-and remove the relaunch mechanism per §3–§4.
+After a **real** incident, `pulumi destroy` is irrelevant, terminate the miners
+and remove the relaunch mechanism per §3-§4.

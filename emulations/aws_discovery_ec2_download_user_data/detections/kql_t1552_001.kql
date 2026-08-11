@@ -2,13 +2,13 @@
 //
 // Two things make this deployable where the original was not:
 //
-//   1. `attribute == "userData"` — DescribeInstanceAttribute is called for many
+//   1. `attribute == "userData"` - DescribeInstanceAttribute is called for many
 //      benign attribute types. Without this filter the query returns routine
 //      administration, not credential harvesting.
 //   2. Counting DISTINCT INSTANCES, not events. The technique is defined by
 //      breadth: one user-data read is administration, fifty is harvesting.
 //
-// DescribeInstances is deliberately absent — it is among the highest-volume
+// DescribeInstances is deliberately absent, it is among the highest-volume
 // calls in AWS (every console load, every inventory tool) and is enumeration
 // context, not a trigger.
 //
@@ -29,5 +29,5 @@ AWSCloudTrail
     LastSeen      = max(TimeGenerated)
     by UserIdentityArn, bin(TimeGenerated, 10m)
 | where InstancesRead > 5
-| extend Verdict = "EC2 USER-DATA HARVESTING — P0"
+| extend Verdict = "EC2 USER-DATA HARVESTING - P0"
 | order by InstancesRead desc

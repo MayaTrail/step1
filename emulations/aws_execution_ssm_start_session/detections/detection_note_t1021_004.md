@@ -1,4 +1,4 @@
-# Detection Note — T1021.004 (Open SSM Sessions to Multiple EC2 Instances)
+# Detection Note: T1021.004 (Open SSM Sessions to Multiple EC2 Instances)
 
 **Signal:** `ssm:StartSession` from a non-operator principal, across several
 distinct instances, or using a port-forwarding document.
@@ -6,7 +6,7 @@ distinct instances, or using a port-forwarding document.
 ## The single most important fact
 
 **Session content is never in CloudTrail.** CloudTrail records that a session
-*began* — not a keystroke of what happened inside it. There is no verbosity
+*began*, not a keystroke of what happened inside it. There is no verbosity
 setting that changes this. The only source of session content is **Session
 Manager logging** (S3 or CloudWatch Logs), configured through the
 `SSM-SessionManagerRunShell` document's `inputs`.
@@ -30,7 +30,7 @@ Two things follow:
 |---|---|
 | Non-operator principal | `StartSession` is a normal operator action; the allowlist is what makes the rule deployable |
 | Fan-out (≥3 distinct targets) | One instance is administration; several is fleet access |
-| Port-forwarding document | A **pivot**, not a shell — see below |
+| Port-forwarding document | A **pivot**, not a shell, see below |
 
 **Port forwarding deserves its own severity.** `AWS-StartPortForwardingSession`
 (and `…ToRemoteHost`) turns Session Manager into a tunnel into the VPC,
@@ -47,21 +47,51 @@ unreachable target as `TargetNotConnected`. SSM service errors are **not**
 `Client.`-prefixed like EC2 errors.
 
 **MITRE note:** the manifest maps T1021.004 (*Remote Services: SSH*), but
-Session Manager is **not SSH** — no SSH daemon, no key exchange, no port 22.
+Session Manager is **not SSH**, no SSH daemon, no key exchange, no port 22.
 The precise mapping is **T1021.008** (*Direct Cloud VM Connections*). Both tags
 are carried on the rules; the T1021.004 mapping is inherited from the upstream
 catalogue.
 
-**Severity:** manifest MEDIUM; IR view **High** — unlogged interactive access
+**Severity:** manifest MEDIUM; IR view **High**, unlogged interactive access
 across a fleet.
 
 **GuardDuty:** no finding type specific to this technique.
 
+## Tuning the allowlist
+
+The rule ships `:role/REPLACE-ME-*` placeholders, not defaults. They match
+nothing, so an unedited rule has no exclusions at all and alerts on the routine
+activity it is supposed to ignore.
+
+Derive the real list from your own trail. The principals that show up
+repeatedly, across weeks rather than once, are your automation:
+
+```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '90 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-90d +%Y-%m-%dT%H:%M:%SZ)
+
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=StartSession \
+  --start-time "$START" \
+  --output json | \
+  jq -r '.Events[].CloudTrailEvent | fromjson | .userIdentity.arn' | \
+  sort | uniq -c | sort -rn
+```
+
+Keep the recurring service and pipeline roles. Leave out anything human unless
+it is a documented break-glass path, since a human name on the allowlist is a
+standing hole in the rule.
+
+Re-check the list when provisioning changes. A retired pipeline role left in
+place is dead weight; a new one missing from it produces the false-positive
+wave that gets a rule muted.
+
 **Files here:**
-- `sigma_t1021_004.yml` — four documents: non-operator session (`high`),
+- `sigma_t1021_004.yml`, four documents: non-operator session (`high`),
   port-forwarding (`critical`), the fan-out `value_count` correlation
   (`high`), and its base rule (`low`).
-- `kql_t1021_004.kql` — all three signals in one query, plus a note on
+- `kql_t1021_004.kql`, all three signals in one query, plus a note on
   alerting when Session Manager logging is disabled.
 
 Full response procedure is in `../PLAYBOOK.md`.

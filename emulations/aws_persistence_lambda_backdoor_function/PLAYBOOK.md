@@ -1,4 +1,4 @@
-# IR Playbook: Backdoor Lambda Function via Resource Policy — Persistence via `lambda:AddPermission`
+# IR Playbook - Backdoor Lambda Function via Resource Policy - Persistence via `lambda:AddPermission`
 
 ## Classification
 
@@ -6,21 +6,21 @@
 |-------|-------|
 | Incident Type | Persistence / Account Manipulation (cross-account resource-policy backdoor on a Lambda function) |
 | Emulation Tier | Atomic technique |
-| Threat Actor | N/A — single-technique emulation, not actor-attributed |
+| Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High — `lambda:AddPermission` grants an **external AWS account** a standing right to invoke the function, independent of any IAM credential, so it survives rotation and deletion of the compromised principal. The blast radius is the **function's execution role and the data it touches**: invoking a backdoored function runs its code under that role. As emulated the target function is a trivial handler with only `AWSLambdaBasicExecutionRole` (logs only), so an invoke gains little — but in a real account the execution role is the multiplier; treat as High until you have confirmed the function's role is unprivileged. `MANIFEST.py` rates MEDIUM |
+| Severity | High, `lambda:AddPermission` grants an **external AWS account** a standing right to invoke the function, independent of any IAM credential, so it survives rotation and deletion of the compromised principal. The blast radius is the **function's execution role and the data it touches**: invoking a backdoored function runs its code under that role. As emulated the target function is a trivial handler with only `AWSLambdaBasicExecutionRole` (logs only), so an invoke gains little, but in a real account the execution role is the multiplier; treat as High until you have confirmed the function's role is unprivileged. `MANIFEST.py` rates MEDIUM |
 | MITRE Tactics | Persistence |
 | MITRE Techniques | T1098 |
 | Services in Scope | Lambda, CloudTrail (management + Lambda data events), CloudWatch, IAM Access Analyzer, GuardDuty |
 | Infrastructure Created | A target Lambda function (`stratus-red-team-backdoor-lambda`) + its execution role, via `pulumi up`. The backdoor **statement** is added and removed by the attack script |
 
-**What the emulation does:** with a pre-created target function, it calls `lambda:AddPermission` to add a statement (`StatementId=stratus-red-team-backdoor-stmt`) to the function's **resource-based policy**, granting `lambda:InvokeFunction` to external account **`193672423079`**. The attacker's account can now invoke the function directly, cross-account. The script removes the statement on cleanup (`RemovePermission`), so a normal run leaves only the CloudTrail trail — a real intrusion leaves the statement (and the standing cross-account grant) in place.
+**What the emulation does:** with a pre-created target function, it calls `lambda:AddPermission` to add a statement (`StatementId=stratus-red-team-backdoor-stmt`) to the function's **resource-based policy**, granting `lambda:InvokeFunction` to external account **`193672423079`**. The attacker's account can now invoke the function directly, cross-account. The script removes the statement on cleanup (`RemovePermission`), so a normal run leaves only the CloudTrail trail, a real intrusion leaves the statement (and the standing cross-account grant) in place.
 
 **Why this is persistence, and why it is easy to miss.** The grant lives in the *function's* resource policy, not in IAM. Rotating the attacker's access key, deleting their user/role, and reviewing IAM policies all leave it untouched. Nobody sees it unless they read each function's resource policy (`get-policy`) or run Access Analyzer. It is the Lambda analogue of a backdoored role trust policy.
 
-**Detection is the principal in the statement, not the event name.** `lambda:AddPermission` is used legitimately all the time — to let S3, SNS, EventBridge, API Gateway, or a sibling account invoke a function. The signal is **`AddPermission` whose `principal` is an external/untrusted AWS account or `*`, granting an `Invoke` action** — not the bare event name. The shipped rule matches `AddPermission` *and* `RemovePermission` with no principal inspection (§2), so it fires on every legitimate integration wiring *and* on the attacker's own cleanup.
+**Detection is the principal in the statement, not the event name.** `lambda:AddPermission` is used legitimately all the time, to let S3, SNS, EventBridge, API Gateway, or a sibling account invoke a function. The signal is **`AddPermission` whose `principal` is an external/untrusted AWS account or `*`, granting an `Invoke` action**, not the bare event name. The shipped rule matches `AddPermission` *and* `RemovePermission` with no principal inspection (§2), so it fires on every legitimate integration wiring *and* on the attacker's own cleanup.
 
-**One trap that inverts a naïve "was it used" check:** `lambda:InvokeFunction` is a **data-plane** event. It is **not** in CloudTrail management events / `lookup-events`. A `lookup-events` query for `Invoke` always returns zero — never read that as "the backdoor was never used." Use the CloudWatch `AWS/Lambda Invocations` metric and Lambda **data events** (if enabled) instead (Query 3).
+**One trap that inverts a naïve "was it used" check:** `lambda:InvokeFunction` is a **data-plane** event. It is **not** in CloudTrail management events / `lookup-events`. A `lookup-events` query for `Invoke` always returns zero, never read that as "the backdoor was never used." Use the CloudWatch `AWS/Lambda Invocations` metric and Lambda **data events** (if enabled) instead (Query 3).
 
 ---
 
@@ -29,10 +29,10 @@
 ### Prerequisites Before This Incident
 
 **Logging & Visibility**
-- CloudTrail multi-region trail capturing Lambda **management** events. `AddPermission` carries `requestParameters.functionName`, `.statementId`, `.action`, `.principal` (the granted account/service/ARN — **cleartext**, not URL-encoded), and optionally `.sourceArn`/`.sourceAccount`/`.principalOrgID`/`.qualifier`
-- **Lambda data events** enabled on the trail for the functions that matter (or at least an account-wide Lambda data-event selector), so a cross-account `Invoke` is actually recorded — otherwise invocation is invisible to CloudTrail and only the CloudWatch metric shows it
-- IAM **Access Analyzer** enabled — it analyzes Lambda function resource policies and raises a finding when one grants access to an external principal
-- GuardDuty enabled — resource-policy and anomalous-invocation findings corroborate this technique
+- CloudTrail multi-region trail capturing Lambda **management** events. `AddPermission` carries `requestParameters.functionName`, `.statementId`, `.action`, `.principal` (the granted account/service/ARN, **cleartext**, not URL-encoded), and optionally `.sourceArn`/`.sourceAccount`/`.principalOrgID`/`.qualifier`
+- **Lambda data events** enabled on the trail for the functions that matter (or at least an account-wide Lambda data-event selector), so a cross-account `Invoke` is actually recorded, otherwise invocation is invisible to CloudTrail and only the CloudWatch metric shows it
+- IAM **Access Analyzer** enabled, it analyzes Lambda function resource policies and raises a finding when one grants access to an external principal
+- GuardDuty enabled, resource-policy and anomalous-invocation findings corroborate this technique
 
 **Alerting (must be pre-configured)**
 - **`lambda:AddPermission` where `principal` is an AWS account ID not in the org / not on an allowlist, or `*`, with an `Invoke` action → P0**
@@ -47,7 +47,7 @@
 
 **Known IOC Baselines**
 - The attacker account in this emulation: **`193672423079`**; StatementId `stratus-red-team-backdoor-stmt`; function `stratus-red-team-backdoor-lambda`
-- Baseline which functions have resource policies and which principals they grant to — a new external-account statement is the signal
+- Baseline which functions have resource policies and which principals they grant to, a new external-account statement is the signal
 - Baseline the execution role of each function, so you can immediately judge the blast radius of a backdoored one
 
 ---
@@ -56,7 +56,7 @@
 
 ### Detection Triggers (prioritized)
 
-#### HIGH-CONFIDENCE — Always Indicate Compromise
+#### HIGH-CONFIDENCE: Always Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
@@ -65,13 +65,13 @@
 | P1 | `lambda:AddPermission` by a non-IaC principal adding any cross-account/public grant | CloudTrail (management) | T1098 |
 | P1 | Cross-account `Invoke` of the function by the granted external account (post-grant) | CloudTrail **data events** / CloudWatch | T1098 |
 
-#### MEDIUM-CONFIDENCE — May Indicate Compromise
+#### MEDIUM-CONFIDENCE: May Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
 | P2 | `lambda:AddPermission` to another **in-org** account outside the normal pattern | CloudTrail (management) | T1098 |
-| P2 | `lambda:CreateFunctionUrlConfig` with `AuthType=NONE` (public HTTP invoke — a sibling backdoor surface) | CloudTrail (management) | T1098 |
-| P2 | `lambda:AddPermission` denied at volume (`errorCode = AccessDenied`) — probing | CloudTrail (management) | T1098 |
+| P2 | `lambda:CreateFunctionUrlConfig` with `AuthType=NONE` (public HTTP invoke, a sibling backdoor surface) | CloudTrail (management) | T1098 |
+| P2 | `lambda:AddPermission` denied at volume (`errorCode = AccessDenied`), probing | CloudTrail (management) | T1098 |
 | P3 | IaC/deploy pipeline wiring a known service principal (`s3`/`sns`/`events`/`apigateway`) to a function | CloudTrail (management) | T1098 |
 
 ### Detection Rule Quality Notes
@@ -81,12 +81,12 @@ The shipped rule matches the grant *and* its removal, and inspects no principal.
 | Issue | Impact | Correction |
 |-------|--------|-----------|
 | Sigma/KQL match `eventName IN (AddPermission, RemovePermission)` with `condition: selection` | Noisy and signal-blind. `AddPermission` is routine integration wiring; `RemovePermission` is its teardown (and here the emulation's own cleanup). The rule fires on every legit S3/SNS/EventBridge wiring and on removals | Match `AddPermission` only, filtered to a **cross-account/wildcard `principal`** with an `Invoke` action; drop `RemovePermission` from the alerting rule |
-| No `principal` inspection | The entire signal — *who* was granted — is exactly what the event-name match ignores | Extract `requestParameters.principal`; alert when it is an account ID not in the org/allowlist, or `*` |
+| No `principal` inspection | The entire signal, *who* was granted, is exactly what the event-name match ignores | Extract `requestParameters.principal`; alert when it is an account ID not in the org/allowlist, or `*` |
 | `RemovePermission` bundled in | A permission *removal* is not persistence; it inverts the signal and adds noise | Keep `RemovePermission` only for the forensic timeline, not the alert |
 | No account-scope / allowlist | Cannot separate a sibling-account integration from an attacker account | Compare `principal` against `aws organizations list-accounts` + a service allowlist |
 | Header TODO "verify acronym casing"; `level: medium` | Stale; a standing external invoke grant is higher | Resolve TODO; external/wildcard grant → `level: high` |
 
-**Recommended detection — external/wildcard invoke grant.**
+**Recommended detection, external/wildcard invoke grant.**
 
 ```yaml
 title: Lambda AddPermission granting external/public invoke
@@ -103,7 +103,7 @@ detection:
     requestParameters.action|contains: 'Invoke'   # InvokeFunction / InvokeFunctionUrl
   public:
     requestParameters.principal: '*'
-  # 'external' cannot be expressed as a static Sigma value — it is any AWS account
+  # 'external' cannot be expressed as a static Sigma value: it is any AWS account
   # not in your org. Enforce it at the log platform: compare requestParameters.principal
   # (a 12-digit account or an account-root ARN) against the org account list, or an
   # allowlist watchlist, and alert when it is neither an in-org account nor a trusted
@@ -115,7 +115,7 @@ level: high
 ```
 
 The `principal` is **cleartext** in the event (a request parameter, not a URL-encoded
-policy document), so account digits match directly — no decode step is needed here.
+policy document), so account digits match directly, no decode step is needed here.
 Because "external account" is a set membership your rules engine must evaluate against
 the live org list, treat the Sigma above as the static half (public `*` and
 non-service grants) and pair it with a log-platform join against
@@ -126,17 +126,21 @@ denials surface as `AccessDenied` / `AccessDeniedException`, not `Client.`-prefi
 
 ### Key Investigation Queries
 
-> Lambda management events are regional — the function lives in one region; run these there (default `us-east-1`, adjust to the function's region). Extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`. **`lookup-events` returns ≤50 events per page** — paginate on `NextToken` or use your log platform for busy windows.
+> Lambda management events are regional, the function lives in one region; run these there (default `us-east-1`, adjust to the function's region). Extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`. **`lookup-events` returns ≤50 events per page**, paginate on `NextToken` or use your log platform for busy windows.
 
-#### Query 1 — Reconstruct the grant: who added what to which function's policy
+#### Query 1 - Reconstruct the grant: who added what to which function's policy
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 
 for EV in AddPermission RemovePermission CreateFunctionUrlConfig; do
   aws cloudtrail lookup-events \
     --lookup-attributes AttributeKey=EventName,AttributeValue=$EV \
-    --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+    --start-time "$START" \
     --region "$REGION" --output json 2>/dev/null
 done | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
@@ -146,7 +150,7 @@ done | \
      function: .requestParameters.functionName,
      statement_id: .requestParameters.statementId,
      action: .requestParameters.action,
-     principal: .requestParameters.principal,       # the granted account/service/* — cleartext IOC
+     principal: .requestParameters.principal,       # the granted account/service/*, cleartext IOC
      url_auth: (.requestParameters.authType // .requestParameters.functionUrlAuthType),  # NONE=public URL; CreateFunctionUrlConfig uses authType, AddPermission uses functionUrlAuthType
      error: (.errorCode // "SUCCESS"), ip: .sourceIPAddress}' | \
   jq -s 'sort_by(.time)'
@@ -155,9 +159,9 @@ done | \
 An `AddPermission` whose `principal` is an account ID not in your org (here
 `193672423079`) or `*`, with an `Invoke` `action`, is the backdoor. Record the
 `function`, `statement_id`, and `principal` (IOCs). A `CreateFunctionUrlConfig`
-with `url_auth="NONE"` is a second public-invoke surface — check for it too.
+with `url_auth="NONE"` is a second public-invoke surface, check for it too.
 
-#### Query 2 — Sweep ALL functions' resource policies for external principals (find every backdoor)
+#### Query 2: Sweep ALL functions' resource policies for external principals (find every backdoor)
 
 The attacker may have backdoored more than one function, or one you did not see in
 Query 1's window. Read every function's resource policy and flag any statement
@@ -203,37 +207,41 @@ ANALYZER=$(aws accessanalyzer list-analyzers --query 'analyzers[0].arn' --output
 > `Principal` as `"*"`, `{"AWS":"arn"}`, or `{"AWS":["arn",...]}`. Note `AddPermission`
 > with a bare account stores the principal as `arn:aws:iam::193672423079:root`, so the
 > 12-digit account is what survives the match. `contains` on a space-joined account
-> list is a substring test — fine for fixed-width 12-digit IDs, which cannot be
+> list is a substring test, fine for fixed-width 12-digit IDs, which cannot be
 > substrings of one another.
 
-#### Query 3 — Was the backdoored function INVOKED by the external account?
+#### Query 3: Was the backdoored function INVOKED by the external account?
 
-> **`lambda:InvokeFunction` is a data-plane event — it is NOT in `lookup-events`.**
+> **`lambda:InvokeFunction` is a data-plane event, it is NOT in `lookup-events`.**
 > A management-event query for `Invoke` always returns zero; that is not evidence of
 > non-use. Use the two sources below.
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 FUNCTION="<function-from-Query-1>"
 ATTACKER_ACCT="<principal-from-Query-1>"
 
-# (a) CloudWatch Invocations metric — did the function run at all, and when?
+# (a) CloudWatch Invocations metric: did the function run at all, and when?
 aws cloudwatch get-metric-statistics --namespace AWS/Lambda --metric-name Invocations \
   --dimensions Name=FunctionName,Value="$FUNCTION" \
-  --start-time "$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --period 3600 --statistics Sum --region "$REGION" \
   --query 'Datapoints[?Sum>`0`].[Timestamp,Sum]' --output text | sort
 
-# (b) Lambda DATA events (only if data-event logging was enabled on the trail) —
+# (b) Lambda DATA events (only if data-event logging was enabled on the trail),
 #     these carry the caller, so you can confirm the EXTERNAL account invoked it.
-#     NB: match the function on .resources[].ARN, NOT requestParameters — a synchronous
+#     NB: match the function on .resources[].ARN, NOT requestParameters - a synchronous
 #     (RequestResponse) Invoke records requestParameters=null and the function identity
 #     lives only in the resources[] array, so a requestParameters.functionName filter
 #     would silently drop the default (sync) invoke an attacker most likely uses.
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=Invoke \
-  --start-time "$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json 2>/dev/null | \
   jq -r --arg fn "$FUNCTION" --arg acct "$ATTACKER_ACCT" '.Events[].CloudTrailEvent | fromjson |
     select(.eventSource=="lambda.amazonaws.com"
@@ -250,15 +258,19 @@ of cross-account abuse (and every action the function took under its execution r
 during that window is in scope). If **(b)** returns nothing because data events were
 never enabled, rely on **(a)** and enable Lambda data events now.
 
-#### Query 4 — Full session reconstruction of the principal that planted the backdoor
+#### Query 4: Full session reconstruction of the principal that planted the backdoor
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 ACCESS_KEY_ID="<access-key-from-Query-1>"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=AccessKeyId,AttributeValue="$ACCESS_KEY_ID" \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, event: .eventName, source: .eventSource,
@@ -266,10 +278,10 @@ aws cloudtrail lookup-events \
   jq -s 'sort_by(.time)'
 ```
 
-Look for *other* persistence and tampering by the same principal — more
+Look for *other* persistence and tampering by the same principal, more
 `AddPermission` grants, `UpdateFunctionCode` (code overwrite), `PublishLayerVersion` +
 `AddLayerVersionPermission` (layer backdoor), `CreateFunctionUrlConfig`, IAM
-backdoors — and remediate each with the relevant playbook.
+backdoors, and remediate each with the relevant playbook.
 
 ---
 
@@ -283,7 +295,7 @@ determine whether it was invoked, and contain the planting principal.
 > Run every command under the **break-glass responder credentials** from §1, not
 > under any principal being contained.
 
-#### Step 1 — Remove the backdoor statement(s) from the function policy
+#### Step 1: Remove the backdoor statement(s) from the function policy
 
 ```bash
 REGION="us-east-1"
@@ -310,10 +322,10 @@ aws lambda get-function-url-config --function-name "$FUNCTION" --region "$REGION
 > If the function's execution role is privileged and you cannot yet rule out abuse,
 > consider setting reserved concurrency to 0 (`aws lambda put-function-concurrency
 > --function-name "$FUNCTION" --reserved-concurrent-executions 0`) to freeze all
-> invocation while you investigate — this stops execution without deleting the
+> invocation while you investigate, this stops execution without deleting the
 > function or its logs. Reverse it in Recovery.
 
-#### Step 2 — Contain the principal that planted the backdoor
+#### Step 2: Contain the principal that planted the backdoor
 
 The `:user/` and `:assumed-role/` branches cover the common cases. A **root** or
 **federated** caller needs manual handling (root credential rotation, or the IdP),
@@ -335,14 +347,14 @@ elif echo "$SUSPECT_ARN" | grep -q ":assumed-role/"; then
     --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"*","Resource":"*","Condition":{"DateLessThan":{"aws:TokenIssueTime":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}}}]}'
   echo "[OK] Revoked sessions for role $R"
 else
-  echo "[i] $SUSPECT_ARN is neither an IAM user nor an assumed-role — root/federated: contain manually"
+  echo "[i] $SUSPECT_ARN is neither an IAM user nor an assumed-role, root/federated: contain manually"
 fi
 ```
 
 Note: `aws:TokenIssueTime` revokes only sessions issued **before** the cutoff; a
 credential re-fetched afterward is not caught.
 
-#### Step 3 — Deny further resource-policy changes by the principal
+#### Step 3: Deny further resource-policy changes by the principal
 
 ```bash
 DENY_DOC='{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":["lambda:AddPermission","lambda:AddLayerVersionPermission","lambda:CreateFunctionUrlConfig","lambda:UpdateFunctionCode"],"Resource":"*"}]}'
@@ -356,7 +368,7 @@ elif echo "$SUSPECT_ARN" | grep -q ":user/"; then
   aws iam put-user-policy --user-name "$U" --policy-name "EmergencyDenyLambdaBackdoor" --policy-document "$DENY_DOC"
   echo "[OK] Lambda resource-policy changes denied for user $U"
 else
-  echo "[i] Root/federated principal — apply the deny at the SCP level instead"
+  echo "[i] Root/federated principal, apply the deny at the SCP level instead"
 fi
 ```
 
@@ -393,13 +405,13 @@ for FN in $(aws lambda list-functions --region "$REGION" --query 'Functions[].Fu
 done
 ```
 
-> Review each removal before running in production — an in-org account not in
+> Review each removal before running in production, an in-org account not in
 > `list-accounts` (e.g. a partner account you trust) would be flagged; confirm it is
 > genuinely unwanted first.
 
 #### Remove other persistence / tampering by the principal
 
-From Query 4, remediate anything else the principal did — code overwrite
+From Query 4, remediate anything else the principal did, code overwrite
 (`UpdateFunctionCode` → redeploy from a trusted source, see the overwrite-code
 playbook), a backdoor layer (`AddLayerVersionPermission` → the layer-extension
 playbook), function URLs, additional grants, IAM backdoors.
@@ -479,7 +491,7 @@ INVOKED=$(aws cloudwatch get-metric-statistics --namespace AWS/Lambda --metric-n
   --period 3600 --statistics Sum --region "$REGION" \
   --query 'Datapoints[?Sum>`0`]' --output json | jq 'length')
 [ "$INVOKED" -eq 0 ] && echo "[OK] No invocations since containment" \
-                     || echo "[i] $INVOKED post-containment invocation window(s) — confirm they are legitimate (the grant is removed, so any invoke is now from an authorized principal)"
+                     || echo "[i] $INVOKED post-containment invocation window(s), confirm they are legitimate (the grant is removed, so any invoke is now from an authorized principal)"
 ```
 
 #### Restore normal concurrency (if frozen in Step 1)
@@ -494,7 +506,7 @@ aws lambda delete-function-concurrency --function-name "$FUNCTION" --region "$RE
 
 ```bash
 echo "Re-run the emulation and confirm the external-grant rule fires HIGH on the"
-echo "AddPermission with principal=193672423079 (an out-of-org account) — and that it"
+echo "AddPermission with principal=193672423079 (an out-of-org account), and that it"
 echo "does NOT fire on the RemovePermission cleanup, nor on a legitimate service-principal"
 echo "grant (e.g. s3.amazonaws.com)."
 ```
@@ -509,7 +521,7 @@ echo "grant (e.g. s3.amazonaws.com)."
 |---------|------------------------------|
 | A principal could grant an external account invoke access to a function | `lambda:AddPermission` available outside the IaC pipeline; no SCP constraining the `lambda:Principal` to the org |
 | Backdoor undetected | Shipped rule matched `AddPermission`/`RemovePermission` with no principal inspection; Access Analyzer not enabled/alarmed on Lambda resource policies |
-| Persistence survives credential remediation | The grant lives in the *function* resource policy, not IAM — untouched by key rotation or principal deletion |
+| Persistence survives credential remediation | The grant lives in the *function* resource policy, not IAM, untouched by key rotation or principal deletion |
 | Blast radius under-appreciated | The function's execution role determines what an invoke can do; roles were not baselined per function |
 | Possible unnoticed invocation | Lambda **data events** not enabled, so cross-account invocation was invisible to CloudTrail (only the CloudWatch metric showed it) |
 
@@ -532,7 +544,7 @@ echo "grant (e.g. s3.amazonaws.com)."
 }
 ```
 
-(Verify the exact behavior of `lambda:Principal` in your account before enforcing —
+(Verify the exact behavior of `lambda:Principal` in your account before enforcing,
 for cross-account *account* grants combine it with an `aws:PrincipalOrgID` condition
 on who may call `AddPermission`, and allowlist your integration service principals.
 Test in a non-prod org unit first; a too-broad deny breaks legitimate S3/SNS/EventBridge wiring.)
@@ -550,7 +562,7 @@ Test in a non-prod org unit first; a too-broad deny breaks legitimate S3/SNS/Eve
 ```
 
 **Structural controls**
-- **Least-privilege execution roles** per function — the single biggest blast-radius reducer; a backdoored function with a scoped role can do little
+- **Least-privilege execution roles** per function, the single biggest blast-radius reducer; a backdoored function with a scoped role can do little
 - Enable **IAM Access Analyzer** and alarm on any Lambda external-access finding
 - Enable **Lambda data events** on high-value functions so cross-account invocation is actually logged
 - Manage all resource policies through reviewed IaC; treat any out-of-band `AddPermission` as an incident
@@ -564,20 +576,20 @@ Test in a non-prod org unit first; a too-broad deny breaks legitimate S3/SNS/Eve
 
 | Type | Value |
 |------|-------|
-| MITRE technique | T1098 — Account Manipulation |
+| MITRE technique | T1098 - Account Manipulation |
 | MITRE tactic | Persistence (TA0003) |
 | Primary API | `lambda:AddPermission` (adds a statement to the function resource policy granting `lambda:InvokeFunction` to an external account) |
-| Event source | `lambda.amazonaws.com` (regional — query the function's region) |
-| Key discriminator | `requestParameters.principal` is an out-of-org account (or `*`) with an `Invoke` action — **cleartext**, not URL-encoded; account digits match directly |
-| Sweep tool | `aws lambda get-policy` per function (policy is a **stringified** JSON — `fromjson`) + IAM Access Analyzer (analyzes Lambda resource policies) — not the Credential Report |
-| "Was it used" pivot | **Data-plane** `Invoke` — NOT in `lookup-events`; use CloudWatch `AWS/Lambda Invocations` + Lambda data events (caller-aware) |
+| Event source | `lambda.amazonaws.com` (regional, query the function's region) |
+| Key discriminator | `requestParameters.principal` is an out-of-org account (or `*`) with an `Invoke` action, **cleartext**, not URL-encoded; account digits match directly |
+| Sweep tool | `aws lambda get-policy` per function (policy is a **stringified** JSON, `fromjson`) + IAM Access Analyzer (analyzes Lambda resource policies), not the Credential Report |
+| "Was it used" pivot | **Data-plane** `Invoke` - NOT in `lookup-events`; use CloudWatch `AWS/Lambda Invocations` + Lambda data events (caller-aware) |
 | Related backdoor surfaces | `CreateFunctionUrlConfig` (public URL), `AddLayerVersionPermission` (layer share), `UpdateFunctionCode` (code overwrite) |
-| Conditionable guardrail | `lambda:Principal` condition key on `AddPermission` — the grant target *is* constrainable (unlike some network-firewall APIs) |
+| Conditionable guardrail | `lambda:Principal` condition key on `AddPermission`, the grant target *is* constrainable (unlike some network-firewall APIs) |
 | Error strings (not `Client.`-prefixed) | `AccessDenied` / `AccessDeniedException` |
 | Resources created | The target function persists (created by `pulumi up`); the backdoor statement is added and removed by the script (a real attack leaves the statement) |
 
 **MITRE mapping note:** T1098 (Account Manipulation), Persistence, is a defensible
-mapping — modifying a resource policy to grant standing external access is account/
+mapping, modifying a resource policy to grant standing external access is account/
 access manipulation. The MANIFEST's technique *name* ("Backdoor Lambda Function via
 Resource Policy") is the upstream Stratus label, not a canonical MITRE technique name;
 cosmetic, not a mis-mapping.
@@ -587,8 +599,7 @@ cosmetic, not a mis-mapping.
 The emulation removes its own backdoor statement on cleanup, so a normal run leaves
 the function but no grant; `pulumi destroy` in `infra/` then removes the function and
 its role. After a **real** incident, `pulumi destroy` is irrelevant to attacker-added
-statements on *other* functions — remove every external statement (§3–§4), delete any
+statements on *other* functions, remove every external statement (§3-§4), delete any
 attacker function URLs, redeploy any tampered code, and constrain `AddPermission` via
 SCP; the resource-policy grant persists until you remove it, regardless of any stack
 teardown.
-```

@@ -1,30 +1,30 @@
-# IR Playbook: Invoke Bedrock Model for Resource Exhaustion — LLM Cost Abuse via `bedrock:InvokeModel`
+# IR Playbook - Invoke Bedrock Model for Resource Exhaustion - LLM Cost Abuse via `bedrock:InvokeModel`
 
 ## Classification
 
 | Field | Value |
 |-------|-------|
-| Incident Type | Impact / Resource Hijacking (LLM inference cost abuse — "LLMjacking") |
+| Incident Type | Impact / Resource Hijacking (LLM inference cost abuse, "LLMjacking") |
 | Emulation Tier | Atomic technique |
-| Threat Actor | N/A — single-technique emulation, not actor-attributed |
+| Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High — foundation-model inference is expensive; sustained abuse runs up large bills fast and can exhaust account model quotas, denying service to legitimate workloads |
+| Severity | High, foundation-model inference is expensive; sustained abuse runs up large bills fast and can exhaust account model quotas, denying service to legitimate workloads |
 | MITRE Tactics | Impact |
 | MITRE Techniques | T1496 |
 | Services in Scope | Bedrock, CloudWatch (Bedrock metrics), CloudTrail, Cost Explorer / Cost Anomaly Detection, IAM |
-| Infrastructure Created | None — the emulation only requires Bedrock model access enabled in the region |
+| Infrastructure Created | None, the emulation only requires Bedrock model access enabled in the region |
 
-**What the emulation does:** calls `bedrock:InvokeModel` (via the `bedrock-runtime` client) against a foundation model in a loop, generating inference cost. This is the LLM analogue of cryptomining: the attacker burns the victim's paid inference capacity — for cost damage, quota exhaustion (denial of service to real workloads), or to resell stolen model access ("LLMjacking").
+**What the emulation does:** calls `bedrock:InvokeModel` (via the `bedrock-runtime` client) against a foundation model in a loop, generating inference cost. This is the LLM analogue of cryptomining: the attacker burns the victim's paid inference capacity, for cost damage, quota exhaustion (denial of service to real workloads), or to resell stolen model access ("LLMjacking").
 
-**What the telemetry does and doesn't give you.** `bedrock:InvokeModel` (and `Converse`/`ConverseStream`) **is** logged as a CloudTrail **management event** by default — a standard multi-region trail captures each call with `userIdentity.arn`, `requestParameters.modelId`, region, and source IP, at no extra cost. So CloudTrail *is* a valid primary source for **volume and per-principal attribution**. What CloudTrail management events do **not** carry is the *token counts*, *throttle counts*, and *prompt/response content* — those come from other sources. Use each for what it is good at:
-- **CloudTrail management events** — per-call identity, model, region, source IP → volume + attribution (default, no cost). This is the fastest detection path
-- **CloudWatch `AWS/Bedrock` metrics** — `Invocations`, `InputTokenCount`, `OutputTokenCount`, `InvocationThrottles` (on by default, per model, **no** per-principal dimension) → token-level cost signal and quota-throttle signal
-- **Bedrock model invocation logging** — opt-in, to S3/CloudWatch → prompt/response *content* and richer per-invocation detail
+**What the telemetry does and doesn't give you.** `bedrock:InvokeModel` (and `Converse`/`ConverseStream`) **is** logged as a CloudTrail **management event** by default, a standard multi-region trail captures each call with `userIdentity.arn`, `requestParameters.modelId`, region, and source IP, at no extra cost. So CloudTrail *is* a valid primary source for **volume and per-principal attribution**. What CloudTrail management events do **not** carry is the *token counts*, *throttle counts*, and *prompt/response content*, those come from other sources. Use each for what it is good at:
+- **CloudTrail management events**, per-call identity, model, region, source IP → volume + attribution (default, no cost). This is the fastest detection path
+- **CloudWatch `AWS/Bedrock` metrics**, `Invocations`, `InputTokenCount`, `OutputTokenCount`, `InvocationThrottles` (on by default, per model, **no** per-principal dimension) → token-level cost signal and quota-throttle signal
+- **Bedrock model invocation logging**, opt-in, to S3/CloudWatch → prompt/response *content* and richer per-invocation detail
 - **Cost Anomaly Detection / Cost Explorer** on Bedrock spend → the backstop that catches abuse even if logging is disabled
 
-The shipped rule's real defect is therefore **noise, not blindness**: it matches `InvokeModel` with no `eventSource` scoping and no volume threshold, so a single benign call fires it — not that it "never fires." (Note: a few Bedrock operations — `InvokeModelWithBidirectionalStream`, async-invoke, and Agent-runtime calls like `InvokeAgent`/`Retrieve` — are *data events*, not management events, and need data-event logging enabled; but `InvokeModel`, which is what this technique uses, is a management event.)
+The shipped rule's real defect is therefore **noise, not blindness**: it matches `InvokeModel` with no `eventSource` scoping and no volume threshold, so a single benign call fires it, not that it "never fires." (Note: a few Bedrock operations, `InvokeModelWithBidirectionalStream`, async-invoke, and Agent-runtime calls like `InvokeAgent`/`Retrieve`, are *data events*, not management events, and need data-event logging enabled; but `InvokeModel`, which is what this technique uses, is a management event.)
 
-**Control-plane precursors are also in CloudTrail.** Model-access enumeration (`ListFoundationModels`), model-access requests (`PutUseCaseForModelAccess` / `CreateFoundationModelAgreement`), and — critically — an attacker **disabling invocation logging** (`PutModelInvocationLoggingConfiguration` / `DeleteModelInvocationLoggingConfiguration`) to blind the content capture. Those are the earliest signals.
+**Control-plane precursors are also in CloudTrail.** Model-access enumeration (`ListFoundationModels`), model-access requests (`PutUseCaseForModelAccess` / `CreateFoundationModelAgreement`), and, critically, an attacker **disabling invocation logging** (`PutModelInvocationLoggingConfiguration` / `DeleteModelInvocationLoggingConfiguration`) to blind the content capture. Those are the earliest signals.
 
 ---
 
@@ -33,17 +33,17 @@ The shipped rule's real defect is therefore **noise, not blindness**: it matches
 ### Prerequisites Before This Incident
 
 **Logging & Visibility**
-- **CloudTrail multi-region trail** — captures `InvokeModel`/`Converse`/`ConverseStream` as management events with `userIdentity.arn`, `modelId`, region, and source IP, by default and at no extra cost. This is your primary per-principal volume/attribution source; confirm the trail exists and covers every Bedrock-enabled region
-- **CloudWatch `AWS/Bedrock` metrics** are on by default — build dashboards/alarms on `Invocations`, `InputTokenCount`, `OutputTokenCount`, `InvocationThrottles` per `ModelId`. These add the *token-level* and *throttle* signal CloudTrail lacks (but have no per-principal dimension)
-- **Bedrock model invocation logging** (opt-in, to S3/CloudWatch) — enable it for prompt/response *content* and richer detail; it is the source for *what was asked*, not for *whether/who invoked* (CloudTrail already gives that)
-- **AWS Cost Anomaly Detection** monitor scoped to the Bedrock service — the backstop that catches cost abuse even if invocation logging is disabled
+- **CloudTrail multi-region trail**, captures `InvokeModel`/`Converse`/`ConverseStream` as management events with `userIdentity.arn`, `modelId`, region, and source IP, by default and at no extra cost. This is your primary per-principal volume/attribution source; confirm the trail exists and covers every Bedrock-enabled region
+- **CloudWatch `AWS/Bedrock` metrics** are on by default, build dashboards/alarms on `Invocations`, `InputTokenCount`, `OutputTokenCount`, `InvocationThrottles` per `ModelId`. These add the *token-level* and *throttle* signal CloudTrail lacks (but have no per-principal dimension)
+- **Bedrock model invocation logging** (opt-in, to S3/CloudWatch), enable it for prompt/response *content* and richer detail; it is the source for *what was asked*, not for *whether/who invoked* (CloudTrail already gives that)
+- **AWS Cost Anomaly Detection** monitor scoped to the Bedrock service, the backstop that catches cost abuse even if invocation logging is disabled
 
 **Alerting (must be pre-configured)**
 - CloudWatch alarm: `AWS/Bedrock` `Invocations` or `InputTokenCount` exceeding a baseline multiple (e.g. >3× rolling average) per model → alert
 - CloudWatch alarm: `InvocationThrottles` spiking → the account is hitting model quota (abuse in progress or DoS to real workloads)
 - **P0: `bedrock:PutModelInvocationLoggingConfiguration` / `DeleteModelInvocationLoggingConfiguration` disabling or unencrypting logging** → an attacker blinding you before abuse
 - Cost Anomaly Detection: Bedrock spend anomaly → alert
-- `bedrock:InvokeModel` by a principal not on the ML-workload allowlist — visible directly in the default CloudTrail management-event trail (with `userIdentity.arn`); no invocation logging or data events required for this
+- `bedrock:InvokeModel` by a principal not on the ML-workload allowlist, visible directly in the default CloudTrail management-event trail (with `userIdentity.arn`); no invocation logging or data events required for this
 
 **Response Tooling**
 - AWS CLI v2 with break-glass responder credentials, separate from any principal under investigation
@@ -52,7 +52,7 @@ The shipped rule's real defect is therefore **noise, not blindness**: it matches
 - Knowledge of which models are enabled in which regions (abuse often targets the most capable/expensive models)
 
 **Known IOC Baselines**
-- Baseline per-model invocation and token volume, and which principals invoke — a sudden spike, a new principal, or an off-hours surge is the signal
+- Baseline per-model invocation and token volume, and which principals invoke, a sudden spike, a new principal, or an off-hours surge is the signal
 - Baseline the set of regions with Bedrock enabled; invocation in an unexpected region is anomalous (attackers enable access in quiet regions)
 
 ---
@@ -61,7 +61,7 @@ The shipped rule's real defect is therefore **noise, not blindness**: it matches
 
 ### Detection Triggers (prioritized)
 
-#### HIGH-CONFIDENCE — Always Indicate Compromise
+#### HIGH-CONFIDENCE: Always Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
@@ -71,23 +71,23 @@ The shipped rule's real defect is therefore **noise, not blindness**: it matches
 | P1 | `bedrock:InvokeModel` at volume by a principal not on the ML-workload allowlist | CloudTrail (management events) + CloudWatch metrics | T1496 |
 | P1 | `InvocationThrottles` spiking (quota exhaustion in progress) | CloudWatch metrics | T1496 |
 
-#### MEDIUM-CONFIDENCE — May Indicate Compromise
+#### MEDIUM-CONFIDENCE: May Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
 | P2 | `ListFoundationModels` / model-access enumeration then a burst of invocations | CloudTrail + metrics | T1496 |
 | P2 | Model-access request (`PutUseCaseForModelAccess` / `CreateFoundationModelAgreement`) by a non-provisioning principal | CloudTrail | T1496 |
 | P2 | Invocation in a region with no normal Bedrock workload | CloudWatch metrics (per region) | T1496 |
-| P2 | `bedrock:InvokeModel` denied at volume (`errorCode = AccessDeniedException`) — access probing | CloudTrail (management events) | T1496 |
+| P2 | `bedrock:InvokeModel` denied at volume (`errorCode = AccessDeniedException`), access probing | CloudTrail (management events) | T1496 |
 | P3 | Modest invocation volume from an allowlisted ML principal within baseline | metrics / logging | T1496 |
 
 ### Detection Rule Quality Notes
 
-The rules in `detections/` are too coarse — they fire on every invocation. These are noise/precision defects (the rule *does* fire; it just can't tell abuse from normal use).
+The rules in `detections/` are too coarse, they fire on every invocation. These are noise/precision defects (the rule *does* fire; it just can't tell abuse from normal use).
 
 | Issue | Impact | Correction |
 |-------|--------|-----------|
-| Sigma/KQL match `EventName == "InvokeModel"` with `condition: selection`, no threshold | Noise. `InvokeModel` *is* a CloudTrail management event, so the rule fires — but on **every** call, including the constant legitimate traffic of any real ML workload. It cannot distinguish abuse (volume) from normal use, so it gets muted | Add a per-principal count threshold over a window (the technique is defined by *volume*, not occurrence) |
+| Sigma/KQL match `EventName == "InvokeModel"` with `condition: selection`, no threshold | Noise. `InvokeModel` *is* a CloudTrail management event, so the rule fires, but on **every** call, including the constant legitimate traffic of any real ML workload. It cannot distinguish abuse (volume) from normal use, so it gets muted | Add a per-principal count threshold over a window (the technique is defined by *volume*, not occurrence) |
 | KQL rule omits `eventSource` | Matching a bare `InvokeModel` across all sources is imprecise and risks name collisions | Scope to `eventSource: bedrock.amazonaws.com` (the runtime calls log under this source) |
 | Aggregate cost/throttle signal absent | CloudTrail shows calls but not token volume or quota exhaustion; the biggest-bill and DoS signals live in CloudWatch metrics | Add CloudWatch `AWS/Bedrock` `InputTokenCount` / `InvocationThrottles` alarms alongside the CloudTrail rule |
 | The disable-logging precursor is not detected | An attacker who disables invocation logging blinds the *content* capture | Add a P0 rule on `Put/DeleteModelInvocationLoggingConfiguration` |
@@ -95,10 +95,10 @@ The rules in `detections/` are too coarse — they fire on every invocation. The
 
 **Recommended detections.** Deploy three complementary controls:
 
-1. **A CloudTrail volume rule** — the primary, zero-config detection. `InvokeModel` is a management event, so a thresholded correlation over the default trail works out of the box:
+1. **A CloudTrail volume rule**, the primary, zero-config detection. `InvokeModel` is a management event, so a thresholded correlation over the default trail works out of the box:
 
 ```yaml
-# Base rule — a Bedrock invocation (management event)
+# Base rule: a Bedrock invocation (management event)
 title: Bedrock InvokeModel
 id: 3e1a7c94-2f60-4b85-9d02-6c8a1b7e0f53
 name: bedrock_invoke_base
@@ -117,7 +117,7 @@ detection:
   condition: selection
 level: low
 ---
-# Correlation — high invocation volume from one principal (the abuse shape)
+# Correlation: high invocation volume from one principal (the abuse shape)
 title: Bedrock invocation flood from a single principal
 status: experimental
 correlation:
@@ -132,7 +132,7 @@ correlation:
 level: high
 ```
 
-2. **CloudWatch alarms** on `AWS/Bedrock` `InputTokenCount` and `InvocationThrottles` per model — the token-cost and quota-exhaustion signals CloudTrail can't provide.
+2. **CloudWatch alarms** on `AWS/Bedrock` `InputTokenCount` and `InvocationThrottles` per model, the token-cost and quota-exhaustion signals CloudTrail can't provide.
 3. **A Sigma rule on the disable-logging precursor** (attacker blinding content capture):
 
 ```yaml
@@ -162,14 +162,18 @@ Back all three with Cost Anomaly Detection on Bedrock spend.
 
 > `InvokeModel` **is** a CloudTrail management event, so Query 1 attributes the abuse per-principal straight from the default trail. CloudWatch metrics (Query 2) add the token/throttle volume CloudTrail lacks; invocation logging adds prompt/response content. CloudTrail extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`.
 
-#### Query 1 — Who invoked, and how much? (CloudTrail — the fastest attribution path)
+#### Query 1 - Who invoked, and how much? (CloudTrail: the fastest attribution path)
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=InvokeModel \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     select(.eventSource == "bedrock.amazonaws.com") |
@@ -184,7 +188,7 @@ aws cloudtrail lookup-events \
       source_ips: ([.[].ip] | unique),
       denied: ([.[] | select(.error!="SUCCESS")] | length)
     }) | sort_by(-.invocations)'
-# Also check Converse/ConverseStream/InvokeModelWithResponseStream the same way —
+# Also check Converse/ConverseStream/InvokeModelWithResponseStream the same way,
 # they are management events too.
 ```
 
@@ -193,9 +197,13 @@ The principal with an anomalously high `invocations` count is the abuser, and it
 for the true count use Query 2's CloudWatch `Invocations` metric, which sums every
 call.)
 
-#### Query 2 — Quantify token burn and throttling (CloudWatch metrics)
+#### Query 2: Quantify token burn and throttling (CloudWatch metrics)
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 MODEL_ID="anthropic.claude-3-sonnet-20240229-v1:0"   # the abused model from cost/metrics
 
@@ -203,7 +211,7 @@ MODEL_ID="anthropic.claude-3-sonnet-20240229-v1:0"   # the abused model from cos
 aws cloudwatch get-metric-statistics --namespace AWS/Bedrock \
   --metric-name Invocations --region "$REGION" \
   --dimensions Name=ModelId,Value="$MODEL_ID" \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --period 3600 --statistics Sum --output table
 
@@ -213,22 +221,22 @@ for M in InputTokenCount OutputTokenCount InvocationThrottles; do
   aws cloudwatch get-metric-statistics --namespace AWS/Bedrock \
     --metric-name "$M" --region "$REGION" \
     --dimensions Name=ModelId,Value="$MODEL_ID" \
-    --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+    --start-time "$START" \
     --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --period 3600 --statistics Sum --output table
 done
 ```
 
-A sharp, sustained rise in `Invocations`/`InputTokenCount` — especially with
-`InvocationThrottles` climbing — confirms abuse. Repeat per enabled model and
+A sharp, sustained rise in `Invocations`/`InputTokenCount`, especially with
+`InvocationThrottles` climbing, confirms abuse. Repeat per enabled model and
 region.
 
-#### Query 3 — Retrieve prompt/response content (invocation logging, if enabled)
+#### Query 3: Retrieve prompt/response content (invocation logging, if enabled)
 
 Query 1 already gave the *who/how-much* from CloudTrail. Invocation logging adds
-the one thing CloudTrail doesn't: the *content* of each request/response — useful
+the one thing CloudTrail doesn't: the *content* of each request/response, useful
 to understand what the attacker was doing (data exfil via prompts, resale probes,
-jailbreak attempts). It is opt-in; if it is off, skip this — you still have
+jailbreak attempts). It is opt-in; if it is off, skip this, you still have
 attribution from Query 1 and volume from Query 2.
 
 ```bash
@@ -241,9 +249,11 @@ aws bedrock get-model-invocation-logging-configuration --region "$REGION" \
   --output json
 
 # If CloudWatch invocation logging is on, pull the logged records (each carries
-# identity, model, region, and — if textDataDeliveryEnabled — the prompt/response)
+# identity, model, region, and - if textDataDeliveryEnabled: the prompt/response)
 LOG_GROUP="<bedrock-invocation-log-group-from-above>"
-START=$(date -u -d '24 hours ago' +%s)
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%s 2>/dev/null \
+        || date -u -v-24H +%s)
 aws logs filter-log-events --log-group-name "$LOG_GROUP" \
   --start-time "${START}000" --region "$REGION" \
   --query 'events[*].message' --output text 2>/dev/null | \
@@ -252,19 +262,23 @@ aws logs filter-log-events --log-group-name "$LOG_GROUP" \
          models: ([.[].model] | unique)}) | sort_by(-.invocations)'
 ```
 
-**Handle the retrieved prompts/responses as sensitive** — they may contain the
+**Handle the retrieved prompts/responses as sensitive**, they may contain the
 data the attacker was extracting.
 
-#### Query 4 — Control-plane precursors (CloudTrail management events)
+#### Query 4: Control-plane precursors (CloudTrail management events)
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 
-# Attacker disabling/altering invocation logging (blinding you) — P0
+# Attacker disabling/altering invocation logging (blinding you): P0
 for EV in DeleteModelInvocationLoggingConfiguration PutModelInvocationLoggingConfiguration; do
   aws cloudtrail lookup-events \
     --lookup-attributes AttributeKey=EventName,AttributeValue=$EV \
-    --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+    --start-time "$START" \
     --region "$REGION" --output json 2>/dev/null
 done | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
@@ -275,7 +289,7 @@ done | \
 for EV in ListFoundationModels PutUseCaseForModelAccess CreateFoundationModelAgreement; do
   aws cloudtrail lookup-events \
     --lookup-attributes AttributeKey=EventName,AttributeValue=$EV \
-    --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+    --start-time "$START" \
     --region "$REGION" --output json 2>/dev/null
 done | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
@@ -283,26 +297,34 @@ done | \
   jq -s 'sort_by(.time)'
 ```
 
-#### Query 5 — Cost impact
+#### Query 5: Cost impact
 
 ```bash
-# Bedrock spend by day — quantify the damage and confirm it is dropping post-containment
+# GNU date first, BSD/macOS date second. The two take different flags.
+START_DATE=$(date -u -d '14 days ago' +%Y-%m-%d 2>/dev/null \
+        || date -u -v-14d +%Y-%m-%d)
+
+# Bedrock spend by day: quantify the damage and confirm it is dropping post-containment
 aws ce get-cost-and-usage --granularity DAILY \
-  --time-period Start=$(date -u -d '14 days ago' +%Y-%m-%d),End=$(date -u +%Y-%m-%d) \
+  --time-period Start=$START_DATE,End=$(date -u +%Y-%m-%d) \
   --metrics UnblendedCost \
   --filter '{"Dimensions":{"Key":"SERVICE","Values":["Amazon Bedrock"]}}' \
   --query 'ResultsByTime[].{Date:TimePeriod.Start,Cost:Total.UnblendedCost.Amount}' \
   --output table
 ```
 
-#### Query 6 — Full session reconstruction of the abusing principal
+#### Query 6: Full session reconstruction of the abusing principal
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 ACCESS_KEY_ID="<access-key-from-Query-1 (or Query-4 for the control-plane actor)>"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=AccessKeyId,AttributeValue="$ACCESS_KEY_ID" \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region us-east-1 --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, event: .eventName, source: .eventSource,
@@ -310,18 +332,22 @@ aws cloudtrail lookup-events \
   jq -s 'sort_by(.time)'
 ```
 
-#### Query 7 — Multi-region metric sweep (abuse often hides in quiet regions)
+#### Query 7: Multi-region metric sweep (abuse often hides in quiet regions)
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 for REGION in $(aws ec2 describe-regions --query 'Regions[*].RegionName' --output text); do
   SUM=$(aws cloudwatch get-metric-statistics --namespace AWS/Bedrock \
     --metric-name Invocations --region "$REGION" \
-    --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+    --start-time "$START" \
     --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --period 86400 --statistics Sum \
     --query 'Datapoints[0].Sum' --output text 2>/dev/null)
   [ -n "$SUM" ] && [ "$SUM" != "None" ] && [ "$SUM" != "0.0" ] && \
-    echo "[!] $REGION — $SUM Bedrock invocations in 24h"
+    echo "[!] $REGION, $SUM Bedrock invocations in 24h"
 done
 ```
 
@@ -338,7 +364,7 @@ credential can no longer call `InvokeModel`.
 > Run every command under the **break-glass responder credentials** from §1, not
 > under any principal being contained.
 
-#### Step 1 — Contain the abusing principal
+#### Step 1: Contain the abusing principal
 
 Query 1 (CloudTrail) attributes the abuse to a principal directly. Contain that
 principal; if attribution is ambiguous (e.g. a shared role), cross-check the
@@ -363,7 +389,7 @@ elif echo "$SUSPECT_ARN" | grep -q ":assumed-role/"; then
 fi
 ```
 
-#### Step 2 — Deny Bedrock invocation by the principal (targeted)
+#### Step 2: Deny Bedrock invocation by the principal (targeted)
 
 If the principal is a production role that must keep other functions, deny only
 Bedrock invocation rather than all actions. (For an IAM user, `put-user-policy`
@@ -380,11 +406,11 @@ aws iam put-role-policy --role-name "$SUSPECT_ROLE" \
 echo "[OK] Bedrock invocation denied for $SUSPECT_ROLE"
 ```
 
-#### Step 3 — Account-wide brake if attribution is unclear or abuse is broad
+#### Step 3: Account-wide brake if attribution is unclear or abuse is broad
 
 If you cannot pin the principal quickly and cost is climbing, apply an
 organization/account SCP denying Bedrock invocation to all but the known ML
-workload roles — stops the bleeding while you investigate. (Decision, not reflex:
+workload roles, stops the bleeding while you investigate. (Decision, not reflex:
 it also stops legitimate Bedrock workloads.)
 
 ```bash
@@ -403,7 +429,7 @@ JSON
 echo "Apply the above as an SCP if broad containment is warranted."
 ```
 
-#### Step 4 — Restore invocation logging if the attacker disabled it
+#### Step 4: Restore invocation logging if the attacker disabled it
 
 If Query 4 showed logging disabled, re-enable it so continued/renewed abuse is
 captured.
@@ -427,7 +453,7 @@ SUSPECT_ROLE="<role-name>"
 aws iam list-attached-role-policies --role-name "$SUSPECT_ROLE" --output table
 aws iam list-role-policies --role-name "$SUSPECT_ROLE" --output table
 # Remove bedrock:InvokeModel* from principals with no ML workload need. Where
-# needed, scope to specific model ARNs (Resource: arn:aws:bedrock:*::foundation-model/<id>)
+# needed, scope to specific model ARNs (Resource - arn:aws:bedrock:*::foundation-model/<id>)
 # rather than Resource: *.
 ```
 
@@ -437,12 +463,16 @@ Bedrock is regional; ensure the deny/containment is effective everywhere the
 attacker invoked (Query 7).
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)
+
 # Confirm CloudWatch Invocations has dropped to baseline in every region from Query 7
 ABUSE_REGIONS="<space-separated-regions-from-Query-7>"
 for REGION in $ABUSE_REGIONS; do
   SUM=$(aws cloudwatch get-metric-statistics --namespace AWS/Bedrock \
     --metric-name Invocations --region "$REGION" \
-    --start-time "$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" \
+    --start-time "$START" \
     --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --period 3600 --statistics Sum --query 'Datapoints[0].Sum' --output text 2>/dev/null)
   echo "$REGION: ${SUM:-0} invocations in the last hour (expect near baseline)"
@@ -452,7 +482,7 @@ done
 #### If it was a compromised static key, treat it as a broader compromise
 
 LLMjacking commonly follows a leaked long-lived key. Rotate it (delete + reissue
-via IAM), and review everything else that key did (Query 6) — Bedrock abuse may
+via IAM), and review everything else that key did (Query 6) - Bedrock abuse may
 be one facet of a wider compromise.
 
 #### Remove emergency policies once clean
@@ -474,13 +504,17 @@ echo "[OK] Emergency policies removed"
 #### Verify invocations have returned to baseline
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 MODEL_ID="<abused-model-id>"
 
 SUM=$(aws cloudwatch get-metric-statistics --namespace AWS/Bedrock \
   --metric-name Invocations --region "$REGION" \
   --dimensions Name=ModelId,Value="$MODEL_ID" \
-  --start-time "$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --period 3600 --statistics Sum --query 'Datapoints[0].Sum' --output text 2>/dev/null)
 echo "Invocations in the last hour: ${SUM:-0}"
@@ -497,7 +531,7 @@ CFG=$(aws bedrock get-model-invocation-logging-configuration --region "$REGION" 
 echo "$CFG"
 echo "$CFG" | jq -e '(.S3 != null and .S3 != "") or (.CW != null and .CW != "")' >/dev/null \
   && echo "[OK] Bedrock invocation logging is configured" \
-  || echo "[FAIL] Bedrock invocation logging is OFF — invocations are unattributable"
+  || echo "[FAIL] Bedrock invocation logging is OFF, invocations are unattributable"
 ```
 
 #### Verify the credential is dead
@@ -515,8 +549,12 @@ fi
 #### Verify Bedrock cost has returned to baseline
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START_DATE=$(date -u -d '3 days ago' +%Y-%m-%d 2>/dev/null \
+        || date -u -v-3d +%Y-%m-%d)
+
 aws ce get-cost-and-usage --granularity DAILY \
-  --time-period Start=$(date -u -d '3 days ago' +%Y-%m-%d),End=$(date -u +%Y-%m-%d) \
+  --time-period Start=$START_DATE,End=$(date -u +%Y-%m-%d) \
   --metrics UnblendedCost \
   --filter '{"Dimensions":{"Key":"SERVICE","Values":["Amazon Bedrock"]}}' \
   --query 'ResultsByTime[].{Date:TimePeriod.Start,Cost:Total.UnblendedCost.Amount}' \
@@ -567,7 +605,7 @@ echo "event; it just fired on every benign call) plus eventSource scoping."
 ```
 
 - Scope the *allow* side to specific model ARNs (`arn:aws:bedrock:*::foundation-model/<id>`), not `Resource: *`
-- Keep Bedrock model access **disabled** in regions with no ML workload — attackers enable it in quiet regions
+- Keep Bedrock model access **disabled** in regions with no ML workload, attackers enable it in quiet regions
 
 **Make abuse visible and bounded**
 - Enable Bedrock model invocation logging (S3+CloudWatch, KMS-encrypted) in every Bedrock-enabled region, and alert on any attempt to disable it
@@ -582,21 +620,21 @@ echo "event; it just fired on every benign call) plus eventSource scoping."
 
 | Type | Value |
 |------|-------|
-| MITRE technique | T1496 — Resource Hijacking |
+| MITRE technique | T1496 - Resource Hijacking |
 | MITRE tactic | Impact (TA0040) |
-| Primary API | `bedrock:InvokeModel` (also `InvokeModelWithResponseStream`, `Converse`, `ConverseStream`) — logged as **management events** |
-| Telemetry sources | CloudTrail management events (per-call identity/model/region — volume + attribution, default/no-cost); CloudWatch `AWS/Bedrock` metrics (token counts, throttles — no principal dim); invocation logging (prompt/response content); Cost Anomaly Detection (cost backstop) |
-| Shipped-rule defect | It DOES fire (InvokeModel is a management event) but on every call — missing `eventSource` scoping + a volume threshold. Noise, not blindness |
-| Data-event-only ops (need data-event logging) | `InvokeModelWithBidirectionalStream`, async-invoke, Agent-runtime (`InvokeAgent`/`Retrieve`/`InvokeFlow`) — NOT plain `InvokeModel` |
+| Primary API | `bedrock:InvokeModel` (also `InvokeModelWithResponseStream`, `Converse`, `ConverseStream`), logged as **management events** |
+| Telemetry sources | CloudTrail management events (per-call identity/model/region, volume + attribution, default/no-cost); CloudWatch `AWS/Bedrock` metrics (token counts, throttles, no principal dim); invocation logging (prompt/response content); Cost Anomaly Detection (cost backstop) |
+| Shipped-rule defect | It DOES fire (InvokeModel is a management event) but on every call, missing `eventSource` scoping + a volume threshold. Noise, not blindness |
+| Data-event-only ops (need data-event logging) | `InvokeModelWithBidirectionalStream`, async-invoke, Agent-runtime (`InvokeAgent`/`Retrieve`/`InvokeFlow`) - NOT plain `InvokeModel` |
 | Control-plane precursors (in CloudTrail) | `ListFoundationModels`, `PutUseCaseForModelAccess`, `Put/DeleteModelInvocationLoggingConfiguration` |
 | Error strings (not `Client.`-prefixed) | `AccessDeniedException`, `ThrottlingException` |
-| Resources created | None — invocations complete and are billed; nothing to destroy |
+| Resources created | None, invocations complete and are billed; nothing to destroy |
 | Related | Analogous to cryptomining resource-hijacking (the EC2-launch playbook); shares the cost-anomaly backstop |
 
 ### Revert
 
 The emulation creates no infrastructure and the invocations cannot be "reverted"
-— they completed and are billed. `pulumi destroy` is a no-op. After a **real**
+- they completed and are billed. `pulumi destroy` is a no-op. After a **real**
 incident, there is nothing to tear down; the response is to contain the principal
 (§3), scope Bedrock permissions (§4), and quantify/accept the cost impact. If a
 leaked static key drove it, treat the key as a broader compromise and rotate it.

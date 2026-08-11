@@ -6,7 +6,7 @@
 //
 // COUNTING RULE: BatchGetSecretValue also emits one per-secret GetSecretValue
 // event, so GetSecretValue alone is a complete and self-deduplicating source.
-// Do NOT add BatchGetSecretValue to the dcount — it double-counts ~2x. The
+// Do NOT add BatchGetSecretValue to the dcount, it double-counts ~2x. The
 // batch API is joined back in below purely as a verdict discriminator.
 //
 // Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
@@ -31,7 +31,7 @@ AWSCloudTrail
     | summarize BatchCalls = count() by UserIdentityArn, bin(TimeGenerated, 10m)
   ) on UserIdentityArn, TimeGenerated
 | extend Verdict = case(
-    BatchCalls > 0, "BULK SECRET EXFILTRATION via batch API — P0",
-    "HIGH-VOLUME SECRET READ — review")
+    BatchCalls > 0, "BULK SECRET EXFILTRATION via batch API - P0",
+    "HIGH-VOLUME SECRET READ, review")
 | project TimeGenerated, UserIdentityArn, SecretsRetrieved, Calls, BatchCalls, SourceIPs, Verdict
 | order by SecretsRetrieved desc

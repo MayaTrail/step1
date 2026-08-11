@@ -9,7 +9,7 @@
 // verbatim. Decoding is what makes wildcard and arbitrary-external trust
 // detectable at all.
 //
-// DetachRolePolicy / DeleteRole are excluded — benign cleanup and the
+// DetachRolePolicy / DeleteRole are excluded, benign cleanup and the
 // emulation's own revert.
 //
 // Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
@@ -48,18 +48,18 @@ AWSCloudTrail
     by RoleName, bin(TimeGenerated, 10m)
 | where ExternalTrust > 0 or AdminGrants > 0
 | extend Verdict = case(
-    ExternalTrust > 0 and AdminGrants > 0, "CROSS-ACCOUNT ADMIN BACKDOOR ROLE — P0",
-    Wildcard > 0,                          "ROLE TRUSTS ANY PRINCIPAL — P0",
-    ExternalTrust > 0,                     "ROLE TRUSTS EXTERNAL ACCOUNT — investigate",
-    "ADMIN ATTACHED TO ROLE — investigate")
+    ExternalTrust > 0 and AdminGrants > 0, "CROSS-ACCOUNT ADMIN BACKDOOR ROLE - P0",
+    Wildcard > 0,                          "ROLE TRUSTS ANY PRINCIPAL - P0",
+    ExternalTrust > 0,                     "ROLE TRUSTS EXTERNAL ACCOUNT, investigate",
+    "ADMIN ATTACHED TO ROLE, investigate")
 | project FirstSeen, LastSeen, RoleName, Created, ExternalTrust, TrustAccounts,
           Wildcard, AdminGrants, PolicyArns, Callers, SourceIPs, Verdict
 | order by LastSeen desc
 //
 // Pair with IAM Access Analyzer, which evaluates EXISTING roles rather than only
-// new changes — a backdoor planted before logging is invisible here and visible
+// new changes, a backdoor planted before logging is invisible here and visible
 // there. Use `accessanalyzer list-findings-v2` for the sweep.
 //
 // Containment caution: if the caller was root or a federated identity, the
-// standard "disable the access key" step does not apply — there is no key to
+// standard "disable the access key" step does not apply, there is no key to
 // disable. Revoke sessions and address the trust relationship instead.

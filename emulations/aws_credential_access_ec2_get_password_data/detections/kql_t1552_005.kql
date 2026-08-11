@@ -5,7 +5,7 @@
 // and the errorCode split below are what make this deployable.
 //
 // Dialect: Sentinel / Azure Log Analytics KQL. NOT runnable in CloudWatch Logs
-// Insights — `summarize`, `make_set`, `case()`, `bin()` and the AWSCloudTrail
+// Insights, `summarize`, `make_set`, `case()`, `bin()` and the AWSCloudTrail
 // table do not exist there.
 AWSCloudTrail
 | where TimeGenerated > ago(24h)
@@ -28,8 +28,8 @@ AWSCloudTrail
 // IDs and lands on 3 real Windows hosts has Succeeded=3 AND NotFoundRatio=0.92;
 // any conjunction here misfiles a real disclosure as enumeration.
 | extend Verdict = case(
-    Succeeded > 0,                         "POSSIBLE RETRIEVAL — confirm the instance existed, then escalate",
-    NotFoundRatio >= 0.8 and Calls >= 10,  "ENUMERATION — P0",
+    Succeeded > 0,                         "POSSIBLE RETRIEVAL, confirm the instance existed, then escalate",
+    NotFoundRatio >= 0.8 and Calls >= 10,  "ENUMERATION - P0",
     Unauthorized > 0,                      "PERMISSION PROBING",
     "REVIEW")
 | project TimeGenerated, UserIdentityArn, Calls, Succeeded, NotFound,

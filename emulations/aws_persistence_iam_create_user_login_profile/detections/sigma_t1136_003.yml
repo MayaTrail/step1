@@ -3,7 +3,7 @@
 # The original rule matched CreateUser / CreateLoginProfile / DeleteLoginProfile
 # / DeleteUser with a bare `condition: selection`. It was noisy AND
 # SIGNAL-INVERTED: it fired on every onboarding and every offboarding, and
-# bundling the Delete* events means a DELETION — the opposite of persistence —
+# bundling the Delete* events means a DELETION: the opposite of persistence,
 # raised the same alert as a backdoor. Those are dropped from the primary rules
 # and kept only for the forensic timeline.
 #
@@ -28,12 +28,15 @@ detection:
   selection:
     eventSource: 'iam.amazonaws.com'
     eventName: 'CreateLoginProfile'
+  # REPLACE these with the roles in YOUR account that legitimately create IAM
+  # users and login profiles. The placeholder values below match nothing, so
+  # until they are edited this rule fires on every onboarding.
   identity_admin:
     userIdentity.arn|contains:
-      - ':role/identity-admin'
-      - ':role/onboarding'
-      - ':role/iac-deploy'
-      - ':role/BreakGlassAdmin'
+      - ':role/REPLACE-ME-identity-admin'
+      - ':role/REPLACE-ME-onboarding'
+      - ':role/REPLACE-ME-iac-deploy'
+      - ':role/REPLACE-ME-break-glass'
   condition: selection and not identity_admin
 falsepositives:
   - Help-desk password provisioning from roles not yet allowlisted
@@ -45,7 +48,7 @@ title: IAM CreateUser
 id: 6a0d3b82-1948-4c50-8b23-4e9a7c5d1f06
 name: iam_create_user
 status: experimental
-description: Base rule — sequence component only, not for direct alerting.
+description: Base rule, sequence component only, not for direct alerting.
 tags:
   - attack.persistence
   - attack.t1136.003
@@ -88,7 +91,7 @@ id: 5f9a2c31-7e40-4b86-93d5-1c8b0e64a7f2
 status: experimental
 description: >-
   A login profile was created and the same user was granted permissions within
-  the window — a usable console identity rather than an empty account.
+  the window, a usable console identity rather than an empty account.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-user-login-profile/
 tags:
@@ -108,7 +111,7 @@ title: IAM user privilege grant
 id: 0b73e5d8-4c19-4a02-8f61-27d5be9c308a
 name: iam_user_privilege_grant
 status: experimental
-description: Base rule — permissions granted to a user. Sequence component only.
+description: Base rule, permissions granted to a user. Sequence component only.
 tags:
   - attack.persistence
   - attack.t1098

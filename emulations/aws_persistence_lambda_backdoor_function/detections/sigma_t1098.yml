@@ -2,14 +2,14 @@
 #
 # The original rule matched AddPermission + RemovePermission with a bare
 # `condition: selection`. It fired on every legitimate S3/SNS/EventBridge
-# integration wiring, and bundling RemovePermission INVERTED the signal — a
+# integration wiring, and bundling RemovePermission INVERTED the signal: a
 # permission removal is not persistence, and it is the emulation's own cleanup.
 # RemovePermission is dropped from alerting and kept only for the timeline.
 #
 # The backdoor lives in the FUNCTION'S RESOURCE POLICY, not in IAM, so it
 # survives rotation of every credential in the account.
 #
-# GOOD NEWS ON PARSING: `principal` is CLEARTEXT in the event — a request
+# GOOD NEWS ON PARSING: `principal` is CLEARTEXT in the event - a request
 # parameter, not a URL-encoded policy document. Unlike the IAM trust-policy
 # techniques, account digits match directly and no decode step is required.
 title: Lambda AddPermission granting external/public invoke
@@ -42,12 +42,12 @@ detection:
     requestParameters.principal|endswith: '.amazonaws.com'
   condition: selection and (public or not service_principal)
 falsepositives:
-  - Legitimate cross-account integrations with partner or sibling accounts —
+  - Legitimate cross-account integrations with partner or sibling accounts,
     allowlist those account IDs
 level: high
 ---
 # The function-URL variant. A public function URL is reachable from the open
-# internet with no AWS credentials at all — a broader exposure than a
+# internet with no AWS credentials at all: a broader exposure than a
 # cross-account grant.
 #
 # PARAMETER-NAME TRAP: AddPermission uses `functionUrlAuthType`, while
@@ -78,10 +78,10 @@ detection:
     requestParameters.functionUrlAuthType: 'NONE'
   no_auth_urlconfig:
     requestParameters.authType: 'NONE'
-  # Different events carry different keys — these MUST be OR'd as sibling
+  # Different events carry different keys: these MUST be OR'd as sibling
   # blocks. ANDing them means no single event satisfies both and the rule never
   # fires.
   condition: selection and (no_auth_addpermission or no_auth_urlconfig)
 falsepositives:
-  - Deliberately public webhooks — should be explicitly inventoried
+  - Deliberately public webhooks, should be explicitly inventoried
 level: high

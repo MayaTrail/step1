@@ -1,7 +1,7 @@
 // Retrieve a High Number of Secrets Manager Secrets (T1555)
 //
 // Thresholds on DISTINCT SECRETS per principal per window. GetSecretValue is
-// far too frequent to alert on per-event — every application fetches its
+// far too frequent to alert on per-event, every application fetches its
 // config secret on startup and cache expiry.
 //
 // dcount(SecretId) also absorbs the batch-API variant: BatchGetSecretValue
@@ -23,5 +23,5 @@ AWSCloudTrail
     LastSeen         = max(TimeGenerated)
     by UserIdentityArn, bin(TimeGenerated, 10m)
 | where SecretsRetrieved > 15
-| extend Verdict = "MASS SECRET RETRIEVAL — P0"
+| extend Verdict = "MASS SECRET RETRIEVAL - P0"
 | order by SecretsRetrieved desc

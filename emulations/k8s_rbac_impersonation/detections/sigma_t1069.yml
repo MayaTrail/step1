@@ -14,7 +14,6 @@ date: 2026/06/28
 tags:
   - attack.discovery
   - attack.t1069
-  - kubernetes
 logsource:
   product: kubernetes
   service: audit

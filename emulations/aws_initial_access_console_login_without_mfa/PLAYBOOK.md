@@ -1,4 +1,4 @@
-# IR Playbook: Console Login Without MFA — Valid-Account Console Access via a Non-MFA IAM User
+# IR Playbook: Console Login Without MFA - Valid-Account Console Access via a Non-MFA IAM User
 
 ## Classification
 
@@ -6,19 +6,19 @@
 |-------|-------|
 | Incident Type | Initial Access / Valid Accounts (console sign-in without MFA) |
 | Emulation Tier | Atomic technique |
-| Threat Actor | N/A — single-technique emulation, not actor-attributed |
+| Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | Medium — a non-MFA console login is a strong compromise indicator for accounts that should enforce MFA; **High if the identity is root or an admin** |
+| Severity | Medium, a non-MFA console login is a strong compromise indicator for accounts that should enforce MFA; **High if the identity is root or an admin** |
 | MITRE Tactics | Initial Access |
 | MITRE Techniques | T1078.004 |
 | Services in Scope | IAM, CloudTrail (`signin.amazonaws.com`), GuardDuty |
 | Infrastructure Created | 1 IAM user with a console login profile and **no MFA** (via `infra/`) |
 
-**What the emulation does:** provisions an IAM user with a console password (login profile) and no MFA device, then (because a real console login needs a browser) *simulates* the attack by confirming the user has no MFA and documenting the CloudTrail signal it would produce: a `ConsoleLogin` event with `additionalEventData.MFAUsed = "No"` and `responseElements.ConsoleLogin = "Success"`. In a real intrusion, an attacker who has the username and password logs into the AWS Management Console with no second factor — the `MFAUsed=No` console login is the detectable event.
+**What the emulation does:** provisions an IAM user with a console password (login profile) and no MFA device, then (because a real console login needs a browser) *simulates* the attack by confirming the user has no MFA and documenting the CloudTrail signal it would produce: a `ConsoleLogin` event with `additionalEventData.MFAUsed = "No"` and `responseElements.ConsoleLogin = "Success"`. In a real intrusion, an attacker who has the username and password logs into the AWS Management Console with no second factor, the `MFAUsed=No` console login is the detectable event.
 
 **Why this technique is really about a control gap plus stolen credentials.** The "attack" is just a successful console sign-in; what makes it an incident is (a) MFA was not enforced, so a leaked password alone grants full console access, and (b) the login is from an unexpected identity/location. The response therefore has two halves: treat the specific login as possible credential compromise, and close the MFA-enforcement gap so a password alone is never sufficient again.
 
-**The shipped detection here is good — validate and extend it, don't replace it.** Unlike most techniques in this catalogue, the rules in `detections/` are correctly written: they scope to `signin.amazonaws.com` / `ConsoleLogin`, filter `MFAUsed == "No"` and `ConsoleLogin == "Success"`, and even carry a false-positive note. The work in §2 is to *validate* them and add the important edge cases they don't yet cover — federated/SSO false positives, root logins, and failed-login brute force — not to rewrite a working rule.
+**The shipped detection here is good, validate and extend it, don't replace it.** Unlike most techniques in this catalogue, the rules in `detections/` are correctly written: they scope to `signin.amazonaws.com` / `ConsoleLogin`, filter `MFAUsed == "No"` and `ConsoleLogin == "Success"`, and even carry a false-positive note. The work in §2 is to *validate* them and add the important edge cases they don't yet cover, federated/SSO false positives, root logins, and failed-login brute force, not to rewrite a working rule.
 
 ---
 
@@ -27,16 +27,16 @@
 ### Prerequisites Before This Incident
 
 **Logging & Visibility**
-- CloudTrail multi-region trail. **`ConsoleLogin` is emitted by the global `signin.amazonaws.com` endpoint and lands in `us-east-1`** — ensure the trail captures global service events and query `us-east-1` for these events regardless of where your workloads run
-- The `ConsoleLogin` event carries `additionalEventData.MFAUsed`, `responseElements.ConsoleLogin` (Success/Failure), `userIdentity` (the user/role), and `sourceIPAddress` — everything the detection needs is in the event
-- GuardDuty enabled — `UnauthorizedAccess:IAMUser/*` and anomalous-behaviour findings corroborate a suspicious login
+- CloudTrail multi-region trail. **`ConsoleLogin` is emitted by the global `signin.amazonaws.com` endpoint and lands in `us-east-1`**, ensure the trail captures global service events and query `us-east-1` for these events regardless of where your workloads run
+- The `ConsoleLogin` event carries `additionalEventData.MFAUsed`, `responseElements.ConsoleLogin` (Success/Failure), `userIdentity` (the user/role), and `sourceIPAddress`, everything the detection needs is in the event
+- GuardDuty enabled, `UnauthorizedAccess:IAMUser/*` and anomalous-behaviour findings corroborate a suspicious login
 - An **MFA-exemption allowlist**: the (ideally empty) set of identities legitimately without MFA, so `MFAUsed=No` for anyone else is unambiguous
 
 **Alerting (must be pre-configured)**
-- **`ConsoleLogin`, `MFAUsed=No`, `ConsoleLogin=Success` for any IAM user not on the MFA-exemption allowlist → alert** (the canonical rule — already shipped here in good shape)
-- **P0: root `ConsoleLogin` with `MFAUsed=No`** — root must always have MFA; a non-MFA root login is a critical event on its own
-- A `ConsoleLogin` from a new/off-baseline source IP or geography for the user, MFA or not — geo/impossible-travel signal
-- A burst of `ConsoleLogin` with `ConsoleLogin=Failure` for one user or from one IP — console password brute force preceding a successful login
+- **`ConsoleLogin`, `MFAUsed=No`, `ConsoleLogin=Success` for any IAM user not on the MFA-exemption allowlist → alert** (the canonical rule, already shipped here in good shape)
+- **P0: root `ConsoleLogin` with `MFAUsed=No`**, root must always have MFA; a non-MFA root login is a critical event on its own
+- A `ConsoleLogin` from a new/off-baseline source IP or geography for the user, MFA or not, geo/impossible-travel signal
+- A burst of `ConsoleLogin` with `ConsoleLogin=Failure` for one user or from one IP, console password brute force preceding a successful login
 - AWS Config `iam-user-mfa-enabled` / `mfa-enabled-for-iam-console-access` non-compliant → the standing control gap
 
 **Response Tooling**
@@ -46,7 +46,7 @@
 
 **Known IOC Baselines**
 - Baseline each console user's normal source IPs/geographies and login hours
-- Baseline which identities are SSO/federated (they sign in differently — see the federated caveat in §2) vs. genuine IAM users with passwords
+- Baseline which identities are SSO/federated (they sign in differently, see the federated caveat in §2) vs. genuine IAM users with passwords
 
 ---
 
@@ -54,7 +54,7 @@
 
 ### Detection Triggers (prioritized)
 
-#### HIGH-CONFIDENCE — Always Indicate Compromise
+#### HIGH-CONFIDENCE: Always Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
@@ -63,7 +63,7 @@
 | P1 | IAM-user `ConsoleLogin`, `MFAUsed = No`, `Success`, for a user not on the MFA-exemption allowlist | CloudTrail | T1078.004 |
 | P1 | GuardDuty `UnauthorizedAccess:IAMUser/*` on the same user around the login | GuardDuty | T1078.004 |
 
-#### MEDIUM-CONFIDENCE — May Indicate Compromise
+#### MEDIUM-CONFIDENCE: May Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
@@ -74,20 +74,20 @@
 
 ### Detection Rule Quality Notes
 
-**The shipped rules are largely correct** — a notable exception in this catalogue. The Sigma rule (`sigma_t1078_004.yml`) and KQL (`kql_t1078_004.kql`) both scope to `signin.amazonaws.com` / `ConsoleLogin`, filter `MFAUsed == "No"` and `ConsoleLogin == "Success"`, and the Sigma even documents false positives. They are deployable as-is. The refinements below add coverage they lack; they are extensions, not fixes for brokenness.
+**The shipped rules are largely correct**, a notable exception in this catalogue. The Sigma rule (`sigma_t1078_004.yml`) and KQL (`kql_t1078_004.kql`) both scope to `signin.amazonaws.com` / `ConsoleLogin`, filter `MFAUsed == "No"` and `ConsoleLogin == "Success"`, and the Sigma even documents false positives. They are deployable as-is. The refinements below add coverage they lack; they are extensions, not fixes for brokenness.
 
 | Refinement | Why | How |
 |-----------|-----|-----|
-| **Exclude / separately handle federated & SSO logins** | For SAML/IAM Identity Center (SSO) console sessions, MFA is enforced at the **IdP**, and AWS may record `MFAUsed=No` even though the user *did* complete MFA. Firing on those is a false positive that erodes trust in the rule | Exclude IAM Identity Center default roles (`:assumed-role/AWSReservedSSO_`), **and** external SAML federation (`userIdentity.type: SAMLUser`, or sessions from `AssumeRoleWithSAML`), **and** any custom-named permission-set roles your org uses (the default prefix does not catch renamed ones — enumerate yours). Route all of these to a separate, lower-severity rule; treat their MFA posture as an IdP-side control |
+| **Exclude / separately handle federated & SSO logins** | For SAML/IAM Identity Center (SSO) console sessions, MFA is enforced at the **IdP**, and AWS may record `MFAUsed=No` even though the user *did* complete MFA. Firing on those is a false positive that erodes trust in the rule | Exclude IAM Identity Center default roles (`:assumed-role/AWSReservedSSO_`), **and** external SAML federation (`userIdentity.type: SAMLUser`, or sessions from `AssumeRoleWithSAML`), **and** any custom-named permission-set roles your org uses (the default prefix does not catch renamed ones, enumerate yours). Route all of these to a separate, lower-severity rule; treat their MFA posture as an IdP-side control |
 | **Split out root** | A non-MFA **root** login is categorically worse than an IAM-user one and warrants P0/critical, not the blended `medium` | Add a rule variant keyed on `userIdentity.type == "Root"` at `level: critical` |
 | **Add failed-login / brute-force coverage** | The success rule misses the brute force that precedes a successful non-MFA login | A companion rule on `ConsoleLogin == "Failure"` counted per user / per source IP over a window |
 | **Allowlist-aware, not blanket** | `level: medium` on every non-MFA login (including known-exempt service accounts) causes fatigue | Suppress allowlisted exempt identities; keep non-allowlisted at `high`, root at `critical` |
-| Resolve stale header/TODO if present | Hygiene | The header here already targets the canonical signal — leave as-is |
+| Resolve stale header/TODO if present | Hygiene | The header here already targets the canonical signal, leave as-is |
 
 **Recommended additions (the shipped success rule stays):**
 
 ```yaml
-# P0 variant — root console login without MFA
+# P0 variant: root console login without MFA
 title: Root console login without MFA
 id: 8e2c1f47-9a05-4b63-8d12-6f3a0c7b9e24
 status: experimental
@@ -119,23 +119,27 @@ on compliant IdP-MFA sessions:
 **On the login-result field:** `responseElements.ConsoleLogin` is `Success` or
 `Failure`; `additionalEventData.MFAUsed` is `Yes` / `No`. Match these exact
 strings. (KQL note: parse `AdditionalEventData`/`ResponseElements` with
-`parse_json` and compare with `==` — do **not** use `has`, which is whole-term
+`parse_json` and compare with `==`, do **not** use `has`, which is whole-term
 and unreliable for these values.)
 
 ---
 
 ### Key Investigation Queries
 
-> `ConsoleLogin` events are global — query **`us-east-1`**. CloudTrail extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`.
+> `ConsoleLogin` events are global, query **`us-east-1`**. CloudTrail extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`.
 
-#### Query 1 — Find the non-MFA console login(s) and the identity/source
+#### Query 1: Find the non-MFA console login(s) and the identity/source
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"   # ConsoleLogin is a global (signin.amazonaws.com) event
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=ConsoleLogin \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime,
@@ -144,7 +148,7 @@ aws cloudtrail lookup-events \
      user: (.userIdentity.userName // .userIdentity.arn),
      mfa: .additionalEventData.MFAUsed,
      result: .responseElements.ConsoleLogin,
-     # SSO/federated sessions enforce MFA at the IdP — MFAUsed=No there is not the same signal
+     # SSO/federated sessions enforce MFA at the IdP: MFAUsed=No there is not the same signal
      federated: ((.userIdentity.arn // "") | test("assumed-role/AWSReservedSSO_")),
      sourceIP: .sourceIPAddress,
      userAgent: .userAgent}' | \
@@ -152,26 +156,32 @@ aws cloudtrail lookup-events \
 ```
 
 Prioritise rows where `mfa == "No"`, `result == "Success"`, `federated == false`.
-`type == "Root"` is P0. Note the `sourceIP` and `userAgent` — an unfamiliar IP/UA
+`type == "Root"` is P0. Note the `sourceIP` and `userAgent`, an unfamiliar IP/UA
 for the user is the compromise signal.
 
-**If `type == "Root"`, skip Query 2–4 and go to Containment Step 3.** Root
+**If `type == "Root"`, skip Query 2-4 and go to Containment Step 3.** Root
 `ConsoleLogin` events have no `userName`, so `SUSPECT_USER` and the
-`userName`-filtered Queries 2–4 do not apply — root is handled separately (it
-can't be contained by IAM policy). Queries 2–4 and `SUSPECT_USER` are for
+`userName`-filtered Queries 2-4 do not apply, root is handled separately (it
+can't be contained by IAM policy). Queries 2-4 and `SUSPECT_USER` are for
 **IAM-user** identities only.
 
-#### Query 2 — Was this login from an anomalous location, and what came before?
+#### Query 2: Was this login from an anomalous location, and what came before?
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+BASELINE_START=$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-30d +%Y-%m-%dT%H:%M:%SZ)
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 SUSPECT_USER="<iam-username-from-Query-1>"
 SUSPECT_IP="<source-ip-from-Query-1>"
 
-# All console logins for this user — establish their baseline IPs vs the suspect one
+# All console logins for this user: establish their baseline IPs vs the suspect one
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=ConsoleLogin \
-  --start-time "$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$BASELINE_START" \
   --region "$REGION" --output json | \
   jq -r --arg u "$SUSPECT_USER" '.Events[].CloudTrailEvent | fromjson |
     select((.userIdentity.userName // "") == $u) |
@@ -183,7 +193,7 @@ aws cloudtrail lookup-events \
 # Failed logins from the suspect IP (brute force preceding success?)
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=ConsoleLogin \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r --arg ip "$SUSPECT_IP" '.Events[].CloudTrailEvent | fromjson |
     select(.sourceIPAddress == $ip) |
@@ -195,17 +205,21 @@ aws cloudtrail lookup-events \
 A `sourceIP` that never appears in the 30-day baseline, or a run of `Failure`
 before the `Success`, elevates this to likely credential compromise.
 
-#### Query 3 — What did the session do after login?
+#### Query 3: What did the session do after login?
 
 The login is entry; the damage is what followed. Reconstruct the user's actions.
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 SUSPECT_USER="<iam-username-from-Query-1>"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=Username,AttributeValue="$SUSPECT_USER" \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, event: .eventName, source: .eventSource,
@@ -214,21 +228,21 @@ aws cloudtrail lookup-events \
 ```
 
 (For an IAM *user* the `Username` lookup attribute is the user name and works
-directly — unlike assumed-role sessions, where it is the session name.) Flag
+directly, unlike assumed-role sessions, where it is the session name.) Flag
 privilege changes, new credentials (`CreateAccessKey`, `CreateLoginProfile`),
 persistence, and data access.
 
-#### Query 4 — Confirm the user's MFA state (the control gap)
+#### Query 4: Confirm the user's MFA state (the control gap)
 
 ```bash
 SUSPECT_USER="<iam-username-from-Query-1>"
 
 aws iam list-mfa-devices --user-name "$SUSPECT_USER" \
   --query 'MFADevices[].{Serial:SerialNumber,Enabled:EnableDate}' --output table
-echo "If empty, the user had NO MFA — a password alone granted console access."
+echo "If empty, the user had NO MFA, a password alone granted console access."
 ```
 
-#### Query 5 — Account-wide: who else can log in without MFA?
+#### Query 5 - Account-wide: who else can log in without MFA?
 
 The same gap likely exists for other users. Find every console user without MFA.
 
@@ -242,10 +256,10 @@ done
 
 # Root MFA status (critical)
 aws iam get-account-summary --query 'SummaryMap.AccountMFAEnabled' --output text | \
-  awk '{print ($1==1)?"[OK] Root has MFA":"[!!] ROOT HAS NO MFA — remediate immediately"}'
+  awk '{print ($1==1)?"[OK] Root has MFA":"[!!] ROOT HAS NO MFA, remediate immediately"}'
 ```
 
-#### Query 6 — Multi-region note
+#### Query 6: Multi-region note
 
 `ConsoleLogin` is a global event delivered to `us-east-1`; there is no per-region
 sweep to do for the login itself. Do sweep the *post-login actions* (Query 3
@@ -262,7 +276,7 @@ access, then investigate the session and close the MFA gap.
 
 > Run every command under the **break-glass responder credentials** from §1.
 
-#### Step 1 — Revoke the user's console password and active sessions
+#### Step 1: Revoke the user's console password and active sessions
 
 ```bash
 SUSPECT_USER="<iam-username-from-Query-1>"
@@ -288,7 +302,7 @@ user's long-lived access keys, which is why Step 2 disables those separately.
 Removing the login profile (above) is what kills the browser console session's
 ability to keep working.
 
-#### Step 2 — Disable the user's access keys (in case the attacker also made/used them)
+#### Step 2: Disable the user's access keys (in case the attacker also made/used them)
 
 ```bash
 SUSPECT_USER="<iam-username-from-Query-1>"
@@ -299,7 +313,7 @@ for K in $(aws iam list-access-keys --user-name "$SUSPECT_USER" \
 done
 ```
 
-#### Step 3 — If root logged in without MFA, escalate immediately
+#### Step 3: If root logged in without MFA, escalate immediately
 
 ```bash
 # Root cannot be "contained" by IAM policy. If Query 1 showed a root non-MFA login:
@@ -307,7 +321,7 @@ echo "[!!] ROOT non-MFA login: rotate the root password NOW, enable root MFA, an
 echo "     review all root activity. Engage AWS Support if account takeover is suspected."
 ```
 
-#### Step 4 — Undo anything the session changed (from Query 3)
+#### Step 4: Undo anything the session changed (from Query 3)
 
 If Query 3 showed the session creating access keys, users, login profiles, or
 policy changes, reverse them per the relevant persistence playbook (backdoor
@@ -343,7 +357,7 @@ aws iam create-login-profile --user-name "$SUSPECT_USER" \
 
 ```bash
 # Attach a policy that DENIES all actions unless MFA is present, to the console-user group.
-# This is the durable fix — it makes non-MFA sessions useless even with a valid password.
+# This is the durable fix: it makes non-MFA sessions useless even with a valid password.
 cat <<'JSON'
 {
   "Version":"2012-10-17",
@@ -387,11 +401,11 @@ SUSPECT_USER="<iam-username-from-Query-1>"
 
 MFA=$(aws iam list-mfa-devices --user-name "$SUSPECT_USER" --query 'length(MFADevices)' --output text)
 [ "$MFA" != "0" ] && echo "[OK] $SUSPECT_USER now has an MFA device" \
-                  || echo "[FAIL] $SUSPECT_USER still has no MFA — enrol before restoring access"
+                  || echo "[FAIL] $SUSPECT_USER still has no MFA, enrol before restoring access"
 
 ACTIVE=$(aws iam list-access-keys --user-name "$SUSPECT_USER" \
   --query 'AccessKeyMetadata[?Status==`Active`]' --output text)
-[ -z "$ACTIVE" ] && echo "[OK] No unexpected active keys" || echo "[i] Active keys present — confirm they are the re-issued ones"
+[ -z "$ACTIVE" ] && echo "[OK] No unexpected active keys" || echo "[i] Active keys present, confirm they are the re-issued ones"
 ```
 
 #### Verify no further non-MFA logins since containment
@@ -410,7 +424,7 @@ COUNT=$(aws cloudtrail lookup-events \
     .eventTime' | grep -c .)
 
 [ "$COUNT" -eq 0 ] && echo "[OK] No non-MFA logins for $SUSPECT_USER since containment" \
-                   || echo "[FAIL] $COUNT non-MFA logins after containment — access not fully cut"
+                   || echo "[FAIL] $COUNT non-MFA logins after containment, access not fully cut"
 ```
 
 #### Verify account-wide MFA posture
@@ -446,7 +460,7 @@ echo "and that a compliant AWSReservedSSO login does NOT false-positive."
 |---------|------------------------------|
 | A password alone granted full console access | MFA not enforced for the user; no `aws:MultiFactorAuthPresent` deny policy |
 | Credential compromise possible | The user's password was obtainable (phishing, reuse, leak) and nothing else was required |
-| Account-wide exposure | Other console users / root also lacked MFA (Query 5) — a systemic gap, not one user |
+| Account-wide exposure | Other console users / root also lacked MFA (Query 5), a systemic gap, not one user |
 | Detection existed but coverage was partial | The shipped rule correctly caught IAM-user non-MFA logins but had no root variant, no SSO false-positive handling, and no brute-force companion |
 
 ### Recommended Guardrails
@@ -454,7 +468,7 @@ echo "and that a compliant AWSReservedSSO login does NOT false-positive."
 **Enforce MFA everywhere (the primary control)**
 - Attach the `aws:MultiFactorAuthPresent = false` deny policy to all console users so a non-MFA session can do nothing but enrol MFA
 - Enable MFA on **root** and remove/rotate root access keys; use root only for the few tasks that require it
-- Prefer **IAM Identity Center (SSO) with enforced MFA** over long-lived IAM users with passwords — it centralises MFA at the IdP and removes standing console passwords
+- Prefer **IAM Identity Center (SSO) with enforced MFA** over long-lived IAM users with passwords, it centralises MFA at the IdP and removes standing console passwords
 
 **Standing compliance**
 - AWS Config `iam-user-mfa-enabled`, `mfa-enabled-for-iam-console-access`, and `root-account-mfa-enabled` rules, alarmed on non-compliant
@@ -469,11 +483,11 @@ echo "and that a compliant AWSReservedSSO login does NOT false-positive."
 
 | Type | Value |
 |------|-------|
-| MITRE technique | T1078.004 — Valid Accounts: Cloud Accounts |
+| MITRE technique | T1078.004 - Valid Accounts: Cloud Accounts |
 | MITRE tactic | Initial Access (TA0001) |
 | Signal event | `ConsoleLogin` (`eventSource: signin.amazonaws.com`) with `additionalEventData.MFAUsed = "No"` and `responseElements.ConsoleLogin = "Success"` |
 | Event location | Global service → events land in **`us-east-1`** |
-| Shipped-rule status | **Good** — correctly scoped and filtered; extend with root variant + SSO exclusion + brute-force companion (do not replace) |
+| Shipped-rule status | **Good**, correctly scoped and filtered; extend with root variant + SSO exclusion + brute-force companion (do not replace) |
 | Key false positive | SAML/SSO (`AWSReservedSSO_`) logins where MFA is enforced at the IdP but `MFAUsed` reads `No` |
 | Highest-severity variant | Root `ConsoleLogin` with `MFAUsed=No` → P0/critical |
 | Emulation note | The script does not perform a real browser login; it verifies the user has no MFA and documents the `ConsoleLogin` signal |
@@ -484,7 +498,7 @@ echo "and that a compliant AWSReservedSSO login does NOT false-positive."
 
 `pulumi destroy` in `infra/` removes the IAM user and its login profile. The
 emulation performs no real login and creates no attacker artifacts, so a normal
-run self-cleans. After a **real** incident, `pulumi destroy` is irrelevant — the
+run self-cleans. After a **real** incident, `pulumi destroy` is irrelevant, the
 response is to cut the compromised user's console access (§3), reverse anything
-the session did, and — the durable fix — enforce MFA account-wide (§4) so a
+the session did, and, the durable fix, enforce MFA account-wide (§4) so a
 stolen password is never again sufficient for console access.

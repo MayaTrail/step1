@@ -1,4 +1,4 @@
-# IR Playbook: Backdoor IAM User with Additional Access Key — Persistence via `iam:CreateAccessKey`
+# IR Playbook - Backdoor IAM User with Additional Access Key - Persistence via `iam:CreateAccessKey`
 
 ## Classification
 
@@ -6,9 +6,9 @@
 |-------|-------|
 | Incident Type | Persistence / Additional Cloud Credentials (backdoor access key) |
 | Emulation Tier | Atomic technique |
-| Threat Actor | N/A — single-technique emulation, not actor-attributed |
+| Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High — a second access key gives the attacker independent, standing programmatic access that **survives rotation of the user's own key**; it is quiet, durable persistence (`MANIFEST.py` rates MEDIUM; the IR view is High because it is an enduring foothold behind a legitimate identity) |
+| Severity | High, a second access key gives the attacker independent, standing programmatic access that **survives rotation of the user's own key**; it is quiet, durable persistence (`MANIFEST.py` rates MEDIUM; the IR view is High because it is an enduring foothold behind a legitimate identity) |
 | MITRE Tactics | Persistence |
 | MITRE Techniques | T1098.001 |
 | Services in Scope | IAM, STS, CloudTrail |
@@ -16,11 +16,11 @@
 
 **What the emulation does:** calls `iam:CreateAccessKey` for an existing IAM user (a user *other than the caller*), minting a second, attacker-controlled set of programmatic credentials for that identity. The attacker can now authenticate as the user indefinitely. The emulation's revert deletes the key it created.
 
-**Why this is durable persistence.** The backdoor key is a fully independent credential for the user. If the legitimate owner rotates *their* key, or their password is reset, the attacker's key keeps working — the two keys are unrelated. Nothing new appears in the identity graph: no new user, no new role, just one extra key on an existing user, which few teams review. The only evidence is a single `iam:CreateAccessKey` event.
+**Why this is durable persistence.** The backdoor key is a fully independent credential for the user. If the legitimate owner rotates *their* key, or their password is reset, the attacker's key keeps working, the two keys are unrelated. Nothing new appears in the identity graph: no new user, no new role, just one extra key on an existing user, which few teams review. The only evidence is a single `iam:CreateAccessKey` event.
 
-**The detection discriminator is "who created the key for whom."** Creating your *own* access key is routine self-service. The backdoor signature is `iam:CreateAccessKey` where **`requestParameters.userName` differs from the caller's own identity** — someone minting a key *for another user*. The shipped rule's own description states exactly this, but the shipped rule does not implement it — it matches `CreateAccessKey`/`DeleteAccessKey` with no comparison (§2). The refinement that matters: admins and provisioning pipelines *legitimately* create keys for other users, so the real signal is **key-for-another-user by a non-provisioning principal** (or on a user that should never get an ad-hoc key).
+**The detection discriminator is "who created the key for whom."** Creating your *own* access key is routine self-service. The backdoor signature is `iam:CreateAccessKey` where **`requestParameters.userName` differs from the caller's own identity**, someone minting a key *for another user*. The shipped rule's own description states exactly this, but the shipped rule does not implement it, it matches `CreateAccessKey`/`DeleteAccessKey` with no comparison (§2). The refinement that matters: admins and provisioning pipelines *legitimately* create keys for other users, so the real signal is **key-for-another-user by a non-provisioning principal** (or on a user that should never get an ad-hoc key).
 
-**Distinct from the trust-policy backdoor (the sibling technique).** That one is caught by IAM Access Analyzer (it analyses resource/trust policies). **Access Analyzer does NOT cover access-key creation** — there is no policy document here. The controls for *this* technique are CloudTrail detection on the create event, an SCP restricting `iam:CreateAccessKey`, and the IAM **Credential Report** for finding keys that shouldn't exist.
+**Distinct from the trust-policy backdoor (the sibling technique).** That one is caught by IAM Access Analyzer (it analyses resource/trust policies). **Access Analyzer does NOT cover access-key creation**, there is no policy document here. The controls for *this* technique are CloudTrail detection on the create event, an SCP restricting `iam:CreateAccessKey`, and the IAM **Credential Report** for finding keys that shouldn't exist.
 
 ---
 
@@ -29,15 +29,15 @@
 ### Prerequisites Before This Incident
 
 **Logging & Visibility**
-- CloudTrail multi-region trail (IAM is global → events land in `us-east-1`). `iam:CreateAccessKey` is a management event carrying `requestParameters.userName` (the target user, when specified), `userIdentity` (the caller), and `responseElements.accessKey.accessKeyId` (**the new key's ID — the IOC**)
-- **IAM Credential Report** available on demand (`aws iam generate-credential-report` / `get-credential-report`) — the account-wide view of which users have which keys and when they were created/last used
+- CloudTrail multi-region trail (IAM is global → events land in `us-east-1`). `iam:CreateAccessKey` is a management event carrying `requestParameters.userName` (the target user, when specified), `userIdentity` (the caller), and `responseElements.accessKey.accessKeyId` (**the new key's ID, the IOC**)
+- **IAM Credential Report** available on demand (`aws iam generate-credential-report` / `get-credential-report`), the account-wide view of which users have which keys and when they were created/last used
 - A maintained allowlist of principals that legitimately create keys for other users (provisioning/identity-admin), so a create-for-another by anyone else stands out
 
 **Alerting (must be pre-configured)**
 - **`iam:CreateAccessKey` where `requestParameters.userName` ≠ the caller's own user, by a principal not on the provisioning allowlist → P0** (the backdoor signature)
-- `iam:CreateAccessKey` resulting in a user holding **two** access keys (AWS max) where the second was created by someone other than the user — a strong backdoor indicator
+- `iam:CreateAccessKey` resulting in a user holding **two** access keys (AWS max) where the second was created by someone other than the user, a strong backdoor indicator
 - Use of a newly-created access key from an off-baseline IP/geo within a short time of its creation (the key being exercised)
-- `iam:CreateAccessKey` denied at volume (`errorCode = AccessDenied` / `LimitExceeded`) — probing / a user already at the 2-key limit
+- `iam:CreateAccessKey` denied at volume (`errorCode = AccessDenied` / `LimitExceeded`), probing / a user already at the 2-key limit
 
 **Response Tooling**
 - AWS CLI v2 with break-glass responder credentials, separate from any principal under investigation
@@ -45,7 +45,7 @@
 - The provisioning-principal allowlist and a baseline of which users have keys (from the Credential Report)
 
 **Known IOC Baselines**
-- Baseline which principals create access keys for others — normally only provisioning/identity-admin
+- Baseline which principals create access keys for others, normally only provisioning/identity-admin
 - Baseline which users have programmatic keys at all; a service/human user that *never* had a key suddenly getting one is anomalous
 - The backdoor key ID from the create event is the primary IOC for hunting usage
 
@@ -55,7 +55,7 @@
 
 ### Detection Triggers (prioritized)
 
-#### HIGH-CONFIDENCE — Always Indicate Compromise
+#### HIGH-CONFIDENCE: Always Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
@@ -64,13 +64,13 @@
 | P1 | A user ends up with two access keys, the second created by a different principal | CloudTrail / Credential Report | T1098.001 |
 | P1 | `iam:CreateAccessKey` for a privileged/admin user by anyone outside identity-admin | CloudTrail | T1098.001 |
 
-#### MEDIUM-CONFIDENCE — May Indicate Compromise
+#### MEDIUM-CONFIDENCE: May Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
 | P2 | `iam:CreateAccessKey` for another user by an interactive human principal (vs. the CI/provisioning role) | CloudTrail | T1098.001 |
 | P2 | `iam:CreateAccessKey` for a user that has had no programmatic activity historically | CloudTrail / Credential Report | T1098.001 |
-| P2 | `iam:CreateAccessKey` denied at volume (`errorCode = AccessDenied`/`LimitExceeded`) — probing | CloudTrail | T1098.001 |
+| P2 | `iam:CreateAccessKey` denied at volume (`errorCode = AccessDenied`/`LimitExceeded`), probing | CloudTrail | T1098.001 |
 | P3 | A user creating their **own** access key (no `userName`, or `userName` == caller) during normal rotation | CloudTrail | T1098.001 |
 
 ### Detection Rule Quality Notes
@@ -79,13 +79,13 @@ The shipped rule's *description* is correct but the rule does not implement it. 
 
 | Issue | Impact | Correction |
 |-------|--------|-----------|
-| Sigma/KQL match `eventName IN (CreateAccessKey, DeleteAccessKey)` with `condition: selection` — **no caller-vs-target comparison** despite the rule's own description calling for one | Noisy and imprecise. `CreateAccessKey` fires on every routine self-service key creation; `DeleteAccessKey` is the benign revert. The rule never checks whether the key was created *for another user* | Compare `requestParameters.userName` to the caller's own user; alert only on a mismatch |
+| Sigma/KQL match `eventName IN (CreateAccessKey, DeleteAccessKey)` with `condition: selection`, **no caller-vs-target comparison** despite the rule's own description calling for one | Noisy and imprecise. `CreateAccessKey` fires on every routine self-service key creation; `DeleteAccessKey` is the benign revert. The rule never checks whether the key was created *for another user* | Compare `requestParameters.userName` to the caller's own user; alert only on a mismatch |
 | No provisioning allowlist | Admin/IaC creating keys for others is legitimate; without an allowlist the rule floods on provisioning | Exclude provisioning/identity-admin principals |
-| `DeleteAccessKey` as a trigger | Benign cleanup / the emulation's revert — pure noise | Drop it as a primary trigger |
+| `DeleteAccessKey` as a trigger | Benign cleanup / the emulation's revert, pure noise | Drop it as a primary trigger |
 | No usage correlation | Catches the plant but not the key being used (the confirmation of active compromise) | Correlate the new `accessKeyId` with subsequent use from an off-baseline IP |
 | Header TODO "verify acronym casing"; `level: medium` | Stale; durable credential persistence is higher | Resolve TODO; the mismatch rule → `level: high` |
 
-**Recommended detection — key created for another user by a non-provisioning principal.** The caller-vs-target comparison is a field relationship, best expressed in the log platform (Query 1). A single-event Sigma rule can express the "for another user by non-provisioning" shape where the backend supports field-to-field comparison; otherwise deploy Query 1:
+**Recommended detection, key created for another user by a non-provisioning principal.** The caller-vs-target comparison is a field relationship, best expressed in the log platform (Query 1). A single-event Sigma rule can express the "for another user by non-provisioning" shape where the backend supports field-to-field comparison; otherwise deploy Query 1:
 
 ```yaml
 title: IAM access key created for another user by a non-provisioning principal
@@ -111,7 +111,7 @@ detection:
 level: high
 ```
 
-**On the comparison:** self-service key creation usually **omits** `userName` (the key is created for the caller), so `requestParameters.userName|exists: true` already excludes most self-service. The remaining false positive — a user passing their *own* name — is removed by the `userName == caller` check, which Query 1 does explicitly.
+**On the comparison:** self-service key creation usually **omits** `userName` (the key is created for the caller), so `requestParameters.userName|exists: true` already excludes most self-service. The remaining false positive, a user passing their *own* name, is removed by the `userName == caller` check, which Query 1 does explicitly.
 
 **On error strings:** IAM denials surface as `AccessDenied` / `AccessDeniedException`; a user already at the two-key maximum as `LimitExceeded`. Not `Client.`-prefixed. Match the denial forms and confirm against a sample.
 
@@ -121,14 +121,18 @@ level: high
 
 > IAM events are global → query **`us-east-1`**. Extraction uses `--output json | jq '.Events[].CloudTrailEvent | fromjson'`. (No policy documents here, so none of the URL-decoding of the trust-policy playbook applies.)
 
-#### Query 1 — Find keys created for another user, and grab the backdoor key IDs
+#### Query 1: Find keys created for another user, and grab the backdoor key IDs
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=CreateAccessKey \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     select(.eventSource == "iam.amazonaws.com") |
@@ -147,23 +151,26 @@ aws cloudtrail lookup-events \
   jq -s 'map(select(.for_another)) | sort_by(.time)'
 ```
 
-Note: `for_another` is a *coarse* flag — for an **assumed-role** caller it compares
+Note: `for_another` is a *coarse* flag, for an **assumed-role** caller it compares
 the target username against the role ARN, so it is always `true`. Query 1 does no
 allowlist filtering itself; it surfaces candidates for you to triage against the
 provisioning allowlist. Each row with `for_another: true` from a non-provisioning `caller` is a backdoor.
-Record every `new_key` — those are the IOC access-key IDs to disable (§3) and hunt
+Record every `new_key`, those are the IOC access-key IDs to disable (§3) and hunt
 for usage (Query 3).
 
-#### Query 2 — Sweep ALL users for foreign-created / extra keys (Credential Report)
+#### Query 2: Sweep ALL users for foreign-created / extra keys (Credential Report)
 
 The attacker may have backdoored more than one user. The Credential Report is the
 account-wide view; cross-reference key creation against CloudTrail to see *who*
 created each.
 
 ```bash
+# GNU base64 decodes with -d, older BSD/macOS with -D. Probe, then decode.
+b64d() { if base64 -d </dev/null >/dev/null 2>&1; then base64 -d; else base64 -D; fi; }
+
 # Generate + fetch the credential report (base64 CSV)
 aws iam generate-credential-report >/dev/null 2>&1
-aws iam get-credential-report --query 'Content' --output text | base64 -d | \
+aws iam get-credential-report --query 'Content' --output text | b64d | \
   awk -F',' 'NR==1 || $9=="true" || $14=="true" {print $1, "key1_active="$9, "key2_active="$14}'
   # columns: 1=user, 9=access_key_1_active, 14=access_key_2_active
 
@@ -179,15 +186,19 @@ done
 Flag any user with a key it should not have, or a key whose `CreateAccessKey`
 event (Query 1) shows a caller other than the user or provisioning.
 
-#### Query 3 — Was the backdoor key USED? (active compromise?)
+#### Query 3: Was the backdoor key USED? (active compromise?)
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)
+
 REGION="us-east-1"
 BACKDOOR_KEY="<new_key-from-Query-1>"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=AccessKeyId,AttributeValue="$BACKDOOR_KEY" \
-  --start-time "$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, event: .eventName, source: .eventSource,
@@ -195,19 +206,23 @@ aws cloudtrail lookup-events \
   jq -s 'sort_by(.time)'
 ```
 
-Any activity here means the backdoor key was exercised — everything it did is part
+Any activity here means the backdoor key was exercised, everything it did is part
 of the incident, and the `ip` values are attacker IOCs. (CloudTrail is regional
 for the *services called*; run this in the regions the key touched, or use your
 log platform for an account-wide view by access key.)
 
-#### Query 4 — Full session reconstruction of the principal that planted the backdoor
+#### Query 4: Full session reconstruction of the principal that planted the backdoor
 
 ```bash
+# GNU date first, BSD/macOS date second. The two take different flags.
+START=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+
 ACCESS_KEY_ID="<caller_key-from-Query-1>"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=AccessKeyId,AttributeValue="$ACCESS_KEY_ID" \
-  --start-time "$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --start-time "$START" \
   --region us-east-1 --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson |
     {time: .eventTime, event: .eventName, source: .eventSource,
@@ -215,7 +230,7 @@ aws cloudtrail lookup-events \
   jq -s 'sort_by(.time)'
 ```
 
-Look for *other* persistence the same principal planted — more backdoored users,
+Look for *other* persistence the same principal planted, more backdoored users,
 backdoored role trust policies, new login profiles.
 
 ---
@@ -230,7 +245,7 @@ was used and contain the planting principal.
 > Run every command under the **break-glass responder credentials** from §1, not
 > under any principal being contained.
 
-#### Step 1 — Disable the backdoor key(s) (do NOT delete yet — preserve evidence)
+#### Step 1 - Disable the backdoor key(s) (do NOT delete yet: preserve evidence)
 
 ```bash
 TARGET_USER="<target_user-from-Query-1>"
@@ -245,7 +260,7 @@ aws iam list-access-keys --user-name "$TARGET_USER" \
   --query 'AccessKeyMetadata[].{Key:AccessKeyId,Status:Status,Created:CreateDate}' --output table
 ```
 
-#### Step 2 — Contain the principal that created the backdoor
+#### Step 2: Contain the principal that created the backdoor
 
 ```bash
 SUSPECT_ARN="<caller-arn-from-Query-1>"
@@ -265,11 +280,11 @@ elif echo "$SUSPECT_ARN" | grep -q ":assumed-role/"; then
 fi
 ```
 
-#### Step 3 — Consider the backdoored user itself compromised
+#### Step 3: Consider the backdoored user itself compromised
 
 The user now had an attacker credential minted against it. Disable the user's
 *other* keys too (rotate them in eradication) and, if it has console access, reset
-the password / require MFA — treat the whole identity as suspect, not just the one
+the password / require MFA, treat the whole identity as suspect, not just the one
 key.
 
 ```bash
@@ -281,7 +296,7 @@ for K in $(aws iam list-access-keys --user-name "$TARGET_USER" \
 done
 ```
 
-#### Step 4 — Deny further key creation by the principal
+#### Step 4: Deny further key creation by the principal
 
 ```bash
 SUSPECT_ROLE="<role-name>"    # role principals; for an IAM user use put-user-policy
@@ -328,8 +343,8 @@ keys. Do not assume only the one user from Query 1 was affected.
 
 #### Remove other persistence planted by the principal
 
-From Query 4, remediate anything else the principal created — more backdoor keys,
-backdoored role trust policies, login profiles, admin policy attachments — using
+From Query 4, remediate anything else the principal created, more backdoor keys,
+backdoored role trust policies, login profiles, admin policy attachments, using
 the relevant persistence playbook for each.
 
 #### Right-size key-creation permissions
@@ -375,10 +390,13 @@ aws iam list-access-keys --user-name "$TARGET_USER" \
 #### Verify no user has an unexplained foreign-created key (re-sweep)
 
 ```bash
+# GNU base64 decodes with -d, older BSD/macOS with -D. Probe, then decode.
+b64d() { if base64 -d </dev/null >/dev/null 2>&1; then base64 -d; else base64 -D; fi; }
+
 # Re-run the Credential Report sweep; every remaining key should trace to the user
 # themselves or provisioning in CloudTrail
 aws iam generate-credential-report >/dev/null 2>&1
-aws iam get-credential-report --query 'Content' --output text | base64 -d | \
+aws iam get-credential-report --query 'Content' --output text | b64d | \
   awk -F',' 'NR==1 || $9=="true" || $14=="true" {print $1, "key1="$9, "key2="$14}'
 echo "Cross-check any active key against its CreateAccessKey caller (Query 1)."
 ```
@@ -396,7 +414,7 @@ COUNT=$(aws cloudtrail lookup-events \
   jq -r --arg arn "$SUSPECT_ARN" '.Events[].CloudTrailEvent | fromjson |
     select(.userIdentity.arn == $arn) | .eventTime' | grep -c .)
 [ "$COUNT" -eq 0 ] && echo "[OK] No further key creation from $SUSPECT_ARN since containment" \
-                   || echo "[FAIL] $COUNT further CreateAccessKey — containment did not hold"
+                   || echo "[FAIL] $COUNT further CreateAccessKey, containment did not hold"
 ```
 
 #### Verify the backdoor key never worked again after disablement
@@ -411,7 +429,7 @@ USED=$(aws cloudtrail lookup-events \
   --start-time "$CONTAINED_AT" --region "$REGION" --output json | \
   jq -r '.Events[].CloudTrailEvent | fromjson | select(.errorCode == null) | .eventTime' | grep -c .)
 [ "$USED" -eq 0 ] && echo "[OK] Backdoor key had no successful use after containment" \
-                  || echo "[FAIL] Backdoor key succeeded $USED times post-containment — not fully disabled"
+                  || echo "[FAIL] Backdoor key succeeded $USED times post-containment, not fully disabled"
 ```
 
 #### Confirm the corrected detection fires
@@ -419,7 +437,7 @@ USED=$(aws cloudtrail lookup-events \
 ```bash
 echo "Re-run the emulation and confirm the corrected rule fires on the CreateAccessKey"
 echo "where requestParameters.userName != the caller (a key minted for another user)"
-echo "by a non-provisioning principal — classified P0 — and does NOT fire on a user"
+echo "by a non-provisioning principal, classified P0, and does NOT fire on a user"
 echo "creating their own key or on DeleteAccessKey."
 ```
 
@@ -433,7 +451,7 @@ echo "creating their own key or on DeleteAccessKey."
 |---------|------------------------------|
 | A principal could mint a key for another user | `iam:CreateAccessKey` granted outside provisioning/identity-admin; no restriction on creating keys for others |
 | Backdoor undetected | Shipped rule matched the event but never compared caller vs. target user (despite its own description); no usage correlation |
-| Persistence survives rotation | The backdoor key is independent of the user's own key — rotating theirs does nothing |
+| Persistence survives rotation | The backdoor key is independent of the user's own key, rotating theirs does nothing |
 | Possibly more than one user backdoored | No account-wide Credential Report sweep for foreign-created keys |
 | Long-lived static keys existed at all | Reliance on IAM user access keys rather than short-lived STS role credentials |
 
@@ -457,7 +475,7 @@ echo "creating their own key or on DeleteAccessKey."
 
 (The precise self-service condition varies by setup; the intent is: deny creating a
 key for a user other than yourself unless you are provisioning/identity-admin.
-**Use `StringNotEqualsIfExists`** for the `aws:username` clause — `aws:username`
+**Use `StringNotEqualsIfExists`** for the `aws:username` clause, `aws:username`
 is absent for assumed-role principals, and a plain `StringNotEquals` on a missing
 key evaluates as a *match*, which would wrongly deny legitimate role sessions.)
 
@@ -466,7 +484,7 @@ key evaluates as a *match*, which would wrongly deny legitimate role sessions.)
 - Where user keys are unavoidable, monitor the Credential Report for unexpected keys and enforce rotation/expiry
 
 **Detection improvements**
-- Deploy the caller-vs-target comparison rule (Query 1) — never the shipped bare `CreateAccessKey` match
+- Deploy the caller-vs-target comparison rule (Query 1), never the shipped bare `CreateAccessKey` match
 - Correlate a newly-created key with its first use (off-baseline IP = active compromise)
 - Alarm `CreateAccessKey` for privileged users by anyone outside identity-admin
 
@@ -474,27 +492,27 @@ key evaluates as a *match*, which would wrongly deny legitimate role sessions.)
 
 | Type | Value |
 |------|-------|
-| MITRE technique | T1098.001 — Account Manipulation: Additional Cloud Credentials |
+| MITRE technique | T1098.001 - Account Manipulation: Additional Cloud Credentials |
 | MITRE tactic | Persistence (TA0003) |
 | Primary API | `iam:CreateAccessKey` (for a user other than the caller) |
 | Event source | `iam.amazonaws.com` (global → events in `us-east-1`) |
-| Key discriminator | `requestParameters.userName` ≠ the caller's own identity, by a non-provisioning principal — self-service key creation usually omits `userName` |
-| Primary IOC | `responseElements.accessKey.accessKeyId` from the create event — the backdoor key ID to disable and hunt for usage |
-| Persistence property | The backdoor key is independent of the user's own credentials — survives the user rotating their key |
-| Not covered by Access Analyzer | Unlike the trust-policy backdoor, there is no resource policy — detect via CloudTrail + Credential Report + SCP, not Access Analyzer |
+| Key discriminator | `requestParameters.userName` ≠ the caller's own identity, by a non-provisioning principal, self-service key creation usually omits `userName` |
+| Primary IOC | `responseElements.accessKey.accessKeyId` from the create event, the backdoor key ID to disable and hunt for usage |
+| Persistence property | The backdoor key is independent of the user's own credentials, survives the user rotating their key |
+| Not covered by Access Analyzer | Unlike the trust-policy backdoor, there is no resource policy, detect via CloudTrail + Credential Report + SCP, not Access Analyzer |
 | Error strings (not `Client.`-prefixed) | `AccessDenied` / `AccessDeniedException`, `LimitExceeded` (user already has 2 keys) |
 | Resources created | 1 IAM user (no initial keys) |
 | Related | The role trust-policy backdoor (sibling persistence technique) and the login-profile backdoor |
 
 **MITRE mapping note:** T1098.001 (Additional Cloud Credentials) is the correct,
-precise mapping — a second access key *is* additional cloud credentials for the
+precise mapping, a second access key *is* additional cloud credentials for the
 identity. No caveat needed.
 
 ### Revert
 
 `pulumi destroy` in `infra/` removes the IAM user; the emulation's own revert
 deletes the key it created, so a normal run self-cleans. After a **real** incident,
-`pulumi destroy` is irrelevant — disable then delete every backdoor key (§3–§4),
+`pulumi destroy` is irrelevant, disable then delete every backdoor key (§3-§4),
 rotate the affected users' real keys, remove any other persistence, and tighten
 who can create keys; deleting a stack does not remove a key the attacker minted on
 a user you still need.

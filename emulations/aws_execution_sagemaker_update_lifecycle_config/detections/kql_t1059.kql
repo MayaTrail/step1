@@ -3,7 +3,7 @@
 // The script body is IN the event, base64-encoded, so content inspection costs
 // nothing and is by far the strongest signal. The original query neither
 // decoded it nor filtered the principal, and additionally matched the benign
-// Describe call — dropped here.
+// Describe call, dropped here.
 //
 // Create* is included: an attacker can create a NEW malicious config and attach
 // it, evading any Update-only rule.
@@ -17,17 +17,23 @@ AWSCloudTrail
 | extend OnStartB64 = tostring(Req.onStart[0].content)
 | extend OnStart = base64_decode_tostring(OnStartB64)
 | extend Config = tostring(Req.notebookInstanceLifecycleConfigName)
-// Use `contains` (substring), NOT `has_any` (whole-term) — has_any won't reliably
+// Use `contains` (substring), NOT `has_any` (whole-term), has_any won't reliably
 // match "/dev/tcp" or "base64 -d" (slash/space-delimited), the exact payloads here.
 | extend Suspicious = OnStart contains "curl" or OnStart contains "wget"
                       or OnStart contains "/dev/tcp" or OnStart contains "base64 -d"
                       or OnStart contains "bash -i"
 | project TimeGenerated, UserIdentityArn, EventName, Config, SourceIpAddress, Suspicious, OnStart
 | where Suspicious
-       or UserIdentityArn !has "role/provisioning"      // tune to your allowlist
+// REPLACE with the roles in YOUR account that legitimately update SageMaker
+// lifecycle configurations. The placeholder matches nothing, so until it is
+// edited this rule fires on every notebook provisioning change.
+//
+// Same rule as the content match above: `contains`, not `has`. A role path is
+// slash and hyphen delimited, so a whole-term operator does not match it.
+       or UserIdentityArn !contains "role/REPLACE-ME-provisioning"
 | extend Verdict = iff(Suspicious,
-                       "MALICIOUS LIFECYCLE SCRIPT — content-confirmed, P0",
-                       "LIFECYCLE CONFIG WRITTEN OUTSIDE PROVISIONING — review")
+                       "MALICIOUS LIFECYCLE SCRIPT, content-confirmed, P0",
+                       "LIFECYCLE CONFIG WRITTEN OUTSIDE PROVISIONING, review")
 | order by TimeGenerated desc
 //
 // Only onStart[0] is decoded above. A config may carry multiple entries and an
