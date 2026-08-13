@@ -229,8 +229,11 @@ CLAUDE.md
 # Local Postman app state (collection lives in backend/*.postman_collection.json)
 .postman/
 
-# Local scratch/experimental work (not part of the test suite)
-tests/
+# Local scratch/experimental work (not part of the test suite).
+# The leading slash anchors this to the repository root, so it excludes only the
+# top-level scratch directory. A bare `tests/` would also match
+# backend/apps/*/tests/, which are the real Django suites and must stay tracked.
+/tests/
 
 # Design reference screenshots (not part of the application)
 frontend/screens/

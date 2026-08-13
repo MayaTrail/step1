@@ -1,0 +1,46 @@
+name: Backend tests
+
+# Runs the Django suite that folds over every emulation the registry discovers:
+# the dashboard manifest contract, the readiness contract, the MITRE catalogue
+# and its aggregations, and detection rule rendering. A malformed emulation
+# fails here at PR time rather than as a miscounted dashboard or a blank
+# detection page after merge.
+#
+# Uses config.settings.ci, which swaps in sqlite and an empty URL configuration
+# so the job installs four packages instead of the full runtime stack. No
+# database service and no repository secrets are required: SECRET_KEY is only
+# present because base.py demands one, and its value here is a literal dummy.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    name: backend-tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings.ci
+      SECRET_KEY: ci-only-not-a-secret
+      EMULATIONS_BASE_DIR: ${{ github.workspace }}/emulations
+    steps:
+      - uses: actions/checkout@v4
+        # emulations/_kb is a private submodule. Leave it unfetched so the job
+        # runs for contributors without access to the authoring repository.
+        with:
+          submodules: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements-test.txt
+
+      - name: Install test dependencies
+        run: pip install -r requirements-test.txt
+
+      - name: Run the emulation and metrics test suites
+        run: python manage.py test apps.emulations apps.metrics
