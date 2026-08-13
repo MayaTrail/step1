@@ -16,7 +16,7 @@
 
 <div align="center">
   
-  [![Backend tests](https://github.com/MayaTrail/step1/actions/workflows/backend-tests.yml/badge.svg?branch=main)](https://github.com/MayaTrail/step1/actions/workflows/backend-tests.yml)
+  [![Backend tests](https://github.com/MayaTrail/step1/actions/workflows/backend-tests.yml/badge.svg)](https://github.com/MayaTrail/step1/actions/workflows/backend-tests.yml)
   [![Detections](https://github.com/MayaTrail/step1/actions/workflows/detections.yml/badge.svg?branch=main)](https://github.com/MayaTrail/step1/actions/workflows/detections.yml)
   [![Dependency Graph](https://github.com/MayaTrail/step1/actions/workflows/dependabot/update-graph/badge.svg?branch=main)](https://github.com/MayaTrail/step1/actions/workflows/dependabot/update-graph)
 </div>
