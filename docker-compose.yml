@@ -141,8 +141,13 @@ services:
       dockerfile: Dockerfile
       args:
         # Baked into the SPA at build time; enables the "Continue with Google"
-        # button. Value comes from the shell env or a root-level .env file.
-        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-}
+        # button. Pass-through form (no value): the arg is forwarded when the
+        # variable is set in the shell or a root-level .env, and OMITTED when it
+        # is not. The `${VAR:-}` form always forwards it, and an empty build arg
+        # becomes an empty env var that overrides frontend/UI/.env, because Vite
+        # gives an existing environment variable precedence over a .env file.
+        # Leaving it unset here is what lets frontend/UI/.env act as the default.
+        - VITE_GOOGLE_CLIENT_ID
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "kill -0 $$(cat /tmp/nginx.pid 2>/dev/null) 2>/dev/null || exit 1"]
