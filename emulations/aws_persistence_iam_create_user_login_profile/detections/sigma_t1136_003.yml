@@ -1,8 +1,21 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Create IAM User with Console Access (T1136.003)
+# Create IAM User with Console Access (T1136.003)
+#
+# The original rule matched CreateUser / CreateLoginProfile / DeleteLoginProfile
+# / DeleteUser with a bare `condition: selection`. It was noisy AND
+# SIGNAL-INVERTED: it fired on every onboarding and every offboarding, and
+# bundling the Delete* events means a DELETION: the opposite of persistence,
+# raised the same alert as a backdoor. Those are dropped from the primary rules
+# and kept only for the forensic timeline.
+#
+# The discriminator here is a console PASSWORD (not a key, not an admin policy)
+# on a user, granted by a principal outside the onboarding allowlist.
+title: IAM CreateLoginProfile by non-identity-admin principal
 id: 4e03ddd5-625b-5d09-bd70-5e1c81c9f465
+name: iam_create_login_profile_base
 status: experimental
-description: iam:CreateUser followed by iam:CreateLoginProfile — new console-enabled user created outside normal IAM provisioning pipeline
+description: >-
+  A console password was created for an IAM user by a principal outside the
+  identity-administration allowlist.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-user-login-profile/
 tags:
@@ -14,6 +27,103 @@ logsource:
 detection:
   selection:
     eventSource: 'iam.amazonaws.com'
-    eventName: ['CreateUser', 'CreateLoginProfile', 'DeleteLoginProfile', 'DeleteUser']
+    eventName: 'CreateLoginProfile'
+  # REPLACE these with the roles in YOUR account that legitimately create IAM
+  # users and login profiles. The placeholder values below match nothing, so
+  # until they are edited this rule fires on every onboarding.
+  identity_admin:
+    userIdentity.arn|contains:
+      - ':role/REPLACE-ME-identity-admin'
+      - ':role/REPLACE-ME-onboarding'
+      - ':role/REPLACE-ME-iac-deploy'
+      - ':role/REPLACE-ME-break-glass'
+  condition: selection and not identity_admin
+falsepositives:
+  - Help-desk password provisioning from roles not yet allowlisted
+level: high
+---
+# Base rule for the sequence correlation. Inlined here so the correlation is
+# deploy-complete from this one file.
+title: IAM CreateUser
+id: 6a0d3b82-1948-4c50-8b23-4e9a7c5d1f06
+name: iam_create_user
+status: experimental
+description: Base rule, sequence component only, not for direct alerting.
+tags:
+  - attack.persistence
+  - attack.t1136.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'CreateUser'
   condition: selection
-level: medium
+level: low
+---
+title: IAM create-console-user backdoor sequence
+id: 8c2f5d04-3b69-4e72-a1d4-6a1c9b7e5f28
+status: experimental
+description: >-
+  A net-new user given console access by the same principal within ten minutes,
+  outside the onboarding pipeline.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-user-login-profile/
+tags:
+  - attack.persistence
+  - attack.t1136.003
+correlation:
+  type: temporal_ordered
+  rules:
+    - iam_create_user
+    - iam_create_login_profile_base
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+level: high
+---
+# THE ESCALATION. A console user with no policy attached is powerless; paired
+# with a privilege grant it becomes a real threat. This pairing is what raises
+# the incident from Medium to High.
+title: IAM console access granted alongside a privilege grant
+id: 5f9a2c31-7e40-4b86-93d5-1c8b0e64a7f2
+status: experimental
+description: >-
+  A login profile was created and the same user was granted permissions within
+  the window, a usable console identity rather than an empty account.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-user-login-profile/
+tags:
+  - attack.persistence
+  - attack.t1136.003
+correlation:
+  type: temporal
+  rules:
+    - iam_create_login_profile_base
+    - iam_user_privilege_grant
+  group-by:
+    - requestParameters.userName      # same TARGET user, not same caller
+  timespan: 15m
+level: critical
+---
+title: IAM user privilege grant
+id: 0b73e5d8-4c19-4a02-8f61-27d5be9c308a
+name: iam_user_privilege_grant
+status: experimental
+description: Base rule, permissions granted to a user. Sequence component only.
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName:
+      - 'AttachUserPolicy'
+      - 'PutUserPolicy'
+      - 'AddUserToGroup'
+  condition: selection
+level: low

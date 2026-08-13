@@ -1,18 +1,101 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Usage of EC2 Serial Console to Push an SSH Public Key (T1021.004)
+# Usage of EC2 Serial Console to Push an SSH Public Key (T1021.004 / T1021.008)
+#
+# The shipped rule was closer than most in this catalogue: the API is rare
+# enough that a bare match is a reasonable starting point. It was still
+# under-scoped (no eventSource, no principal filter) and missed the
+# account-level enable precursor entirely.
+#
+# WHY THIS TECHNIQUE IS DIFFERENT from EC2 Instance Connect: the serial console
+# is OUT-OF-BAND. It bypasses security groups and NACLs completely, and the
+# session does NOT appear in VPC Flow Logs. The network-side corroboration
+# available for Instance Connect does not exist here: the control plane is the
+# only record.
+title: EC2 serial console SSH key push by non-operator
 id: 2749b7b2-2969-58a2-a47d-8e2b86c38fc9
+name: serial_console_push_base
 status: experimental
-description: CloudTrail ec2-instance-connect:SendSerialConsoleSSHPublicKey — a niche API almost never called in normal operations
+description: >-
+  An SSH key was pushed to an instance's serial console by a principal outside
+  the break-glass allowlist. A SINGLE call is P0, this API has essentially no
+  routine use.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.lateral-movement.ec2-serial-console-send-ssh-public-key/
 tags:
   - attack.lateral_movement
   - attack.t1021.004
+  - attack.t1021.008
 logsource:
   product: aws
   service: cloudtrail
 detection:
   selection:
-    eventName: ['SendSerialConsoleSSHPublicKey']
+    eventSource: 'ec2-instance-connect.amazonaws.com'
+    eventName: 'SendSerialConsoleSSHPublicKey'
+  # REPLACE these with the roles in YOUR account that legitimately use the EC2
+  # serial console. The placeholder values below match nothing, so until they
+  # are edited this rule fires on every break-glass recovery.
+  operators:
+    userIdentity.arn|contains:
+      - ':role/REPLACE-ME-break-glass'
+  condition: selection and not operators
+falsepositives:
+  - Genuine break-glass recovery of an unreachable instance, should be rare,
+    announced, and traceable to an incident
+level: high
+---
+# THE PRECURSOR, and the most important addition here.
+#
+# Serial console access is gated at the ACCOUNT level and is disabled by
+# default. An attacker must enable it before any key push can succeed: which
+# makes this event both an early warning and an account-wide security
+# downgrade affecting every instance, not just the target.
+#
+# Cleanup gotcha: tearing down the emulation does NOT re-disable account serial
+# console access. Verify and disable it explicitly.
+title: EC2 serial console access enabled at account level
+id: 9a4f1c76-2b83-4d05-8e12-7c3a0b6f9d24
+status: experimental
+description: >-
+  Account-wide serial console access was turned on. This is a persistent
+  security downgrade for every instance in the account.
+references:
+  - https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configure-access-to-serial-console.html
+tags:
+  - attack.lateral_movement
+  - attack.defense_evasion
+  - attack.t1021.008
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'EnableSerialConsoleAccess'
   condition: selection
-level: medium
+falsepositives:
+  - Deliberate enablement for a documented recovery procedure, should still be
+    reviewed and re-disabled afterwards
+level: critical
+---
+title: EC2 serial console fan-out across instances
+id: 7b06e5d3-8c41-4a92-9f05-3d1a2c8b7e60
+status: experimental
+description: >-
+  One principal pushed serial-console keys to two or more distinct instances,
+  a sweep rather than recovery of a single unreachable host.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.lateral-movement.ec2-serial-console-send-ssh-public-key/
+tags:
+  - attack.lateral_movement
+  - attack.t1021.008
+correlation:
+  type: value_count
+  rules:
+    - serial_console_push_base
+  group-by:
+    - userIdentity.arn
+  timespan: 15m
+  condition:
+    gte: 2
+    field: requestParameters.instanceId
+level: critical

@@ -1,8 +1,22 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Execute Malicious Code via EC2 User Data (T1059)
+# Execute Malicious Code via EC2 User Data (T1059)
+#
+# The original rule matched StopInstances / ModifyInstanceAttribute /
+# StartInstances independently under a bare `condition: selection`. That is
+# both noisy and blind to the technique: Stop and Start fire on every routine
+# maintenance window, and matching them independently never expresses the
+# ORDERED SEQUENCE that defines the attack.
+#
+# Rule A catches the write itself (the rare, high-value event).
+# Rule B catches the full Stop -> Modify(userData) -> Start fingerprint.
+# Stop/Start appear ONLY as bracketing events in Rule B, never as alerts.
+title: EC2 ModifyInstanceAttribute changing user-data
 id: 222ab6b0-63a5-5177-88fc-aa43018fb567
+name: ec2_modify_userdata
 status: experimental
-description: ec2:ModifyInstanceAttribute with attribute=userData on a stopped instance, especially when followed by ec2:StartInstances
+description: >-
+  User-data rewritten on an existing instance. Provisioning sets user-data at
+  launch; modifying it afterwards is a code-execution primitive that runs as
+  root on next boot.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ec2-user-data/
 tags:
@@ -14,6 +28,82 @@ logsource:
 detection:
   selection:
     eventSource: 'ec2.amazonaws.com'
-    eventName: ['StopInstances', 'ModifyInstanceAttribute', 'StartInstances']
+    eventName: 'ModifyInstanceAttribute'
+  # The attribute being modified is the whole point: a bare
+  # ModifyInstanceAttribute match also catches security-group and
+  # termination-protection changes. Confirm the exact field name against a
+  # sample event in your account.
+  userdata:
+    requestParameters.userData|exists: true
+  # REPLACE these with the roles in YOUR account that legitimately modify
+  # instance user-data. The placeholder values below match nothing, so until
+  # they are edited this rule fires on every provisioning change.
+  allowlisted:
+    userIdentity.arn|contains:
+      - ':role/REPLACE-ME-provisioning'
+      - ':role/REPLACE-ME-ci-'
+      - ':role/REPLACE-ME-break-glass'
+  condition: selection and userdata and not allowlisted
+falsepositives:
+  - Instance re-bootstrapping by tooling not yet allowlisted
+level: high
+---
+title: EC2 user-data injection sequence
+id: 9c4a7e13-5028-4b6d-91fa-3e7c60b8d245
+status: experimental
+description: >-
+  The full technique fingerprint, instance stopped, user-data rewritten,
+  instance restarted, within fifteen minutes and against the same instance.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ec2-user-data/
+tags:
+  - attack.execution
+  - attack.t1059
+correlation:
+  type: temporal_ordered
+  rules:
+    - ec2_stop_instances
+    - ec2_modify_userdata
+    - ec2_start_instances
+  group-by:
+    - requestParameters.instanceId
+  timespan: 15m
+level: high
+---
+# Bracketing base rules for the sequence above. Deliberately `level: low` and
+# never deployed standalone: Stop/Start are routine maintenance.
+title: EC2 StopInstances
+id: 1a5d83f6-2c47-4e09-b731-8f60a94c2e5b
+name: ec2_stop_instances
+status: experimental
+description: Base rule, sequence bracketing only, not for direct alerting.
+tags:
+  - attack.execution
+  - attack.t1059
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'StopInstances'
   condition: selection
-level: medium
+level: low
+---
+title: EC2 StartInstances
+id: 6b09e2c8-47d3-4a15-8e62-b0f37c5a91d4
+name: ec2_start_instances
+status: experimental
+description: Base rule, sequence bracketing only, not for direct alerting.
+tags:
+  - attack.execution
+  - attack.t1059
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'StartInstances'
+  condition: selection
+level: low

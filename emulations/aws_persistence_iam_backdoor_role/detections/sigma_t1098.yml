@@ -1,8 +1,35 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Backdoor IAM Role Trust Policy (T1098)
+# Backdoor IAM Role Trust Policy (T1098)
+#
+# The original rule matched GetRole + UpdateAssumeRolePolicy with a bare
+# `condition: selection`. GetRole is a benign read; UpdateAssumeRolePolicy
+# fires on every legitimate IaC trust update. Critically, it never inspected
+# whether an EXTERNAL principal was added: which is the entire technique.
+#
+# ============================================================================
+# THE URL-ENCODING CONSTRAINT: read before editing these rules
+# ============================================================================
+# `policyDocument` is URL-ENCODED in the CloudTrail event. Percent-encoding
+# escapes the structural characters -  "  ->  %22    *  ->  %2A    :  ->  %3A
+#
+# So a substring pattern like '"AWS":"*"' NEVER MATCHES the raw event. Any
+# Sigma rule written that way silently detects nothing.
+#
+# What DOES survive URL-encoding verbatim: 12-digit account IDs (plain digits
+# are not escaped). That is why this rule is scoped to KNOWN-BAD ACCOUNT IDs
+# and nothing else.
+#
+# The general case: "any account outside the org, or a wildcard principal",
+# CANNOT be a static substring match against the encoded event. It requires
+# decoding the document, which is the log-platform path in `kql_t1098.kql`.
+# Deploy that as the standing detection; treat this rule as an IOC catcher.
+# ============================================================================
+title: IAM role trust policy references a known-bad account
 id: bf91c492-44ed-5179-bd62-c8b2b03efb3b
 status: experimental
-description: iam:UpdateAssumeRolePolicy with an external account principal added to an existing role's trust policy
+description: >-
+  A role trust policy was created or updated referencing an account ID on the
+  known-bad list. Digits survive URL-encoding, so this match is reliable,
+  but it covers only enumerated IOC accounts, not the general case.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-backdoor-role/
 tags:
@@ -14,6 +41,52 @@ logsource:
 detection:
   selection:
     eventSource: 'iam.amazonaws.com'
-    eventName: ['GetRole', 'UpdateAssumeRolePolicy']
-  condition: selection
-level: medium
+    eventName:
+      - 'UpdateAssumeRolePolicy'
+      - 'CreateRole'
+  # Update stores the trust policy in policyDocument; CreateRole in
+  # assumeRolePolicyDocument. These are DIFFERENT KEYS and no single event has
+  # both: they must be OR'd as sibling blocks. ANDing them in one block means
+  # the rule never fires for either event.
+  update_doc:
+    requestParameters.policyDocument|contains:
+      - '193672423079'          # emulation marker account; add your own IOC account IDs
+  create_doc:
+    requestParameters.assumeRolePolicyDocument|contains:
+      - '193672423079'
+  condition: selection and (update_doc or create_doc)
+level: critical
+---
+# Detects the backdoor being USED, not merely planted. In the role owner's
+# account, a cross-account AssumeRole records the external caller's account in
+# userIdentity.accountId while the assumed role belongs to yours.
+#
+# SET YOUR OWN ACCOUNT IDs in the org_accounts filter: as shipped this fires
+# on every cross-account assumption.
+title: Cross-account AssumeRole into a local role
+id: 4e17b6a9-3d02-4c85-b71f-9a5c08e2d763
+status: experimental
+description: >-
+  A principal from outside the organisation assumed a role in this account.
+  Where a backdoored trust policy is suspected, this confirms exploitation.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-backdoor-role/
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sts.amazonaws.com'
+    eventName: 'AssumeRole'
+  org_accounts:
+    userIdentity.accountId:
+      - '111111111111'        # REPLACE with your organisation's account IDs
+      - '222222222222'
+  condition: selection and not org_accounts
+falsepositives:
+  - Approved third-party integrations (monitoring, CSPM, backup vendors),
+    allowlist their account IDs alongside your own
+level: high

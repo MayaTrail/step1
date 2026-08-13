@@ -1,10 +1,20 @@
-# Targets the canonical ConsoleLogin signal (not the script's IAM recon calls).
+# AWS Console Login Without MFA (T1078.004)
+#
+# NOTE: the original rule in this file was GOOD - correctly scoped to
+# signin.amazonaws.com/ConsoleLogin, filtering MFAUsed=No and
+# ConsoleLogin=Success, with a falsepositives note. It is the exception in this
+# catalogue and is retained below essentially unchanged.
+#
+# What is added here is COVERAGE it lacked, not fixes:
+#   - an SSO/SAML exclusion, so compliant IdP-MFA sessions stop false-firing
+#   - a root variant at `critical`
+#   - a brute-force companion on failed logins
 title: AWS Console Login Without MFA (T1078.004)
 id: 561a4908-847c-58cd-94db-27320778dcc1
 status: experimental
 description: >
-  Detects an AWS console sign-in where MFA was not used — valid-account access
-  without MFA (Stratus aws.initial-access.console-login-without-mfa).
+  Detects an AWS console sign-in where MFA was not used, valid-account access
+  without MFA.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.initial-access.console-login-without-mfa/
   - https://attack.mitre.org/techniques/T1078/004/
@@ -21,7 +31,98 @@ detection:
     additionalEventData.MFAUsed: 'No'
   success:
     responseElements.ConsoleLogin: 'Success'
-  condition: selection and success
+  # For SAML / IAM Identity Center sessions, MFA is enforced at the IdP and AWS
+  # may still record MFAUsed=No. Firing on those is a false positive that
+  # erodes trust in the rule.
+  #
+  # ENUMERATE YOUR OWN permission-set role names here: the AWSReservedSSO_
+  # prefix only covers Identity Center DEFAULTS and will not match renamed or
+  # custom permission sets.
+  federated:
+    userIdentity.arn|contains: ':assumed-role/AWSReservedSSO_'
+  saml:
+    userIdentity.type: 'SAMLUser'
+  condition: selection and success and not (federated or saml)
 falsepositives:
   - Users legitimately exempt from MFA (should be rare and reviewed)
+  - Custom-named SSO permission sets not covered by the federated filter
 level: medium
+---
+# Root without MFA is categorically worse than an IAM user without MFA. It
+# warrants its own severity rather than being blended into `medium`.
+#
+# Note `success` is a SIBLING of `selection`, not nested inside it: nesting it
+# would break the rule's own condition.
+title: Root console login without MFA
+id: 8e2c1f47-9a05-4b63-8d12-6f3a0c7b9e24
+status: experimental
+description: >-
+  The account root user signed in to the console without MFA. Root is
+  unconstrained by IAM policy and by SCPs, so this is a P0 regardless of what
+  followed.
+references:
+  - https://attack.mitre.org/techniques/T1078/004/
+tags:
+  - attack.initial_access
+  - attack.t1078.004
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'signin.amazonaws.com'
+    eventName: 'ConsoleLogin'
+    userIdentity.type: 'Root'
+    additionalEventData.MFAUsed: 'No'
+  success:
+    responseElements.ConsoleLogin: 'Success'
+  condition: selection and success
+falsepositives:
+  - Break-glass root access, should be pre-announced and time-boxed
+level: critical
+---
+# The success rule cannot see the brute force that PRECEDED a successful
+# non-MFA login. This companion covers it.
+title: AWS console login brute force
+id: 4a7d0e93-15c6-4802-b3f9-8e2170ac5b64
+status: experimental
+description: >-
+  Repeated failed console sign-ins from one source IP. Precursor to a
+  successful credential-stuffing or password-guessing login.
+references:
+  - https://attack.mitre.org/techniques/T1078/004/
+tags:
+  - attack.initial_access
+  - attack.t1110
+correlation:
+  type: event_count
+  rules:
+    - aws_console_login_failure
+  group-by:
+    - sourceIPAddress
+  timespan: 15m
+  condition:
+    gt: 10
+level: high
+---
+title: AWS console login failure
+id: f206b8d1-3c94-4e57-a081-95bd7e0f4c38
+name: aws_console_login_failure
+status: experimental
+description: >-
+  Base rule for the brute-force correlation. Individual failures are routine,
+  not for direct alerting.
+tags:
+  - attack.initial_access
+  - attack.t1110
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'signin.amazonaws.com'
+    eventName: 'ConsoleLogin'
+  failure:
+    responseElements.ConsoleLogin: 'Failure'
+  condition: selection and failure
+level: low

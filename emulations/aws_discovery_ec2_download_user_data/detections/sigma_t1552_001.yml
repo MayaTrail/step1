@@ -1,8 +1,24 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Download EC2 Instance User Data (T1552.001)
+# Download EC2 Instance User Data (T1552.001)
+#
+# The original rule matched `eventName IN (DescribeInstances,
+# DescribeInstanceAttribute)` with a bare `condition - selection`. Two problems:
+#
+#   1. DescribeInstances is among the highest-volume calls in AWS: every
+#      console load, every inventory tool. It is enumeration CONTEXT and has
+#      been dropped as a trigger entirely.
+#   2. No `attribute=userData` filter. DescribeInstanceAttribute is called for
+#      many benign attribute types, so without this the rule fires constantly
+#      on activity unrelated to credential harvesting.
+#
+# The technique is defined by BREADTH - reading many instances' user-data: so
+# the deployable detection is the correlation below.
+title: EC2 DescribeInstanceAttribute userData read
 id: 4cdc9a3a-45c3-52f9-af5d-e61931ca8854
+name: ec2_describe_userdata_base
 status: experimental
-description: ec2:DescribeInstanceAttribute with Attribute=userData called on multiple instances in rapid succession from a principal without normal operational need
+description: >-
+  A successful read of an instance's user-data. Base rule for the breadth
+  correlation; a single read is routine, so this is not for direct alerting.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.discovery.ec2-download-user-data/
 tags:
@@ -14,6 +30,37 @@ logsource:
 detection:
   selection:
     eventSource: 'ec2.amazonaws.com'
-    eventName: ['DescribeInstances', 'DescribeInstanceAttribute']
-  condition: selection
-level: medium
+    eventName: 'DescribeInstanceAttribute'
+    requestParameters.attribute: 'userData'
+  success:
+    errorCode: null          # Sigma: matches when errorCode is ABSENT (the read succeeded)
+  condition: selection and success
+falsepositives:
+  - Patch and configuration tooling that legitimately reads user-data,
+    allowlist those principals
+level: low
+---
+# THE deployable detection: many DISTINCT instances read by one principal.
+title: EC2 user-data harvesting across many instances
+id: d81a35c7-0e6f-4b92-a417-58c3e9f0b62d
+status: experimental
+description: >-
+  One principal read the user-data of five or more distinct instances in ten
+  minutes. User-data frequently contains bootstrap credentials, so breadth here
+  is credential harvesting rather than administration.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.discovery.ec2-download-user-data/
+tags:
+  - attack.discovery
+  - attack.t1552.001
+correlation:
+  type: value_count
+  rules:
+    - ec2_describe_userdata_base
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gte: 5
+    field: requestParameters.instanceId    # count DISTINCT instances, not events
+level: high

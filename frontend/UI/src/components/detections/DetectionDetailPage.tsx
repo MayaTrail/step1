@@ -439,7 +439,8 @@ function LatestValidationCard({
         </div>
       ) : validation && !validation.evaluable ? (
         <div className="text-[0.83rem] text-content-secondary">
-          Not machine-testable ({validation.reason}). Open AI Validation for an AI assessment.
+          Not machine-testable ({validation.reason}). Its logic spans multiple events, so
+          single-event testing does not apply and no fidelity score is produced.
         </div>
       ) : (
         <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -510,8 +511,11 @@ function ValidationPanel({
         <div className="bg-surface-card border border-border rounded-card p-6">
           <SectionLabel>Not machine-testable</SectionLabel>
           <p className="text-[0.83rem] text-content-secondary mt-2 leading-[1.6]">
-            This rule uses an {validation.reason}. A single-event evaluator cannot judge it, so it is not
-            executed here.
+            This rule uses an {validation.reason}. Its detection logic is a threshold or a sequence
+            measured across many events, and the in-process evaluator judges one event at a time, so
+            the rule is not executed here and no fidelity score is produced. The rule itself is not
+            faulty; this form of testing simply does not apply to it. Review the logic against
+            the detection note and the playbook instead.
           </p>
         </div>
       )}

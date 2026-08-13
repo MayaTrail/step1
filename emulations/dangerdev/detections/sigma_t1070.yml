@@ -1,45 +1,85 @@
-title: DangerDev — High-Frequency IAM Deletion Burst Indicating Cover-Up Attempt
+# DangerDev IAM Deletion Burst (T1070)
+#
+# The signal is RATE, not occurrence. A single IAM deletion is routine
+# offboarding; several from one principal inside two minutes is a cleanup
+# sweep. The deployable detection is the correlation document below; the base
+# rule exists only to be referenced by it.
+#
+# The legacy Sigma v1 pipe form (`condition: selection | count() by ... > 4`
+# with `timeframe:` and `group-by:` inside `detection:`) was removed from the
+# specification. pySigma rejects it and no current backend compiles it, so the
+# rule as previously written could not be deployed anywhere.
+title: DangerDev IAM deletion event
 id: a3b4c5d6-e7f8-4012-abcd-000000000012
+name: dangerdev_iam_deletion_base
 status: experimental
-description: >
-  Detects a rapid burst of IAM deletion events (DeleteUser, DeleteAccessKey, DetachUserPolicy,
-  DeleteLoginProfile) from the same principal within 120 seconds. DangerDev deleted
-  DangerDev@protonmail.me and the 'ses' masquerade user after reviewing GuardDuty findings.
-  Crucially, CloudTrail fully preserves all deletion events — the cover-up is itself
-  forensic evidence. The actor also switched credentials mid-cleanup (can't self-delete
-  while holding active session), creating a principal-switch artifact in the logs.
+description: >-
+  Base rule. Matches every IAM deletion outside the offboarding automation by
+  design and is NOT intended for direct alerting, deploy the correlation that
+  references it.
 references:
-    - https://attack.mitre.org/techniques/T1070/
-    - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+  - https://attack.mitre.org/techniques/T1070/
+  - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
 author: MayaTrail
 date: 2026/04/15
 tags:
-    - attack.defense_evasion
-    - attack.t1070
+  - attack.defense_evasion
+  - attack.t1070
 logsource:
-    product: aws
-    service: cloudtrail
+  product: aws
+  service: cloudtrail
 detection:
-    selection:
-        eventSource: iam.amazonaws.com
-        eventName:
-            - DeleteUser
-            - DeleteAccessKey
-            - DetachUserPolicy
-            - DeleteLoginProfile
-            - UpdateAccessKey
-            - DetachRolePolicy
-    filter_offboarding:
-        userIdentity.arn|contains:
-            - ':assumed-role/HRProvisioningRole'
-            - ':assumed-role/IdentitySync'
-            - ':assumed-role/OrganizationAccountAccessRole'
-    timeframe: 2m
-    condition: selection and not filter_offboarding | count() by userIdentity.arn > 4
-    group-by:
-        - userIdentity.arn
+  selection:
+    eventSource: iam.amazonaws.com
+    eventName:
+      - DeleteUser
+      - DeleteAccessKey
+      - DetachUserPolicy
+      - DeleteLoginProfile
+      - UpdateAccessKey
+      - DetachRolePolicy
+  # REPLACE with the roles in YOUR account that legitimately offboard identities.
+  # Left unedited this filter matches nothing and the correlation fires on your
+  # own bulk offboarding.
+  filter_offboarding:
+    userIdentity.arn|contains:
+      - ':assumed-role/HRProvisioningRole'
+      - ':assumed-role/IdentitySync'
+      - ':assumed-role/OrganizationAccountAccessRole'
+  condition: selection and not filter_offboarding
 falsepositives:
-    - IAM administrator offboarding a terminated employee (normally one user, not burst)
-    - Bulk offboarding automation during org restructuring (use dedicated role — filtered)
-    - Infrastructure teardown by authorized Terraform/Pulumi pipelines
+  - IAM administrator offboarding a terminated employee, normally one user rather than a burst
+  - Infrastructure teardown by authorized Terraform or Pulumi pipelines
+level: low
+---
+title: DangerDev high-frequency IAM deletion burst indicating cover-up
+id: da225eb9-9177-41c5-933a-092fe37ef69f
+status: experimental
+description: >-
+  More than four IAM deletions from a single principal within two minutes.
+  DangerDev deleted the DangerDev@protonmail.me and 'ses' masquerade users
+  after reviewing GuardDuty findings. CloudTrail preserves every deletion, so
+  the cover-up is itself forensic evidence. The actor also switched credentials
+  mid-cleanup, because a principal cannot delete itself while holding an active
+  session, which leaves a principal-switch artifact in the same window.
+  Tune the threshold to your own offboarding baseline.
+references:
+  - https://attack.mitre.org/techniques/T1070/
+  - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+author: MayaTrail
+date: 2026/04/15
+tags:
+  - attack.defense_evasion
+  - attack.t1070
+correlation:
+  type: event_count
+  rules:
+    - dangerdev_iam_deletion_base
+  group-by:
+    - userIdentity.arn
+  timespan: 2m
+  condition:
+    gt: 4
+falsepositives:
+  - Bulk offboarding during an org restructure, run from a role not yet in the filter
 level: high

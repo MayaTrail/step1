@@ -1,7 +1,47 @@
-// Open SSM Sessions to Multiple EC2 Instances (T1021.004) — eventName(s) auto-derived; verify casing.
-// Signal: ssm:StartSession called on multiple instances in rapid succession from unexpected principals — especially combined with ssm:TerminateSession
+// Open SSM Sessions to Multiple EC2 Instances (T1021.004 / T1021.008)
+//
+// Three signals in one query: non-operator principal, fan-out across distinct
+// target instances, and port-forwarding (a pivot rather than a shell). The
+// original query matched three SSM event names with no qualifier, firing on
+// every legitimate session.
+//
+// REMEMBER: this shows that sessions HAPPENED, never what was done in them.
+// Session content is not in CloudTrail at any verbosity. If Session Manager
+// logging is not configured, treat a confirmed intrusion as full host
+// compromise, there is no investigative path to what was typed.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 AWSCloudTrail
-| where EventSource in ("ssm.amazonaws.com")
-| where EventName in ("DescribeInstanceInformation", "StartSession", "TerminateSession")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
-| order by TimeGenerated desc
+| where TimeGenerated > ago(24h)
+| where EventSource == "ssm.amazonaws.com"
+| where EventName == "StartSession"
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Target = tostring(Req.target)
+| extend Doc = tostring(Req.documentName)
+| summarize
+    DistinctTargets = dcount(Target),
+    TargetSet       = make_set(Target, 20),
+    PortForwarding  = countif(Doc startswith "AWS-StartPortForwardingSession"),
+    SourceIPs       = make_set(SourceIpAddress, 10),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 15m)
+| where DistinctTargets >= 3 or PortForwarding > 0
+// REPLACE with the roles in YOUR account that legitimately open SSM sessions to
+// instances. The placeholder matches nothing, so until it is edited this rule
+// fires on every operator session.
+//
+// `contains` (substring), NOT `has` (whole-term): a role path is delimited by a
+// slash and hyphens, so `has` does not match it reliably.
+       or UserIdentityArn !contains "role/REPLACE-ME-ssm-operator"
+| extend Verdict = case(
+    PortForwarding > 0,     "SSM PORT-FORWARDING / PIVOT - P0",
+    DistinctTargets >= 3,   "SSM INTERACTIVE ACCESS SWEEP - P0",
+    "SSM SESSION BY NON-OPERATOR, review")
+| order by DistinctTargets desc
+//
+// Companion check worth running standing: alert if Session Manager logging is
+// turned OFF (the SSM-SessionManagerRunShell document's s3BucketName /
+// cloudWatchLogGroupName inputs being cleared). Disabling logging immediately
+// before a session is itself the signal.

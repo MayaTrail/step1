@@ -25,6 +25,23 @@ _SIGMA_PREFIX = "sigma_"
 _KQL_PREFIX = "kql_"
 _NOTE_PREFIX = "detection_note_"
 
+# Sigma severity levels, weakest first, for comparing documents within a file.
+_LEVEL_ORDER = ("informational", "low", "medium", "high", "critical")
+
+# Metadata the detail view renders. Borrowed from a lower-severity document
+# when the highest-severity one omits it.
+_DISPLAY_FIELDS = (
+    "title",
+    "description",
+    "status",
+    "logsource",
+    "tags",
+    "author",
+    "date",
+    "falsepositives",
+    "references",
+)
+
 
 def _technique_key(filename: str) -> str | None:
     """
@@ -69,20 +86,60 @@ def _group_by_technique(detection_files: list[str]) -> dict[str, dict[str, str]]
     return groups
 
 
-def parse_sigma(text: str) -> dict[str, Any]:
+def parse_sigma_documents(text: str) -> list[dict[str, Any]]:
     """
-    Parse a Sigma rule file into a dict.
+    Parse a Sigma rule file into its list of YAML documents.
 
-    The leading "# FILE:" line is a YAML comment and is ignored by the
-    loader. Returns an empty dict when the content is not valid YAML so a
-    single malformed rule cannot break the detail view.
+    A rule file describes one technique and may hold several documents: the
+    standalone detections, any correlation that ties them together, and the
+    low-severity base rules a correlation references. Leading "#" lines are
+    YAML comments and are ignored by the loader.
+
+    Returns an empty list when the content is not valid YAML so a single
+    malformed rule cannot break the detail view.
     """
     try:
-        loaded = yaml.safe_load(text)
+        loaded = list(yaml.safe_load_all(text))
     except yaml.YAMLError as exc:
         logger.warning("Could not parse Sigma rule: %s", exc)
+        return []
+    return [document for document in loaded if isinstance(document, dict)]
+
+
+def _level_rank(level: Any) -> int:
+    """Rank a Sigma severity for comparison. Unknown or absent ranks lowest."""
+    try:
+        return _LEVEL_ORDER.index(str(level))
+    except ValueError:
+        return -1
+
+
+def parse_sigma(text: str) -> dict[str, Any]:
+    """
+    Parse a Sigma rule file into the single dict the detail view renders.
+
+    Metadata comes from the highest-severity document, because that is the
+    rule a team deploys: the base rules a correlation references are
+    deliberately level "low" and fire too broadly to alert on directly.
+    Ties keep the earlier document. Fields the chosen document omits fall
+    back to the first document that defines them, since a correlation
+    carries no logsource of its own.
+
+    Returns an empty dict when the content is not valid YAML.
+    """
+    documents = parse_sigma_documents(text)
+    if not documents:
         return {}
-    return loaded if isinstance(loaded, dict) else {}
+
+    merged = dict(max(documents, key=lambda document: _level_rank(document.get("level"))))
+    for field in _DISPLAY_FIELDS:
+        if merged.get(field):
+            continue
+        for document in documents:
+            if document.get(field):
+                merged[field] = document[field]
+                break
+    return merged
 
 
 def _read(detections_dir: Path, filename: str | None) -> str | None:

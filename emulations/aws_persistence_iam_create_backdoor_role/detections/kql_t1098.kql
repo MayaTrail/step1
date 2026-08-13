@@ -1,7 +1,65 @@
-// Create IAM Backdoor Role with Admin Access (T1098) — eventName(s) auto-derived; verify casing.
-// Signal: iam:CreateRole with a cross-account trust principal followed by iam:AttachRolePolicy attaching AdministratorAccess or broad managed policies
+// Create IAM Backdoor Role with Admin Access (T1098)
+//
+// This technique is the COMBINATION of external trust + admin grant. This query
+// evaluates both halves per role and scores them together, because either half
+// alone is suspicious while both together are a cross-account admin backdoor.
+//
+// DECODING IS MANDATORY: assumeRolePolicyDocument is URL-encoded in the event,
+// so '"AWS":"*"' never matches the raw field. Only 12-digit account IDs survive
+// verbatim. Decoding is what makes wildcard and arbitrary-external trust
+// detectable at all.
+//
+// DetachRolePolicy / DeleteRole are excluded, benign cleanup and the
+// emulation's own revert.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let OrgAccounts   = dynamic(["111111111111","222222222222"]);   // REPLACE with your org account IDs
+let AdminPolicies = dynamic([
+    "arn:aws:iam::aws:policy/AdministratorAccess",
+    "arn:aws:iam::aws:policy/IAMFullAccess",
+    "arn:aws:iam::aws:policy/PowerUserAccess"]);
 AWSCloudTrail
-| where EventSource in ("iam.amazonaws.com")
-| where EventName in ("CreateRole", "AttachRolePolicy", "DetachRolePolicy", "DeleteRole")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
-| order by TimeGenerated desc
+| where TimeGenerated > ago(7d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName in ("CreateRole", "AttachRolePolicy")
+| where isempty(ErrorCode)
+| extend Req  = parse_json(RequestParameters)
+| extend Resp = parse_json(ResponseElements)
+// CreateRole nests the created role under responseElements.role.*
+| extend RoleName = tostring(coalesce(Req.roleName, Resp.role.roleName))
+| extend TrustDoc = iff(EventName == "CreateRole",
+                        url_decode(tostring(Req.assumeRolePolicyDocument)), "")
+| extend RefAccounts      = extract_all(@"(\d{12})", TrustDoc)
+| extend ExternalAccounts = set_difference(RefAccounts, OrgAccounts)
+| extend HasWildcardTrust = TrustDoc contains "\"AWS\":\"*\"" or TrustDoc contains "\"AWS\": \"*\""
+| extend PolicyArn        = tostring(Req.policyArn)
+| extend IsAdminAttach    = (EventName == "AttachRolePolicy" and PolicyArn in (AdminPolicies))
+| summarize
+    Created         = countif(EventName == "CreateRole"),
+    ExternalTrust   = countif(array_length(ExternalAccounts) > 0 or HasWildcardTrust),
+    TrustAccounts   = make_set_if(tostring(ExternalAccounts), array_length(ExternalAccounts) > 0, 5),
+    Wildcard        = countif(HasWildcardTrust),
+    AdminGrants     = countif(IsAdminAttach),
+    PolicyArns      = make_set_if(PolicyArn, IsAdminAttach, 5),
+    Callers         = make_set(UserIdentityArn, 5),
+    SourceIPs       = make_set(SourceIpAddress, 5),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated)
+    by RoleName, bin(TimeGenerated, 10m)
+| where ExternalTrust > 0 or AdminGrants > 0
+| extend Verdict = case(
+    ExternalTrust > 0 and AdminGrants > 0, "CROSS-ACCOUNT ADMIN BACKDOOR ROLE - P0",
+    Wildcard > 0,                          "ROLE TRUSTS ANY PRINCIPAL - P0",
+    ExternalTrust > 0,                     "ROLE TRUSTS EXTERNAL ACCOUNT, investigate",
+    "ADMIN ATTACHED TO ROLE, investigate")
+| project FirstSeen, LastSeen, RoleName, Created, ExternalTrust, TrustAccounts,
+          Wildcard, AdminGrants, PolicyArns, Callers, SourceIPs, Verdict
+| order by LastSeen desc
+//
+// Pair with IAM Access Analyzer, which evaluates EXISTING roles rather than only
+// new changes, a backdoor planted before logging is invisible here and visible
+// there. Use `accessanalyzer list-findings-v2` for the sweep.
+//
+// Containment caution: if the caller was root or a federated identity, the
+// standard "disable the access key" step does not apply, there is no key to
+// disable. Revoke sessions and address the trust relationship instead.

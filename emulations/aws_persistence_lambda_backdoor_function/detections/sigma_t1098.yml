@@ -1,8 +1,24 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Backdoor Lambda Function via Resource Policy (T1098)
+# Backdoor Lambda Function via Resource Policy (T1098)
+#
+# The original rule matched AddPermission + RemovePermission with a bare
+# `condition: selection`. It fired on every legitimate S3/SNS/EventBridge
+# integration wiring, and bundling RemovePermission INVERTED the signal: a
+# permission removal is not persistence, and it is the emulation's own cleanup.
+# RemovePermission is dropped from alerting and kept only for the timeline.
+#
+# The backdoor lives in the FUNCTION'S RESOURCE POLICY, not in IAM, so it
+# survives rotation of every credential in the account.
+#
+# GOOD NEWS ON PARSING: `principal` is CLEARTEXT in the event - a request
+# parameter, not a URL-encoded policy document. Unlike the IAM trust-policy
+# techniques, account digits match directly and no decode step is required.
+title: Lambda AddPermission granting external/public invoke
 id: b68838dd-b750-5e00-95b5-51109d2ecedc
+name: lambda_addpermission_external
 status: experimental
-description: lambda:AddPermission granting cross-account or wildcard invoke access to a Lambda function
+description: >-
+  Invoke permission on a Lambda function granted to a wildcard or to a
+  non-service principal. Persistence in the function's resource policy.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.lambda-backdoor-function/
 tags:
@@ -14,6 +30,58 @@ logsource:
 detection:
   selection:
     eventSource: 'lambda.amazonaws.com'
-    eventName: ['AddPermission', 'RemovePermission']
-  condition: selection
-level: medium
+    eventName: 'AddPermission'
+    requestParameters.action|contains: 'Invoke'   # InvokeFunction / InvokeFunctionUrl
+  public:
+    requestParameters.principal: '*'
+  # "External account" is SET MEMBERSHIP against your live org account list and
+  # cannot be a static Sigma value. This rule covers the static half: an
+  # explicit wildcard, or any principal that is not an AWS service. Pair it with
+  # the org-list join in `kql_t1098.kql` for the "not in my org" half.
+  service_principal:
+    requestParameters.principal|endswith: '.amazonaws.com'
+  condition: selection and (public or not service_principal)
+falsepositives:
+  - Legitimate cross-account integrations with partner or sibling accounts,
+    allowlist those account IDs
+level: high
+---
+# The function-URL variant. A public function URL is reachable from the open
+# internet with no AWS credentials at all: a broader exposure than a
+# cross-account grant.
+#
+# PARAMETER-NAME TRAP: AddPermission uses `functionUrlAuthType`, while
+# CreateFunctionUrlConfig uses `authType`. They are different keys on different
+# events; matching only one silently misses the other.
+title: Lambda function URL exposed without authentication
+id: 9e4c1b73-6a20-4f85-b3d9-07c5a2e841f6
+status: experimental
+description: >-
+  A function URL was configured or permitted with NONE authentication, making
+  the function invocable from the public internet without credentials.
+references:
+  - https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName:
+      - 'AddPermission'
+      - 'CreateFunctionUrlConfig'
+      - 'UpdateFunctionUrlConfig'
+  no_auth_addpermission:
+    requestParameters.functionUrlAuthType: 'NONE'
+  no_auth_urlconfig:
+    requestParameters.authType: 'NONE'
+  # Different events carry different keys: these MUST be OR'd as sibling
+  # blocks. ANDing them means no single event satisfies both and the rule never
+  # fires.
+  condition: selection and (no_auth_addpermission or no_auth_urlconfig)
+falsepositives:
+  - Deliberately public webhooks, should be explicitly inventoried
+level: high

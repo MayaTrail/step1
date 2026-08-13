@@ -1,7 +1,48 @@
-// Backdoor IAM Role Trust Policy (T1098) — eventName(s) auto-derived; verify casing.
-// Signal: iam:UpdateAssumeRolePolicy with an external account principal added to an existing role's trust policy
+// Backdoor IAM Role Trust Policy (T1098)
+//
+// THE authoritative detection. It decodes the trust policy, which is what makes
+// the general case detectable at all.
+//
+// WHY DECODING IS MANDATORY: policyDocument is URL-ENCODED in the event.
+// Percent-encoding escapes the structural characters ( " -> %22, * -> %2A ),
+// so substring patterns like '"AWS":"*"' never match the raw field. Only
+// 12-digit account IDs survive verbatim. Any rule hoping to catch WILDCARD or
+// ARBITRARY-EXTERNAL principals must decode first, as below.
+//
+// GetRole is excluded: it is a benign read that only dilutes the signal.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let OrgAccounts = dynamic(["111111111111","222222222222"]);   // REPLACE with your org account IDs
 AWSCloudTrail
-| where EventSource in ("iam.amazonaws.com")
-| where EventName in ("GetRole", "UpdateAssumeRolePolicy")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| where TimeGenerated > ago(7d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName in ("UpdateAssumeRolePolicy", "CreateRole")
+| extend Req = parse_json(RequestParameters)
+// Update -> policyDocument ; CreateRole -> assumeRolePolicyDocument.
+// Different keys; coalesce so both variants are covered.
+| extend RawDoc = tostring(coalesce(Req.policyDocument, Req.assumeRolePolicyDocument))
+| where isnotempty(RawDoc)
+| extend Trust = parse_json(url_decode(RawDoc))
+| extend RoleName = tostring(coalesce(Req.roleName, Req.RoleName))
+| mv-expand Stmt = Trust.Statement          // Statement may be an object or an array
+| extend PrincipalBlob = tostring(Stmt.Principal)
+// Wildcard trust, anyone, anywhere. Always critical.
+| extend HasWildcard = PrincipalBlob contains "\"*\"" or PrincipalBlob == "*"
+// Any 12-digit account referenced in the principal block
+| extend RefAccounts = extract_all(@"(\d{12})", PrincipalBlob)
+| extend ExternalAccounts = set_difference(RefAccounts, OrgAccounts)
+| where HasWildcard or array_length(ExternalAccounts) > 0
+| project TimeGenerated, UserIdentityArn, EventName, RoleName,
+          HasWildcard, ExternalAccounts, PrincipalBlob, SourceIpAddress
+| extend Verdict = case(
+    HasWildcard,                          "TRUST POLICY OPEN TO ANY PRINCIPAL - P0",
+    array_length(ExternalAccounts) > 0,   "TRUST POLICY GRANTS EXTERNAL ACCOUNT - P0",
+    "REVIEW")
 | order by TimeGenerated desc
+//
+// Pair this with:
+//   - IAM Access Analyzer findings for role external access (the purpose-built
+//     detector for exactly this condition, and it sweeps EXISTING roles rather
+//     than only new changes)
+//   - the cross-account AssumeRole rule in sigma_t1098.yml, which shows whether
+//     the backdoor was actually USED

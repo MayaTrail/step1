@@ -1,8 +1,22 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Execute Commands on EC2 Instances via SSM (T1651)
+# Execute Commands on EC2 Instances via SSM (T1651)
+#
+# The original rule matched `eventName IN (DescribeInstanceInformation,
+# SendCommand, GetCommandInvocation)` with a bare `condition: selection` - the
+# same broken pattern shipped with the SSM credential-theft and recon
+# techniques. SendCommand and GetCommandInvocation are routine patch
+# operations; DescribeInstanceInformation is pure noise. Matching them
+# independently floods the queue.
+#
+# Discriminators used here: shell DOCUMENT + non-automation PRINCIPAL. The
+# fan-out and command-body signals are aggregations/decodes and live in
+# `kql_t1651.kql`.
+title: SSM SendCommand shell document from non-automation principal
 id: 2e7a461b-0588-594c-ad91-df8ea34085a5
 status: experimental
-description: ssm:SendCommand in CloudTrail, especially with AWS-RunShellScript document targeting multiple instances
+description: >-
+  Arbitrary shell execution dispatched to instances by a principal outside the
+  patch-automation allowlist. SSM Run Command is a fully-featured remote
+  execution channel; the shell documents are the arbitrary-code ones.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ssm-send-command/
 tags:
@@ -14,6 +28,85 @@ logsource:
 detection:
   selection:
     eventSource: 'ssm.amazonaws.com'
-    eventName: ['DescribeInstanceInformation', 'SendCommand', 'GetCommandInvocation']
+    eventName: 'SendCommand'
+    requestParameters.documentName:
+      - 'AWS-RunShellScript'
+      - 'AWS-RunPowerShellScript'
+  # REPLACE these with the roles in YOUR account that legitimately run SSM
+  # commands on instances. The placeholder values below match nothing, so until
+  # they are edited this rule fires on every patch cycle.
+  automation_principals:
+    userIdentity.arn|contains:
+      - ':role/REPLACE-ME-patch-automation'
+      - ':role/REPLACE-ME-ssm-automation'
+      - ':role/REPLACE-ME-break-glass'
+  condition: selection and not automation_principals
+falsepositives:
+  - Break-glass administration via Run Command
+  - New automation roles not yet added to the allowlist
+level: high
+---
+# Best-effort content inspection.
+#
+# IMPORTANT: CloudTrail OFTEN OMITS the command body. A rule keyed on
+# requestParameters.parameters.commands silently matches nothing wherever SSM
+# does not record it (and a custom document using NoEcho hides it deliberately).
+# Treat this as a bonus signal layered on the rule above: never as the primary
+# detection. Where SSM output logging to S3/CloudWatch is enabled, run the
+# equivalent match against the logged command text instead, which is reliable.
+title: SSM SendCommand body contains download-and-execute tokens
+id: 7f3e0b95-8c21-4d47-a6b0-52d19c8e4a03
+status: experimental
+description: >-
+  The dispatched command text contains download-and-execute or reverse-shell
+  markers. High confidence when present; absence proves nothing.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ssm-send-command/
+tags:
+  - attack.execution
+  - attack.t1651
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName: 'SendCommand'
+    requestParameters.parameters.commands|contains:
+      - 'curl'
+      - 'wget'
+      - '/dev/tcp'
+      - 'base64 -d'
+      - 'bash -i'
+      - '169.254.169.254'
   condition: selection
-level: medium
+falsepositives:
+  - Legitimate bootstrap and package-install commands using curl/wget, inspect
+    the destination host
+level: high
+---
+# Demoted from primary selector to context. These are benign follow-on and
+# enumeration calls; correlate them with the rules above rather than alerting.
+title: SSM command enumeration and result retrieval
+id: c50a92e7-1b84-4f36-9d28-7ae3c0f61b5d
+status: experimental
+description: >-
+  Supporting context for SSM execution investigations, who looked up managed
+  instances and who collected command output.
+tags:
+  - attack.execution
+  - attack.t1651
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName:
+      - 'DescribeInstanceInformation'
+      - 'GetCommandInvocation'
+      - 'ListCommandInvocations'
+  condition: selection
+falsepositives:
+  - Routine automation, the overwhelming majority
+level: low

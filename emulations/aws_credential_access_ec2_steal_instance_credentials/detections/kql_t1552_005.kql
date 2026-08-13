@@ -1,7 +1,27 @@
-// Steal EC2 Instance Credentials via IMDS (T1552.005) — eventName(s) auto-derived; verify casing.
-// Signal: ssm:SendCommand executing IMDS queries; sts:GetCallerIdentity or ec2:DescribeInstances called with instance-profile credentials from an IP not associated with the instance
+// Steal EC2 Instance Credentials via IMDS (T1552.005)
+//
+// This is Rule B, the real detection, expressed against stored logs:
+// instance-profile credentials used from an IP that is not the instance's.
+// The theft itself happens on the host and never reaches CloudTrail, so the
+// detectable event is the credential being USED somewhere else.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// PREREQUISITE: a Sentinel watchlist named `InstanceRoleIPs` with columns
+// RoleName, AllowedPrivateIp, AllowedNatIp, one row per instance role mapping
+// it to the IPs it may legitimately call from. Without this the query returns
+// nothing useful; maintaining it is a standing task, not a one-off.
+let InstanceRoleIPs = _GetWatchlist('InstanceRoleIPs');
 AWSCloudTrail
-| where EventSource in ("ssm.amazonaws.com", "sts.amazonaws.com")
-| where EventName in ("DescribeInstanceInformation", "SendCommand", "GetCommandInvocation", "GetCallerIdentity")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
-| order by TimeGenerated desc
+| where TimeGenerated > ago(6h)
+| where UserIdentityType == "AssumedRole"
+| where UserIdentityArn has "assumed-role/"
+| extend RoleName = tostring(split(UserIdentityArn, "/")[1])
+| where SourceIpAddress !endswith "amazonaws.com"            // drop AWS-internal
+| join kind=inner (InstanceRoleIPs) on RoleName              // instance roles only
+| where SourceIpAddress != AllowedPrivateIp and SourceIpAddress != AllowedNatIp
+| summarize Calls = count(), Events = make_set(EventName, 20),
+            FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated)
+    by RoleName, SourceIpAddress
+| extend Verdict = "INSTANCE CREDENTIAL USED OFF-HOST, exfiltration"
+| order by Calls desc

@@ -15,7 +15,6 @@ date: 2026/06/28
 tags:
   - attack.execution
   - attack.t1609
-  - kubernetes
 logsource:
   product: kubernetes
   service: audit

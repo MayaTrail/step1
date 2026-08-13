@@ -1,7 +1,35 @@
-// Retrieve SSM Parameters from the Parameter Store (T1552.007) — eventName(s) auto-derived; verify casing.
-// Signal: ssm:GetParameters with withDecryption=true for large number of parameters from single principal
+// Retrieve SSM Parameters from the Parameter Store (T1552.007)
+//
+// THE deployable detection. Two things make it work where the original did not:
+//
+//   1. `withDecryption == true`, the discriminator. Without it there is no
+//      way to separate a metadata read from credential theft, and the rule
+//      fires on every application config read in the account.
+//   2. Counting distinct PARAMETER NAMES, not events. GetParameters is a batch
+//      call that decrypts up to 10 parameters at once, so event-counting
+//      understates exposure by up to 10x.
+//
+// GetParameter (singular) is included: an attacker looping the singular call
+// evades any GetParameters-only rule.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 AWSCloudTrail
-| where EventSource in ("ssm.amazonaws.com")
-| where EventName in ("DescribeParameters", "GetParameters")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
-| order by TimeGenerated desc
+| where TimeGenerated > ago(24h)
+| where EventSource == "ssm.amazonaws.com"
+| where EventName in ("GetParameters", "GetParameter")
+| extend Req = parse_json(RequestParameters)
+| where tostring(Req.withDecryption) == "true"
+| where isempty(ErrorCode)
+// normalise singular .name and batch .names into one multi-valued column
+| extend Names = iff(EventName == "GetParameters", Req.names, pack_array(Req.name))
+| mv-expand ParamName = Names to typeof(string)
+| summarize
+    ParamsDecrypted = dcount(ParamName),
+    Calls           = count(),
+    SourceIPs       = make_set(SourceIpAddress, 10),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 5m)
+| where ParamsDecrypted > 10
+| extend Verdict = "MASS SECURESTRING DECRYPTION - P0"
+| order by ParamsDecrypted desc

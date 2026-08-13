@@ -1,7 +1,60 @@
-// Create an IAM User with an Inline Admin Policy (T1136.003) — eventName(s) auto-derived; verify casing.
-// Signal: iam:CreateUser followed immediately by iam:AttachUserPolicy with AdministratorAccess in CloudTrail
+// Create an IAM User with an Admin Policy (T1136.003)
+//
+// Detects the SEQUENCE, user created, granted admin, issued credentials by the
+// same principal in a short window, plus the admin grant on its own.
+//
+// The original query matched all seven routine IAM user-lifecycle events with
+// no qualifier, firing on every onboarding, rotation and offboarding. The
+// cleanup and list events are excluded here.
+//
+// NESTED RESPONSE PATHS (both easy to get wrong, both silently return null):
+//   CreateUser       -> responseElements.user.userName
+//   CreateAccessKey  -> responseElements.accessKey.accessKeyId
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let AdminPolicies = dynamic([
+    "arn:aws:iam::aws:policy/AdministratorAccess",
+    "arn:aws:iam::aws:policy/IAMFullAccess",
+    "arn:aws:iam::aws:policy/PowerUserAccess"]);
 AWSCloudTrail
-| where EventSource in ("iam.amazonaws.com")
-| where EventName in ("CreateUser", "AttachUserPolicy", "CreateAccessKey", "ListAccessKeys", "DeleteAccessKey", "DetachUserPolicy", "DeleteUser")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
-| order by TimeGenerated desc
+| where TimeGenerated > ago(24h)
+| where EventSource == "iam.amazonaws.com"
+| where EventName in ("CreateUser", "AttachUserPolicy", "PutUserPolicy", "CreateAccessKey")
+| where isempty(ErrorCode)
+| extend Req  = parse_json(RequestParameters)
+| extend Resp = parse_json(ResponseElements)
+// Target user: named in the request for Attach/Put/CreateAccessKey; nested in
+// the response for CreateUser.
+| extend TargetUser = tostring(coalesce(Req.userName, Resp.user.userName))
+| extend PolicyArn  = tostring(Req.policyArn)
+| extend IsAdminAttach = (EventName == "AttachUserPolicy" and PolicyArn in (AdminPolicies))
+// Inline variant, policyDocument is URL-encoded, so decode before matching.
+| extend InlineDoc = iff(EventName == "PutUserPolicy",
+                         url_decode(tostring(Req.policyDocument)), "")
+| extend IsAdminInline = InlineDoc contains "\"Action\":\"*\"" or InlineDoc contains "\"Action\": \"*\""
+| extend NewKeyId = tostring(Resp.accessKey.accessKeyId)
+| summarize
+    Created      = countif(EventName == "CreateUser"),
+    AdminGrants  = countif(IsAdminAttach or IsAdminInline),
+    PolicyArns   = make_set_if(PolicyArn, IsAdminAttach, 5),
+    KeysIssued   = countif(EventName == "CreateAccessKey"),
+    NewKeys      = make_set_if(NewKeyId, isnotempty(NewKeyId), 5),
+    Callers      = make_set(UserIdentityArn, 5),
+    SourceIPs    = make_set(SourceIpAddress, 5),
+    FirstSeen    = min(TimeGenerated),
+    LastSeen     = max(TimeGenerated)
+    by TargetUser, bin(TimeGenerated, 10m)
+| where AdminGrants > 0
+| extend Verdict = case(
+    Created > 0 and AdminGrants > 0 and KeysIssued > 0,
+        "NET-NEW ADMIN USER WITH CREDENTIALS, backdoor, P0",
+    Created > 0 and AdminGrants > 0,
+        "NET-NEW ADMIN USER - P0",
+    "ADMIN GRANTED TO EXISTING USER, privilege escalation, investigate")
+| project FirstSeen, LastSeen, TargetUser, Created, AdminGrants, PolicyArns,
+          KeysIssued, NewKeys, Callers, SourceIPs, Verdict
+| order by LastSeen desc
+//
+// Note: `lookup-events` style CLI pagination caveats do not apply here, but a
+// long-running actor may spread these steps beyond the 10m bin, widen it if
+// the sequence appears split across adjacent buckets.

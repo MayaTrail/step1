@@ -1,8 +1,23 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Invoke Bedrock Model for Resource Exhaustion (T1496)
+# Invoke Bedrock Model for Resource Exhaustion (T1496)
+#
+# Unlike most rules in this set, the original here is FIXABLE rather than
+# broken: `InvokeModel` IS a CloudTrail management event, so the rule does
+# fire. Its defects are precision ones:
+#
+#   1. No threshold. The technique is defined by VOLUME, not occurrence, so a
+#      1:1 rule fires on the constant legitimate traffic of any ML workload and
+#      gets muted.
+#   2. No eventSource scoping: a bare `InvokeModel` match across all sources
+#      is imprecise and risks name collisions.
+#   3. Only the one event name; the streaming and Converse APIs achieve the
+#      same thing.
+title: Bedrock InvokeModel
 id: 778e06a0-fd6a-5354-bf6e-31d752f9117d
+name: bedrock_invoke_base
 status: experimental
-description: bedrock:InvokeModel called at high volume or from an unexpected principal; sudden spike in Bedrock spend in cost explorer
+description: >-
+  A Bedrock model invocation. Base rule for the volume correlation, fires on
+  all legitimate traffic by design and is not for direct alerting.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.impact.bedrock-invoke-model/
 tags:
@@ -13,6 +28,66 @@ logsource:
   service: cloudtrail
 detection:
   selection:
-    eventName: ['InvokeModel']
+    eventSource: 'bedrock.amazonaws.com'
+    eventName:
+      - 'InvokeModel'
+      - 'InvokeModelWithResponseStream'
+      - 'Converse'
+      - 'ConverseStream'
   condition: selection
-level: medium
+level: low
+---
+# THE primary detection. Zero-config: because these are management events, a
+# thresholded correlation works against the default trail with no data-event
+# configuration required.
+title: Bedrock invocation flood from a single principal
+id: 3e1a7c94-2f60-4b85-9d02-6c8a1b7e0f53
+status: experimental
+description: >-
+  One principal issued more than 100 model invocations in ten minutes. Bedrock
+  is billed per token, so sustained abuse is a direct and fast-accruing cost.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.impact.bedrock-invoke-model/
+tags:
+  - attack.impact
+  - attack.t1496
+correlation:
+  type: event_count
+  rules:
+    - bedrock_invoke_base
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gt: 100          # tune to the workload baseline; the emulation loops rapidly
+falsepositives:
+  - Batch inference and evaluation jobs, allowlist those principals
+level: high
+---
+# The blinding precursor. Invocation logging is what captures prompt and
+# completion CONTENT; an attacker who disables it removes the only record of
+# what was actually asked of the model.
+title: Bedrock model invocation logging disabled or altered
+id: 2c7f9a13-6b48-4e02-9d15-8a3c0b7e5f41
+status: experimental
+description: >-
+  Model invocation logging configuration deleted or rewritten. Deletion is
+  unambiguous; a Put should be reviewed for whether logging was weakened.
+references:
+  - https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html
+tags:
+  - attack.defense_evasion
+  - attack.t1562.008
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'bedrock.amazonaws.com'
+    eventName:
+      - 'DeleteModelInvocationLoggingConfiguration'
+      - 'PutModelInvocationLoggingConfiguration'   # review: was logging weakened?
+  condition: selection
+falsepositives:
+  - Legitimate logging reconfiguration, correlate with change management
+level: high

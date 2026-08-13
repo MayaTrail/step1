@@ -1,7 +1,56 @@
-// Create IAM Roles Anywhere Trust Anchor (T1550.001) — eventName(s) auto-derived; verify casing.
-// Signal: rolesanywhere:CreateTrustAnchor — rare API call almost never made outside initial IAM Roles Anywhere setup; warrants immediate investigation
+// Create IAM Roles Anywhere Trust Anchor (T1550.001)
+//
+// Covers the whole CHAIN, not just the anchor. A trust anchor alone is INERT,
+// credential vending needs anchor + profile + a role trusting
+// rolesanywhere.amazonaws.com. Detecting any link catches the scheme.
+//
+// ROLES ANYWHERE IS REGIONAL. A query or rule bound to one region misses an
+// anchor created anywhere else. Run this across all regions, and sweep all
+// regions during hunts (the IAM role-trust half is global).
+//
+// Disable/Delete are retained for the forensic timeline only, removing an
+// anchor is remediation, not attack.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 AWSCloudTrail
-| where EventSource in ("rolesanywhere.amazonaws.com")
-| where EventName in ("CreateTrustAnchor", "DisableTrustAnchor", "DeleteTrustAnchor")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
+| where TimeGenerated > ago(30d)
+| where (EventSource == "rolesanywhere.amazonaws.com")
+     or (EventSource == "iam.amazonaws.com"
+         and EventName in ("CreateRole", "UpdateAssumeRolePolicy"))
+| extend Req = parse_json(RequestParameters)
+// The role-trust link. Service principal survives URL-encoding as a literal
+// substring (letters and dots only), so no decode is needed for this match.
+| extend TrustDoc = tostring(coalesce(Req.policyDocument, Req.assumeRolePolicyDocument))
+| extend TrustsRolesAnywhere = TrustDoc contains "rolesanywhere.amazonaws.com"
+| where EventSource == "rolesanywhere.amazonaws.com" or TrustsRolesAnywhere
+| extend AnchorName  = tostring(Req.name)
+| extend ProfileArn  = tostring(Req.profileArn)
+| extend RoleName    = tostring(Req.roleName)
+// The CA certificate PEM is logged in cleartext (it is public material, not
+// redacted), extract and inspect the issuer/subject with openssl.
+| extend CertPem = tostring(Req.source.sourceData.x509CertificateData)
+| project TimeGenerated, AWSRegion, EventSource, EventName, UserIdentityArn,
+          AnchorName, ProfileArn, RoleName, TrustsRolesAnywhere,
+          HasCert = isnotempty(CertPem), SourceIpAddress
+| extend Verdict = case(
+    EventName == "CreateTrustAnchor",  "ROLES ANYWHERE TRUST ANCHOR CREATED, external CA registered as identity source, P0",
+    EventName == "CreateProfile",      "ROLES ANYWHERE PROFILE CREATED, links the anchor to assumable roles, P0",
+    TrustsRolesAnywhere,               "ROLE NOW TRUSTS ROLES ANYWHERE, the gate, P0",
+    EventName == "CreateSession",      "ROLES ANYWHERE SESSION VENDED, anchor in use",
+    EventName in ("DisableTrustAnchor","DeleteTrustAnchor"), "anchor removed (timeline only)",
+    "REVIEW")
 | order by TimeGenerated desc
+//
+// FIELD NOTES
+// - CreateSession has NO requestParameters.subjectName. The presenting
+//   certificate is in requestParameters.cert; the certificate CN surfaces as
+//   `sourceIdentity` on the DOWNSTREAM calls made with the vended credentials.
+//   That is the field to pivot on when tracing what the session did.
+// - profileId is the trailing segment of the profile ARN.
+// - get-role returns the trust policy DECODED (unlike the CloudTrail event).
+//
+// CONTAINMENT ORDER: disable before delete, a deleted anchor takes its
+// evidence with it.
+//
+// PREVENTION: aws:SourceArn binds a role to a specific trust anchor, so a role
+// cannot be assumed via an attacker's newly created anchor.

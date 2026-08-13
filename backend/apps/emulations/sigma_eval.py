@@ -6,7 +6,8 @@ can be tested against synthetic events without compiling to a SIEM query
 language. It supports the subset of Sigma that MayaTrail's own rules use:
 
     - plain field equality (case-insensitive, per Sigma default),
-    - the |contains, |startswith, |endswith, |re, and |all field modifiers,
+    - the |contains, |startswith, |endswith, |re, |exists and |all field
+      modifiers,
     - list-of-values (OR by default, AND with |all),
     - nested dotted field paths (userIdentity.type, requestParameters.roleArn),
     - list-of-maps selections (OR of the maps),
@@ -24,7 +25,7 @@ import json
 import re
 from typing import Any
 
-_SUPPORTED_MODIFIERS = frozenset({"contains", "startswith", "endswith", "re", "all"})
+_SUPPORTED_MODIFIERS = frozenset({"contains", "startswith", "endswith", "re", "all", "exists"})
 _CONDITION_TOKEN = re.compile(r"\(|\)|[A-Za-z0-9_*.]+")
 
 
@@ -92,6 +93,12 @@ def _match_field(field_spec: str, expected: Any, event: dict) -> bool:
             raise SigmaUnsupported(f"unsupported field modifier '|{mod}'")
 
     actual = _get_field(event, path)
+
+    # |exists asks whether the path resolves at all, so it cannot go through
+    # _compare, which treats an absent field as a non-match by definition.
+    if modifier == "exists":
+        return (actual is not None) is bool(expected)
+
     values = expected if isinstance(expected, list) else [expected]
     results = [_compare(actual, value, modifier) for value in values]
     return all(results) if require_all else any(results)
@@ -103,12 +110,17 @@ def _match_selection(selection: Any, event: dict) -> bool:
 
     A dict selection matches when every field predicate matches (AND). A list
     selection is OR of its member maps.
+
+    Both branches build a list rather than pass a generator to any()/all().
+    Short-circuiting would stop at the first decisive predicate, so an
+    unsupported modifier later in the same block would never raise and
+    is_evaluable would wrongly pass the rule. Every predicate is evaluated.
     """
     if isinstance(selection, list):
-        return any(_match_selection(member, event) for member in selection)
+        return any([_match_selection(member, event) for member in selection])
     if not isinstance(selection, dict):
         raise SigmaUnsupported("selection is neither a map nor a list of maps")
-    return all(_match_field(field, expected, event) for field, expected in selection.items())
+    return all([_match_field(field, expected, event) for field, expected in selection.items()])
 
 
 def _eval_condition(condition: str, selection_matches: dict[str, bool]) -> bool:

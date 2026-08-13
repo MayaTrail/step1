@@ -1,8 +1,26 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Create IAM Backdoor Role with Admin Access (T1098)
+# Create IAM Backdoor Role with Admin Access (T1098)
+#
+# This technique is the COMBINATION of two others: an externally-trusted role
+# (backdoor_role) plus an admin grant (create_admin_user). Either half alone is
+# suspicious; together they are a cross-account admin backdoor.
+#
+# The original rule matched CreateRole / AttachRolePolicy / DetachRolePolicy /
+# DeleteRole with a bare `condition: selection` - every IaC role change fires
+# it, and DetachRolePolicy/DeleteRole are the benign cleanup and the
+# emulation's own revert. Both are dropped.
+#
+# URL-ENCODING CONSTRAINT (same as the backdoor_role technique):
+# assumeRolePolicyDocument is URL-encoded in the event, so '"AWS":"*"' never
+# matches the raw field ( " -> %22, * -> %2A ). Only 12-digit account IDs
+# survive verbatim, which is why Rule A is an IOC catcher. The general
+# external/wildcard case requires decoding: see `kql_t1098.kql`.
+title: IAM CreateRole trust policy references a known-bad account
 id: a93c79c1-1109-50d5-96c6-939c06cf0a78
+name: iam_createrole_external
 status: experimental
-description: iam:CreateRole with a cross-account trust principal followed by iam:AttachRolePolicy attaching AdministratorAccess or broad managed policies
+description: >-
+  A role was created whose trust policy references an account on the known-bad
+  list. Covers enumerated IOC accounts only, see the KQL for the general case.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-backdoor-role/
 tags:
@@ -14,6 +32,114 @@ logsource:
 detection:
   selection:
     eventSource: 'iam.amazonaws.com'
-    eventName: ['CreateRole', 'AttachRolePolicy', 'DetachRolePolicy', 'DeleteRole']
+    eventName: 'CreateRole'
+  known_bad_account:
+    requestParameters.assumeRolePolicyDocument|contains:
+      - '193672423079'          # emulation marker; add your own IOC account IDs
+  condition: selection and known_bad_account
+level: critical
+---
+title: IAM AdministratorAccess attached to a role by non-identity-admin
+id: 8c4f2a83-9d15-4e07-b2d1-6a0c9b7e5f24
+name: iam_attach_role_admin
+status: experimental
+description: >-
+  An admin-equivalent managed policy was attached to a role by a principal
+  outside the identity-administration allowlist.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-backdoor-role/
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'AttachRolePolicy'
+    requestParameters.policyArn:
+      - 'arn:aws:iam::aws:policy/AdministratorAccess'
+      - 'arn:aws:iam::aws:policy/IAMFullAccess'
+      - 'arn:aws:iam::aws:policy/PowerUserAccess'
+  # REPLACE these with the roles in YOUR account that legitimately create roles
+  # and set trust policies. The placeholder values below match nothing, so
+  # until they are edited this rule fires on every role your IaC creates.
+  identity_admin:
+    userIdentity.arn|contains:
+      - ':role/REPLACE-ME-identity-admin'
+      - ':role/REPLACE-ME-iac-deploy'
+      - ':role/REPLACE-ME-break-glass'
+  condition: selection and not identity_admin
+falsepositives:
+  - Legitimate admin roles created outside the allowlisted principals, should
+    be rare and traceable to a change request
+level: critical
+---
+title: IAM backdoor-role creation sequence
+id: 1f6b3e07-5c92-4a48-8d21-90e7ac35f6b8
+status: experimental
+description: >-
+  A role created and granted admin by the same principal within ten minutes.
+  Combined with an external trust principal this is a cross-account admin
+  backdoor.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-backdoor-role/
+tags:
+  - attack.persistence
+  - attack.t1098
+correlation:
+  type: temporal_ordered
+  rules:
+    - iam_create_role_base
+    - iam_attach_role_admin
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+level: critical
+---
+title: IAM CreateRole
+id: 6d92f14b-38a0-4e75-b1c6-2f80e5a9c317
+name: iam_create_role_base
+status: experimental
+description: Base rule, sequence component only, not for direct alerting.
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'CreateRole'
   condition: selection
-level: medium
+level: low
+---
+# Detects the backdoor being USED. In this account, a cross-account assumption
+# records the external caller's account id while the role is local.
+# SET YOUR OWN ACCOUNT IDs: as shipped this fires on all cross-account use.
+title: Cross-account AssumeRole into a local role
+id: 4c8e0b76-2a39-4d51-97f0-8b6c1e50da34
+status: experimental
+description: >-
+  A principal outside the organisation assumed a role in this account,
+  confirmation that a backdoored trust policy was exercised.
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sts.amazonaws.com'
+    eventName: 'AssumeRole'
+  org_accounts:
+    userIdentity.accountId:
+      - '111111111111'        # REPLACE with your organisation's account IDs
+      - '222222222222'
+  condition: selection and not org_accounts
+falsepositives:
+  - Approved third-party integrations, allowlist their account IDs
+level: high

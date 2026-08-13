@@ -1,7 +1,71 @@
-// Create IAM User with Console Access (T1136.003) — eventName(s) auto-derived; verify casing.
-// Signal: iam:CreateUser followed by iam:CreateLoginProfile — new console-enabled user created outside normal IAM provisioning pipeline
+// Create IAM User with Console Access (T1136.003)
+//
+// Grouped by TARGET USER, not by caller, the question is "which identity now
+// has console access it should not have", and the privilege grant may come from
+// a different principal than the one that created the profile.
+//
+// Delete* events are retained here ONLY for the forensic timeline (was the
+// backdoor cleaned up, and when). They are not part of the alerting condition:
+// a deletion is the opposite of persistence, and the original rule's inclusion
+// of them inverted the signal.
+//
+// NESTED PATHS: CreateUser -> responseElements.user.userName
+//               CreateLoginProfile -> responseElements.loginProfile.userName
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 AWSCloudTrail
-| where EventSource in ("iam.amazonaws.com")
-| where EventName in ("CreateUser", "CreateLoginProfile", "DeleteLoginProfile", "DeleteUser")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
-| order by TimeGenerated desc
+| where TimeGenerated > ago(24h)
+| where EventSource == "iam.amazonaws.com"
+| where EventName in ("CreateUser", "CreateLoginProfile", "AttachUserPolicy",
+                      "PutUserPolicy", "AddUserToGroup",
+                      "DeleteLoginProfile", "DeleteUser")
+| where isempty(ErrorCode)
+| extend Req  = parse_json(RequestParameters)
+| extend Resp = parse_json(ResponseElements)
+| extend TargetUser = tostring(coalesce(Req.userName,
+                                        Resp.user.userName,
+                                        Resp.loginProfile.userName))
+| extend PwdResetRequired = tostring(Req.passwordResetRequired)
+| summarize
+    UserCreated    = countif(EventName == "CreateUser"),
+    ProfileCreated = countif(EventName == "CreateLoginProfile"),
+    PrivGrants     = countif(EventName in ("AttachUserPolicy","PutUserPolicy","AddUserToGroup")),
+    GrantDetail    = make_set_if(tostring(Req.policyArn), EventName == "AttachUserPolicy", 5),
+    Groups         = make_set_if(tostring(Req.groupName), EventName == "AddUserToGroup", 5),
+    CleanedUp      = countif(EventName in ("DeleteLoginProfile","DeleteUser")),
+    NoResetFlag    = countif(EventName == "CreateLoginProfile" and PwdResetRequired == "false"),
+    Callers        = make_set(UserIdentityArn, 5),
+    SourceIPs      = make_set(SourceIpAddress, 5),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated)
+    by TargetUser, bin(TimeGenerated, 15m)
+| where ProfileCreated > 0
+// REPLACE these with the roles in YOUR account that legitimately create IAM
+// users and login profiles. The placeholder values match nothing, so until they
+// are edited this rule fires on every onboarding.
+//
+// `contains` (substring), NOT `has` (whole-term): a role path is delimited by a
+// slash and hyphens, so `has` does not match it reliably.
+| where not(Callers contains "role/REPLACE-ME-identity-admin"
+            or Callers contains "role/REPLACE-ME-onboarding")
+| extend Verdict = case(
+    ProfileCreated > 0 and PrivGrants > 0,
+        "CONSOLE BACKDOOR WITH PRIVILEGES - P0",
+    UserCreated > 0 and ProfileCreated > 0,
+        "NET-NEW CONSOLE USER, investigate (powerless until granted)",
+    "CONSOLE ACCESS ADDED TO EXISTING USER, investigate")
+| project FirstSeen, LastSeen, TargetUser, UserCreated, ProfileCreated, PrivGrants,
+          GrantDetail, Groups, NoResetFlag, CleanedUp, Callers, SourceIPs, Verdict
+| order by LastSeen desc
+//
+// `passwordResetRequired == false` is a SUPPORTING discriminator only. Some
+// legitimate flows also set it false. Never gate a containment action on it
+// alone, it colours the triage, it does not decide it.
+//
+// "Was it used?" pivot is ConsoleLogin, not access-key activity:
+//   AWSCloudTrail
+//   | where EventSource == "signin.amazonaws.com" and EventName == "ConsoleLogin"
+//   | where UserIdentityUserName == "<TargetUser>"
+//   | extend Result = tostring(parse_json(ResponseElements).ConsoleLogin),
+//            MFA    = tostring(parse_json(AdditionalEventData).MFAUsed)
+// Remember console sign-in is global and lands in us-east-1.

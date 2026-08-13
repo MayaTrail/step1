@@ -1,7 +1,39 @@
-// Execute Malicious Code via EC2 User Data (T1059) — eventName(s) auto-derived; verify casing.
-// Signal: ec2:ModifyInstanceAttribute with attribute=userData on a stopped instance, especially when followed by ec2:StartInstances
+// Execute Malicious Code via EC2 User Data (T1059)
+//
+// Detects the SEQUENCE, not the individual events. Stop and Start fire on every
+// routine maintenance window; only their co-occurrence with a user-data
+// rewrite, against the same instance, inside a short window, is the technique.
+//
+// Field-shape gotcha: instanceId is a direct request parameter on
+// ModifyInstanceAttribute, but on Stop/StartInstances it is nested in
+// instancesSet.items[]. The coalesce below normalises the two so the grouping
+// key actually lines up, without it the sequence never assembles.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let window = 15m;
 AWSCloudTrail
-| where EventSource in ("ec2.amazonaws.com")
+| where TimeGenerated > ago(24h)
+| where EventSource == "ec2.amazonaws.com"
 | where EventName in ("StopInstances", "ModifyInstanceAttribute", "StartInstances")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
-| order by TimeGenerated desc
+| extend Req = parse_json(RequestParameters)
+// instanceId is on ModifyInstanceAttribute directly; on Stop/Start it is in instancesSet
+| extend InstanceId = tostring(coalesce(Req.instanceId, Req.instancesSet.items[0].instanceId))
+| extend IsUserDataModify = (EventName == "ModifyInstanceAttribute" and isnotempty(Req.userData))
+| where EventName in ("StopInstances","StartInstances") or IsUserDataModify
+| sort by InstanceId asc, TimeGenerated asc
+| summarize
+    Events   = make_list(EventName),
+    ModUD    = countif(IsUserDataModify),
+    Stops    = countif(EventName == "StopInstances"),
+    Starts   = countif(EventName == "StartInstances"),
+    Callers  = make_set(UserIdentityArn, 5),
+    FirstSeen = min(TimeGenerated),
+    LastSeen  = max(TimeGenerated)
+    by InstanceId, bin(TimeGenerated, window)
+| where ModUD > 0 and Stops > 0 and Starts > 0
+| extend Verdict = "EC2 USER-DATA INJECTION SEQUENCE - P0"
+| order by LastSeen desc
+//
+// To catch the write on its own (an actor who rewrites user-data and waits for
+// a natural reboot rather than forcing one), drop the Stops/Starts predicate
+// and alert on ModUD > 0 with the provisioning roles allowlisted.

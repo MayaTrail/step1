@@ -1,7 +1,37 @@
-// Retrieve a High Number of Secrets Manager Secrets via Batch (T1555) — eventName(s) auto-derived; verify casing.
-// Signal: secretsmanager:BatchGetSecretValue from a single principal — distinct from individual GetSecretValue pattern
+// Retrieve a High Number of Secrets Manager Secrets via Batch (T1555)
+//
+// Counts DISTINCT SECRETS DISCLOSED, not calls. Severity for this technique
+// scales with the number of secrets read, which event-counting misses entirely
+// (one batch call can disclose 20 secrets).
+//
+// COUNTING RULE: BatchGetSecretValue also emits one per-secret GetSecretValue
+// event, so GetSecretValue alone is a complete and self-deduplicating source.
+// Do NOT add BatchGetSecretValue to the dcount, it double-counts ~2x. The
+// batch API is joined back in below purely as a verdict discriminator.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 AWSCloudTrail
-| where EventSource in ("secretsmanager.amazonaws.com")
-| where EventName in ("ListSecrets", "BatchGetSecretValue")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
-| order by TimeGenerated desc
+| where TimeGenerated > ago(24h)
+| where EventSource == "secretsmanager.amazonaws.com"
+| where EventName == "GetSecretValue"
+| where isempty(ErrorCode)                              // disclosed, not denied
+| extend SecretId = tostring(parse_json(RequestParameters).secretId)
+| summarize
+    SecretsRetrieved = dcount(SecretId),                // DISTINCT secrets, one source
+    Calls            = count(),
+    SourceIPs        = make_set(SourceIpAddress, 10),
+    FirstSeen        = min(TimeGenerated),
+    LastSeen         = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 10m)
+| where SecretsRetrieved > 15
+| join kind=leftouter (
+    AWSCloudTrail
+    | where TimeGenerated > ago(24h)
+    | where EventName == "BatchGetSecretValue"
+    | summarize BatchCalls = count() by UserIdentityArn, bin(TimeGenerated, 10m)
+  ) on UserIdentityArn, TimeGenerated
+| extend Verdict = case(
+    BatchCalls > 0, "BULK SECRET EXFILTRATION via batch API - P0",
+    "HIGH-VOLUME SECRET READ, review")
+| project TimeGenerated, UserIdentityArn, SecretsRetrieved, Calls, BatchCalls, SourceIPs, Verdict
+| order by SecretsRetrieved desc

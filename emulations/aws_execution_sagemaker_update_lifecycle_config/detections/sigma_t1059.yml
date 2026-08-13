@@ -1,8 +1,19 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Malicious Script Execution via SageMaker Lifecycle Config (T1059)
+# Malicious Script Execution via SageMaker Lifecycle Config (T1059)
+#
+# The original rule ORed UpdateNotebookInstanceLifecycleConfig with
+# DescribeNotebookInstanceLifecycleConfig under a bare `condition: selection`,
+# so a routine read fired the same alert as a malicious write. The Describe is
+# dropped as a trigger.
+#
+# Create* is included: an attacker can create a NEW malicious config and attach
+# it, which an Update-only rule never sees.
+title: SageMaker notebook lifecycle config written by non-provisioning principal
 id: 6a679be3-52fe-5cfb-a8b2-a9bd7ad7ea48
 status: experimental
-description: CloudTrail sagemaker:UpdateNotebookInstanceLifecycleConfig with a base64-encoded OnStart script from an unexpected principal
+description: >-
+  A notebook lifecycle configuration created or modified outside the
+  provisioning pipeline. These scripts run automatically on notebook start
+  under the notebook's execution role.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.sagemaker-update-lifecycle-config/
 tags:
@@ -14,6 +25,62 @@ logsource:
 detection:
   selection:
     eventSource: 'sagemaker.amazonaws.com'
-    eventName: ['UpdateNotebookInstanceLifecycleConfig', 'DescribeNotebookInstanceLifecycleConfig']
-  condition: selection
-level: medium
+    eventName:
+      - 'UpdateNotebookInstanceLifecycleConfig'
+      - 'CreateNotebookInstanceLifecycleConfig'
+  # REPLACE these with the roles in YOUR account that legitimately update
+  # SageMaker lifecycle configurations. The placeholder values below match
+  # nothing, so until they are edited this rule fires on every notebook
+  # provisioning change.
+  allowlisted:
+    userIdentity.arn|contains:
+      - ':role/REPLACE-ME-provisioning'
+      - ':role/REPLACE-ME-ci-'
+  condition: selection and not allowlisted
+falsepositives:
+  - Data scientists editing their own notebook bootstrap outside CI, common
+    enough to warrant tuning by team role
+level: high
+---
+# Content inspection. The OnStart/OnCreate script body is carried in the event
+# itself (base64), so the strongest available signal costs nothing to check.
+#
+# REQUIRES a pipeline that base64-decodes requestParameters.onStart[].content
+# into a `DecodedOnStart` field before evaluation. Where the backend cannot
+# decode, use `kql_t1059.kql`, which decodes inline.
+#
+# Substring matching is deliberate: whole-term matching does not reliably hit
+# "/dev/tcp" or "base64 -d", which are exactly the payloads of interest.
+title: SageMaker lifecycle config with suspicious OnStart content
+id: 5d2a7f18-6b34-4c90-a2e1-8f0c3b9d4a67
+status: experimental
+description: >-
+  The decoded lifecycle script contains download-and-execute or reverse-shell
+  tokens. Content-confirmed malicious rather than merely unexpected.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.sagemaker-update-lifecycle-config/
+tags:
+  - attack.execution
+  - attack.t1059
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sagemaker.amazonaws.com'
+    eventName:
+      - 'UpdateNotebookInstanceLifecycleConfig'
+      - 'CreateNotebookInstanceLifecycleConfig'
+  suspicious_decoded:
+    # after base64-decoding requestParameters.onStart[].content / onCreate[].content
+    DecodedOnStart|contains:
+      - 'curl'
+      - 'wget'
+      - '/dev/tcp'
+      - 'base64 -d'
+      - 'bash -i'
+  condition: selection and suspicious_decoded
+falsepositives:
+  - Legitimate bootstrap scripts that pip-install from an internal mirror via
+    curl, inspect the destination host before dismissing
+level: critical

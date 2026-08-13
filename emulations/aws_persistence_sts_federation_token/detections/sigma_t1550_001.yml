@@ -1,8 +1,44 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Backdoor IAM User with Federated Token (T1550.001)
+# Backdoor IAM User with Federated Token (T1550.001)
+#
+# The original rule paired the rare signal with the NOISIEST CALL IN AWS.
+# sts:GetCallerIdentity fires on every SDK/CLI init, every credential check,
+# every CI job: bundling it buried GetFederationToken completely. It was only
+# the emulation's proof-of-access step and is dropped entirely.
+# (Same defect class as the EC2 credential-theft rule.)
+title: STS GetFederationToken called
 id: fc51777c-ee50-5d9f-bb4f-0abea1490706
+name: sts_getfederationtoken
 status: experimental
-description: sts:GetFederationToken called with a permissive inline policy or from an unexpected principal; federated sessions appear in CloudTrail with token source info
+description: >-
+  A federation token was minted. The resulting session survives rotation of the
+  source user's access keys, which is what makes this persistence.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.sts-federation-token/
+tags:
+  - attack.persistence
+  - attack.t1550.001
+  - attack.t1078.004
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sts.amazonaws.com'
+    eventName: 'GetFederationToken'
+  condition: selection
+falsepositives:
+  - Environments that legitimately use federation, keep the rule but downgrade
+    to `medium` and add a principal allowlist
+level: high
+---
+# The follow-on: what the minted token actually DID. Rule A catches the mint;
+# this catches the damage.
+title: Federated-user session activity
+id: 3d8f2b05-4e69-4f72-a1d3-7b1c9e6f4a28
+status: experimental
+description: >-
+  Activity performed by a FederatedUser session. Scope to unrecognised session
+  names by allowlisting approved federated-user ARNs at the log platform.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.sts-federation-token/
 tags:
@@ -13,7 +49,34 @@ logsource:
   service: cloudtrail
 detection:
   selection:
-    eventSource: 'sts.amazonaws.com'
-    eventName: ['GetFederationToken', 'GetCallerIdentity']
+    userIdentity.type: 'FederatedUser'
   condition: selection
+falsepositives:
+  - Legitimate federation use, allowlist by federated-user name
+level: high
+---
+# Probing signal. GetFederationToken is IAM-user-only (root can also call it,
+# capped at 3600s), so a ROLE session attempting it fails with AccessDenied.
+# A burst of those failures is an actor discovering what their credential can do.
+title: STS GetFederationToken denied
+id: 8f0b4d61-2c95-4a37-be48-15a70cd39e26
+status: experimental
+description: >-
+  Failed GetFederationToken attempts, typically a role session trying an
+  IAM-user-only API. Probing rather than success.
+references:
+  - https://docs.aws.amazon.com/STS/latest/APIReference/API_GetFederationToken.html
+tags:
+  - attack.persistence
+  - attack.t1550.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sts.amazonaws.com'
+    eventName: 'GetFederationToken'
+  denied:
+    errorCode|contains: 'AccessDenied'
+  condition: selection and denied
 level: medium

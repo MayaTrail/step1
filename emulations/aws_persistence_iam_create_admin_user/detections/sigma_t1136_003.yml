@@ -1,8 +1,22 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Create an IAM User with an Inline Admin Policy (T1136.003)
+# Create an IAM User with an Admin Policy (T1136.003)
+#
+# The original rule matched ALL SEVEN routine IAM user-lifecycle events
+# (CreateUser, AttachUserPolicy, CreateAccessKey, ListAccessKeys,
+# DeleteAccessKey, DetachUserPolicy, DeleteUser) with a bare
+# `condition: selection`. It fires on every onboarding, every key rotation and
+# every offboarding, and inspects neither WHICH policy was attached nor the
+# sequence. The cleanup and list events are dropped entirely.
+#
+# NAMING NOTE: the technique is called "inline admin policy" but attack.py uses
+# a MANAGED policy (AttachUserPolicy with AdministratorAccess), not inline
+# PutUserPolicy. Both variants are covered below.
+title: IAM AdministratorAccess attached to a user by non-identity-admin
 id: f741faca-9d6c-59ea-8a9d-a37d0398398c
+name: iam_attach_admin_base
 status: experimental
-description: iam:CreateUser followed immediately by iam:AttachUserPolicy with AdministratorAccess in CloudTrail
+description: >-
+  An admin-equivalent managed policy was attached to an IAM user by a principal
+  outside the identity-administration allowlist.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-admin-user/
 tags:
@@ -14,6 +28,114 @@ logsource:
 detection:
   selection:
     eventSource: 'iam.amazonaws.com'
-    eventName: ['CreateUser', 'AttachUserPolicy', 'CreateAccessKey', 'ListAccessKeys', 'DeleteAccessKey', 'DetachUserPolicy', 'DeleteUser']
+    eventName: 'AttachUserPolicy'
+    requestParameters.policyArn:
+      - 'arn:aws:iam::aws:policy/AdministratorAccess'
+      - 'arn:aws:iam::aws:policy/IAMFullAccess'
+      - 'arn:aws:iam::aws:policy/PowerUserAccess'
+  # REPLACE these with the roles in YOUR account that legitimately attach
+  # admin-equivalent policies to users. The placeholder values below match
+  # nothing, so until they are edited this rule fires on every admin grant you
+  # make yourself.
+  identity_admin:
+    userIdentity.arn|contains:
+      - ':role/REPLACE-ME-identity-admin'
+      - ':role/REPLACE-ME-iac-deploy'
+      - ':role/REPLACE-ME-break-glass'
+  condition: selection and not identity_admin
+falsepositives:
+  - Legitimate privilege grants outside the allowlisted roles, should be rare
+    and traceable to a change request
+level: critical
+---
+# The INLINE variant, which the technique's own name references.
+#
+# REQUIRES a decode step: policyDocument is URL-encoded in the raw event, so
+# a substring match on '"Action":"*"' does not work against the raw field
+# (quotes become %22, the asterisk %2A). The log platform must decode first.
+title: IAM inline admin policy written to a user
+id: 2b7e4c19-8a05-4d63-91f7-6c0a3b8e5d72
+status: experimental
+description: >-
+  An inline policy granting unrestricted action was written directly to a user,
+  achieving admin without attaching a recognisable managed policy ARN.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-admin-user/
+tags:
+  - attack.persistence
+  - attack.t1136.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'PutUserPolicy'
+  # Field produced by a pipeline that URL-decodes requestParameters.policyDocument.
+  admin_document:
+    DecodedPolicyDocument|contains:
+      - '"Action":"*"'
+      - '"Action": "*"'
+      - '"Action":["*"]'
+  condition: selection and admin_document
+falsepositives:
+  - Legitimate broad policies for automation identities, review the principal
+level: critical
+---
+title: IAM create-admin-user backdoor sequence
+id: 9d4f2a83-6c15-4e07-b2d1-8a0c9b7e5f94
+status: experimental
+description: >-
+  A net-new user created, granted admin, and issued programmatic credentials by
+  the same principal inside ten minutes, the full backdoor fingerprint.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.persistence.iam-create-admin-user/
+tags:
+  - attack.persistence
+  - attack.t1136.003
+correlation:
+  type: temporal_ordered
+  rules:
+    - iam_create_user
+    - iam_attach_admin_base
+    - iam_create_access_key
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+level: critical
+---
+title: IAM CreateUser
+id: 5a91c7e4-2b60-4d38-9f15-7a0e3c86b241
+name: iam_create_user
+status: experimental
+description: Base rule, sequence component only, not for direct alerting.
+tags:
+  - attack.persistence
+  - attack.t1136.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'CreateUser'
   condition: selection
-level: medium
+level: low
+---
+title: IAM CreateAccessKey
+id: 3f80b2d6-7c41-49e5-a8b3-1d92e05fc748
+name: iam_create_access_key
+status: experimental
+description: Base rule, sequence component only, not for direct alerting.
+tags:
+  - attack.persistence
+  - attack.t1136.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'CreateAccessKey'
+  condition: selection
+level: low

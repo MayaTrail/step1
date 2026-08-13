@@ -25,7 +25,11 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
-from apps.emulations.detections import build_detection_detail, parse_sigma
+from apps.emulations.detections import (
+    build_detection_detail,
+    parse_sigma,
+    parse_sigma_documents,
+)
 from apps.emulations.registry import get_emulation
 from apps.emulations.sigma_eval import is_evaluable
 from apps.infrastructure.permissions import IsEnterpriseUser
@@ -257,8 +261,8 @@ class DetectionValidateView(APIView):
 
     Synthesizes labeled CloudTrail events via the user's LLM connector, runs the
     rule against them with the in-process Sigma evaluator, and returns an
-    ephemeral fidelity report. Aggregation Sigma rules cannot be judged from
-    single events and are reported as not evaluable rather than executed.
+    ephemeral fidelity report. Correlation and aggregation rules cannot be judged
+    from single events and are reported as not evaluable rather than executed.
     Results are not persisted.
     """
 
@@ -283,6 +287,14 @@ class DetectionValidateView(APIView):
             )
 
         rule_text = detail["sigma"]
+        # When the file carries a correlation, that correlation is the rule a
+        # team deploys and it spans many events. Scoring the base rules it
+        # references would measure the wrong thing: they match broadly by
+        # design, so the report would read as a poor rule rather than a
+        # deliberately wide sequence component.
+        if any(document.get("correlation") for document in parse_sigma_documents(rule_text)):
+            return Response({"evaluable": False, "reason": "aggregation/correlation condition"})
+
         sigma_rule = parse_sigma(rule_text)
         evaluable, reason = is_evaluable(sigma_rule)
         if not evaluable:

@@ -1,19 +1,120 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Open SSM Sessions to Multiple EC2 Instances (T1021.004)
+# Open SSM Sessions to Multiple EC2 Instances (T1021.004 / T1021.008)
+#
+# The original rule matched `eventName IN (DescribeInstanceInformation,
+# StartSession, TerminateSession)` with a bare `condition: selection` - the
+# same broken pattern as the other SSM techniques. StartSession is a normal
+# operator action; TerminateSession and DescribeInstanceInformation are pure
+# noise. Matching them independently fires on every legitimate session.
+#
+# CRITICAL CONTEXT: session CONTENT is never in CloudTrail. CloudTrail records
+# that a session began, not what was typed. Without Session Manager logging
+# configured, a confirmed intrusion is UNRECOVERABLE by investigation: the
+# only safe assumption is full host compromise. See the detection note.
+title: SSM StartSession by non-operator principal
 id: 14024d53-fcd4-5c5e-9cd4-635af4ae836b
 status: experimental
-description: ssm:StartSession called on multiple instances in rapid succession from unexpected principals — especially combined with ssm:TerminateSession
+description: >-
+  An interactive shell opened on an instance by a principal outside the
+  operator allowlist. Session Manager provides full interactive access without
+  SSH, key material, or an inbound security-group rule.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ssm-start-session/
 tags:
   - attack.execution
   - attack.t1021.004
+  - attack.t1021.008
 logsource:
   product: aws
   service: cloudtrail
 detection:
   selection:
     eventSource: 'ssm.amazonaws.com'
-    eventName: ['DescribeInstanceInformation', 'StartSession', 'TerminateSession']
+    eventName: 'StartSession'
+  # REPLACE these with the roles in YOUR account that legitimately open SSM
+  # sessions to instances. The placeholder values below match nothing, so until
+  # they are edited this rule fires on every operator session.
+  operators:
+    userIdentity.arn|contains:
+      - ':role/REPLACE-ME-ssm-operator'
+      - ':role/REPLACE-ME-break-glass'
+  condition: selection and not operators
+falsepositives:
+  - Engineers debugging production outside the operator role, tune the
+    allowlist rather than the rule
+level: high
+---
+# Port forwarding is a PIVOT, not a shell. It turns Session Manager into a
+# tunnel into the VPC, reaching services that were never meant to be exposed,
+# and it bypasses security groups entirely because the traffic is outbound from
+# the instance's SSM agent.
+title: SSM port-forwarding session
+id: 3e8b47f0-91c6-4a25-bd73-508fa2c19e64
+status: experimental
+description: >-
+  A Session Manager port-forwarding tunnel was opened. This is lateral movement
+  infrastructure rather than administration.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ssm-start-session/
+tags:
+  - attack.execution
+  - attack.t1021.008
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName: 'StartSession'
+    # Covers both AWS-StartPortForwardingSession and
+    # AWS-StartPortForwardingSessionToRemoteHost.
+    requestParameters.documentName|startswith: 'AWS-StartPortForwardingSession'
   condition: selection
-level: medium
+falsepositives:
+  - Approved database/admin-port tunnelling by platform engineers, allowlist
+    by principal, not by removing the rule
+level: critical
+---
+title: SSM interactive access sweep across instances
+id: 9c4f2a71-5e83-4b60-a1d2-7f0c6b9e3a48
+status: experimental
+description: >-
+  One principal opened interactive sessions to three or more distinct instances
+  within fifteen minutes, fleet access rather than targeted administration.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.execution.ssm-start-session/
+tags:
+  - attack.execution
+  - attack.t1021.008
+correlation:
+  type: value_count
+  rules:
+    - ssm_start_session_base
+  group-by:
+    - userIdentity.arn
+  timespan: 15m
+  condition:
+    gte: 3
+    field: requestParameters.target      # distinct target INSTANCES
+level: high
+---
+title: SSM session started
+id: 6d217c9b-40ae-4f81-9235-c8b0e73f5a1d
+name: ssm_start_session_base
+status: experimental
+description: >-
+  Base rule for the fan-out correlation. Successful sessions only, not for
+  direct alerting.
+tags:
+  - attack.execution
+  - attack.t1021.008
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName: 'StartSession'
+  success:
+    errorCode: null
+  condition: selection and success
+level: low

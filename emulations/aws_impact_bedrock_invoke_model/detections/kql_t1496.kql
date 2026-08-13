@@ -1,6 +1,45 @@
-// Invoke Bedrock Model for Resource Exhaustion (T1496) — eventName(s) auto-derived; verify casing.
-// Signal: bedrock:InvokeModel called at high volume or from an unexpected principal; sudden spike in Bedrock spend in cost explorer
+// Invoke Bedrock Model for Resource Exhaustion (T1496)
+//
+// InvokeModel IS a CloudTrail management event, so this works against the
+// default trail with no data-event configuration. What the original query
+// lacked was a THRESHOLD (the technique is volume, not occurrence) and
+// eventSource scoping.
+//
+// The streaming and Converse APIs are included, an actor using them achieves
+// identical cost impact and evades an InvokeModel-only rule.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
 AWSCloudTrail
-| where EventName in ("InvokeModel")
-| project TimeGenerated, UserIdentityArn, EventName, SourceIpAddress, AWSRegion
-| order by TimeGenerated desc
+| where TimeGenerated > ago(24h)
+| where EventSource == "bedrock.amazonaws.com"
+| where EventName in ("InvokeModel", "InvokeModelWithResponseStream", "Converse", "ConverseStream")
+| extend Req = parse_json(RequestParameters)
+| extend ModelId = tostring(Req.modelId)
+| summarize
+    Invocations   = count(),
+    Models        = make_set(ModelId, 10),
+    DistinctModels= dcount(ModelId),
+    Throttled     = countif(ErrorCode == "ThrottlingException"),
+    Denied        = countif(ErrorCode == "AccessDeniedException"),
+    Regions       = make_set(AWSRegion, 10),
+    SourceIPs     = make_set(SourceIpAddress, 10),
+    FirstSeen     = min(TimeGenerated),
+    LastSeen      = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 10m)
+| where Invocations > 100          // tune to the workload baseline
+| extend Verdict = case(
+    Throttled > 0, "BEDROCK FLOOD, quota exhausted, P0 (cost + denial of service)",
+    Denied > 10,   "BEDROCK MODEL ACCESS PROBING",
+    "HIGH-VOLUME BEDROCK INVOCATION, verify against workload baseline")
+| project TimeGenerated, UserIdentityArn, Invocations, DistinctModels, Models,
+          Throttled, Denied, Regions, SourceIPs, Verdict
+| order by Invocations desc
+//
+// WHAT THIS CANNOT SEE: token counts. CloudTrail records that a call happened,
+// not how large it was, and Bedrock bills per token, so 100 huge-context
+// calls can cost more than 10,000 small ones. Pair this with CloudWatch
+// AWS/Bedrock InputTokenCount and InvocationThrottles alarms per model, plus
+// Cost Anomaly Detection on Bedrock spend.
+//
+// Prompt/completion CONTENT is not here either, that lives only in model
+// invocation logging, if it was enabled and not disabled by the actor.

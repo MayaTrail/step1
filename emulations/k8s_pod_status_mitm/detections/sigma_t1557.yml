@@ -17,7 +17,6 @@ tags:
   - attack.credential_access
   - attack.collection
   - attack.t1557
-  - kubernetes
 logsource:
   product: kubernetes
   service: audit

@@ -1,12 +1,30 @@
-# eventName(s) auto-derived from attack.py — verify acronym casing.
-title: Open Ingress Port 22 on Security Group (T1562.007)
+# Open Ingress Port 22 on Security Group (T1562.007)
+#
+# The original rule matched AuthorizeSecurityGroupIngress and
+# RevokeSecurityGroupIngress with a bare `condition: selection`. It inspected
+# nothing - not the port, not the CIDR: so it fired on every routine SG change
+# while being unable to identify the actual exposure. Revoke is the attacker's
+# CLEANUP, not the attack, and is dropped entirely.
+#
+# ModifySecurityGroupRules is added: the newer API achieves the same exposure
+# and evades any Authorize-only rule.
+#
+# LIMITATION, STATED PLAINLY: the `|contains` substring matching below is a
+# pragmatic approximation. It cannot express range containment, so a rule like
+# fromPort:20,toPort:23 - which exposes 22 without naming it - slips past. The
+# authoritative check is the structured logic in `kql_t1562_007.kql`. Deploy
+# that as the real detection and treat this as a coarse first alert.
+title: Security group ingress opened to the world on an admin port
 id: 37fcd7ea-dafe-5822-ae79-7b3b9e794a89
 status: experimental
-description: ec2:AuthorizeSecurityGroupIngress with CidrIp=0.0.0.0/0 or CidrIpv6=::/0 on port 22 — indicates deliberate exposure of SSH access
+description: >-
+  An ingress rule was added permitting the entire internet to reach an
+  administrative port. Combined world-CIDR and admin-port exposure is rarely
+  intentional and never safe.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.exfiltration.ec2-security-group-open-port-22-ingress/
 tags:
-  - attack.exfiltration
+  - attack.defense_evasion
   - attack.t1562.007
 logsource:
   product: aws
@@ -14,6 +32,20 @@ logsource:
 detection:
   selection:
     eventSource: 'ec2.amazonaws.com'
-    eventName: ['AuthorizeSecurityGroupIngress', 'RevokeSecurityGroupIngress']
-  condition: selection
-level: medium
+    eventName:
+      - 'AuthorizeSecurityGroupIngress'
+      - 'ModifySecurityGroupRules'
+  world_v4:
+    requestParameters|contains: '0.0.0.0/0'
+  world_v6:
+    requestParameters|contains: '::/0'
+  admin_port:
+    requestParameters|contains:
+      - '"fromPort":22'
+      - '"fromPort":3389'
+      - '"fromPort":0'      # all-ports range start
+  condition: selection and (world_v4 or world_v6) and admin_port
+falsepositives:
+  - Reviewed IaC changes opening a bastion, allowlist the network-admin and
+    pipeline principals
+level: high
