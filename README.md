@@ -4,16 +4,22 @@
 <h1 align="center">MayaTrail</h1>
 
 <p align="center">
-  <strong>Rehearse real cloud attacks safely — in your own AWS account, before attackers do.</strong>
+  <strong>Rehearse real cloud attacks safely - in your own AWS account, before attackers do.</strong>
 </p>
 
 <p align="center">
   MayaTrail connects to your AWS account, provisions a realistic, intentionally vulnerable
   environment, runs a real adversary emulation against it, and shows you exactly what an
-  attacker could reach — then tears it all down automatically. Every emulation ships with
+  attacker could reach, then tears it all down automatically. Every emulation ships with
   MITRE ATT&CK mappings and ready-to-deploy detection rules.
 </p>
 
+<div align="center">
+  
+  [![Backend tests](https://github.com/MayaTrail/step1/actions/workflows/backend-tests.yml/badge.svg?branch=main)](https://github.com/MayaTrail/step1/actions/workflows/backend-tests.yml)
+  [![Detections](https://github.com/MayaTrail/step1/actions/workflows/detections.yml/badge.svg?branch=main)](https://github.com/MayaTrail/step1/actions/workflows/detections.yml)
+  [![Dependency Graph](https://github.com/MayaTrail/step1/actions/workflows/dependabot/update-graph/badge.svg?branch=main)](https://github.com/MayaTrail/step1/actions/workflows/dependabot/update-graph)
+</div>
 <!-- PLACEHOLDER: badges — add once CI / license / release are public -->
 <p align="center">
   <!-- <img src="https://img.shields.io/badge/license-TBD-blue" alt="License"/> -->
@@ -25,11 +31,12 @@
 
 ## The problem
 
-Cloud and Kubernetes misconfiguration is the leading cause of modern breaches — a single over-permissive IAM role, an EC2 instance with IMDSv1 enabled, or a pod with a writable hostPath mount is enough to lose an account or a cluster. Yet security teams have almost no safe way to rehearse these attacks against infrastructure that looks like their own:
+Cloud and Kubernetes misconfiguration is the leading cause of modern breaches, a single over-permissive IAM role, an EC2 instance with IMDSv1 enabled, or a pod with a writable hostPath mount is enough to lose an account or a cluster. Yet security teams have almost no safe way to rehearse these attacks against infrastructure that looks like their own:
 
 Production is too risky to attack. You can't run a credential-theft-to-persistence chain, or a pod-to-node escape, against live infrastructure just to see if it works.
-Pentests are expensive and infrequent. A point-in-time engagement once or twice a year doesn't keep pace with infrastructure that changes daily.
-Knowing about a misconfiguration isn't the same as knowing your blast radius. Most tools flag that IMDSv1 is on or that a pod can mount hostPath; they don't show you the full kill chain it unlocks — or whether your detections would catch it.
+Pentests are expensive and infrequent. A point-in-time engagement once or twice a year doesn't keep pace with infrastructure that changes daily.    
+
+Knowing about a misconfiguration isn't the same as knowing your blast radius. Most tools flag that IMDSv1 is on or that a pod can mount hostPath; they don't show you the full kill chain it unlocks or whether your detections would catch it.
 The result: teams discover whether their cloud or cluster is exploitable only when a real attacker shows them.
 
 ## The solution
@@ -37,18 +44,18 @@ The result: teams discover whether their cloud or cluster is exploitable only wh
 MayaTrail closes the loop — **connect → deploy → attack → observe → auto-destroy** — running
 real adversary emulations inside an isolated, disposable environment in *your own* AWS account.
 
-1. **Connect** your AWS account by granting a scoped, cross-account IAM role (no long-lived keys to hand over — MayaTrail assumes the role via STS at run time), or target a MayaTrail-provisioned Kubernetes host for cluster-level emulations.
+1. **Connect** your AWS account by granting a scoped, cross-account IAM role (no long-lived keys to hand over. MayaTrail assumes the role via STS at run time), or target a MayaTrail-provisioned Kubernetes host for cluster-level emulations.
 2. **Deploy** a realistic, intentionally vulnerable environment from code (Pulumi).
 3. **Attack** it with a real adversary emulation modelled on a documented campaign or a known CVE/misconfiguration class.
 4. **Observe** the outcome in a dashboard: the kill chain, MITRE ATT&CK coverage, blast
-   radius, and an immutable audit log — plus detection rules you can take straight to your SIEM.
-5. **Auto-destroy** — every environment has a TTL, so nothing lingers and costs stay bounded.
+   radius, and an immutable audit log - plus detection rules you can take straight to your SIEM.
+5. **Auto-destroy** every environment has a TTL, so nothing lingers and costs stay bounded.
 
 Spin it up, run the breach, learn from it, and let it clean itself up. Repeat as often as your
 infrastructure changes.
 
 <p align="center">
-  <img src="docs/assets/mayatrail-dashboard.png" alt="MayaTrail dashboard" width="820"/>
+  <img width="1915" height="995" alt="image" src="https://github.com/user-attachments/assets/431b63ab-a990-47f1-ba9a-805dec35f402" />
 </p>
 
 ## Who it's for
@@ -125,6 +132,10 @@ asks for or stores long-lived AWS access keys. To connect:
    (`arn:aws:iam::<your-account-id>:role/<role-name>`). MayaTrail verifies it live via
    `sts:AssumeRole` before marking the connection verified — nothing is provisioned until you
    actually run an emulation.
+
+<p align="center">
+  <img width="1909" height="987" alt="image" src="https://github.com/user-attachments/assets/0e8d2535-24ca-498e-b8fc-a110db8997eb" />
+</p>
 
 ### Using the hosted app (app.mayatrail.tech)
 
@@ -227,7 +238,7 @@ Each emulation packages a documented threat-actor campaign or a disclosed CVE/mi
 > only the authoring methodology is gated.
 
 <p align="center">
-  <img src="docs/assets/aws-platform-overview.png" alt="MayaTrail dashboard" width="820"/>
+  <img width="1915" height="995" alt="image" src="https://github.com/user-attachments/assets/332e1c22-4edd-48a1-8f9e-fd12da46bc0f" />
 </p>
 
 ## Docker Compose stack
@@ -244,52 +255,13 @@ The full platform runs as a Docker Compose stack with 7 services:
 | `ui` | React SPA (Nginx, non-root) |
 | `nginx` | Edge reverse proxy (routes `/` to UI, `/api/` + `/admin/` to backend) |
 
-## Project structure
-
-```shell
-step1/
-├── backend/                    # Django REST API
-│   ├── apps/
-│   │   ├── users/              # Auth: registration (invite code), JWT login, Google SSO, profile
-│   │   ├── connectors/         # AWS account connection via cross-account IAM role
-│   │   ├── emulations/         # Emulation catalogue + run lifecycle (deploy/attack/destroy)
-│   │   ├── infrastructure/     # Stack model, Celery tasks, TTL auto-destroy
-│   │   ├── metrics/            # Platform Overview dashboard metrics (MITRE + attack-surface coverage)
-│   │   └── logs/               # Read-only audit log
-│   ├── config/                 # Django settings (base/dev/prod), Celery, URLs
-│   ├── Dockerfile              # Backend / beat image
-│   ├── Dockerfile.worker       # Enterprise worker image
-│   └── requirements.txt
-├── emulations/                 # Adversary emulation packages (mounted at /opt/emulations)
-│   ├── registry.py             # Auto-discovers packages via MANIFEST.py
-│   ├── scarleteel/             # SCARLETEEL 2.0 campaign emulation
-│   ├── ambersquid/             # AMBERSQUID campaign emulation
-│   ├── codefinger/             # Codefinger S3 ransomware campaign emulation
-│   ├── dangerdev/              # DangerDev campaign emulation
-│   ├── aws_*/                  # ~30 single-technique atomic AWS emulations based on stratus red team's emulations
-│   ├── k8s_rbac_impersonation/  # K8s RBAC impersonation privilege escalation
-│   ├── k8s_external_ips_mitm/   # K8s CVE-2020-8554 externalIPs MITM
-│   ├── k8s_pod_status_mitm/     # K8s pod status.podIP MITM
-│   ├── k8s_pvc_psa_bypass/      # K8s Pod Security Admission bypass via PV abuse
-│   ├── k8s_writable_log_escape/ # K8s writable /var/log host escape
-│   └── k8s_attack_readme.md    # Kubernetes emulation catalogue walkthrough
-│       # each package: MANIFEST.py, attack.py, infra/ (Pulumi), detections/, PLAYBOOK.md
-├── frontend/UI/                # React + TypeScript SPA
-│   ├── src/
-│   │   ├── components/         # dashboard, emulations, playbooks, detections, platforms, ...
-│   │   ├── context/            # Auth, Theme, Platform contexts
-│   │   ├── services/           # API service layer (Axios)
-│   │   ├── data/               # Static taxonomies (e.g. attack-surface mapping)
-│   │   └── types/              # TypeScript type definitions
-│   ├── DESIGN.md               # Frontend design system (source of truth)
-│   └── Dockerfile              # Multi-stage: Node build -> Nginx
-├── docker-compose.yml          # Full stack orchestration (7 services)
-└── nginx.conf                  # Edge reverse proxy config
-```
-
 ## Contributing
 
 Good entry points for understanding the codebase:
+
+**NOTE:** Contributors are required to have access to the emulations' knowledge base,
+in case you want to contribute, show us some of your emulations sample and if everythign aligns perfectly, we will allow
+you to access our knowledge base directory so you can start contributing to Mayatrail. 
 
 - `docker-compose.yml` — the full service topology and how the pieces connect
 - `emulations/scarleteel/` — a complete AWS emulation package (manifest, attack, infra, detections, playbook)
@@ -298,15 +270,11 @@ Good entry points for understanding the codebase:
 - `emulations/_kb/AUTHORING.md` — **the authoring/migration knowledge base (private submodule); read it before
   writing or migrating an emulation** (see the [Emulations](#emulations) callout to initialise it)
 - `frontend/UI/DESIGN.md` — the frontend design system; read it before any UI change
+- Adding or migrating an emulation is the most common contribution. **Read `emulations/_kb/AUTHORING.md` first**, then copy `emulations/_kb/_TEMPLATE/` to a new `emulations/<name>/`, fill in the `MANIFEST.py` and an `attack.py`
+- exposing `run(outputs, region)` — the registry discovers it automatically — and record the work in `emulations/_kb/migrations/<name>.md`.
 
-Adding or migrating an emulation is the most common contribution. **Read `emulations/_kb/AUTHORING.md` first**,
-then copy `emulations/_kb/_TEMPLATE/` to a new `emulations/<name>/`, fill in the `MANIFEST.py` and an `attack.py`
-exposing `run(outputs, region)` — the registry discovers it automatically — and record the work in
-`emulations/_kb/migrations/<name>.md`. The KB defines the contracts CI enforces, so following it keeps your
-package from failing the build.
+The KB defines the contracts CI enforces, so following it keeps your package from failing the build.
 
 ---
 
-> **Safety note:** MayaTrail provisions intentionally vulnerable AWS resources inside the
-> connected account. Use only a dedicated, isolated test account. Environments auto-destroy on
-> their TTL, and you can also tear them down on demand from the dashboard.
+$`\textcolor{red}{\text{Safety note: MayaTrail provisions intentionally vulnerable AWS resources inside the connected account. Use only a dedicated, isolated test account.}}`$

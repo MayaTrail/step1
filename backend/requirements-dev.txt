@@ -1,8 +1,16 @@
-# Validation toolchain. Not installed into the runtime image.
+# Detection validator toolchain. Used by the validate-detections job in
+# .github/workflows/detections.yml and by backend/scripts/validate_detections.py.
+# Not installed into the runtime image.
 #
-# Deliberately does not pull in requirements.txt: the detection validator
-# imports only apps.emulations.detections and apps.emulations.sigma_eval, both
-# of which are Django-free, so CI needs no Django, database or AWS SDK and
-# finishes in seconds.
+# Deliberately does not pull in requirements.txt: the validator imports only
+# apps.emulations.detections and apps.emulations.sigma_eval, both Django-free,
+# so this job needs no Django, database or AWS SDK and installs in about two
+# seconds.
+#
+# Kept separate from requirements-test.txt, which the backend-tests job uses to
+# run the Django suite. The two jobs share no dependency beyond PyYAML, and the
+# split keeps this one minimal. The visible consequence is that
+# test_every_rule_passes_the_validator skips under requirements-test.txt alone;
+# install both files to run everything locally.
 PyYAML==6.0.2
 pysigma==0.11.23

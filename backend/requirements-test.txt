@@ -1,0 +1,15 @@
+# Django test suite toolchain. Used by the backend-tests job in
+# .github/workflows/backend-tests.yml, under config.settings.ci.
+#
+# Deliberately not requirements.txt. Those settings replace the URL
+# configuration and the database engine, which removes the need for DRF,
+# simplejwt, corsheaders, psycopg2, boto3, cryptography, google-auth and pulumi.
+# celery is still required because config/__init__.py imports the celery app.
+#
+# pySigma is absent on purpose. It lives in requirements-dev.txt, which the
+# validate-detections job installs, so test_every_rule_passes_the_validator
+# skips here. Install both files to run the whole suite locally.
+Django==5.0.6
+python-decouple==3.8
+PyYAML==6.0.2
+celery==5.4.0
