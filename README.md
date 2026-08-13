@@ -277,4 +277,5 @@ The KB defines the contracts CI enforces, so following it keeps your package fro
 
 ---
 
-$`\textcolor{red}{\text{Safety note: MayaTrail provisions intentionally vulnerable AWS resources inside the connected account. Use only a dedicated, isolated test account.}}`$
+$`\textcolor{red}{\text{Safety note: MayaTrail provisions intentionally vulnerable AWS resources inside the connected account. 
+Use only a dedicated, isolated test account.}}`$
