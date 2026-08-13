@@ -42,8 +42,6 @@ services:
       # Mount emulations package so the API registry can discover packages.
       - ./emulations:/opt/emulations:ro
     depends_on: # waits for db and redis to be healthy before starting backend.
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -68,7 +66,7 @@ services:
       - ./backend/.env
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.dev
-      POSTGRES_HOST: db
+      POSTGRES_HOST: <db_ec2_private_ip>
       POSTGRES_PORT: "5432"
       POSTGRES_DB: mayatrail
       POSTGRES_USER: mayatrail
@@ -83,8 +81,6 @@ services:
       # Emulation packages: attack scripts and per-emulation infra/ programs.
       - ./emulations:/opt/emulations:ro
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     command: celery -A config worker --queues=enterprise --concurrency=4 --loglevel=info
@@ -99,15 +95,13 @@ services:
       - ./backend/.env
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.dev
-      POSTGRES_HOST: db
+      POSTGRES_HOST: <db_ec2_private_ip>
       POSTGRES_PORT: "5432"
       POSTGRES_DB: mayatrail
       POSTGRES_USER: mayatrail
       POSTGRES_PASSWORD: mayatrail
       REDIS_URL: redis://redis:6379/0
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
       backend:
