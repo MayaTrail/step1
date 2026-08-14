@@ -51,6 +51,7 @@ LOCAL_APPS = [
     "apps.connectors",
     "apps.infrastructure",
     "apps.emulations",
+    "apps.guardrails",
     "apps.logs",
     "apps.metrics",
     "apps.ai",
@@ -226,6 +227,15 @@ EMULATIONS_BASE_DIR = config("EMULATIONS_BASE_DIR", default="")
 EMULATION_PHASE_PACING_SECONDS = config(
     "EMULATION_PHASE_PACING_SECONDS", default=0, cast=float
 )
+
+# ---------------------------------------------------------------------------
+# Guardrails
+# ---------------------------------------------------------------------------
+# Directory holding the SCP/RCP policy library: one JSON policy document per
+# guardrail plus the MANIFEST.json sidecar that names and tags them.
+# In docker-compose, ./Guardrails is mounted at /opt/guardrails.
+
+GUARDRAILS_BASE_DIR = config("GUARDRAILS_BASE_DIR", default="")
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------

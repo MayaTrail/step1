@@ -1,0 +1,42 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowOnlyNetworkingServices",
+      "Effect": "Deny",
+      "NotAction": [
+        "ec2:*Vpc*",
+        "ec2:*Subnet*",
+        "ec2:*Gateway*",
+        "ec2:*Route*",
+        "ec2:*NetworkAcl*",
+        "ec2:*SecurityGroup*",
+        "ec2:*TransitGateway*",
+        "ec2:Describe*",
+        "directconnect:*",
+        "route53:*",
+        "route53resolver:*",
+        "networkfirewall:*",
+        "vpc-lattice:*",
+        "cloudwatch:*",
+        "logs:*",
+        "iam:*",
+        "sts:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyComputeAndStorage",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:RunInstances",
+        "rds:*",
+        "s3:CreateBucket",
+        "lambda:*",
+        "ecs:*",
+        "eks:*"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

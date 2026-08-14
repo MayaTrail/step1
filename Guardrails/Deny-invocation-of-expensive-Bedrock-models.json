@@ -1,0 +1,18 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyExpensiveBedrockModels",
+      "Effect": "Deny",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-3-opus-*",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-3-5-sonnet-*",
+        "arn:aws:bedrock:*::foundation-model/meta.llama3-1-405b-*"
+      ]
+    }
+  ]
+}

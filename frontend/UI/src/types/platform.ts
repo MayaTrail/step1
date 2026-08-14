@@ -217,10 +217,30 @@ export interface DetectionDetail {
   kql: string | null
 }
 
-export interface Guardrails {
-  excluded: string[]
-  schedule: string
-  scopeLimits: string[]
+export type GuardrailType = 'SCP' | 'RCP'
+
+/**
+ * One preventative policy in the guardrails library.
+ *
+ * `name` is the display title in "SCP : Purpose" / "RCP : Purpose" form, and
+ * `code` is the policy document verbatim as it sits on disk.
+ */
+export interface GuardrailPolicy {
+  id: string
+  type: GuardrailType
+  name: string
+  purpose: string
+  /** AWS services the policy targets; ["All services"] when it is org-wide. */
+  services: string[]
+  source: string
+  code: string
+}
+
+export interface GuardrailLibrary {
+  scp: GuardrailPolicy[]
+  rcp: GuardrailPolicy[]
+  totalCount: number
+  formats: string
 }
 
 /** One H2 section of a PLAYBOOK.md, kept as raw markdown so it renders faithfully. */
@@ -264,7 +284,7 @@ export interface PlaybookRaw {
 export interface PlatformData {
   emulations: Emulation[]
   detections: DetectionData
-  guardrails: Guardrails
+  guardrails: GuardrailLibrary
   playbooks: Playbook[]
 }
 

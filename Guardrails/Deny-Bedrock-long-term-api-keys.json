@@ -1,0 +1,25 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Deny",
+      "Action": "bedrock:CallWithBearerToken",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "bedrock:bearerTokenType": "LONG_TERM"
+        }
+      }
+    },
+    {
+      "Effect": "Deny",
+      "Action": "bedrock-mantle:CallWithBearerToken",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "bedrock-mantle:bearerTokenType": "LONG_TERM"
+        }
+      }
+    }
+  ]
+}

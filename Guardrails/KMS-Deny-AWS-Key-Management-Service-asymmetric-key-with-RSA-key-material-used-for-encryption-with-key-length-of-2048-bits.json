@@ -1,0 +1,17 @@
+{
+    "Version":"2012-10-17",
+    "Statement":[
+       {
+          "Effect":"Deny",
+          "Principal":"*",
+          "Action":"kms:CreateKey",
+          "Resource":"*",
+          "Condition":{
+             "StringEquals":{
+                "kms:KeyUsage":"ENCRYPT_DECRYPT",
+                "kms:KeySpec":"RSA_2048"
+             }
+          }
+       }
+    ]
+ }

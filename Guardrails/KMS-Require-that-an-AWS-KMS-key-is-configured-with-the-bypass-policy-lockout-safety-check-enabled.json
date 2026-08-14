@@ -1,0 +1,19 @@
+{
+    "Version":"2012-10-17",
+    "Statement":[
+       {
+          "Effect":"Deny",
+          "Principal":"*",
+          "Action":[
+             "kms:CreateKey",
+             "kms:PutKeyPolicy"
+          ],
+          "Resource":"*",
+          "Condition":{
+             "Bool":{
+                "kms:BypassPolicyLockoutSafetyCheck":"true"
+             }
+          }
+       }
+    ]
+ }

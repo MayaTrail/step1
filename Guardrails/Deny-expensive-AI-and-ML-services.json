@@ -1,0 +1,19 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyExpensiveAIMLServices",
+      "Effect": "Deny",
+      "Action": [
+        "sagemaker:CreateTrainingJob",
+        "sagemaker:CreateHyperParameterTuningJob",
+        "sagemaker:CreateNotebookInstance",
+        "sagemaker:CreateEndpoint",
+        "elasticmapreduce:RunJobFlow",
+        "redshift:CreateCluster",
+        "redshift-serverless:CreateWorkgroup"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

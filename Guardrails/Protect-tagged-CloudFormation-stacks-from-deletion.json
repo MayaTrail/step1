@@ -1,0 +1,30 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ProtectTaggedCloudFormationStacks",
+      "Effect": "Deny",
+      "Action": [
+        "cloudformation:DeleteStack",
+        "cloudformation:DeleteStackInstances",
+        "cloudformation:DeleteStackSet"
+      ],
+      "Resource": [
+        "arn:aws:cloudformation:*:*:stack/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/organization": "YourOrganizationName"
+        },
+        "StringNotLike": {
+          "aws:PrincipalARN": [
+            "arn:aws:iam::*:role/AWSCloudFormationStackSetExecutionRole",
+            "arn:aws:iam::*:role/AWSCloudFormationStackSetAdministrationRole",
+            "arn:aws:iam::*:role/OrganizationAccountAccessRole",
+            "arn:aws:iam::*:role/YourCICDRole"
+          ]
+        }
+      }
+    }
+  ]
+}

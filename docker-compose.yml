@@ -54,11 +54,14 @@ services:
       POSTGRES_PASSWORD: mayatrail
       REDIS_URL: redis://redis:6379/0
       EMULATIONS_BASE_DIR: /opt/emulations
+      GUARDRAILS_BASE_DIR: /opt/guardrails
     ports:
       - "8000:8000"
     volumes:
       # Mount emulations package so the API registry can discover packages.
       - ./emulations:/opt/emulations:ro
+      # SCP/RCP policy library served by /api/guardrails/.
+      - ./Guardrails:/opt/guardrails:ro
     depends_on: # waits for db and redis to be healthy before starting backend.
       db:
         condition: service_healthy

@@ -1,0 +1,19 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RequireVPCForSageMaker",
+      "Effect": "Deny",
+      "Action": [
+        "sagemaker:CreateNotebookInstance",
+        "sagemaker:CreateTrainingJob"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "Null": {
+          "sagemaker:VpcSubnets": "true"
+        }
+      }
+    }
+  ]
+}

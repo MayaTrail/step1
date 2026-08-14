@@ -1,0 +1,49 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PreventResourcePolicyConfigurations",
+      "Effect": "Deny",
+      "Action": [
+        "acm-pca:PutPolicy",
+        "apigateway:UpdateDomainNamePolicy",
+        "apigateway:UpdateRestApiPolicy",
+        "aps:PutResourcePolicy",
+        "cloudtrail:PutResourcePolicy",
+        "codeartifact:PutRepositoryPermissionsPolicy",
+        "codeartifact:PutDomainPermissionsPolicy",
+        "dsql:PutClusterPolicy",
+        "elasticfilesystem:PutFileSystemPolicy",
+        "events:PutPermission",
+        "glacier:SetVaultAccessPolicy",
+        "glue:PutResourcePolicy",
+        "imagebuilder:PutComponentPolicy",
+        "imagebuilder:PutContainerRecipePolicy",
+        "imagebuilder:PutImagePolicy",
+        "imagebuilder:PutImageRecipePolicy",
+        "kafka:PutClusterPolicy",
+        "kinesis:PutResourcePolicy",
+        "lambda:AddLayerVersionPermission",
+        "lambda:AddPermission",
+        "lex:CreateResourcePolicy",
+        "lex:UpdateResourcePolicy",
+        "redshift:PutResourcePolicy",
+        "schemas:PutResourcePolicy",
+        "serverlessrepo:PutApplicationPolicy",
+        "ses:CreateEmailIdentityPolicy",
+        "ses:UpdateEmailIdentityPolicy",
+        "ses:PutIdentityPolicy",
+        "ssm:PutResourcePolicy",
+        "ssm-contacts:PutContactPolicy",
+        "ssm-incidents:PutResourcePolicy",
+        "sns:AddPermission"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEqualsIfExists": {
+          "aws:PrincipalTag/dp:exclude:identity": "true"
+        }
+      }
+    }
+  ]
+}

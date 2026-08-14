@@ -1,0 +1,215 @@
+{
+   "Version": "2012-10-17",
+   "Statement": [
+      {
+         "Sid": "PreventDeploymentSSMAutomationRunbook",
+         "Effect": "Deny",
+         "Action": [
+            "ssm:StartAutomationExecution"
+         ],
+         "Resource": "*",
+         "Condition": {
+            "StringNotEqualsIfExists": {
+               "aws:PrincipalTag/dp:exclude": "true"
+            }
+         }
+      },
+      {
+         "Sid": "PreventDeploymentCodeStarConnections",
+         "Effect": "Deny",
+         "Action": [
+            "codestar-connections:*"
+         ],
+         "Resource": "*",
+         "Condition": {
+            "StringNotEqualsIfExists": {
+               "aws:PrincipalTag/dp:exclude": "true"
+            }
+         }
+      },
+      {
+         "Sid": "PreventNonVPCDeploymentSageMaker",
+         "Effect": "Deny",
+         "Action": [
+            "sagemaker:CreateAutoMLJob",
+            "sagemaker:CreateAutoMLJobV2",
+            "sagemaker:CreateCluster",
+            "sagemaker:CreateDataQualityJobDefinition",
+            "sagemaker:CreateDomain",
+            "sagemaker:CreateHyperParameterTuningJob",
+            "sagemaker:CreateModel",
+            "sagemaker:CreateModelBiasJobDefinition",
+            "sagemaker:CreateModelExplainabilityJobDefinition",
+            "sagemaker:CreateModelQualityJobDefinition",
+            "sagemaker:CreateMonitoringSchedule",
+            "sagemaker:CreateNotebookInstance",
+            "sagemaker:CreateProcessingJob",
+            "sagemaker:CreateTrainingJob",
+            "sagemaker:UpdateDomain",
+            "sagemaker:UpdateMonitoringSchedule"
+         ],
+         "Resource": "*",
+         "Condition": {
+            "StringNotEqualsIfExists": {
+               "aws:PrincipalTag/dp:exclude": "true"
+            },
+            "Null": {
+               "sagemaker:VpcSubnets": "true"
+            }
+         }
+      },
+      {
+         "Sid": "PreventNonVpcOnlySageMakerDomain",
+         "Effect": "Deny",
+         "Action": [
+            "sagemaker:CreateDomain",
+            "sagemaker:UpdateDomain"
+         ],
+         "Resource": "*",
+         "Condition": {
+            "StringNotEqualsIfExists": {
+               "aws:PrincipalTag/dp:exclude": "true",
+               "sagemaker:AppNetworkAccessType": "VpcOnly"
+            }
+         }
+      },
+      {
+         "Sid": "PreventDirectInternetAccessSageMakerNotebook",
+         "Effect": "Deny",
+         "Action": [
+            "sagemaker:CreateNotebookInstance"
+         ],
+         "Resource": "*",
+         "Condition": {
+            "StringEquals": {
+               "sagemaker:DirectInternetAccess": "Enabled"
+            },
+            "StringNotEqualsIfExists": {
+               "aws:PrincipalTag/dp:exclude": "true"
+            }
+         }
+      },
+      {
+         "Sid": "PreventNonVPCDeploymentLambda",
+         "Effect": "Deny",
+         "Action": [
+            "lambda:CreateFunction",
+            "lambda:UpdateFunctionConfiguration"
+         ],
+         "Resource": "*",
+         "Condition": {
+            "StringNotEqualsIfExists": {
+               "aws:PrincipalTag/dp:exclude": "true"
+            },
+            "Null": {
+               "lambda:VpcIds": "true"
+            }
+         }
+      },
+      {
+         "Sid": "PreventNonVPCDeploymentGlueJob",
+         "Effect": "Deny",
+         "Action": [
+            "glue:CreateJob",
+            "glue:UpdateJob",
+            "glue:CreateSession"
+         ],
+         "Resource": "*",
+         "Condition": {
+            "StringNotEqualsIfExists": {
+               "aws:PrincipalTag/dp:exclude": "true"
+            },
+            "Null": {
+               "glue:VpcIds": "true"
+            }
+         }
+      },
+      {
+         "Sid": "PreventNonVPCDeploymentCloudShell",
+         "Action": [
+            "cloudshell:CreateEnvironment"
+         ],
+         "Effect": "Deny",
+         "Resource": "*",
+         "Condition": {
+            "StringNotEqualsIfExists": {
+               "aws:PrincipalTag/dp:exclude": "true"
+            },
+            "Null": {
+               "cloudshell:VpcIds": "true"
+            }
+         }
+      },
+      {
+         "Sid": "PreventNonVPCDeploymentAppRunner",
+         "Effect": "Deny",
+         "Action": [
+            "apprunner:CreateService",
+            "apprunner:UpdateService"
+         ],
+         "Resource": "*",
+         "Condition": {
+            "StringNotEqualsIfExists": {
+               "aws:PrincipalTag/dp:exclude": "true"
+            },
+            "Null": {
+               "apprunner:VpcConnectorArn": "true"
+            }
+         }
+      },
+      {
+         "Sid": "PreventNonVPCDeploymentCodeBuildProject",
+         "Effect": "Deny",
+         "Action": [
+            "codebuild:CreateProject",
+            "codebuild:UpdateProject"
+         ],
+         "Resource": "*",
+         "Condition": {
+            "StringNotEqualsIfExists": {
+               "aws:PrincipalTag/dp:exclude": "true"
+            },
+            "Null": {
+               "codebuild:vpcConfig.vpcId": "true",
+               "codebuild:environment.fleet.fleetArn": "true"
+            }
+         }
+      },
+      {
+         "Sid": "PreventNonVPCDeploymentCodeBuildFleet",
+         "Effect": "Deny",
+         "Action": [
+            "codebuild:CreateFleet",
+            "codebuild:UpdateFleet"
+         ],
+         "Resource": "*",
+         "Condition": {
+            "StringNotEqualsIfExists": {
+               "aws:PrincipalTag/dp:exclude": "true"
+            },
+            "Null": {
+               "codebuild:vpcConfig.vpcId": "true"
+            }
+         }
+      },
+      {
+         "Sid": "PreventNonVPCDeploymentBedrockAgentCore",
+         "Effect": "Deny",
+         "Action": [
+            "bedrock-agentcore:CreateAgentRuntime",
+            "bedrock-agentcore:CreateBrowser",
+            "bedrock-agentcore:CreateCodeInterpreter",
+            "bedrock-agentcore:UpdateAgentRuntime"
+         ],
+         "Resource": "*",
+         "Condition": {
+            "StringNotEqualsIfExists": {
+               "aws:PrincipalTag/dp:exclude": "true"
+            },
+            "Null": {
+               "bedrock-agentcore:subnets": "true"
+            }
+         }
+      }
+   ]
+}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { PlatformId, PlatformData, Emulation, DetectionData, DetectionDetail, Guardrails, Playbook } from '@/types'
+import type { PlatformId, PlatformData, Emulation, DetectionData, DetectionDetail, GuardrailLibrary, Playbook } from '@/types'
 import * as platformService from '@/services/platform.service'
 
 interface AsyncState<T> {
@@ -125,7 +125,11 @@ export function useDetectionDetail(
   )
 }
 
-export function useGuardrails(platformId: PlatformId | undefined): AsyncState<Guardrails> {
+/**
+ * Fetch the SCP/RCP guardrails library for a platform.
+ * The library is AWS-only today; other platforms resolve to null.
+ */
+export function useGuardrails(platformId: PlatformId | undefined): AsyncState<GuardrailLibrary> {
   return useCachedAsync(
     platformId ? `guardrails:${platformId}` : null,
     () => platformService.fetchGuardrails(platformId as PlatformId),
