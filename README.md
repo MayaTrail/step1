@@ -190,6 +190,7 @@ startup.
 | `STATE_BUCKET` | S3 bucket for Pulumi state (e.g. `mayatrail-state-bucket`) |
 | `PULUMI_CONFIG_PASSPHRASE` | Passphrase for Pulumi stack secrets |
 | `EMULATIONS_BASE_DIR` | Where emulation packages are mounted (`/opt/emulations`) |
+| `THREATINTEL_BUCKET` | S3 bucket holding the daily threat intel RSS snapshot (e.g. `mayatrail-threatintel`). Leave empty to disable ingestion |
 | `REGISTRATION_INVITE_CODE` | Invite code gating self-registration |
 | `GOOGLE_CLIENT_ID` | Google SSO client ID |
 
@@ -250,8 +251,8 @@ The full platform runs as a Docker Compose stack with 7 services:
 | `db` | PostgreSQL 16 database |
 | `redis` | Celery message broker + result backend |
 | `backend` | Django REST API (Gunicorn) |
-| `worker_enterprise` | Celery worker — deploys, attacks, and destroys emulations in the user's AWS account via STS AssumeRole (Pulumi Automation API, in-process) |
-| `beat` | Celery Beat scheduler — auto-destroys expired stacks every 15 minutes |
+| `worker_enterprise` | Celery worker — deploys, attacks, and destroys emulations in the user's AWS account via STS AssumeRole (Pulumi Automation API, in-process); also runs the daily threat intel RSS ingest |
+| `beat` | Celery Beat scheduler — auto-destroys expired stacks every 15 minutes, and triggers the daily threat intel ingest |
 | `ui` | React SPA (Nginx, non-root) |
 | `nginx` | Edge reverse proxy (routes `/` to UI, `/api/` + `/admin/` to backend) |
 

@@ -4,12 +4,15 @@ name: Backend tests
 # the dashboard manifest contract, the readiness contract, the MITRE catalogue
 # and its aggregations, and detection rule rendering. A malformed emulation
 # fails here at PR time rather than as a miscounted dashboard or a blank
-# detection page after merge.
+# detection page after merge. It also covers the threat intel feed catalogue,
+# its RSS/Atom normalisation and the daily merge — all against fixture XML, so
+# the job stays offline.
 #
 # Uses config.settings.ci, which swaps in sqlite and an empty URL configuration
-# so the job installs four packages instead of the full runtime stack. No
-# database service and no repository secrets are required: SECRET_KEY is only
-# present because base.py demands one, and its value here is a literal dummy.
+# so the job installs a handful of packages instead of the full runtime stack.
+# No database service and no repository secrets are required: SECRET_KEY is
+# only present because base.py demands one, and its value here is a literal
+# dummy.
 on:
   pull_request:
   push:
@@ -42,5 +45,5 @@ jobs:
       - name: Install test dependencies
         run: pip install -r requirements-test.txt
 
-      - name: Run the emulation and metrics test suites
-        run: python manage.py test apps.emulations apps.metrics
+      - name: Run the emulation, metrics and threat intel test suites
+        run: python manage.py test apps.emulations apps.metrics apps.threatintel

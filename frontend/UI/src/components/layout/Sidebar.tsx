@@ -11,6 +11,7 @@ import {
   IconSearch,
   IconClipboard,
   IconShield,
+  IconBroadcast,
   IconBarChart,
   IconGear,
   IconBook,
@@ -58,6 +59,7 @@ export function Sidebar({ isOpen }: SidebarProps) {
       <NavItem to="/detections" icon={<IconSearch size={17} />} label="Detections" />
       <NavItem to="/playbooks" icon={<IconClipboard size={17} />} label="Playbooks" />
       <NavItem to="/guardrails" icon={<IconShield size={17} />} label="Guardrails" />
+      <NavItem to="/threat-intel" icon={<IconBroadcast size={17} />} label="Threat Intel" />
 
       <Spacer />
 

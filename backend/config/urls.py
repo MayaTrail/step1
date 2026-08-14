@@ -16,5 +16,6 @@ urlpatterns = [
     path("api/emulations/", include("apps.emulations.urls")),
     path("api/logs/", include("apps.logs.urls")),
     path("api/metrics/", include("apps.metrics.urls")),
+    path("api/threat-intel/", include("apps.threatintel.urls")),
     path("api/ai/", include("apps.ai.urls")),
 ]
