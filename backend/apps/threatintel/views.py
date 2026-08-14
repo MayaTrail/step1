@@ -33,6 +33,13 @@ logger = logging.getLogger(__name__)
 # The snapshot changes once a day, so re-reading it from S3 on every request is
 # waste. Held in-process like the guardrails registry cache, but with a TTL so
 # a long-lived gunicorn worker still picks up the new snapshot the same day.
+#
+# Only a *successful* read is cached. Caching the absence of a snapshot would
+# mean that after the very first ingest completes, the page keeps showing its
+# empty state for up to another TTL — and because gunicorn runs several worker
+# processes each holding their own cache, a refresh would flip between empty
+# and populated depending on which one answered. A missing object is one cheap
+# S3 call, so re-checking every time is the better trade.
 CACHE_TTL_SECONDS = 300
 
 # Items returned when the caller does not ask for a specific page size.
@@ -54,11 +61,12 @@ def reset_cache() -> None:
 
 def _snapshot() -> dict[str, Any] | None:
     """
-    Return the current snapshot, reading through a short-lived cache.
+    Return the current snapshot, reading successful results through a cache.
 
     Returns:
         The stored payload, or None when no run has completed or the bucket is
-        unreadable.
+        unreadable. A None result is never cached, so the first snapshot to
+        land is served immediately rather than after the TTL expires.
     """
     global _cache  # noqa: PLW0603
     now = time.monotonic()
@@ -66,7 +74,8 @@ def _snapshot() -> dict[str, Any] | None:
         return _cache[1]
 
     payload = storage.read_latest()
-    _cache = (now, payload)
+    if payload is not None:
+        _cache = (now, payload)
     return payload
 
 

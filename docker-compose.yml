@@ -60,7 +60,11 @@ services:
       THREATINTEL_PREFIX: rss-feed/
       THREATINTEL_BUCKET_REGION: ap-south-1
     ports:
-      - "8000:8000"
+      # Host port is overridable: some Windows/Hyper-V hosts reserve the
+      # 7979-8078 range, which makes the default 8000 unbindable. Set
+      # BACKEND_PORT in the root .env to publish elsewhere; the container
+      # port and everything behind nginx are unaffected.
+      - "${BACKEND_PORT:-8000}:8000"
     volumes:
       # Mount emulations package so the API registry can discover packages.
       - ./emulations:/opt/emulations:ro
