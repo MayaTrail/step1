@@ -82,7 +82,6 @@ export function ThreatIntelFeedPanel() {
         sourceCount={feed?.sourceCount ?? 0}
         subscribedCount={sources?.totalCount ?? 0}
         fetchedAt={feed?.fetchedAt ?? null}
-        feedsFailed={feed?.feedsFailed ?? 0}
       />
 
       <div className="flex flex-wrap items-center gap-3 mb-5">
@@ -108,21 +107,26 @@ export function ThreatIntelFeedPanel() {
   )
 }
 
-/** Freshness and coverage line above the toolbar. */
+/**
+ * Freshness and coverage line above the toolbar.
+ *
+ * Reports what the run produced, not how it went: a dead subscription is an
+ * operator's problem, visible in the per-feed report the sources endpoint
+ * serves, and surfacing it here only told a reader something they could not
+ * act on.
+ */
 function FeedSummary({
   itemCount,
   totalCount,
   sourceCount,
   subscribedCount,
   fetchedAt,
-  feedsFailed,
 }: {
   itemCount: number
   totalCount: number
   sourceCount: number
   subscribedCount: number
   fetchedAt: string | null
-  feedsFailed: number
 }) {
   const shown = totalCount > itemCount ? `${itemCount} of ${totalCount} items` : `${itemCount} items`
 
@@ -140,14 +144,6 @@ function FeedSummary({
             updated {formatWhen(fetchedAt)}
           </span>
         </>
-      )}
-      {feedsFailed > 0 && (
-        <span
-          className="font-mono text-[10px] uppercase tracking-[1px] text-warning bg-warning/[0.1] rounded-[6px] px-2 py-0.5"
-          title="Feeds whose URL did not return a parseable document on the last run"
-        >
-          {feedsFailed} feed{feedsFailed === 1 ? '' : 's'} unreachable
-        </span>
       )}
     </div>
   )

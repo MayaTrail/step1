@@ -286,3 +286,10 @@ LLM_FERNET_KEY = config("LLM_FERNET_KEY", default="")
 THREATINTEL_BUCKET = config("THREATINTEL_BUCKET", default="")
 THREATINTEL_PREFIX = config("THREATINTEL_PREFIX", default="rss-feed/")
 THREATINTEL_BUCKET_REGION = config("THREATINTEL_BUCKET_REGION", default="ap-south-1")
+
+# The advisory library (APT dossiers) is a sibling prefix in the same bucket,
+# not a child of THREATINTEL_PREFIX: the RSS snapshot and the dossiers are
+# unrelated content that happen to share a bucket. `manage.py sync_advisories`
+# uploads the dossier markdown plus the index.json that the list endpoint reads.
+
+THREATINTEL_ADVISORY_PREFIX = config("THREATINTEL_ADVISORY_PREFIX", default="advisory/")

@@ -21,6 +21,7 @@ import { DetectionsHub } from './components/detections/DetectionsHub'
 import { PlaybooksHub } from './components/playbooks/PlaybooksHub'
 import { GuardrailsHub } from './components/guardrails/GuardrailsHub'
 import { ThreatIntelPage } from './components/threatintel/ThreatIntelPage'
+import { AdvisoryPage } from './components/threatintel/AdvisoryPage'
 import { ComingSoon } from './components/common/ComingSoon'
 import { ActiveRunsPage } from './components/operations/ActiveRunsPage'
 import { ResultsPage } from './components/operations/ResultsPage'
@@ -55,6 +56,7 @@ export default function App() {
                 <Route path="playbooks" element={<PlaybooksHub />} />
                 <Route path="guardrails" element={<GuardrailsHub />} />
                 <Route path="threat-intel" element={<ThreatIntelPage />} />
+                <Route path="threat-intel/advisory/:advisoryId" element={<AdvisoryPage />} />
 
                 {/* Administration */}
                 <Route path="reports" element={

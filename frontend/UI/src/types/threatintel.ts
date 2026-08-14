@@ -66,18 +66,50 @@ export interface ThreatIntelSources {
 }
 
 /**
- * A MayaTrail-authored advisory.
+ * One APT threat-actor dossier, as a library card.
  *
- * No advisory content exists yet — the endpoint returns an empty library and
- * the panel renders its placeholder. The shape is declared now so the panel
- * has something to bind to when content lands.
+ * Parsed backend-side at upload time from the dossier markdown, so every field
+ * is already normalised: `origin` and `motivations` are canonicalised (the
+ * upstream sources spell "Russia" and "Russian Federation" both ways), and any
+ * field the dossier does not carry arrives empty rather than absent.
  */
 export interface Advisory {
+  /** URL-safe slug derived from the dossier filename, e.g. "lazarus-group". */
   id: string
-  title: string
+  /** Actor name as the dossier titles it — the MITRE-canonical one. */
+  name: string
+  /**
+   * The name the dossier is filed under, e.g. "APT10" for a file titled
+   * "menuPass". Differs from `name` for six actors; shown and searchable so
+   * either name finds the card.
+   */
+  reference: string
+  /** MITRE ATT&CK group id, e.g. "G0016". Empty when the actor has none. */
+  groupId: string
+  /** Opening of the Intelligence Overview. Empty for dossiers without one. */
   summary: string
-  severity: string
-  publishedAt: string | null
+  origin: string
+  /** Year first observed. Empty unless the dossier records a real one. */
+  firstSeen: string
+  motivations: string[]
+  aliases: string[]
+  /** MITRE tactics from the TTP table, in first-seen order. */
+  tactics: string[]
+  techniqueCount: number
+  /** Known exploited CVEs (CISA KEV) attributed to the actor. */
+  cveCount: number
+  malwareCount: number
+  sectors: string[]
+  /** When the dossier was generated, as written, e.g. "2026-08-14 21:54 UTC". */
+  generatedAt: string
+  /** Upstream feeds merged into the dossier, e.g. ["mitre_attack"]. */
+  sources: string[]
+}
+
+/** One advisory plus its full dossier, from /advisories/<id>/. */
+export interface AdvisoryDetail extends Advisory {
+  /** The dossier markdown, verbatim. */
+  content: string
 }
 
 /** The advisory library as served by /api/threat-intel/advisories/. */

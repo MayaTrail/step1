@@ -1,5 +1,5 @@
 import api from './api'
-import type { AdvisoryLibrary, ThreatIntelFeed, ThreatIntelSources } from '@/types'
+import type { AdvisoryDetail, AdvisoryLibrary, ThreatIntelFeed, ThreatIntelSources } from '@/types'
 
 /**
  * Threat Intel API client.
@@ -42,10 +42,29 @@ export async function fetchThreatIntelSources(): Promise<ThreatIntelSources | nu
   }
 }
 
-/** Fetch the advisory library. Empty until advisory content exists. */
+/**
+ * Fetch the advisory library — one card per APT dossier.
+ *
+ * Empty until `manage.py sync_advisories` has published the dossiers.
+ */
 export async function fetchAdvisories(): Promise<AdvisoryLibrary | null> {
   try {
     const { data } = await api.get<AdvisoryLibrary>('/threat-intel/advisories/')
+    return data
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Fetch one advisory with its full dossier markdown.
+ *
+ * @param advisoryId - The card's `id`, e.g. "lazarus-group".
+ * @returns The dossier, or null when no advisory has that id.
+ */
+export async function fetchAdvisory(advisoryId: string): Promise<AdvisoryDetail | null> {
+  try {
+    const { data } = await api.get<AdvisoryDetail>(`/threat-intel/advisories/${advisoryId}/`)
     return data
   } catch {
     return null

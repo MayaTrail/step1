@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AdvisoryLibrary, ThreatIntelFeed, ThreatIntelSources } from '@/types'
+import type { AdvisoryDetail, AdvisoryLibrary, ThreatIntelFeed, ThreatIntelSources } from '@/types'
 import * as threatIntelService from '@/services/threatintel.service'
 
 interface AsyncState<T> {
@@ -69,7 +69,18 @@ export function useThreatIntelSources(): AsyncState<ThreatIntelSources> {
   return useCachedAsync('threatintel:sources', threatIntelService.fetchThreatIntelSources)
 }
 
-/** Fetch the advisory library. Empty until advisory content exists. */
+/** Fetch the advisory library — one card per APT dossier. */
 export function useAdvisories(): AsyncState<AdvisoryLibrary> {
   return useCachedAsync('threatintel:advisories', threatIntelService.fetchAdvisories)
+}
+
+/**
+ * Fetch one advisory with its dossier markdown.
+ *
+ * @param advisoryId - The card's `id`; an empty value skips the fetch.
+ */
+export function useAdvisory(advisoryId: string | undefined): AsyncState<AdvisoryDetail> {
+  return useCachedAsync(`threatintel:advisory:${advisoryId ?? ''}`, () =>
+    advisoryId ? threatIntelService.fetchAdvisory(advisoryId) : Promise.resolve(null),
+  )
 }

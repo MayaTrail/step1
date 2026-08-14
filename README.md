@@ -190,7 +190,8 @@ startup.
 | `STATE_BUCKET` | S3 bucket for Pulumi state (e.g. `mayatrail-state-bucket`) |
 | `PULUMI_CONFIG_PASSPHRASE` | Passphrase for Pulumi stack secrets |
 | `EMULATIONS_BASE_DIR` | Where emulation packages are mounted (`/opt/emulations`) |
-| `THREATINTEL_BUCKET` | S3 bucket holding the daily threat intel RSS snapshot (e.g. `mayatrail-threatintel`). Leave empty to disable ingestion |
+| `THREATINTEL_BUCKET` | S3 bucket holding the daily threat intel RSS snapshot and the advisory library (e.g. `mayatrail-threatintel`). Leave empty to disable ingestion |
+| `THREATINTEL_ADVISORY_PREFIX` | Prefix in that bucket holding the APT dossiers (`advisory/`) |
 | `REGISTRATION_INVITE_CODE` | Invite code gating self-registration |
 | `GOOGLE_CLIENT_ID` | Google SSO client ID |
 
@@ -201,6 +202,22 @@ cd frontend/UI
 npm install
 npm run dev    # Vite dev server on http://localhost:3000
 ```
+
+### Publishing the advisory library
+
+Threat Intel → Advisory is a library of APT threat-actor dossiers, one markdown
+document per actor. The RSS feed half ingests itself on a daily schedule, but
+the dossiers are generated out of band and uploaded explicitly. Point the
+command at the directory holding them:
+
+```bash
+python manage.py sync_advisories path/to/dossiers --dry-run
+```
+
+The dry run parses every document and prints what it would write — the S3 keys,
+plus each dossier's parsed name, origin and counts — without contacting S3. Drop
+`--dry-run` to upload the documents and the `index.json` the API serves. Until
+that has run, the Advisory panel shows its empty state.
 
 ## Emulations
 

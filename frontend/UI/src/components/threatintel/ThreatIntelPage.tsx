@@ -46,7 +46,9 @@ export function ThreatIntelPage() {
           <FilterDropdown label="View" value={view} options={VIEW_OPTIONS} onChange={select} />
         </div>
         <div className="text-[0.9rem] text-content-secondary mt-1.5">
-          Cloud security research, breach reporting and provider advisories
+          {view === 'feed'
+            ? 'Cloud security research, breach reporting and provider advisories'
+            : 'APT threat-actor dossiers — TTPs, tooling and known exploited CVEs by actor'}
         </div>
       </div>
 

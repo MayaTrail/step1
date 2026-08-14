@@ -37,9 +37,12 @@ services:
       REDIS_URL: redis://redis:6379/0
       EMULATIONS_BASE_DIR: /opt/emulations
       # Threat Intel reads the daily RSS snapshot from S3 to serve
-      # /api/threat-intel/feed/. Read-only here; the worker does the writing.
+      # /api/threat-intel/feed/, and the dossier library under the advisory
+      # prefix to serve /api/threat-intel/advisories/. Read-only here; the
+      # worker writes the snapshot and sync_advisories writes the library.
       THREATINTEL_BUCKET: mayatrail-threatintel
       THREATINTEL_PREFIX: rss-feed/
+      THREATINTEL_ADVISORY_PREFIX: advisory/
       THREATINTEL_BUCKET_REGION: ap-south-1
     ports:
       - "8000:8000"
@@ -84,8 +87,11 @@ services:
       EMULATIONS_BASE_DIR: /opt/emulations
       # Threat Intel: the daily RSS ingest task writes its snapshot here.
       # Needs s3:GetObject/PutObject on this bucket; it never creates it.
+      # The advisory prefix is set so `manage.py sync_advisories` can be run
+      # from this container as well as the backend.
       THREATINTEL_BUCKET: mayatrail-threatintel
       THREATINTEL_PREFIX: rss-feed/
+      THREATINTEL_ADVISORY_PREFIX: advisory/
       THREATINTEL_BUCKET_REGION: ap-south-1
     volumes:
       # Emulation packages: attack scripts and per-emulation infra/ programs.
