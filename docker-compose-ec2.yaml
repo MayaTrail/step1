@@ -36,6 +36,11 @@ services:
       POSTGRES_PASSWORD: mayatrail
       REDIS_URL: redis://redis:6379/0
       EMULATIONS_BASE_DIR: /opt/emulations
+      # Threat Intel reads the daily RSS snapshot from S3 to serve
+      # /api/threat-intel/feed/. Read-only here; the worker does the writing.
+      THREATINTEL_BUCKET: mayatrail-threatintel
+      THREATINTEL_PREFIX: rss-feed/
+      THREATINTEL_BUCKET_REGION: ap-south-1
     ports:
       - "8000:8000"
     volumes:
@@ -77,6 +82,11 @@ services:
       # Base directory where emulation packages are mounted.
       # Infra programs are resolved as {EMULATIONS_BASE_DIR}/{type}/infra/
       EMULATIONS_BASE_DIR: /opt/emulations
+      # Threat Intel: the daily RSS ingest task writes its snapshot here.
+      # Needs s3:GetObject/PutObject on this bucket; it never creates it.
+      THREATINTEL_BUCKET: mayatrail-threatintel
+      THREATINTEL_PREFIX: rss-feed/
+      THREATINTEL_BUCKET_REGION: ap-south-1
     volumes:
       # Emulation packages: attack scripts and per-emulation infra/ programs.
       - ./emulations:/opt/emulations:ro
@@ -85,7 +95,9 @@ services:
         condition: service_healthy
     command: celery -A config worker --queues=enterprise --concurrency=4 --loglevel=info
 
-  # Celery Beat scheduler — runs auto_destroy_expired_stacks every 15 minutes.
+  # Celery Beat scheduler — runs auto_destroy_expired_stacks every 15 minutes
+  # and refresh_threat_intel_feeds once a day. Both tasks are pinned to the
+  # enterprise queue, since worker_enterprise is the only consumer.
   beat:
     build:
       context: ./backend
