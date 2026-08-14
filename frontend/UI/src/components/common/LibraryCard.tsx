@@ -23,6 +23,11 @@ interface LibraryCardProps {
   description?: string
   /** MITRE tactic chips. */
   tactics?: string[]
+  /**
+   * Mono label for the band's right slot, e.g. a catalogue reference. Only
+   * rendered when there is no severity — severity owns that slot when present.
+   */
+  badge?: string
   /** One or two footer buttons (e.g. View + Run). */
   actions: CardAction[]
 }
@@ -47,7 +52,7 @@ const MAX_TACTICS = 4
  * dot are the only severity-colored elements, keeping Raycast Red as
  * punctuation per the design system.
  */
-export function LibraryCard({ name, eyebrow, severity, description, tactics, actions }: LibraryCardProps) {
+export function LibraryCard({ name, eyebrow, severity, description, tactics, badge, actions }: LibraryCardProps) {
   const accent = severity ? SEV_ACCENT[severity] : null
   const shown = tactics?.slice(0, MAX_TACTICS) ?? []
   const extra = tactics && tactics.length > MAX_TACTICS ? tactics.length - MAX_TACTICS : 0
@@ -61,12 +66,14 @@ export function LibraryCard({ name, eyebrow, severity, description, tactics, act
         <span className={`font-mono text-[9px] tracking-[1.5px] uppercase font-medium truncate ${accent?.text ?? 'text-content-dim'}`}>
           {eyebrow}
         </span>
-        {severity && accent && (
+        {severity && accent ? (
           <span className="flex items-center gap-2 shrink-0">
             <span className={`font-mono text-[9px] font-bold tracking-[1px] ${accent.text}`}>{severity}</span>
             <span className={`w-2 h-2 rounded-full ${accent.dot} ${accent.glow}`} />
           </span>
-        )}
+        ) : badge ? (
+          <span className="font-mono text-[9px] font-bold tracking-[1px] text-content-dim shrink-0">{badge}</span>
+        ) : null}
       </div>
 
       {/* Body */}

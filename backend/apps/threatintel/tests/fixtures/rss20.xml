@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Example Cloud Security Blog</title>
+    <link>https://example.test/</link>
+    <description>Sample RSS 2.0 channel used by the threat intel parser tests.</description>
+    <item>
+      <title>Abusing an IAM role chain across accounts</title>
+      <link>https://example.test/posts/role-chaining</link>
+      <description><![CDATA[<p>A <strong>role chain</strong> lets an attacker hop between accounts.</p><p>We walk through detection.</p>]]></description>
+      <dc:creator>A. Researcher</dc:creator>
+      <category>iam</category>
+      <category>detection</category>
+      <pubDate>Tue, 12 Aug 2025 09:30:00 +0000</pubDate>
+      <guid>https://example.test/posts/role-chaining</guid>
+    </item>
+    <item>
+      <title>Undated notes on S3 bucket policies</title>
+      <link>https://example.test/posts/s3-policies</link>
+      <description>Plain text description with     irregular    whitespace.</description>
+    </item>
+    <item>
+      <title>An item with no link at all</title>
+      <description>Still has a title, so it is kept.</description>
+      <pubDate>Mon, 04 Aug 2025 12:00:00 +0000</pubDate>
+    </item>
+  </channel>
+</rss>

@@ -12,8 +12,10 @@ Django still loads the database driver and imports ROOT_URLCONF during system
 checks. config/urls.py wires every app's views, and those views import their
 tasks module, which pulls in pulumi, boto3 and the rest of the runtime stack.
 Pointing ROOT_URLCONF at an empty module cuts that chain: the suite then needs
-only django, python-decouple, PyYAML and celery (see requirements-test.txt),
-which is roughly 86 MB installed instead of 450 MB.
+only django, python-decouple, PyYAML, celery, and feedparser + requests for the
+threat intel parser tests (see requirements-test.txt) — around 90 MB installed
+instead of 450 MB. boto3 stays out because no test imports apps.threatintel's
+storage or tasks module.
 """
 
 from .base import *  # noqa: F401, F403
@@ -36,8 +38,10 @@ ROOT_URLCONF = "config.ci_urls"
 # Only the apps whose models or code the suite actually loads. apps.users owns
 # AUTH_USER_MODEL, and apps.infrastructure is required because
 # emulations.EmulationRun.stack is a foreign key to infrastructure.Stack;
-# omitting it fails the system check with fields.E300. The remaining apps
-# (connectors, logs, ai) are not referenced by any test or by these models.
+# omitting it fails the system check with fields.E300. apps.threatintel has no
+# models — it is listed so `manage.py test apps.threatintel` can discover its
+# suite. The remaining apps (connectors, logs, ai) are not referenced by any
+# test or by these models.
 INSTALLED_APPS = [
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -45,4 +49,5 @@ INSTALLED_APPS = [
     "apps.infrastructure",
     "apps.emulations",
     "apps.metrics",
+    "apps.threatintel",
 ]

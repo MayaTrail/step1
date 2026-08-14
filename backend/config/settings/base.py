@@ -53,6 +53,7 @@ LOCAL_APPS = [
     "apps.emulations",
     "apps.logs",
     "apps.metrics",
+    "apps.threatintel",
     "apps.ai",
 ]
 
@@ -204,6 +205,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "emulations.auto_destroy_expired_stacks",
         "schedule": crontab(minute="*/15"),
     },
+    # Poll every threat intel RSS subscription once a day and snapshot the
+    # merged result to S3. Scheduled off-peak because it makes ~40 outbound
+    # requests; the task itself is pinned to the enterprise queue, the only
+    # queue a worker consumes.
+    "refresh-threat-intel-feeds": {
+        "task": "threatintel.refresh_threat_intel_feeds",
+        "schedule": crontab(hour="3", minute="0"),
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -259,3 +268,28 @@ DEMO_DURATION_MINUTES = config("DEMO_DURATION_MINUTES", default=5, cast=int)
 # clear 503 instead of breaking app startup.
 
 LLM_FERNET_KEY = config("LLM_FERNET_KEY", default="")
+
+# ---------------------------------------------------------------------------
+# Threat Intel
+# ---------------------------------------------------------------------------
+# S3 destination for the daily RSS ingest. The Celery Beat task writes one
+# snapshot per day under {prefix}daily/ plus a {prefix}latest.json that the API
+# serves; nothing is fetched during a request.
+#
+# The bucket is provisioned out of band — the task does not create it. Leave
+# THREATINTEL_BUCKET empty to disable ingestion: the task then no-ops and the
+# Threat Intel page shows its empty state instead of failing.
+#
+# Region is separate from STATE_BUCKET_REGION on purpose; this is a different
+# bucket and need not live in ap-south-1.
+
+THREATINTEL_BUCKET = config("THREATINTEL_BUCKET", default="")
+THREATINTEL_PREFIX = config("THREATINTEL_PREFIX", default="rss-feed/")
+THREATINTEL_BUCKET_REGION = config("THREATINTEL_BUCKET_REGION", default="ap-south-1")
+
+# The advisory library (APT dossiers) is a sibling prefix in the same bucket,
+# not a child of THREATINTEL_PREFIX: the RSS snapshot and the dossiers are
+# unrelated content that happen to share a bucket. `manage.py sync_advisories`
+# uploads the dossier markdown plus the index.json that the list endpoint reads.
+
+THREATINTEL_ADVISORY_PREFIX = config("THREATINTEL_ADVISORY_PREFIX", default="advisory/")

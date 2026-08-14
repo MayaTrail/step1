@@ -160,3 +160,29 @@ export const IconBarChart = (p: IconProps) => (
         <path d="M6 21V11M12 21V5M18 21v-8" />
     </Icon>
 )
+
+/** Broadcast arcs — Threat Intel, the section fed by external publications. */
+export const IconBroadcast = (p: IconProps) => (
+    <Icon {...p}>
+        <circle cx="12" cy="12" r="2" />
+        <path d="M8.5 15.5a5 5 0 0 1 0-7M15.5 8.5a5 5 0 0 1 0 7" />
+        <path d="M5.6 18.4a9 9 0 0 1 0-12.8M18.4 5.6a9 9 0 0 1 0 12.8" />
+    </Icon>
+)
+
+/** Rectangle with a pointer — an external link out to a publisher's site. */
+export const IconExternalLink = (p: IconProps) => (
+    <Icon {...p}>
+        <path d="M14 4h6v6" />
+        <path d="M20 4 11 13" />
+        <path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+    </Icon>
+)
+
+/** Warning triangle — the Advisory panel. */
+export const IconWarning = (p: IconProps) => (
+    <Icon {...p}>
+        <path d="M12 3.5 21 19H3l9-15.5Z" />
+        <path d="M12 10v4M12 16.5v.5" />
+    </Icon>
+)
