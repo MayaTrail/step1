@@ -106,12 +106,12 @@ place is dead weight; a new one missing from it produces the false-positive
 wave that gets a rule muted.
 
 **Files here:**
-- `sigma_t1136_003.yml`, five documents: `CreateLoginProfile` by
+- `sigma_t1136.003.yml`, five documents: `CreateLoginProfile` by
   non-identity-admin (`high`), the `CreateUser` base rule (`low`), the
   create-console-user sequence (`high`), the **escalation** correlation pairing
   console access with a privilege grant (`critical`), and its grant base rule
   (`low`). All are inlined here so the correlations are deploy-complete.
-- `kql_t1136_003.kql`, target-user-centric query with escalation verdicts and
+- `kql_t1136.003.kql`, target-user-centric query with escalation verdicts and
   the `ConsoleLogin` follow-on pivot.
 
 Full response procedure is in `../PLAYBOOK.md`.

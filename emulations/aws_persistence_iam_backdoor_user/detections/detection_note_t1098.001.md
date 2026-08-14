@@ -102,9 +102,9 @@ place is dead weight; a new one missing from it produces the false-positive
 wave that gets a rule muted.
 
 **Files here:**
-- `sigma_t1098_001.yml`, one rule (`high`) covering the "for another user by
+- `sigma_t1098.001.yml`, one rule (`high`) covering the "for another user by
   non-provisioning principal" shape.
-- `kql_t1098_001.kql`, the full caller-vs-target comparison with the correct
+- `kql_t1098.001.kql`, the full caller-vs-target comparison with the correct
   nested key path, plus the key-usage hunt query.
 
 Full response procedure is in `../PLAYBOOK.md`.

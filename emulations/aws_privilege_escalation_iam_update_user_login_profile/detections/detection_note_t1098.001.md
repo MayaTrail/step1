@@ -102,10 +102,10 @@ place is dead weight; a new one missing from it produces the false-positive
 wave that gets a rule muted.
 
 **Files here:**
-- `sigma_t1098_001.yml`, three documents: the non-help-desk reset (`high`),
+- `sigma_t1098.001.yml`, three documents: the non-help-desk reset (`high`),
   the reset→login correlation (`critical`), and the console-login base rule
   (`low`).
-- `kql_t1098_001.kql`, joins resets to subsequent logins with MFA-aware
+- `kql_t1098.001.kql`, joins resets to subsequent logins with MFA-aware
   verdicts, and flags self-targeted resets.
 
 Full response procedure is in `../PLAYBOOK.md`.

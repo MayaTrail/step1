@@ -75,10 +75,10 @@ and a trusting role is not yet exploitable.)
 **GuardDuty:** no finding type specific to this technique.
 
 **Files here:**
-- `sigma_t1550_001.yml`, three documents: anchor/profile creation (`high`),
+- `sigma_t1550.001.yml`, three documents: anchor/profile creation (`high`),
   the role-trust gate (`high`, with the OR'd sibling blocks), and
   `CreateSession` vending (`medium`).
-- `kql_t1550_001.kql`, whole-chain query over a 30-day window with per-link
+- `kql_t1550.001.kql`, whole-chain query over a 30-day window with per-link
   verdicts and the certificate extraction pointer.
 
 Full response procedure is in `../PLAYBOOK.md`.

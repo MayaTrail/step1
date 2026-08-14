@@ -17,13 +17,24 @@ class EmulationRunSerializer(serializers.ModelSerializer):
 
     Exposes all fields needed for the frontend to poll run status,
     display phase progress, and render stdout/stderr output.
+
+    triggered_by is a UUID, which is not displayable, so the operator's email
+    and the stack's name are resolved here for the live view's run metadata.
     """
+
+    triggered_by_email = serializers.EmailField(
+        source="triggered_by.email",
+        read_only=True,
+        default=None,
+    )
+    stack_name = serializers.CharField(source="stack.name", read_only=True)
 
     class Meta:
         model = EmulationRun
         fields = [
             "id",
             "stack",
+            "stack_name",
             "emulation_type",
             "status",
             "phase_current",
@@ -31,6 +42,7 @@ class EmulationRunSerializer(serializers.ModelSerializer):
             "stdout",
             "stderr",
             "triggered_by",
+            "triggered_by_email",
             "started_at",
             "completed_at",
             "created_at",

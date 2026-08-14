@@ -37,7 +37,7 @@ fields @timestamp, srcAddr, dstAddr, dstPort, action, bytes
 
 ### AWS Security Hub / Config (Control-Plane Proxy)
 - EC2.19: Security group allows unrestricted inbound on port 3389 (0.0.0.0/0)
-- Fires on the group *configuration* (detectable via CloudTrail — see sigma_t1578_002.yml),
+- Fires on the group *configuration* (detectable via CloudTrail — see sigma_t1578.002.yml),
   not the RDP session itself. Open SG is the necessary precondition.
 
 ### CloudTrail (Indirect — Attack Surface Creation)

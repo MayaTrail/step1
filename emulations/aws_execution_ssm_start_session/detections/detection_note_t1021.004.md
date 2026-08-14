@@ -88,10 +88,10 @@ place is dead weight; a new one missing from it produces the false-positive
 wave that gets a rule muted.
 
 **Files here:**
-- `sigma_t1021_004.yml`, four documents: non-operator session (`high`),
+- `sigma_t1021.004.yml`, four documents: non-operator session (`high`),
   port-forwarding (`critical`), the fan-out `value_count` correlation
   (`high`), and its base rule (`low`).
-- `kql_t1021_004.kql`, all three signals in one query, plus a note on
+- `kql_t1021.004.kql`, all three signals in one query, plus a note on
   alerting when Session Manager logging is disabled.
 
 Full response procedure is in `../PLAYBOOK.md`.

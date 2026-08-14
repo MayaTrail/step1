@@ -34,10 +34,10 @@ imprecise; it is retained here for traceability.
 **GuardDuty:** no finding type specific to this technique.
 
 **Files here:**
-- `sigma_t1552_005.yml`, four documents: two base rules (`level: low`, not for
+- `sigma_t1552.005.yml`, four documents: two base rules (`level: low`, not for
   direct alerting) and the two `event_count` correlations that are the actual
   detections.
-- `kql_t1552_005.kql` - Sentinel / Log Analytics threshold query with triage
+- `kql_t1552.005.kql` - Sentinel / Log Analytics threshold query with triage
   fields projected. Not valid CloudWatch Logs Insights.
 
 Full response procedure, including the CLI hunt queries and the containment

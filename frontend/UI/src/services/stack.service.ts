@@ -5,7 +5,6 @@
  *   GET    /api/stacks/              → list user's stacks
  *   POST   /api/stacks/              → create a new stack record
  *   GET    /api/stacks/{id}/         → get a single stack
- *   DELETE /api/stacks/{id}/         → delete a stack record
  *   POST   /api/stacks/{id}/deploy/  → deploy (pulumi up)
  *   POST   /api/stacks/{id}/destroy/ → destroy (pulumi destroy)
  */
@@ -55,11 +54,6 @@ export async function refreshStack(stackId: string): Promise<StackActionResponse
 export async function previewStack(stackId: string): Promise<StackActionResponse> {
   const { data } = await api.post<StackActionResponse>(`/stacks/${stackId}/preview/`)
   return data
-}
-
-/** Delete a stack record. */
-export async function deleteStack(stackId: string): Promise<void> {
-  await api.delete(`/stacks/${stackId}/`)
 }
 
 /**

@@ -17,7 +17,7 @@
 # event is NOT expressible in Sigma; there is no `count` value-modifier in the
 # specification (`|count|gte` does not exist and fails conversion in pySigma
 # for every backend). The rule below is the coarse "a decrypting read happened"
-# signal; the real volume detection is `kql_t1552_007.kql`.
+# signal; the real volume detection is `kql_t1552.007.kql`.
 title: SSM SecureString decryption
 id: b2293d06-1c00-52f0-b25a-0afabc786283
 name: ssm_getparameters_decrypt_base
@@ -53,7 +53,7 @@ level: low
 #
 # Caveat: this counts distinct values of `requestParameters.names`, which for
 # batch calls is an array. Backends differ in whether they expand it. Where the
-# expansion is not reliable, use `kql_t1552_007.kql`, which does it explicitly.
+# expansion is not reliable, use `kql_t1552.007.kql`, which does it explicitly.
 title: Mass SSM SecureString decryption by a single principal
 id: 5c8e1f47-3a29-4b60-9d18-2e7fa04c9b53
 status: experimental

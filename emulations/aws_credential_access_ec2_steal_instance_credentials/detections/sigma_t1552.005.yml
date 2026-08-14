@@ -15,7 +15,7 @@
 #
 # The off-instance-IP correlation that completes Rule B is a join against a
 # role→IP lookup and cannot be expressed in Sigma; it lives in
-# `kql_t1552_005.kql`.
+# `kql_t1552.005.kql`.
 title: SSM SendCommand shell document from non-automation principal
 id: 8133764f-a9ee-56ef-9579-38555b5f7ea3
 status: experimental

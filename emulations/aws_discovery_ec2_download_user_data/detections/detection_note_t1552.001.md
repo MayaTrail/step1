@@ -38,8 +38,8 @@ contains secrets the disclosure is complete and silent.
 **GuardDuty:** no finding type specific to this technique.
 
 **Files here:**
-- `sigma_t1552_001.yml`, two documents: the userData base rule (`low`, not for
+- `sigma_t1552.001.yml`, two documents: the userData base rule (`low`, not for
   direct alerting) and the `value_count` breadth correlation (`high`).
-- `kql_t1552_001.kql`, the same breadth detection for log platforms.
+- `kql_t1552.001.kql`, the same breadth detection for log platforms.
 
 Full response procedure is in `../PLAYBOOK.md`.

@@ -560,6 +560,46 @@ def deploy_stack(self, stack_id: str) -> dict:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+# Pulumi's file backend writes a lock per in-flight operation but gives it no
+# lease and no expiry. A worker killed mid-run (restart, redeploy, OOM) leaves
+# the lock behind for good, and every later operation on that stack refuses to
+# start. These markers appear in the resulting error.
+_LOCK_ERROR_MARKERS = ("currently locked", "pulumi cancel")
+
+
+def destroy_with_lock_recovery(pulumi_stack, on_output, label: str) -> None:
+    """
+    Run `pulumi destroy`, releasing a stranded lock and retrying once if needed.
+
+    Only a lock failure is retried; every other error propagates untouched.
+    cancel() removes the lock without touching any resource, so the retry reads
+    the same state and proceeds normally.
+
+    Cancelling would also release a lock held by a genuinely running operation,
+    but both destroy paths refuse to start while the stack is in a busy status,
+    so a lock still present here has outlived the process that took it.
+
+    Args:
+        pulumi_stack: Automation API Stack to destroy.
+        on_output:    Callback receiving Pulumi's output lines.
+        label:        Stack name, for log context.
+    """
+    try:
+        pulumi_stack.destroy(on_output=on_output)
+        return
+    except Exception as exc:
+        message = str(exc).lower()
+        if not any(marker in message for marker in _LOCK_ERROR_MARKERS):
+            raise
+        logger.warning(
+            "Destroy blocked by a stale Pulumi lock on %s; cancelling the lock and retrying",
+            label,
+        )
+
+    pulumi_stack.cancel()
+    pulumi_stack.destroy(on_output=on_output)
+
+
 @shared_task(bind=True, name="infrastructure.destroy_stack")
 def destroy_stack(self, stack_id: str) -> dict:
     """
@@ -588,7 +628,7 @@ def destroy_stack(self, stack_id: str) -> dict:
         pulumi_stack = _get_pulumi_stack(record.name, record.region, aws_creds, work_dir=tmp_dir)
 
         logger.info("Starting destroy: stack=%s region=%s emulation=%s", record.name, record.region, record.emulation_type)
-        pulumi_stack.destroy(on_output=on_output)
+        destroy_with_lock_recovery(pulumi_stack, on_output, record.name)
 
         # Success removes the DB record entirely — no logs to retain.
         record.delete()

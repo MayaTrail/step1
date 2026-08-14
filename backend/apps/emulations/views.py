@@ -651,7 +651,7 @@ class EmulationRunDetailView(APIView):
             200 with run data, or 404 if not found or not owned by caller.
         """
         try:
-            run = EmulationRun.objects.select_related("stack").get(
+            run = EmulationRun.objects.select_related("stack", "triggered_by").get(
                 id=run_id,
                 triggered_by=request.user,
             )
