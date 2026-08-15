@@ -1,0 +1,102 @@
+{
+   "Version": "2012-10-17",
+   "Statement": [
+      {
+         "Sid":"EnforceResourcePerimeterAWSResources",
+         "Effect":"Deny",
+         "Action":"*",
+         "NotResource": [
+            "arn:aws:iam::aws:policy/*",
+            "arn:aws:ssm:*::document/*",
+            "arn:aws:ssm:*::parameter/*",
+            "arn:aws:ssm:*::automation-definition/*",
+            "arn:aws:imagebuilder:*:aws:component/*",
+            "arn:aws:imagebuilder:*:aws:image/*",
+            "arn:aws:ec2:*:aws:prefix-list/*",
+            "arn:aws:lambda:*:<service-account-id>:layer:*",
+            "arn:aws:ecr:*:<service-account-id>:repository/*",
+            "arn:aws:s3:::aws-glue-studio-transforms-<service-account-id>-prod-<region>/*",
+            "arn:aws:s3:::elasticbeanstalk-samples-<region>/*",
+            "arn:aws:s3:::elasticbeanstalk-platform-assets-<region>/*", 
+            "arn:aws:s3:::elasticbeanstalk-env-resources-<region>/*",
+            "arn:aws:s3:::elasticbeanstalk-<region>/*",
+            "arn:aws:s3:::jumpstart-cache-prod-<region>/*",
+            "arn:aws:s3:::jumpstart-cache-prod-<region>",
+            "arn:aws:cloudformation:*:aws:transform/*", 
+            "arn:aws:s3:::aws-synthetics-library-<unique-identifier>/*", 
+            "arn:aws:s3:::<unique-identifier>aws-data-exchange<unique-identifier>", 
+            "arn:aws:s3:::sc-<product-identifier>-<region>/*", 
+            "arn:aws:s3:::aws-neptune-notebook",
+            "arn:aws:s3:::aws-neptune-notebook/*",
+            "arn:aws:s3:::aws-neptune-notebook-<region>",
+            "arn:aws:s3:::aws-neptune-notebook-<region>/*",
+            "arn:aws:s3:::athena-examples-<region>/*",
+            "arn:aws:s3:::athena-examples-<region>",
+            "arn:aws:s3:::cloudformation-examples/*",
+            "arn:aws:s3:::awssupportdatasvcs.com/*",
+            "arn:aws:s3:::redshift-downloads/*",
+            "arn:aws:s3:::session-manager-downloads/*",
+            "arn:aws:s3:::ssm-document-categories/*",
+            "arn:aws:s3:::aws-sap-data-provider/*",
+            "arn:aws:s3:::aws-sap-dataprovider-<region>/*",
+            "arn:aws:s3:::awssap-backint-agent/*",
+            "arn:aws:s3:::solutions-<region>/*",
+            "arn:aws:s3:::<region>.managedblockchain/*",
+            "arn:aws:s3:::aws-glue-ml-data-quality-assets-<region>/*",
+            "arn:aws:s3:::crawler-public-<region>",
+            "arn:aws:s3:::crawler-public-<region>/*",
+            "arn:aws:s3:::textract-public-assets-<region>",
+            "arn:aws:s3:::textract-public-assets-<region>/*",
+            "arn:aws:ecr-public::<service-account-id>:repository/*",
+            "arn:aws:ssm:*:<service-account-id>:patchbaseline/*",
+            "arn:aws:iot:*::jobtemplate/*",
+            "<third-party-resource>" 
+         ],
+         "Condition":{
+            "StringNotEqualsIfExists":{
+               "aws:ResourceOrgID":"<my-org-id>",
+               "ec2:Owner":"amazon",
+               "aws:PrincipalTag/dp:exclude:resource": "true"
+            }
+         }
+      },
+      {
+         "Sid":"EnforceResourcePerimeterAWSResourcesS3",
+         "Effect":"Deny",
+         "Action":"*",
+         "Resource":[
+            "arn:aws:s3:::<unique-identifier>aws-data-exchange<unique-identifier>",
+            "arn:aws:s3:::sc-<product-identifier>-<region>/*"
+         ],
+         "Condition":{
+            "StringNotEqualsIfExists":{
+               "aws:ResourceOrgID":"<my-org-id>",
+               "aws:PrincipalTag/dp:exclude:resource": "true"
+            },
+            "ForAllValues:StringNotEquals":{
+               "aws:CalledVia":[
+                  "dataexchange.amazonaws.com",
+                  "servicecatalog.amazonaws.com"
+               ]
+            }
+         }
+      },
+      {
+         "Sid":"EnforceResourcePerimeterThirdPartyResources",
+         "Effect":"Deny",
+         "Action":"*",
+         "Resource":[
+            "<third-party-resource>"
+         ],
+         "Condition":{
+            "StringNotEqualsIfExists":{
+               "aws:PrincipalTag/dp:exclude:resource": "true",
+               "aws:ResourceAccount": [
+                  "<third-party-account-a>",
+                  "<third-party-account-b>"
+               ]
+            }
+         }
+      }
+   ]
+}

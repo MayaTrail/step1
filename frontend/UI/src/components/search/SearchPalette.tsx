@@ -8,7 +8,7 @@ import { platformShortLabel } from '@/data/platforms'
  * Global command palette.
  *
  * Name-only, client-side search over the cached index (emulations, playbooks,
- * detections, stacks). Results are grouped by type; the keyboard drives a single
+ * detections, guardrails, stacks). Results are grouped by type; the keyboard drives a single
  * flat selection across all groups (up/down to move, Enter to open, Esc to
  * close). Selecting a result navigates to its route and closes the palette.
  */
@@ -17,6 +17,7 @@ const GROUPS: { type: SearchItemType; label: string }[] = [
     { type: 'emulation', label: 'Emulations' },
     { type: 'playbook', label: 'Playbooks' },
     { type: 'detection', label: 'Detections' },
+    { type: 'guardrail', label: 'Guardrails' },
     { type: 'stack', label: 'Stacks' },
 ]
 

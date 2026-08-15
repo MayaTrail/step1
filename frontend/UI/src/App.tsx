@@ -77,6 +77,7 @@ export default function App() {
                 <Route path=":platformId/emulations/:emulationId/detections" element={<DetectionsPage />} />
                 <Route path=":platformId/emulations/:emulationId/detections/:ruleId" element={<DetectionDetailPage />} />
                 <Route path=":platformId/guardrails" element={<GuardrailsPage />} />
+                <Route path=":platformId/guardrails/:guardrailId" element={<GuardrailsPage />} />
               </Route>
             </Route>
           </Routes>

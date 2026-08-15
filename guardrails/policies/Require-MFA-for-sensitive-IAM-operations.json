@@ -1,0 +1,29 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RequireMFAForSensitiveIAMOperations",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreateUser",
+        "iam:DeleteUser",
+        "iam:AttachUserPolicy",
+        "iam:AttachRolePolicy",
+        "iam:CreateAccessKey",
+        "iam:CreatePolicyVersion"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "BoolIfExists": {
+          "aws:MultiFactorAuthPresent": "false"
+        },
+        "StringNotLike": {
+          "aws:PrincipalARN": [
+            "arn:aws:iam::*:role/YourCICDRole",
+            "arn:aws:iam::*:role/AWSCloudFormationStackSetExecutionRole"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+    "Version":"2012-10-17",
+    "Statement":[
+       {
+          "Effect":"Deny",
+          "Principal":"*",
+          "Action":"kms:CreateGrant",
+          "Resource":"*",
+          "Condition":{
+             "BoolIfExists":{
+                "kms:GrantIsForAWSResource":"false",
+                "aws:PrincipalIsAWSService":"false"
+             }
+          }
+       }   
+     ]
+ }

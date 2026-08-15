@@ -217,10 +217,49 @@ export interface DetectionDetail {
   kql: string | null
 }
 
-export interface Guardrails {
-  excluded: string[]
-  schedule: string
-  scopeLimits: string[]
+/**
+ * Service control policies attach to a principal, resource control policies to
+ * a resource. The split is derived from the policy document, not authored.
+ */
+export type GuardrailType = 'SCP' | 'RCP'
+
+/** The upstream repository a policy was copied from, so a reader can verify it. */
+export interface GuardrailSource {
+  label: string
+  url: string
+}
+
+/**
+ * One preventive policy as the library index lists it.
+ *
+ * `purpose` is the one-line description and doubles as the display title;
+ * these policies have no separate name worth showing.
+ */
+export interface GuardrailSummary {
+  id: string
+  type: GuardrailType
+  purpose: string
+  /** AWS services the policy constrains; ["All services"] when it is org-wide. */
+  services: string[]
+  source: GuardrailSource
+}
+
+/** A single policy with its document, from the detail endpoint. */
+export interface GuardrailDetail extends GuardrailSummary {
+  /** Policy filename on disk, for tracing an entry back to its source repo. */
+  file: string
+  /** The policy document verbatim. */
+  code: string
+}
+
+/**
+ * The library index. Policy documents are excluded: the list never renders
+ * them and carrying all of them would roughly triple the payload.
+ */
+export interface GuardrailLibrary {
+  guardrails: GuardrailSummary[]
+  totalCount: number
+  formats: string
 }
 
 /** One H2 section of a PLAYBOOK.md, kept as raw markdown so it renders faithfully. */
@@ -264,7 +303,7 @@ export interface PlaybookRaw {
 export interface PlatformData {
   emulations: Emulation[]
   detections: DetectionData
-  guardrails: Guardrails
+  guardrails: GuardrailLibrary
   playbooks: Playbook[]
 }
 

@@ -1,0 +1,37 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Deny",
+            "Principal": "*",
+            "Action": [
+                "s3:*",
+                "sqs:*",
+                "kms:*",
+                "secretsmanager:*",
+                "sts:AssumeRole",
+                "sts:DecodeAuthorizationMessage",
+                "sts:GetAccessKeyInfo",
+                "sts:GetFederationToken",
+                "sts:GetServiceBearerToken",
+                "sts:GetSessionToken",
+                "sts:SetContext",
+                "cognito-identity:*",
+                "cognito-idp:*",
+                "logs:*",
+                "dynamodb:*",
+                "ecr:*",
+                "aoss:*"
+            ],
+            "Resource": "*",
+            "Condition": {
+                "BoolIfExists": {
+                    "aws:PrincipalIsAWSService": "false"
+                },
+                "ArnNotLikeIfExists": {
+                    "aws:PrincipalARN":"arn:aws:iam::${Account}:role/[PRIVILEGED_ROLE]"
+                }
+            }
+        }
+    ]
+}

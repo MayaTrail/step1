@@ -1,0 +1,22 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ProtectVPCFlowLogs",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:DeleteFlowLogs",
+        "logs:DeleteLogGroup"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotLike": {
+          "aws:PrincipalARN": [
+            "arn:aws:iam::*:role/YourCICDRole",
+            "arn:aws:iam::*:role/AWSCloudFormationStackSetExecutionRole"
+          ]
+        }
+      }
+    }
+  ]
+}

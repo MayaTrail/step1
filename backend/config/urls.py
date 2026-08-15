@@ -14,6 +14,7 @@ urlpatterns = [
     path("api/connectors/", include("apps.connectors.urls")),
     path("api/stacks/", include("apps.infrastructure.urls")),
     path("api/emulations/", include("apps.emulations.urls")),
+    path("api/guardrails/", include("apps.guardrails.urls")),
     path("api/logs/", include("apps.logs.urls")),
     path("api/metrics/", include("apps.metrics.urls")),
     path("api/ai/", include("apps.ai.urls")),

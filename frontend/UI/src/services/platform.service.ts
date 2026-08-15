@@ -18,7 +18,8 @@ import type {
   Emulation,
   DetectionData,
   DetectionDetail,
-  Guardrails,
+  GuardrailLibrary,
+  GuardrailDetail,
   Playbook,
   PlaybookRaw,
   CommandResult,
@@ -164,8 +165,35 @@ export async function fetchPlatformData(_platformId: PlatformId): Promise<Platfo
   return null
 }
 
-export async function fetchGuardrails(_platformId: PlatformId): Promise<Guardrails | null> {
-  return null
+/**
+ * Fetch the SCP/RCP guardrail library index.
+ *
+ * The library is AWS-only, so other platforms resolve to null and the
+ * Guardrails pages render their empty state rather than an AWS policy list.
+ * Policy documents are not included; use fetchGuardrail for one policy's text.
+ */
+export async function fetchGuardrails(platformId: PlatformId): Promise<GuardrailLibrary | null> {
+  if (platformId !== 'aws') return null
+  try {
+    const { data } = await api.get<GuardrailLibrary>('/guardrails/')
+    return data
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Fetch one guardrail with its policy document.
+ *
+ * @param guardrailId - The catalogue slug, e.g. "deny-kms-key-deletion".
+ */
+export async function fetchGuardrail(guardrailId: string): Promise<GuardrailDetail | null> {
+  try {
+    const { data } = await api.get<GuardrailDetail>(`/guardrails/${guardrailId}/`)
+    return data
+  } catch {
+    return null
+  }
 }
 
 export async function fetchPlaybooks(_platformId: PlatformId): Promise<Playbook[]> {
