@@ -21,6 +21,7 @@ from collections.abc import Iterator
 
 import boto3
 import requests
+from botocore.eventstream import EventStreamBuffer, ParserError
 from botocore.exceptions import BotoCoreError, ClientError
 
 OPENAI_BASE = "https://api.openai.com/v1"
@@ -251,12 +252,29 @@ class AnthropicProvider(_KeyProvider):
 
 class BedrockProvider(BaseProvider):
     """
-    Amazon Bedrock via boto3's Converse API.
+    Amazon Bedrock via the Converse API, with two authentication modes.
 
-    Authenticates with temporary AWS credentials (from the caller's assumed
-    role) rather than a stored key. The Converse message shape uses the same
-    'user'/'assistant' roles as the persisted history, so no role remapping is
-    needed; only the content is wrapped in a {"text": ...} block.
+    A user may supply a Bedrock API key, or leave it blank and let the backend
+    assume their verified AWS role. Which mode applies is decided per call by
+    whether `creds` carries an api_key, so one provider serves both and the user
+    picks by filling the field in or not.
+
+    The two modes take different transports, and not by preference:
+
+      role  boto3, signing with the short-lived assumed-role credentials.
+      key   plain HTTPS with an Authorization: Bearer header.
+
+    boto3 cannot be used for the key mode. botocore only accepts a Bedrock
+    bearer token through the AWS_BEARER_TOKEN_BEDROCK environment variable
+    (see handlers._should_prefer_bearer_auth, which reads os.environ with no
+    session parameter). That is process-global, so under concurrent requests one
+    user's key could sign another user's call. Calling the REST endpoint
+    directly keeps each key on its own request, and matches how the OpenAI and
+    Anthropic providers already work.
+
+    The Converse message shape uses the same 'user'/'assistant' roles as the
+    persisted history, so no role remapping is needed; only the content is
+    wrapped in a {"text": ...} block.
     """
 
     name = "bedrock"
@@ -278,9 +296,47 @@ class BedrockProvider(BaseProvider):
             aws_session_token=creds.get("session_token"),
         )
 
+    def _endpoint(self, region: str, model: str, action: str) -> str:
+        """
+        Build a Bedrock runtime REST URL for the key mode.
+
+        Args:
+            region: AWS region, e.g. "us-east-1".
+            model:  Model or inference-profile id.
+            action: "converse" or "converse-stream".
+
+        Returns:
+            The fully qualified endpoint.
+        """
+        return f"https://bedrock-runtime.{region}.amazonaws.com/model/{model}/{action}"
+
+    def _key_headers(self, api_key: str) -> dict:
+        """Bearer headers for the API key mode."""
+        return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
     def test(self, creds: dict, timeout: int = 10) -> tuple[bool, str]:
         if not creds.get("region"):
             return False, "An AWS region is required for Bedrock."
+
+        api_key = creds.get("api_key")
+        if api_key:
+            # No control-plane equivalent is reachable with a runtime bearer
+            # token, so the check is a 1-token Converse call: the cheapest thing
+            # that proves the key, the region and the model id all work.
+            try:
+                resp = requests.post(
+                    self._endpoint(creds["region"], creds.get("model") or self.models[0], "converse"),
+                    headers=self._key_headers(api_key),
+                    json={
+                        "messages": [{"role": "user", "content": [{"text": "ping"}]}],
+                        "inferenceConfig": {"maxTokens": 1},
+                    },
+                    timeout=timeout,
+                )
+            except requests.RequestException as exc:
+                return False, f"Could not reach Bedrock ({exc.__class__.__name__})."
+            return _http_test_result(resp)
+
         try:
             # Cheap, non-billable control-plane call: lists models in the region.
             self._client(creds, "bedrock").list_foundation_models()
@@ -288,9 +344,68 @@ class BedrockProvider(BaseProvider):
             return False, _aws_detail(exc)
         return True, "Connection successful."
 
+    def _stream_with_key(self, creds, model, system, messages, max_tokens, timeout):
+        """
+        Stream a Converse response over HTTPS using a Bedrock API key.
+
+        converse-stream replies in the AWS event-stream binary framing rather
+        than SSE, so the raw bytes are fed to botocore's EventStreamBuffer and
+        the decoded frames are read by their :event-type header.
+
+        Yields:
+            Text deltas, or a single STREAM_ERROR_PREFIX message on failure.
+        """
+        body = {
+            "messages": [
+                {"role": m["role"], "content": [{"text": m["content"]}]} for m in messages
+            ],
+            "inferenceConfig": {"maxTokens": max_tokens},
+        }
+        if system:
+            body["system"] = [{"text": system}]
+
+        try:
+            resp = requests.post(
+                self._endpoint(creds["region"], model, "converse-stream"),
+                headers=self._key_headers(creds["api_key"]),
+                json=body,
+                stream=True,
+                timeout=timeout,
+            )
+        except requests.RequestException as exc:
+            yield f"{STREAM_ERROR_PREFIX}Could not reach Bedrock ({exc.__class__.__name__})."
+            return
+
+        if resp.status_code != 200:
+            yield f"{STREAM_ERROR_PREFIX}{_http_error_detail(resp.status_code)}"
+            return
+
+        buffer = EventStreamBuffer()
+        try:
+            for chunk in resp.iter_content(chunk_size=1024):
+                buffer.add_data(chunk)
+                for event in buffer:
+                    event_type = event.headers.get(":event-type")
+                    payload = json.loads(event.payload.decode("utf-8"))
+                    if event_type == "contentBlockDelta":
+                        text = payload.get("delta", {}).get("text")
+                        if text:
+                            yield text
+                    elif event_type == "messageStop":
+                        return
+                    elif event_type in _BEDROCK_STREAM_ERRORS:
+                        yield f"{STREAM_ERROR_PREFIX}{payload.get('message', event_type)}"
+                        return
+        except (requests.RequestException, ValueError, ParserError) as exc:
+            yield f"{STREAM_ERROR_PREFIX}Bedrock stream ended early ({exc.__class__.__name__})."
+
     def stream(self, creds, model, system, messages, max_tokens=1024, timeout=60):
         if not creds.get("region"):
             yield f"{STREAM_ERROR_PREFIX}An AWS region is required for Bedrock."
+            return
+
+        if creds.get("api_key"):
+            yield from self._stream_with_key(creds, model, system, messages, max_tokens, timeout)
             return
 
         converse_messages = [

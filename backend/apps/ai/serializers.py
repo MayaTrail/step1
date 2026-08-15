@@ -18,13 +18,16 @@ class LLMConnectorSerializer(serializers.ModelSerializer):
     api_key = serializers.CharField(
         write_only=True,
         required=False,
-        allow_blank=False,
+        # Blank is meaningful, not missing: it is how the UI clears a stored
+        # Bedrock key to fall back to the assumed AWS role. DRF returns early on
+        # a blank value, so min_length does not reject it.
+        allow_blank=True,
         trim_whitespace=False,
         min_length=8,
         help_text=(
             "Provider API key. Write-only; stored encrypted, never returned. "
-            "Not used by the bedrock provider, which authenticates via the "
-            "user's assumed AWS role."
+            "Optional for the bedrock provider, which falls back to the user's "
+            "assumed AWS role when no key is stored."
         ),
     )
     region = serializers.CharField(

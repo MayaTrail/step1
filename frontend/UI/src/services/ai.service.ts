@@ -54,7 +54,8 @@ export async function deleteLLMConnector(): Promise<void> {
  * argument to test the stored connector.
  */
 export async function testLLMConnector(
-  payload?: { provider: LLMProvider; api_key?: string; region?: string },
+  /** `model` is only read for Bedrock, where the test is a 1-token call to it. */
+  payload?: { provider: LLMProvider; api_key?: string; region?: string; model?: string },
 ): Promise<LLMConnectorTestResult> {
   const { data } = await api.post<LLMConnectorTestResult>('/ai/connector/test/', payload ?? {})
   return data
