@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { PlatformId, PlatformData, Emulation, DetectionData, DetectionDetail, GuardrailLibrary, Playbook } from '@/types'
+import type { PlatformId, PlatformData, Emulation, DetectionData, DetectionDetail, GuardrailLibrary, GuardrailDetail, Playbook } from '@/types'
 import * as platformService from '@/services/platform.service'
 
 interface AsyncState<T> {
@@ -126,7 +126,7 @@ export function useDetectionDetail(
 }
 
 /**
- * Fetch the SCP/RCP guardrails library for a platform.
+ * Fetch the SCP/RCP guardrail library index for a platform.
  * The library is AWS-only today; other platforms resolve to null.
  */
 export function useGuardrails(platformId: PlatformId | undefined): AsyncState<GuardrailLibrary> {
@@ -134,6 +134,22 @@ export function useGuardrails(platformId: PlatformId | undefined): AsyncState<Gu
     platformId ? `guardrails:${platformId}` : null,
     () => platformService.fetchGuardrails(platformId as PlatformId),
     'Guardrails not found',
+  )
+}
+
+/**
+ * Fetch one guardrail with its policy document.
+ *
+ * The index omits policy text, so the preview pane resolves it per selection.
+ * Each document is cached for the session, making re-selection instant.
+ *
+ * @param guardrailId - The catalogue slug, e.g. "deny-kms-key-deletion".
+ */
+export function useGuardrail(guardrailId: string | undefined): AsyncState<GuardrailDetail> {
+  return useCachedAsync(
+    guardrailId ? `guardrail:${guardrailId}` : null,
+    () => platformService.fetchGuardrail(guardrailId as string),
+    'Guardrail not found',
   )
 }
 

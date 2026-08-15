@@ -26,6 +26,7 @@ jobs:
       DJANGO_SETTINGS_MODULE: config.settings.ci
       SECRET_KEY: ci-only-not-a-secret
       EMULATIONS_BASE_DIR: ${{ github.workspace }}/emulations
+      GUARDRAILS_BASE_DIR: ${{ github.workspace }}/guardrails
     steps:
       - uses: actions/checkout@v4
         # emulations/_kb is a private submodule. Leave it unfetched so the job
@@ -42,5 +43,5 @@ jobs:
       - name: Install test dependencies
         run: pip install -r requirements-test.txt
 
-      - name: Run the emulation and metrics test suites
-        run: python manage.py test apps.emulations apps.metrics
+      - name: Run the emulation, metrics and guardrail test suites
+        run: python manage.py test apps.emulations apps.metrics apps.guardrails

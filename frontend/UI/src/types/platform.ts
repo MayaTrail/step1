@@ -217,28 +217,47 @@ export interface DetectionDetail {
   kql: string | null
 }
 
+/**
+ * Service control policies attach to a principal, resource control policies to
+ * a resource. The split is derived from the policy document, not authored.
+ */
 export type GuardrailType = 'SCP' | 'RCP'
 
+/** The upstream repository a policy was copied from, so a reader can verify it. */
+export interface GuardrailSource {
+  label: string
+  url: string
+}
+
 /**
- * One preventative policy in the guardrails library.
+ * One preventive policy as the library index lists it.
  *
- * `name` is the display title in "SCP : Purpose" / "RCP : Purpose" form, and
- * `code` is the policy document verbatim as it sits on disk.
+ * `purpose` is the one-line description and doubles as the display title;
+ * these policies have no separate name worth showing.
  */
-export interface GuardrailPolicy {
+export interface GuardrailSummary {
   id: string
   type: GuardrailType
-  name: string
   purpose: string
-  /** AWS services the policy targets; ["All services"] when it is org-wide. */
+  /** AWS services the policy constrains; ["All services"] when it is org-wide. */
   services: string[]
-  source: string
+  source: GuardrailSource
+}
+
+/** A single policy with its document, from the detail endpoint. */
+export interface GuardrailDetail extends GuardrailSummary {
+  /** Policy filename on disk, for tracing an entry back to its source repo. */
+  file: string
+  /** The policy document verbatim. */
   code: string
 }
 
+/**
+ * The library index. Policy documents are excluded: the list never renders
+ * them and carrying all of them would roughly triple the payload.
+ */
 export interface GuardrailLibrary {
-  scp: GuardrailPolicy[]
-  rcp: GuardrailPolicy[]
+  guardrails: GuardrailSummary[]
   totalCount: number
   formats: string
 }

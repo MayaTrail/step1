@@ -26,7 +26,11 @@ export function CoverageGauge({ pct }: { pct: number }) {
                 <RadialBar dataKey="value" cornerRadius={8} background={{ fill: '#1b1c1e' }} />
             </RadialBarChart>
             <span className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="font-display text-3xl font-bold tabular-nums leading-none text-content-primary">
+                {/* Sized to fit the arc's inner hole at its narrowest useful point.
+                    The label below pushes this line above the centre, where the
+                    chord is ~80px, and coverage carries one decimal ("13.5%"),
+                    so a larger size overflows the ring on two-digit values. */}
+                <span className="font-display text-2xl font-bold tabular-nums leading-none text-content-primary">
                     {pct}%
                 </span>
                 <span className="font-mono text-2xs uppercase tracking-label text-content-muted mt-1">

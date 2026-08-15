@@ -1,19 +1,19 @@
 /**
  * Global search index for the command palette.
  *
- * Builds one flat, client-side index from existing data sources — no new
+ * Builds one flat, client-side index from existing data sources, with no new
  * backend endpoint. Emulations come from the backend list; each emulation also
  * yields a Playbook and Detections entry pointing at its per-emulation routes
- * (so the whole index costs two API calls, not N+1). Stacks come from the
- * stacks list. Guardrails are intentionally omitted until they have a real data
- * source (fetchGuardrails is currently a stub); add a block here when they do.
+ * (so the whole index costs three API calls, not N+1). Stacks come from the
+ * stacks list. Guardrails come from the library index, which carries no policy
+ * text, so indexing all of them stays cheap.
  */
 
 import type { PlatformId } from '@/types'
-import { fetchEmulations } from './platform.service'
+import { fetchEmulations, fetchGuardrails } from './platform.service'
 import { listStacks } from './stack.service'
 
-export type SearchItemType = 'emulation' | 'playbook' | 'detection' | 'stack'
+export type SearchItemType = 'emulation' | 'playbook' | 'detection' | 'stack' | 'guardrail'
 
 export interface SearchItem {
     /** Stable unique id within the index (also used as the React key). */
@@ -35,10 +35,11 @@ export interface SearchItem {
  * so one failing call never blanks the whole palette.
  */
 export async function buildSearchIndex(): Promise<SearchItem[]> {
-    const [emulations, stacks] = await Promise.all([
+    const [emulations, stacks, guardrails] = await Promise.all([
         // platformId is ignored by the service today; it returns all emulations.
         fetchEmulations('aws' as PlatformId).catch(() => []),
         listStacks().catch(() => []),
+        fetchGuardrails('aws' as PlatformId).catch(() => null),
     ])
 
     const items: SearchItem[] = []
@@ -78,6 +79,19 @@ export async function buildSearchIndex(): Promise<SearchItem[]> {
             name: s.name,
             meta: s.status,
             route: '/stacks',
+        })
+    }
+
+    // The purpose is the only name a policy has, so it is what the palette
+    // matches against; the SCP/RCP split rides along as the trailing meta.
+    for (const g of guardrails?.guardrails ?? []) {
+        items.push({
+            id: `guardrail:${g.id}`,
+            type: 'guardrail',
+            name: g.purpose,
+            platform: 'aws' as PlatformId,
+            meta: g.type,
+            route: `/aws/guardrails/${g.id}`,
         })
     }
 

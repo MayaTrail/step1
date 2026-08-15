@@ -1,112 +1,77 @@
 """
-Registry for the SCP/RCP guardrails library.
+Django-side registry helpers for the guardrails app.
 
-Guardrails are plain AWS policy JSON files in the Guardrails/ directory, plus a
-MANIFEST.json sidecar that carries the metadata the policy documents themselves
-do not have: the SCP/RCP split, the human-readable purpose, and the service tags.
+These thin wrappers load the top-level guardrails.registry module and provide
+the look-ups the views use.  Mirrors apps.emulations.registry: the catalogue is
+loaded once and cached in-process (_cache), and reset_cache() forces a reload.
 
-Mirrors apps.emulations.registry: the catalogue is loaded once and cached
-in-process; call reset_cache() to force a reload.
+Caching the catalogue also caches every policy document, so a request never
+touches the filesystem.  The library is a read-only mount that changes only on
+deploy, which is what makes that safe.
 """
 
 from __future__ import annotations
 
-import json
+import importlib
 import logging
 import os
-from pathlib import Path
+import sys
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-MANIFEST_FILENAME = "MANIFEST.json"
-
 _cache: list[dict[str, Any]] | None = None
 
 
-def _base_dir() -> Path | None:
+def _load_registry() -> list[dict[str, Any]]:
     """
-    Resolve the Guardrails/ directory from GUARDRAILS_BASE_DIR.
+    Import and call guardrails.registry.discover().
+
+    The guardrails package lives at GUARDRAILS_BASE_DIR (/opt/guardrails/).
+    Its parent (/opt) is inserted into sys.path so that
+    `import guardrails.registry` resolves both inside Docker and in local
+    development.
+
+    Logs at ERROR level if the import fails so the misconfiguration is
+    immediately visible in server logs rather than silently returning [].
 
     Returns:
-        The directory as a Path, or None if the variable is unset or does not
-        point at an existing directory.
-    """
-    configured = os.environ.get("GUARDRAILS_BASE_DIR", "")
-    if not configured:
-        return None
-    path = Path(configured)
-    return path if path.is_dir() else None
-
-
-def _load() -> list[dict[str, Any]]:
-    """
-    Read MANIFEST.json and attach each guardrail's policy JSON as `code`.
-
-    A manifest entry whose policy file is missing or unreadable is skipped and
-    logged rather than failing the whole catalogue, so one bad file cannot take
-    the library offline.
-
-    Returns:
-        List of guardrail dicts ready for serialisation.
+        List of guardrail catalogue dicts as returned by discover().
     """
     global _cache  # noqa: PLW0603
     if _cache is not None:
         return _cache
 
-    base = _base_dir()
-    if base is None:
+    guardrails_base_dir = os.environ.get("GUARDRAILS_BASE_DIR", "")
+    if guardrails_base_dir:
+        parent = os.path.dirname(guardrails_base_dir.rstrip("/"))
+        if parent and parent not in sys.path:
+            sys.path.insert(0, parent)
+
+    try:
+        registry = importlib.import_module("guardrails.registry")
+        # Force a fresh discover() in case the module was already imported
+        # before the parent directory was on sys.path.
+        importlib.reload(registry)
+        _cache = registry.discover()
+    except Exception as exc:
         logger.error(
-            "Failed to load guardrails registry — "
-            "check that GUARDRAILS_BASE_DIR points to the Guardrails/ directory. "
-            "Current value: %r",
-            os.environ.get("GUARDRAILS_BASE_DIR", ""),
+            "Failed to load guardrails registry, "
+            "check that GUARDRAILS_BASE_DIR points to the guardrails/ directory. "
+            "Error: %s",
+            exc,
         )
         _cache = []
-        return _cache
 
-    manifest_path = base / MANIFEST_FILENAME
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.error("Could not read guardrails manifest %s: %s", manifest_path, exc)
-        _cache = []
-        return _cache
-
-    entries: list[dict[str, Any]] = []
-    for entry in manifest.get("guardrails", []):
-        filename = entry.get("file", "")
-        # Guard against a manifest entry escaping the guardrails directory.
-        policy_path = (base / filename).resolve()
-        if not filename or base.resolve() not in policy_path.parents:
-            logger.warning("Skipping guardrail with unsafe file path: %r", filename)
-            continue
-        try:
-            code = policy_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            logger.warning("Could not read guardrail policy %s: %s", policy_path, exc)
-            continue
-        entries.append({
-            "id": entry.get("id", ""),
-            "type": entry.get("type", ""),
-            "name": entry.get("name", ""),
-            "purpose": entry.get("purpose", ""),
-            "services": entry.get("services", []),
-            "source": entry.get("source", ""),
-            "code": code.rstrip("\n"),
-        })
-
-    _cache = entries
-    logger.info("Guardrails registry loaded: %d policy document(s)", len(entries))
     return _cache
 
 
 def reset_cache() -> None:
     """
-    Clear the in-process guardrails cache so the next call reloads from disk.
+    Clear the in-process catalogue cache so the next look-up reloads from disk.
 
-    Use after editing the Guardrails/ directory without restarting the process,
-    or in tests that need a clean state.
+    Use after editing the guardrails library without restarting the process, or
+    in tests that need a clean state.
     """
     global _cache  # noqa: PLW0603
     _cache = None
@@ -118,7 +83,22 @@ def list_guardrails() -> list[dict[str, Any]]:
     Return every guardrail in the library.
 
     Returns:
-        List of guardrail dicts, each with id, type, name, purpose, services,
-        source and code.
+        List of catalogue dicts, ordered by type then purpose.
     """
-    return _load()
+    return _load_registry()
+
+
+def get_guardrail(guardrail_id: str) -> dict[str, Any] | None:
+    """
+    Look up a single guardrail by its catalogue id.
+
+    Args:
+        guardrail_id: The slug from the catalogue, e.g. "deny-kms-key-deletion".
+
+    Returns:
+        The catalogue dict, or None if no guardrail carries that id.
+    """
+    return next(
+        (g for g in _load_registry() if g.get("id") == guardrail_id),
+        None,
+    )

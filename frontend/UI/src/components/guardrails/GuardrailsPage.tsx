@@ -1,30 +1,58 @@
-import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { useGuardrails } from '@/hooks/usePlatformData'
+import { useMemo, useState } from 'react'
+import { useParams } from 'react-router-dom'
+import { useGuardrail, useGuardrails } from '@/hooks/usePlatformData'
 import { getPlatformMeta } from '@/data'
-import type { GuardrailPolicy, GuardrailType, PlatformId } from '@/types'
-import { Breadcrumb } from '@/components/ui/Breadcrumb'
+import type { GuardrailSummary, GuardrailType, PlatformId } from '@/types'
 import { CodeBlock } from '@/components/ui/CodeBlock'
 import { EmptyState } from '@/components/ui/EmptyState'
-import { Tag } from '@/components/ui/Tag'
+import { IconShield } from '@/components/ui/Icons'
+import { downloadText } from '@/utils/download'
 
-/** Service tags shown inline before the list collapses into a "+N more" chip. */
-const VISIBLE_SERVICE_TAGS = 5
+type TypeFilter = 'all' | GuardrailType
+
+const TYPE_FILTERS: TypeFilter[] = ['all', 'SCP', 'RCP']
 
 /**
- * Scoped guardrails page.
+ * Guardrail library for one platform, rendered as a master-detail view to
+ * match the detections library: a searchable policy index on the left, the
+ * selected policy document on the right.
  *
- * Without a :guardrailId it is the full SCP/RCP library — an SCP/RCP toggle
- * over one card per policy, matching how the detections library presents rules.
- * With a :guardrailId (the hub's "View Policy" destination) it shows that one
- * policy on its own.
+ * The index carries no policy text, so the pane resolves each document as it
+ * is selected. At 97 policies a scannable rail beats a stack of full cards,
+ * and it keeps the initial payload to metadata alone.
+ *
+ * A :guardrailId in the route preselects that policy, which is where the
+ * hub's "View Policy" action lands.
  */
 export function GuardrailsPage() {
   const { platformId, guardrailId } = useParams<{ platformId: string; guardrailId: string }>()
   const pid = platformId as PlatformId
   const meta = getPlatformMeta(pid)
   const { data: library, loading } = useGuardrails(pid)
-  const [activeType, setActiveType] = useState<GuardrailType>('SCP')
+
+  const [selectedId, setSelectedId] = useState<string | null>(guardrailId ?? null)
+  const [type, setType] = useState<TypeFilter>('all')
+  const [query, setQuery] = useState('')
+
+  const policies = useMemo(() => library?.guardrails ?? [], [library])
+
+  const filtered = useMemo(() => {
+    let list = policies
+    if (type !== 'all') list = list.filter((g) => g.type === type)
+    const q = query.trim().toLowerCase()
+    if (q) {
+      list = list.filter(
+        (g) =>
+          g.purpose.toLowerCase().includes(q) ||
+          g.services.some((s) => s.toLowerCase().includes(q)),
+      )
+    }
+    return list
+  }, [policies, type, query])
+
+  // Keep a valid selection as the filters narrow: fall back to the first
+  // visible policy whenever the chosen one is filtered out.
+  const active = filtered.find((g) => g.id === selectedId) ?? filtered[0] ?? null
 
   const platformLabel = meta?.label ?? platformId?.toUpperCase() ?? ''
 
@@ -35,142 +63,178 @@ export function GuardrailsPage() {
   if (!library || library.totalCount === 0) {
     return (
       <EmptyState
-        icon="&#128737;"
+        icon={<IconShield size={32} />}
         title="No guardrails available"
         body={`Guardrails for ${platformLabel} are coming soon.`}
       />
     )
   }
 
-  const selected = guardrailId
-    ? [...library.scp, ...library.rcp].find((g) => g.id === guardrailId)
-    : undefined
-
-  if (guardrailId && !selected) {
-    return (
-      <EmptyState
-        icon="&#128737;"
-        title="Guardrail not found"
-        body={`No policy with id "${guardrailId}" exists in the library.`}
-      />
-    )
-  }
-
-  const crumbs = [
-    { label: 'Home', to: '/' },
-    { label: 'Guardrails', to: '/guardrails' },
-    ...(selected
-      ? [{ label: platformLabel, to: `/${pid}/guardrails` }, { label: selected.type }]
-      : [{ label: platformLabel }]),
-  ]
-
-  const policies = activeType === 'SCP' ? library.scp : library.rcp
-
   return (
     <div>
-      <Breadcrumb items={crumbs} />
-
       {/* Header */}
-      <div className="flex items-start justify-between mb-6 gap-4">
-        <div>
-          <div className="font-mono text-[0.7rem] uppercase tracking-[2px] text-accent-blue font-medium mb-2">
-            {platformLabel}
-          </div>
-          <div className="font-display text-[1.8rem] font-[800] text-content-primary leading-tight tracking-[-1px]">
-            {selected ? selected.name : 'Guardrail Library'}
-          </div>
-          <div className="text-[0.9rem] text-content-secondary mt-1.5">
-            {selected
-              ? `Source: ${selected.source}`
-              : `${library.totalCount} policies · ${library.formats}`}
-          </div>
+      <div className="mb-6">
+        <div className="font-mono text-[0.7rem] uppercase tracking-[2px] text-accent-blue font-medium mb-2">
+          {platformLabel}
         </div>
-        {selected && (
-          <Link
-            to={`/${pid}/guardrails`}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn font-body text-[0.9rem] font-medium cursor-pointer no-underline
-              bg-transparent border border-[rgba(255,255,255,0.15)] text-content-primary transition-all shrink-0
-              hover:bg-[rgba(255,255,255,0.05)] hover:border-border-active"
-          >
-            &#8592; All guardrails
-          </Link>
-        )}
+        <div className="font-display text-[1.8rem] font-[800] text-content-primary leading-tight tracking-[-1px]">
+          Guardrail Library
+        </div>
+        <div className="text-[0.9rem] text-content-secondary mt-1.5">
+          {library.totalCount} preventive policies &middot; {library.formats}
+        </div>
       </div>
 
-      {selected ? (
-        <PolicyCard policy={selected} />
-      ) : (
-        <>
-          {/* Type toggle */}
-          <div className="flex gap-2 mb-5">
-            {(['SCP', 'RCP'] as GuardrailType[]).map((type) => {
-              const count = type === 'SCP' ? library.scp.length : library.rcp.length
-              const isActive = activeType === type
-              return (
-                <button
-                  key={type}
-                  onClick={() => setActiveType(type)}
-                  className={`px-4 py-2 rounded-btn font-mono text-[0.75rem] uppercase tracking-[1.5px] font-medium cursor-pointer border transition-all
-                    ${isActive
-                      ? 'bg-accent-blue/[0.15] border-accent-blue/40 text-accent-blue'
-                      : 'bg-transparent border-[rgba(255,255,255,0.1)] text-content-dim hover:border-[rgba(255,255,255,0.2)] hover:text-content-secondary'
-                    }`}
-                >
-                  {type} ({count})
-                </button>
-              )
-            })}
-          </div>
-
-          {policies.length === 0 ? (
-            <div className="text-center py-12 text-content-dim font-mono text-sm">
-              No {activeType} policies in the library.
+      {/* Master-detail shell */}
+      <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4 items-start">
+        {/* Policy index rail */}
+        <div className="bg-surface-card border border-border rounded-card overflow-hidden flex flex-col h-[calc(100vh-280px)] min-h-[560px]">
+          <div className="p-3 border-b border-border">
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search policies..."
+              className="w-full bg-[rgba(0,0,0,0.3)] border border-border rounded-btn px-3 py-2 text-[0.8rem] text-content-primary
+                placeholder:text-content-dim outline-none focus:border-border-active"
+            />
+            <div className="flex gap-0.5 bg-[rgba(0,0,0,0.3)] border border-border rounded-btn p-0.5 mt-2">
+              {TYPE_FILTERS.map((value) => {
+                const isActive = type === value
+                const count =
+                  value === 'all' ? policies.length : policies.filter((g) => g.type === value).length
+                return (
+                  <button
+                    key={value}
+                    onClick={() => setType(value)}
+                    className={`flex-1 font-mono text-[0.65rem] uppercase tracking-[1px] font-semibold py-1.5 rounded-btn cursor-pointer transition-colors
+                      ${isActive ? 'bg-accent-blue/[0.15] text-accent-blue' : 'text-content-dim hover:text-content-secondary'}`}
+                  >
+                    {value === 'all' ? 'All' : value} ({count})
+                  </button>
+                )
+              })}
             </div>
-          ) : (
-            policies.map((policy) => <PolicyCard key={policy.id} policy={policy} showTitle />)
-          )}
-        </>
-      )}
-    </div>
-  )
-}
-
-/** One policy: title (in list view), service tags, the document, and its source. */
-function PolicyCard({ policy, showTitle = false }: { policy: GuardrailPolicy; showTitle?: boolean }) {
-  return (
-    <div className="bg-surface-card border border-border rounded-card p-6 mb-4
-      transition-all duration-[400ms] hover:border-[rgba(0,180,216,0.2)] hover:-translate-y-0.5">
-      {showTitle && (
-        <div className="font-mono text-[0.7rem] tracking-[1.5px] text-content-dim uppercase mb-3.5 flex items-center gap-2 font-medium">
-          {policy.name}
-          <div className="flex-1 h-px bg-border" />
+          </div>
+          <div className="overflow-y-auto">
+            {filtered.length === 0 ? (
+              <div className="text-center py-8 text-content-dim font-mono text-xs">No matches.</div>
+            ) : (
+              filtered.map((policy) => (
+                <PolicyRow
+                  key={policy.id}
+                  policy={policy}
+                  active={active?.id === policy.id}
+                  onSelect={() => setSelectedId(policy.id)}
+                />
+              ))
+            )}
+          </div>
         </div>
-      )}
-      <ServiceTags services={policy.services} />
-      <CodeBlock code={policy.code} className="mt-0" />
-      <div className="font-mono text-[0.65rem] text-content-dim mt-2.5">
-        Source: {policy.source}
+
+        {/* Policy document pane */}
+        {active && <PolicyPane policy={active} />}
       </div>
     </div>
   )
 }
 
-/** The AWS services a policy targets, rendered as small chips. */
-function ServiceTags({ services }: { services: string[] }) {
-  if (services.length === 0) return null
-  const visible = services.slice(0, VISIBLE_SERVICE_TAGS)
-  const overflow = services.length - visible.length
+function PolicyRow({
+  policy,
+  active,
+  onSelect,
+}: {
+  policy: GuardrailSummary
+  active: boolean
+  onSelect: () => void
+}) {
+  return (
+    <button
+      onClick={onSelect}
+      className={`w-full text-left px-3.5 py-3 border-b border-border cursor-pointer transition-colors border-l-2
+        ${active ? 'bg-accent-blue/[0.07] border-l-accent-blue' : 'border-l-transparent hover:bg-[rgba(255,255,255,0.02)]'}`}
+    >
+      <div className="font-mono text-[0.7rem] text-accent-blue font-semibold">{policy.type}</div>
+      <div className="text-[0.78rem] text-content-secondary mt-1 leading-snug">{policy.purpose}</div>
+      <div className="font-mono text-[0.62rem] text-content-dim mt-1.5 truncate">
+        {policy.services.join(' · ')}
+      </div>
+    </button>
+  )
+}
+
+/**
+ * The selected policy's document, resolved on demand.
+ *
+ * Falls back to the index metadata while the document loads so the header does
+ * not flicker between selections.
+ */
+function PolicyPane({ policy }: { policy: GuardrailSummary }) {
+  const { data: detail, loading } = useGuardrail(policy.id)
+  const code = detail?.code ?? null
+  const exportName = `${policy.id}.json`
 
   return (
-    <div className="flex flex-wrap gap-1.5 mb-3">
-      {visible.map((service) => (
-        <Tag key={service} tone="info">{service}</Tag>
-      ))}
-      {overflow > 0 && (
-        <Tag tone="muted" title={services.slice(VISIBLE_SERVICE_TAGS).join(', ')}>
-          +{overflow} more
-        </Tag>
+    <div className="bg-surface-card border border-border rounded-card overflow-hidden flex flex-col h-[calc(100vh-280px)] min-h-[560px]">
+      {/* Pane header */}
+      <div className="p-5 border-b border-border">
+        <div className="font-mono text-[0.72rem] text-accent-blue font-semibold">{policy.type}</div>
+        <div className="text-[1.05rem] font-[700] text-content-primary mt-1 leading-snug">{policy.purpose}</div>
+        <div className="flex flex-wrap gap-1.5 mt-2.5">
+          {policy.services.map((service) => (
+            <Tag key={service} className="text-accent-blue">{service}</Tag>
+          ))}
+        </div>
+      </div>
+
+      {/* Toolbar */}
+      <div className="flex items-center gap-2 px-5 py-3 border-b border-border flex-wrap">
+        <a
+          href={policy.source.url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[0.78rem] text-content-secondary no-underline transition-opacity hover:opacity-60"
+        >
+          Source: {policy.source.label}
+        </a>
+        <div className="flex gap-2 ml-auto">
+          {code && (
+            <>
+              <ToolButton onClick={() => navigator.clipboard.writeText(code)}>Copy</ToolButton>
+              <ToolButton onClick={() => downloadText(exportName, code)}>Download</ToolButton>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Document, scrolls within the fixed-height pane */}
+      {code ? (
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <CodeBlock code={code} className="mt-0 rounded-none border-0" />
+        </div>
+      ) : (
+        <div className="flex-1 flex items-center justify-center text-content-dim font-mono text-sm">
+          {loading ? 'Loading policy...' : 'Policy document unavailable.'}
+        </div>
       )}
     </div>
+  )
+}
+
+function Tag({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return (
+    <span className={`font-mono text-[0.62rem] font-semibold tracking-[0.4px] uppercase px-2 py-0.5 rounded bg-[rgba(255,255,255,0.05)] ${className || 'text-content-dim'}`}>
+      {children}
+    </span>
+  )
+}
+
+function ToolButton({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="font-body text-[0.78rem] text-content-secondary bg-transparent border border-border rounded-btn px-3 py-1.5 cursor-pointer transition-opacity hover:opacity-60"
+    >
+      {children}
+    </button>
   )
 }

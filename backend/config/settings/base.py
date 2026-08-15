@@ -231,13 +231,14 @@ EMULATION_PHASE_PACING_SECONDS = config(
 # ---------------------------------------------------------------------------
 # Guardrails
 # ---------------------------------------------------------------------------
-# Directory holding the SCP/RCP policy library: one JSON policy document per
-# guardrail plus the MANIFEST.json sidecar that names and tags them.
-# In docker-compose, ./Guardrails is mounted at /opt/guardrails.
+# Directory holding the SCP/RCP policy library: the guardrails package, whose
+# registry discovers the policy documents under its policies/ directory.
+# The parent of this directory (/opt) is inserted into sys.path by the registry
+# so that `import guardrails.registry` resolves correctly.
+# In docker-compose, ./guardrails is mounted at /opt/guardrails.
 
 GUARDRAILS_BASE_DIR = config("GUARDRAILS_BASE_DIR", default="")
 
-# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Email
 # ---------------------------------------------------------------------------

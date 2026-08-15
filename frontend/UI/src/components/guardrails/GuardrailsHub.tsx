@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useGuardrails } from '@/hooks/usePlatformData'
-import type { GuardrailPolicy, GuardrailType } from '@/types'
+import type { GuardrailType } from '@/types'
 import { LibraryCard } from '@/components/common/LibraryCard'
 import { LibraryEmpty } from '@/components/emulations/EmulationsHub'
 import { SearchInput } from '@/components/ui/SearchInput'
@@ -17,39 +17,35 @@ const TYPE_OPTIONS: DropdownOption<TypeFilter>[] = [
 ]
 
 /**
- * Guardrails content hub — preventive-control discovery library.
+ * Guardrails content hub, the preventive-control discovery library.
  *
- * Mirrors the Emulations / Detections hubs: a search + filter toolbar over a
- * grid of library cards. Each card is one Service Control Policy or Resource
- * Control Policy; the service tags reuse the card's chip slot, and the action
- * opens the policy document on the scoped guardrails page.
+ * Mirrors the Emulations / Detections hubs: a search and filter toolbar over a
+ * grid of library cards. Each card is one service control policy or resource
+ * control policy, the service tags reuse the card's chip slot, and the action
+ * opens the policy on the scoped guardrails page.
  *
- * The library is served by /api/guardrails/ and is AWS-only today.
+ * Served by /api/guardrails/ and AWS-only today.
  */
 export function GuardrailsHub() {
   const { data: library, loading } = useGuardrails('aws')
   const [search, setSearch] = useState('')
   const [type, setType] = useState<TypeFilter>('all')
 
-  const all: GuardrailPolicy[] = useMemo(
-    () => [...(library?.scp ?? []), ...(library?.rcp ?? [])],
-    [library],
-  )
+  const policies = useMemo(() => library?.guardrails ?? [], [library])
 
   const filtered = useMemo(() => {
-    let list = all
+    let list = policies
     if (type !== 'all') list = list.filter((g) => g.type === type)
     const q = search.trim().toLowerCase()
     if (q) {
       list = list.filter(
         (g) =>
-          g.name.toLowerCase().includes(q) ||
           g.purpose.toLowerCase().includes(q) ||
           g.services.some((s) => s.toLowerCase().includes(q)),
       )
     }
     return list
-  }, [all, search, type])
+  }, [policies, search, type])
 
   return (
     <div>
@@ -61,7 +57,7 @@ export function GuardrailsHub() {
           Guardrails
         </div>
         <div className="text-[0.9rem] text-content-secondary mt-1.5">
-          {library
+          {library && library.totalCount > 0
             ? `${library.totalCount} preventive policies · ${library.formats}`
             : 'Preventive controls and hardening recommendations'}
         </div>
@@ -89,9 +85,8 @@ export function GuardrailsHub() {
               {filtered.map((g) => (
                 <LibraryCard
                   key={g.id}
-                  name={g.name}
+                  name={g.purpose}
                   eyebrow={`${g.type} · AWS Guardrail`}
-                  description={g.purpose}
                   tactics={g.services}
                   actions={[
                     {

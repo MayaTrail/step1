@@ -60,8 +60,8 @@ services:
     volumes:
       # Mount emulations package so the API registry can discover packages.
       - ./emulations:/opt/emulations:ro
-      # SCP/RCP policy library served by /api/guardrails/.
-      - ./Guardrails:/opt/guardrails:ro
+      # Mount guardrails package so the API registry can discover policies.
+      - ./guardrails:/opt/guardrails:ro
     depends_on: # waits for db and redis to be healthy before starting backend.
       db:
         condition: service_healthy
