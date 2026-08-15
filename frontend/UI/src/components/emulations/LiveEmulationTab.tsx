@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type {
   AttackPhase,
+  DetectionCheck,
   DetectionRuleSummary,
   Emulation,
   EmulationRunRecord,
@@ -215,7 +216,7 @@ export function LiveEmulationTab({
       {/* Once the run settles, point the operator at the validation loop: the
           attack is only half the exercise, the other half is checking whether
           their defenses saw it. */}
-      {(run.status === 'completed' || run.status === 'failed') && <NextSteps emulation={emulation} />}
+      {(run.status === 'completed' || run.status === 'failed') && <NextSteps emulation={emulation} run={run} />}
     </div>
   )
 }
@@ -228,8 +229,12 @@ export function LiveEmulationTab({
  * existing pages; the logging step is guidance because that lives in the user's
  * own environment, not this platform.
  */
-function NextSteps({ emulation }: { emulation: Emulation }) {
+function NextSteps({ emulation, run }: { emulation: Emulation; run: EmulationRunRecord }) {
   const base = `/${emulation.platform}/emulations/${emulation.id}`
+  const check = run.detection_check
+  // Only a completed check has something to show, so the tile stays plain
+  // guidance until then rather than linking to an empty page.
+  const coverage = check?.status === 'ok' ? check : null
   return (
     <div className="bg-surface-card border border-border rounded-card p-5">
       <div className="text-[0.85rem] font-semibold text-content-primary mb-1">What to do next</div>
@@ -248,20 +253,52 @@ function NextSteps({ emulation }: { emulation: Emulation }) {
           body="Check the Sigma and KQL rules that should fire on this activity."
         />
         <NextStep
+          to={coverage ? `${base}/logging/${run.id}` : undefined}
           title="Check your logging"
-          body="Search your SIEM or CloudTrail for the API calls above to confirm they were recorded."
+          body={
+            coverage
+              ? 'See which of this run’s detections actually fired in your logs.'
+              : 'Search your SIEM or CloudTrail for the API calls above to confirm they were recorded.'
+          }
+          result={coverage ? coverageSummary(coverage) : undefined}
         />
       </div>
     </div>
   )
 }
 
+/**
+ * Headline counts for the tile, so the answer is visible without leaving the run.
+ *
+ * @param check - A completed coverage report.
+ */
+function coverageSummary(check: DetectionCheck): string {
+  const counts = check.counts ?? { fired: 0, silent: 0, no_logs: 0 }
+  return `${counts.fired} fired · ${counts.silent} silent · ${counts.no_logs} no logs`
+}
+
 /** One "what next" tile. Renders as a link when `to` is set, else static guidance. */
-function NextStep({ to, title, body }: { to?: string; title: string; body: string }) {
+function NextStep({
+  to,
+  title,
+  body,
+  result,
+}: {
+  to?: string
+  title: string
+  body: string
+  /** Optional one-line outcome shown under a divider. */
+  result?: string
+}) {
   const inner = (
     <>
       <div className="text-[0.8rem] font-semibold text-content-primary mb-1">{title}</div>
       <div className="text-[0.72rem] text-content-secondary leading-[1.5]">{body}</div>
+      {result && (
+        <div className="font-mono text-[0.65rem] text-content-dim mt-2 pt-2 border-t border-border">
+          {result}
+        </div>
+      )}
     </>
   )
   const cls = 'block border border-border rounded-btn px-3.5 py-3 bg-[rgba(255,255,255,0.01)] h-full'

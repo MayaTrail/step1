@@ -97,6 +97,11 @@ services:
       REDIS_URL: redis://redis:6379/0
       STATE_BUCKET: mayatrail-state-bucket
       STATE_BUCKET_REGION: ap-south-1
+      # Detection archive read by check_detection_coverage after an attack ends.
+      # Separate from STATE_BUCKET: a different bucket in a different region.
+      DETECTIONS_BUCKET: mayatrail-detections
+      DETECTIONS_PREFIX: detections/
+      DETECTIONS_BUCKET_REGION: us-east-1
       # Base directory where emulation packages are mounted.
       # Infra programs are resolved as {EMULATIONS_BASE_DIR}/{type}/infra/
       EMULATIONS_BASE_DIR: /opt/emulations
