@@ -47,4 +47,5 @@ INSTALLED_APPS = [
     "apps.emulations",
     "apps.metrics",
     "apps.guardrails",
+    "apps.threatintel",
 ]

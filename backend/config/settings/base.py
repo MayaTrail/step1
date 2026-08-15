@@ -54,6 +54,7 @@ LOCAL_APPS = [
     "apps.guardrails",
     "apps.logs",
     "apps.metrics",
+    "apps.threatintel",
     "apps.ai",
 ]
 
@@ -205,6 +206,13 @@ CELERY_BEAT_SCHEDULE = {
         "task": "emulations.auto_destroy_expired_stacks",
         "schedule": crontab(minute="*/15"),
     },
+    # Poll every threat intel RSS subscription once a day. Scheduled off-peak
+    # because it makes ~40 outbound requests; the task is pinned to the
+    # enterprise queue, the only queue a worker consumes.
+    "refresh-threat-intel-feeds": {
+        "task": "threatintel.refresh_threat_intel_feeds",
+        "schedule": crontab(hour="3", minute="0"),
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -302,3 +310,16 @@ DEMO_DURATION_MINUTES = config("DEMO_DURATION_MINUTES", default=5, cast=int)
 # clear 503 instead of breaking app startup.
 
 LLM_FERNET_KEY = config("LLM_FERNET_KEY", default="")
+
+# ---------------------------------------------------------------------------
+# Threat Intel
+# ---------------------------------------------------------------------------
+# Directory holding the daily RSS snapshot the Threat Intel page serves. The
+# ingest task writes latest.json here and the API reads it back; nothing is
+# fetched during a request.
+#
+# Leave empty to disable ingestion: the task then no-ops and the page shows its
+# empty state instead of failing.
+
+THREATINTEL_DIR = config("THREATINTEL_DIR", default="")
+

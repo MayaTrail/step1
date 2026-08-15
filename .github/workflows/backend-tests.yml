@@ -43,5 +43,5 @@ jobs:
       - name: Install test dependencies
         run: pip install -r requirements-test.txt
 
-      - name: Run the emulation, metrics and guardrail test suites
-        run: python manage.py test apps.emulations apps.metrics apps.guardrails
+      - name: Run the emulation, metrics, guardrail and threat intel test suites
+        run: python manage.py test apps.emulations apps.metrics apps.guardrails apps.threatintel
