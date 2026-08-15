@@ -12,7 +12,7 @@
 # LIMITATION, STATED PLAINLY: the `|contains` substring matching below is a
 # pragmatic approximation. It cannot express range containment, so a rule like
 # fromPort:20,toPort:23 - which exposes 22 without naming it - slips past. The
-# authoritative check is the structured logic in `kql_t1562_007.kql`. Deploy
+# authoritative check is the structured logic in `kql_t1562.007.kql`. Deploy
 # that as the real detection and treat this as a coarse first alert.
 title: Security group ingress opened to the world on an admin port
 id: 37fcd7ea-dafe-5822-ae79-7b3b9e794a89

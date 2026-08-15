@@ -64,9 +64,9 @@ lasting up to 36 hours.
 **GuardDuty:** no finding type specific to this technique.
 
 **Files here:**
-- `sigma_t1550_001.yml`, three documents: the mint (`high`), federated-session
+- `sigma_t1550.001.yml`, three documents: the mint (`high`), federated-session
   activity (`high`), and denied attempts as a probing signal (`medium`).
-- `kql_t1550_001.kql`, scored on policy breadth and duration, with the
+- `kql_t1550.001.kql`, scored on policy breadth and duration, with the
   revocation guidance and the minted-key hunt query inline.
 
 Full response procedure is in `../PLAYBOOK.md`.

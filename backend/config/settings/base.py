@@ -217,6 +217,16 @@ CELERY_BEAT_SCHEDULE = {
 
 EMULATIONS_BASE_DIR = config("EMULATIONS_BASE_DIR", default="")
 
+# Artificial pause held between attack phases, in seconds.
+# Attack modules that complete in under a second give the live view nothing to
+# show, so this slows phase transitions down to a watchable pace for walkthroughs
+# and demos. It delays the attack for presentation purposes only, so it defaults
+# to 0 and recorded run durations stay truthful unless it is explicitly set.
+
+EMULATION_PHASE_PACING_SECONDS = config(
+    "EMULATION_PHASE_PACING_SECONDS", default=0, cast=float
+)
+
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Email

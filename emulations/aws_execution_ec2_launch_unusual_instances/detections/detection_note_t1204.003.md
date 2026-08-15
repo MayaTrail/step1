@@ -85,9 +85,9 @@ place is dead weight; a new one missing from it produces the false-positive
 wave that gets a rule muted.
 
 **Files here:**
-- `sigma_t1204_003.yml`, three documents: unusual-type launch (`high`),
+- `sigma_t1204.003.yml`, three documents: unusual-type launch (`high`),
   GuardDuty mining finding (`critical`), and capability probing (`medium`).
-- `kql_t1204_003.kql`, single query covering launches and failed probes, with
+- `kql_t1204.003.kql`, single query covering launches and failed probes, with
   mining-capable vs cost-abuse verdicts separated.
 
 Full response procedure is in `../PLAYBOOK.md`.

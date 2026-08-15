@@ -1,0 +1,26 @@
+// FILE: kql_t1555.006.kql
+// SCARLETEEL - Secrets Manager GetSecretValue by a Compute-Plane Role (T1555.006)
+// Detects secretsmanager:GetSecretValue / BatchGetSecretValue by an EC2
+// instance-role session (session name = i-xxxx) - a compute-plane principal
+// reading a secret it has no application reason to touch. This is the SCARLETEEL
+// lateral-movement step: harvest the bait secret's app/DB credentials with the
+// stolen instance-role session to pivot into adjacent systems. The MayaTrail
+// emulation performs exactly this call against the planted secret. Both success
+// and AccessDenied are kept - a denied read from an instance role is a probing
+// signal in its own right.
+//
+// Reference: https://attack.mitre.org/techniques/T1555/006/
+
+AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "secretsmanager.amazonaws.com"
+| where EventName in ("GetSecretValue", "BatchGetSecretValue")
+| where UserIdentityType == "AssumedRole"
+// EC2 instance-role sessions use a principalId of AROA...:i-<instance id>
+| where UserIdentityPrincipalId matches regex @"AROA[A-Z0-9]+:i-[0-9a-f]+"
+| extend SecretId = tostring(parse_json(RequestParameters).secretId)
+| project
+    TimeGenerated, EventName, SecretId, UserIdentityArn, UserIdentityPrincipalId,
+    SourceIpAddress, AWSRegion, ErrorCode = column_ifexists("ErrorCode", "")
+| extend AlertTitle = "Secrets Manager secret read by an EC2 instance role - possible credential harvesting"
+| order by TimeGenerated desc

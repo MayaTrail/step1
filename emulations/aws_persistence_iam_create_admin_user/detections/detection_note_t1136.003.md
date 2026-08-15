@@ -111,11 +111,11 @@ Deploy either, or both. Do not expect them to fire on the same set of events,
 and do not treat a disagreement between them as a bug.
 
 **Files here:**
-- `sigma_t1136_003.yml`, five documents: managed admin attach (`critical`),
+- `sigma_t1136.003.yml`, five documents: managed admin attach (`critical`),
   inline admin policy (`critical`), the `temporal_ordered` backdoor sequence
   (`critical`), and two base rules (`low`). The inline rule needs a pipeline
   that URL-decodes `policyDocument`.
-- `kql_t1136_003.kql`, covers both admin paths and the sequence in one query,
+- `kql_t1136.003.kql`, covers both admin paths and the sequence in one query,
   with the correct nested response paths.
 
 Full response procedure is in `../PLAYBOOK.md`.

@@ -46,10 +46,16 @@ class StackViewSet(viewsets.ModelViewSet):
     All endpoints require a valid JWT.  Users can only see their own stacks
     (queryset is filtered by owner).  Mutating actions (create, deploy,
     destroy, refresh, preview) are restricted to enterprise users.
+
+    DELETE is deliberately absent.  ModelViewSet's inherited destroy() removes
+    only the database row, which orphans every AWS resource Pulumi provisioned
+    and leaves the stack unreachable from the UI.  Tearing a stack down goes
+    through the destroy or force-destroy action, which runs `pulumi destroy`
+    first and deletes the record only after it succeeds.
     """
 
     serializer_class = StackSerializer
-    http_method_names = ["get", "post", "delete", "head", "options"]
+    http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
         """

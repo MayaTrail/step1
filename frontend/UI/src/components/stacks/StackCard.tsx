@@ -7,7 +7,7 @@
  *
  * Presentational: all stack operations are delegated to the parent via
  * callbacks. The only state owned here is the ephemeral two-click confirmation
- * for the destructive Destroy / Delete actions.
+ * for the destructive Force Destroy action.
  *
  * Note: the resource-count summary from the wireframe is intentionally deferred
  * to Phase 2, when the backend persists an actual (Pulumi-state-derived)
@@ -53,7 +53,6 @@ interface StackCardProps {
     actionMsg?: string
     onAction: (action: 'deploy' | 'destroy') => void
     onOpenLogs: () => void
-    onDelete: () => void
     onForceDestroy: () => void
 }
 
@@ -67,10 +66,8 @@ export function StackCard({
     actionMsg,
     onAction,
     onOpenLogs,
-    onDelete,
     onForceDestroy,
 }: StackCardProps) {
-    const [confirmDelete, setConfirmDelete] = useState(false)
     const [confirmForceDestroy, setConfirmForceDestroy] = useState(false)
     const [mapOpen, setMapOpen] = useState(false)
 
@@ -220,28 +217,6 @@ export function StackCard({
                         </>
                     )}
 
-                    <div className="flex-1" />
-
-                    {confirmDelete ? (
-                        <ConfirmPair
-                            prompt="Also deletes this stack's emulation results. Delete?"
-                            tone="danger"
-                            onConfirm={() => { setConfirmDelete(false); onDelete() }}
-                            onCancel={() => setConfirmDelete(false)}
-                        />
-                    ) : (
-                        <button
-                            onClick={() => setConfirmDelete(true)}
-                            disabled={isBusy}
-                            title="Delete stack record"
-                            className="px-2.5 py-1.5 rounded-btn font-mono text-[10px] text-content-dim cursor-pointer
-                                bg-transparent border border-transparent transition-all
-                                hover:border-danger/30 hover:text-danger hover:bg-danger/[0.06]
-                                disabled:opacity-30 disabled:cursor-not-allowed"
-                        >
-                            Delete
-                        </button>
-                    )}
                 </div>
 
                 {/* Action message */}

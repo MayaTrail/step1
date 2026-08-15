@@ -1,0 +1,43 @@
+# FILE: sigma_t1555.006.yml
+title: SCARLETEEL - Secrets Manager GetSecretValue by a Compute-Plane Role
+id: fc07e302-d91a-4b3e-a8e3-718dcc920f73
+status: experimental
+description: |
+  Detects secretsmanager:GetSecretValue performed by an EC2 instance-role session
+  (session name = instance ID, i-xxxx) - a compute-plane principal reading a
+  secret it has no application reason to touch. This is the SCARLETEEL
+  lateral-movement step: after stealing the instance-role credentials the attacker
+  harvests the bait secret's application/database credentials to pivot into
+  adjacent systems. The MayaTrail emulation performs exactly this call against the
+  planted secret with the stolen instance-role session. Replaces the earlier
+  cross-account-AssumeRole rule, which the emulation never exercises and which
+  Sigma cannot express (it cannot compare the caller and target account IDs).
+references:
+  - https://sysdig.com/blog/scarleteel-2-0/
+  - https://sysdig.com/blog/cloud-breach-terraform-data-theft/
+  - https://attack.mitre.org/techniques/T1555/006/
+author: MayaTrail
+date: 2026/08/15
+tags:
+  - attack.credential_access
+  - attack.t1555.006
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'secretsmanager.amazonaws.com'
+    eventName:
+      - 'GetSecretValue'
+      - 'BatchGetSecretValue'
+  # An assumed-role session whose session name is an instance ID - i.e. the caller
+  # is an EC2 node/workload role, which should generally read secrets via its own
+  # scoped application logic, not via a stolen session.
+  instance_role_session:
+    userIdentity.type: 'AssumedRole'
+    userIdentity.arn|contains: '/i-'
+  condition: selection and instance_role_session
+falsepositives:
+  - An EC2 workload role that legitimately reads a specific application secret - scope this rule to exclude that role/secret pair, or invert it to alert only on secrets outside the role's expected set
+  - Both successful and AccessDenied calls are kept deliberately - a denied GetSecretValue from an instance role is itself a probing signal
+level: high

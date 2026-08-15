@@ -57,10 +57,10 @@ credentials.
 **GuardDuty:** no finding type specific to this technique.
 
 **Files here:**
-- `sigma_t1078_004.yml`, four documents: the original success rule with the
+- `sigma_t1078.004.yml`, four documents: the original success rule with the
   SSO/SAML exclusion added (`medium`), the root variant (`critical`), the
   brute-force correlation (`high`), and its failure base rule (`low`).
-- `kql_t1078_004.kql`, the enriched success query plus the brute-force
+- `kql_t1078.004.kql`, the enriched success query plus the brute-force
   companion query in comments.
 
 Full response procedure is in `../PLAYBOOK.md`.

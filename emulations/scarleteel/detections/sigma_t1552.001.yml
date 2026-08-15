@@ -1,0 +1,40 @@
+# FILE: sigma_t1552.001.yml
+title: SCARLETEEL - Terraform State File Read From a Non-Pipeline Principal
+id: c07bab5f-67cf-4ccb-9c08-9d0166847ff1
+status: experimental
+description: |
+  Detects an S3 GetObject on a Terraform state file (*.tfstate) by a principal that
+  is not the Terraform/CI-CD pipeline. Terraform state is plaintext by design and
+  frequently contains long-lived IAM keys and other secrets; reading it is how
+  SCARLETEEL pivoted into a second AWS account. GetObject is an S3 DATA event, so
+  this rule only produces results if CloudTrail S3 data events are enabled on the
+  state bucket (a documented prerequisite). NOTE: the MayaTrail emulation lists the
+  target bucket but does not read the state object, so this rule is provided for
+  the real campaign and will not fire on an emulation run - pair it with the
+  ListObjectsV2 management-event signal, which does fire.
+references:
+  - https://sysdig.com/blog/cloud-breach-terraform-data-theft/
+  - https://sysdig.com/blog/scarleteel-2-0/
+  - https://attack.mitre.org/techniques/T1552/001/
+author: MayaTrail
+date: 2026/08/15
+tags:
+  - attack.credential_access
+  - attack.t1552.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'GetObject'
+    requestParameters.key|endswith: '.tfstate'
+  # Exclude the sanctioned pipeline principal. Replace the ARN fragment with your
+  # Terraform runner's role name so pipeline reads do not alert.
+  filter_pipeline:
+    userIdentity.arn|contains: 'TerraformPipelineRole'
+  condition: selection and not filter_pipeline
+falsepositives:
+  - Engineers or tooling that legitimately read state outside the pipeline - migrate them to the pipeline role and tighten the bucket policy
+  - Backup/replication jobs copying state objects - allowlist their principal
+level: high

@@ -100,10 +100,10 @@ Deploy either, or both. Do not expect them to fire on the same set of events,
 and do not treat a disagreement between them as a bug.
 
 **Files here:**
-- `sigma_t1021_004.yml`, three documents: non-operator key push (`high`), the
+- `sigma_t1021.004.yml`, three documents: non-operator key push (`high`), the
   account-enable precursor (`critical`), and the fan-out correlation
   (`critical`).
-- `kql_t1021_004.kql`, covers push, enable and disable together over a 7-day
+- `kql_t1021.004.kql`, covers push, enable and disable together over a 7-day
   window, and distinguishes gate-blocked attempts.
 
 Full response procedure is in `../PLAYBOOK.md`.

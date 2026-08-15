@@ -1,0 +1,74 @@
+# FILE: sigma_t1087.004.yml
+title: SCARLETEEL - IAM/S3/Secrets Manager Enumeration Base Events
+id: b5bf8996-4cd0-4a05-902d-db20b783c4a5
+name: scarleteel_enumeration_base
+status: experimental
+description: |
+  Base event stream for the SCARLETEEL discovery burst: read/list/describe calls
+  against IAM, S3, and Secrets Manager. On its own this matches routine activity;
+  the companion event_count correlation is what raises the alert. SCARLETEEL used
+  the stolen IMDS credentials to map the blast radius (identity, buckets, secrets)
+  before disabling CloudTrail.
+references:
+  - https://sysdig.com/blog/cloud-breach-terraform-data-theft/
+  - https://sysdig.com/blog/scarleteel-2-0/
+  - https://attack.mitre.org/techniques/T1087/004/
+  - https://attack.mitre.org/techniques/T1580/
+author: MayaTrail
+date: 2024/01/01
+modified: 2026/08/15
+tags:
+  - attack.discovery
+  - attack.t1087.004
+  - attack.t1580
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource:
+      - 'iam.amazonaws.com'
+      - 's3.amazonaws.com'
+      - 'secretsmanager.amazonaws.com'
+    eventName|startswith:
+      - 'List'
+      - 'Describe'
+      - 'Get'
+  condition: selection
+falsepositives:
+  - Base rule - not intended to alert directly. Deploy the correlation below.
+level: informational
+---
+title: SCARLETEEL - Enumeration Burst From a Single Principal
+id: 61392921-95de-42f4-b62c-4e51cecdf7d3
+status: experimental
+description: |
+  Fires when one principal makes 20 or more IAM/S3/Secrets Manager read
+  operations within a 5-minute window - the automated privilege-and-resource
+  discovery pattern SCARLETEEL performs immediately after credential theft.
+  NOTE: the MayaTrail emulation issues only a handful of discovery calls
+  (GetCallerIdentity, ListBuckets, ListObjectsV2, ListSecrets), so this
+  threshold is tuned for the real campaign and will NOT fire on an emulation run.
+  Lower the count for tighter environments.
+references:
+  - https://sysdig.com/blog/cloud-breach-terraform-data-theft/
+  - https://attack.mitre.org/techniques/T1087/004/
+author: MayaTrail
+date: 2026/08/15
+tags:
+  - attack.discovery
+  - attack.t1087.004
+  - attack.t1580
+correlation:
+  type: event_count
+  rules:
+    - scarleteel_enumeration_base
+  group-by:
+    - userIdentity.arn
+  timespan: 5m
+  condition:
+    gte: 20
+falsepositives:
+  - Automated compliance scanners (Prowler, ScoutSuite) and CSPM agents
+  - Backup or inventory tooling that sweeps IAM/S3/Secrets Manager on a schedule
+level: medium

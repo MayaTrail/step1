@@ -120,10 +120,10 @@ Deploy either, or both. Do not expect them to fire on the same set of events,
 and do not treat a disagreement between them as a bug.
 
 **Files here:**
-- `sigma_t1021_004.yml`, three documents: non-operator key push (`high`), the
+- `sigma_t1021.004.yml`, three documents: non-operator key push (`high`), the
   fan-out `value_count` correlation (`critical`), and the EIC Endpoint tunnel
   rule (`high`).
-- `kql_t1021_004.kql`, all signals in one query with root/fan-out/tunnel
+- `kql_t1021.004.kql`, all signals in one query with root/fan-out/tunnel
   verdicts, plus the Flow Log correlation guidance.
 
 Full response procedure is in `../PLAYBOOK.md`.

@@ -40,6 +40,7 @@ from botocore.exceptions import ClientError
 import requests as http_requests
 from celery import shared_task
 from django.apps import apps
+from django.conf import settings
 from django.utils import timezone
 from pulumi import automation as auto
 
@@ -55,6 +56,7 @@ from apps.infrastructure.tasks import (
     _persist_failure,
     _summarize_resources,
     _trim_logs,
+    destroy_with_lock_recovery,
 )
 
 logger = logging.getLogger(__name__)
@@ -622,6 +624,9 @@ class _ProgressWriter:
     The current phase is inferred from "PHASE N" markers the attack modules
     print, clamped to [0, phase_total]. Modules that do not print such markers
     simply leave the phase at 0 and stream logs only (graceful degradation).
+
+    When EMULATION_PHASE_PACING_SECONDS is set, each phase advance also holds the
+    attack for that long so fast emulations stay watchable in the live view.
     """
 
     _FLUSH_INTERVAL_SECONDS = 1.5
@@ -633,17 +638,27 @@ class _ProgressWriter:
         self._buffer = io.StringIO()
         self._phase = 0
         self._last_flush = 0.0
+        self._pacing_seconds = getattr(settings, "EMULATION_PHASE_PACING_SECONDS", 0)
 
     def write(self, text: str) -> int:
         """Buffer text, update the inferred phase, and flush on a time debounce."""
         self._buffer.write(text)
         markers = _PHASE_MARKER.findall(text)
+        advanced = False
         if markers:
             highest = max(int(marker) for marker in markers)
             if self._phase_total:
                 highest = min(highest, self._phase_total)
-            self._phase = max(self._phase, highest)
-        if time.monotonic() - self._last_flush >= self._FLUSH_INTERVAL_SECONDS:
+            if highest > self._phase:
+                self._phase = highest
+                advanced = True
+        if advanced and self._pacing_seconds > 0:
+            # Flush before sleeping so the frontend renders the phase it is about
+            # to pause on. Sleeping first would hold the previous phase on screen
+            # and make the pause look like the attack had stalled.
+            self.flush()
+            time.sleep(self._pacing_seconds)
+        elif time.monotonic() - self._last_flush >= self._FLUSH_INTERVAL_SECONDS:
             self.flush()
         return len(text)
 
@@ -814,7 +829,7 @@ def destroy_emulation_stack(self, stack_id: str) -> dict:
                 "Destroying emulation stack: name=%s type=%s region=%s",
                 stack.name, stack.emulation_type, stack.region,
             )
-            pulumi_stack.destroy(on_output=on_output)
+            destroy_with_lock_recovery(pulumi_stack, on_output, stack.name)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 

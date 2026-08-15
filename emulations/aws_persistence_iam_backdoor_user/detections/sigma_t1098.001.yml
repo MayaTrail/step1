@@ -41,7 +41,7 @@ detection:
       - ':role/REPLACE-ME-break-glass'
   # RESIDUAL FALSE POSITIVE: a user passing their OWN name. Removing it needs a
   # field-to-field comparison (requestParameters.userName ==
-  # userIdentity.userName) that Sigma cannot express portably: `kql_t1098_001.kql`
+  # userIdentity.userName) that Sigma cannot express portably: `kql_t1098.001.kql`
   # does it explicitly.
   #
   # Note also that for ROLE callers there is no userIdentity.userName to compare

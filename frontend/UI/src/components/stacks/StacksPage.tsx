@@ -4,7 +4,7 @@
  * Responsibilities:
  *   - List the user's stacks as operational cards (health, metadata, progress)
  *   - Search and filter the list (client-side)
- *   - Drive Deploy / Destroy / Refresh / Preview / Force-Destroy / Delete
+ *   - Drive Deploy / Destroy / Refresh / Preview / Force-Destroy
  *   - Open a per-stack deployment logs modal
  *   - Live-poll while an action is in progress
  *
@@ -30,7 +30,6 @@ import {
     destroyStack,
     refreshStack,
     previewStack,
-    deleteStack,
     forceDestroyStack,
     pollStackUntilReady,
 } from '@/services/stack.service'
@@ -161,18 +160,6 @@ export function StacksPage() {
         } finally {
             setPolling((prev) => { const next = new Set(prev); next.delete(stackId); return next })
             abortRefs.current.delete(stackId)
-        }
-    }, [])
-
-    // ── Delete stack record ──
-    const handleDelete = useCallback(async (stackId: string) => {
-        setActionMsg((prev) => ({ ...prev, [stackId]: 'Deleting stack record...' }))
-        try {
-            await deleteStack(stackId)
-            setStacks((prev) => prev.filter((s) => s.id !== stackId))
-        } catch (err: unknown) {
-            const apiDetail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-            setActionMsg((prev) => ({ ...prev, [stackId]: `Delete failed: ${apiDetail ?? 'Unknown error'}` }))
         }
     }, [])
 
@@ -320,7 +307,6 @@ export function StacksPage() {
                                         actionMsg={actionMsg[stack.id]}
                                         onAction={(action) => handleAction(stack.id, action)}
                                         onOpenLogs={() => setLogsStack(stack)}
-                                        onDelete={() => handleDelete(stack.id)}
                                         onForceDestroy={() => handleForceDestroy(stack)}
                                     />
                                 )

@@ -74,7 +74,7 @@
 
 ### Detection Rule Quality Notes
 
-**The shipped rules are largely correct**, a notable exception in this catalogue. The Sigma rule (`sigma_t1078_004.yml`) and KQL (`kql_t1078_004.kql`) both scope to `signin.amazonaws.com` / `ConsoleLogin`, filter `MFAUsed == "No"` and `ConsoleLogin == "Success"`, and the Sigma even documents false positives. They are deployable as-is. The refinements below add coverage they lack; they are extensions, not fixes for brokenness.
+**The shipped rules are largely correct**, a notable exception in this catalogue. The Sigma rule (`sigma_t1078.004.yml`) and KQL (`kql_t1078.004.kql`) both scope to `signin.amazonaws.com` / `ConsoleLogin`, filter `MFAUsed == "No"` and `ConsoleLogin == "Success"`, and the Sigma even documents false positives. They are deployable as-is. The refinements below add coverage they lack; they are extensions, not fixes for brokenness.
 
 | Refinement | Why | How |
 |-----------|-----|-----|

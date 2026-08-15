@@ -1,7 +1,11 @@
-// SCARLETEEL Phase 6 — T1098: Account Manipulation via Lambda Backdoor
-// Detects Lambda function creation outside of known CI/CD user-agents.
-// SCARLETEEL creates a Lambda function with the stolen role ARN for persistent
-// backdoor access that survives container restarts and cluster remediation.
+// FILE: kql_t1098.kql
+// SCARLETEEL - Lambda Backdoor Created Outside a Deployment Pipeline (T1098 / T1648)
+// Detects lambda:CreateFunction from a principal that is not a known IaC pipeline.
+// SCARLETEEL creates a function bound to an over-privileged execution role for
+// persistence that survives container restarts and cluster remediation. The
+// emulation creates 'mayatrail-scarleteel-backdoor' via boto3 (Botocore
+// user-agent). The CloudTrail eventName is CreateFunction20150331 - the API
+// version is part of the event name; matching "CreateFunction" alone returns none.
 //
 // Reference: https://attack.mitre.org/techniques/T1098/
 
@@ -9,25 +13,17 @@ AWSCloudTrail
 | where TimeGenerated > ago(24h)
 | where EventSource == "lambda.amazonaws.com"
 | where EventName == "CreateFunction20150331"
-// Flag creation events not originating from known IaC tooling
+// Exclude known deployment tooling by user-agent
 | where UserAgent !contains "Terraform"
     and UserAgent !contains "CloudFormation"
     and UserAgent !contains "aws-cdk"
     and UserAgent !contains "pulumi"
-// Extract the execution role from the request
+    and UserAgent !contains "Serverless"
 | extend FunctionName = tostring(parse_json(RequestParameters).functionName)
 | extend ExecutionRoleArn = tostring(parse_json(RequestParameters).role)
 | extend Runtime = tostring(parse_json(RequestParameters).runtime)
 | project
-    TimeGenerated,
-    EventName,
-    FunctionName,
-    ExecutionRoleArn,
-    Runtime,
-    UserIdentityArn,
-    UserIdentityType,
-    SourceIpAddress,
-    UserAgent,
-    AWSRegion
-| extend AlertTitle = "Lambda function created outside known deployment pipeline — possible backdoor"
+    TimeGenerated, EventName, FunctionName, ExecutionRoleArn, Runtime,
+    UserIdentityArn, UserIdentityType, SourceIpAddress, UserAgent, AWSRegion
+| extend AlertTitle = "Lambda function created outside known deployment pipeline - possible backdoor"
 | order by TimeGenerated desc

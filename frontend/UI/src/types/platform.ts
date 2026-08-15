@@ -369,6 +369,7 @@ export type EmulationRunStatus = 'pending' | 'running' | 'completed' | 'failed'
 export interface EmulationRunRecord {
   id: string
   stack: string
+  stack_name: string
   emulation_type: string
   status: EmulationRunStatus
   phase_current: number
@@ -376,6 +377,7 @@ export interface EmulationRunRecord {
   stdout: string
   stderr: string
   triggered_by: string
+  triggered_by_email: string | null
   started_at: string | null
   completed_at: string | null
   created_at: string

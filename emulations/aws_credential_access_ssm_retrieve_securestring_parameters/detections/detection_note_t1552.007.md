@@ -29,7 +29,7 @@ it matches broadly and is `level: low` for that reason.
 `requestParameters.names` *within a single event* is not expressible in Sigma.
 There is no `count` value-modifier in the specification, `|count|gte` does not
 exist and fails conversion in pySigma for every backend. Treat
-`kql_t1552_007.kql` as the real volume detection; the Sigma base rule is the
+`kql_t1552.007.kql` as the real volume detection; the Sigma base rule is the
 coarse "a decrypting read happened" signal.
 
 **Error strings:** SSM errors are *not* `Client.`-prefixed the way EC2 errors
@@ -47,10 +47,10 @@ technique discloses live credential plaintext.
 **GuardDuty:** no finding type specific to this technique.
 
 **Files here:**
-- `sigma_t1552_007.yml`, three documents: the decryption base rule (`low`),
+- `sigma_t1552.007.yml`, three documents: the decryption base rule (`low`),
   the `value_count` volume correlation (`high`), and the KMS corroboration rule
   (`low`, scope the key ARN first).
-- `kql_t1552_007.kql`, the deployable volume detection with explicit
+- `kql_t1552.007.kql`, the deployable volume detection with explicit
   batch/singular normalisation.
 
 Full response procedure is in `../PLAYBOOK.md`.

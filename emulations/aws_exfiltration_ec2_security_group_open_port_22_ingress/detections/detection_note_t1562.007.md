@@ -46,9 +46,9 @@ most of this set.
 follows the exposure, confirming the opening was reachable and found.
 
 **Files here:**
-- `sigma_t1562_007.yml`, one rule (`high`). Substring-based and therefore
+- `sigma_t1562.007.yml`, one rule (`high`). Substring-based and therefore
   approximate; it cannot express range containment.
-- `kql_t1562_007.kql`, the authoritative structured check covering all four
+- `kql_t1562.007.kql`, the authoritative structured check covering all four
   variants above. Deploy this as the real detection.
 
 Full response procedure is in `../PLAYBOOK.md`.

@@ -15,7 +15,7 @@ off-instance use (late, but definitive).
 |---|---|---|
 | Dispatch by non-automation principal | Sigma Rule A, `medium` | Before theft completes |
 | Command body contains an IMDS address | Sigma Rule A2, `high` | Before theft completes |
-| Credentials used off-host | `kql_t1552_005.kql` | After exfiltration |
+| Credentials used off-host | `kql_t1552.005.kql` | After exfiltration |
 | GuardDuty finding | Sigma Rule B, `critical` | After exfiltration |
 
 **GuardDuty:** `UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration`,
@@ -85,10 +85,10 @@ Deploy either, or both. Do not expect them to fire on the same set of events,
 and do not treat a disagreement between them as a bug.
 
 **Files here:**
-- `sigma_t1552_005.yml`, three documents (Rule A, Rule A2, GuardDuty Rule B).
+- `sigma_t1552.005.yml`, three documents (Rule A, Rule A2, GuardDuty Rule B).
   `GetCallerIdentity` and `GetCommandInvocation` are deliberately **not**
   selectors; they are triage context only.
-- `kql_t1552_005.kql`, off-instance credential-use correlation. Requires a
+- `kql_t1552.005.kql`, off-instance credential-use correlation. Requires a
   Sentinel watchlist named `InstanceRoleIPs`.
 
 Full response procedure is in `../PLAYBOOK.md`.
