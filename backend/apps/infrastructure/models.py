@@ -67,8 +67,12 @@ class Stack(models.Model):
     )
     region = models.CharField(
         max_length=32,
-        default="ap-south-1",
-        help_text="AWS region for this stack.",
+        default="us-east-1",
+        help_text=(
+            "AWS region for this stack. Defaults to us-east-1 so an emulation's "
+            "API calls land in the same region the detection notifier watches; "
+            "regional events written elsewhere never reach the archive."
+        ),
     )
     status = models.CharField(
         max_length=20,

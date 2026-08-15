@@ -15,9 +15,9 @@ import { SectionHeader } from './SectionHeader'
  * Key-based providers (OpenAI, Anthropic) store a write-only key, encrypted
  * server-side; the server never returns it, so the input is only for entering a
  * new or replacement key, and an existing key shows as a masked hint. Amazon
- * Bedrock stores no key: it authenticates through the user's connected AWS role
- * and only needs a region, so its inference is billed to the user's AWS account
- * (disclosed below).
+ * Bedrock needs a region and takes either: a Bedrock API key stored the same
+ * encrypted way, or, with the key left blank, the AWS role the user has already
+ * connected. Whichever is used is what gets billed (disclosed below).
  */
 
 const PROVIDERS: { id: LLMProvider; label: string }[] = [
@@ -39,6 +39,10 @@ export function AIAssistantTab() {
     const [provider, setProvider] = useState<LLMProvider>(_connectorCache?.provider ?? 'openai')
     const [model, setModel] = useState<string>(_connectorCache?.model ?? SUGGESTED_MODELS.openai[0]!)
     const [apiKey, setApiKey] = useState('')
+    // Distinguishes "left the field alone" from "asked to remove the stored
+    // key". Only the second sends a blank key, which is how the server is told
+    // to drop it and fall back to the assumed AWS role.
+    const [clearKey, setClearKey] = useState(false)
     const [region, setRegion] = useState(_connectorCache?.region ?? '')
     const [enabled, setEnabled] = useState(_connectorCache?.enabled ?? true)
 
@@ -70,7 +74,9 @@ export function AIAssistantTab() {
     const hasKey = connector?.has_key ?? false
     // "Connected" reflects the saved connector: a stored key, or a saved Bedrock
     // connector (which carries no key, so has_key is always false for it).
-    const connected = connector?.provider === 'bedrock' ? true : hasKey
+    // Bedrock counts as connected once a region is saved, with or without a
+    // key, because the AWS role is a valid credential on its own.
+    const connected = connector?.provider === 'bedrock' ? Boolean(connector.region) : hasKey
     // Bedrock can be tested once a region is set; key providers need a key.
     const canTest = isBedrock ? !!region.trim() : hasKey || !!apiKey.trim()
 
@@ -100,12 +106,15 @@ export function AIAssistantTab() {
                 provider,
                 model,
                 enabled,
-                api_key: isBedrock ? undefined : apiKey.trim() || undefined,
+                // Bedrock: a blank string removes the stored key, undefined
+                // leaves it untouched. Other providers never send a blank.
+                api_key: apiKey.trim() || (isBedrock && clearKey ? '' : undefined),
                 region: isBedrock ? region.trim() : undefined,
             })
             _connectorCache = saved
             setConnector(saved)
             setApiKey('')
+            setClearKey(false)
             setMessage('Saved.')
         } catch {
             setMessage(
@@ -124,7 +133,14 @@ export function AIAssistantTab() {
         try {
             let result
             if (isBedrock) {
-                result = await testLLMConnector({ provider, region: region.trim() || undefined })
+                // Send the typed key so a new one is validated before saving.
+                // Without one the server falls back to a stored key, then the role.
+                result = await testLLMConnector({
+                    provider,
+                    region: region.trim() || undefined,
+                    model,
+                    api_key: apiKey.trim() || undefined,
+                })
             } else if (apiKey.trim()) {
                 result = await testLLMConnector({ provider, api_key: apiKey.trim() })
             } else {
@@ -160,7 +176,7 @@ export function AIAssistantTab() {
         <>
             <SectionHeader
                 title="AI Assistant"
-                description={'Connect your own LLM provider to power the "Explain this emulation" features. API keys are encrypted on the server and never shared; Amazon Bedrock authenticates through your connected AWS role instead. You are billed by your provider.'}
+                description={'Connect your own LLM provider to power the "Explain this emulation" features. API keys are encrypted on the server and never shared; Amazon Bedrock takes either a Bedrock API key or your connected AWS role. You are billed by your provider.'}
             />
 
             {loading ? (
@@ -251,23 +267,49 @@ export function AIAssistantTab() {
                                     </p>
                                 </Field>
 
+                                {/* Bedrock takes either a key or the assumed role, and the
+                                    field being filled in is what picks the mode. */}
+                                <Field label="Bedrock API Key (optional)" className="mt-5">
+                                    <input
+                                        type="password"
+                                        value={apiKey}
+                                        onChange={(e) => setApiKey(e.target.value)}
+                                        placeholder={hasKey ? `•••• •••• ${connector?.key_hint ?? ''}` : 'ABSK... (stored encrypted)'}
+                                        autoComplete="off"
+                                        className="w-full bg-surface-base border border-border rounded-btn px-3 py-2.5 text-sm font-mono text-content-primary placeholder:text-content-dim outline-none focus:border-border-active"
+                                    />
+                                    <p className="text-content-dim text-xs mt-2">
+                                        {hasKey
+                                            ? 'A key is stored, so calls use it instead of your AWS role. Enter a new one to replace it, or clear it to go back to the role.'
+                                            : 'Leave blank to authenticate with the AWS role MayaTrail assumes. Provide a key to bill and authorise Bedrock separately from that role.'}
+                                    </p>
+                                    {hasKey && (
+                                        <button
+                                            type="button"
+                                            onClick={() => { setApiKey(''); setClearKey(true) }}
+                                            className="mt-2 text-xs text-accent-blue bg-transparent border-none p-0 cursor-pointer transition-opacity hover:opacity-60"
+                                        >
+                                            Remove stored key and use my AWS role
+                                        </button>
+                                    )}
+                                </Field>
+
                                 {/* Cost + IAM disclosure — Bedrock bills the user's own AWS account */}
                                 <div className="mt-5 rounded-btn border border-warning/25 bg-warning-dim p-4">
                                     <p className="text-warning text-sm font-semibold mb-1.5">Billed to your AWS account</p>
                                     <p className="text-content-secondary text-xs leading-relaxed">
-                                        Bedrock inference runs under the IAM role MayaTrail assumes, so model usage is
-                                        charged to your connected AWS account — the same one used for simulations.
-                                        Pricing varies by model and region.
+                                        Bedrock inference is charged to the AWS account behind whichever credential is
+                                        used: your Bedrock API key if you set one, otherwise the IAM role MayaTrail
+                                        assumes. Pricing varies by model and region.
                                     </p>
                                     <p className="text-content-dim text-xs leading-relaxed mt-2">
-                                        Grant{' '}
+                                        Using the role instead of a key? Grant it{' '}
                                         <code className="font-mono text-content-secondary">bedrock:InvokeModelWithResponseStream</code>{' '}
                                         and{' '}
-                                        <code className="font-mono text-content-secondary">bedrock:ListFoundationModels</code>{' '}
-                                        to the role. Serverless models are enabled by default, but Anthropic Claude needs
-                                        a one-time usage form per AWS account (complete it once in the Bedrock playground)
-                                        before its first use. A passing connection test confirms access to list models,
-                                        not that the chosen model can be invoked.
+                                        <code className="font-mono text-content-secondary">bedrock:ListFoundationModels</code>.
+                                        Serverless models are enabled by default, but Anthropic Claude needs a one-time
+                                        usage form per AWS account (complete it once in the Bedrock playground) before
+                                        its first use.
                                     </p>
                                 </div>
                             </>

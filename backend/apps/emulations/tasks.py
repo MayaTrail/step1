@@ -64,6 +64,11 @@ from apps.infrastructure.tasks import (
 
 logger = logging.getLogger(__name__)
 
+# Coverage checks before accepting an empty result. At the default 15s spacing
+# this covers ~45s, comfortably past the worst delivery lag observed (34s),
+# while a run whose logs arrive quickly reports back in about 15.
+DETECTION_CHECK_MAX_ATTEMPTS = 3
+
 # Pulumi state bucket. Each tenant's state lives in that tenant's own AWS
 # account, so the bucket name is resolved per-tenant from the account id (see
 # _state_bucket_from_creds). STATE_BUCKET is only the fallback when the account
@@ -796,7 +801,7 @@ def run_emulation_attack(self, run_id: str) -> dict:
 
 
 @shared_task(name="emulations.check_detection_coverage", queue="enterprise")
-def check_detection_coverage(run_id: str) -> dict:
+def check_detection_coverage(run_id: str, attempt: int = 1) -> dict:
     """
     Replay an emulation's detection rules over the archived logs for its window.
 
@@ -850,6 +855,22 @@ def check_detection_coverage(run_id: str) -> dict:
         run.detection_check = {"status": "error", "detail": f"{type(exc).__name__}: {exc}"}
         run.save(update_fields=["detection_check"])
         return {"run_id": run_id, "status": "error"}
+
+    # Finding nothing usually means the logs have not landed yet, not that the
+    # attack went unrecorded: delivery lag is a few seconds typically but has
+    # been seen at 34. Rather than wait out the worst case on every run, check
+    # early and retry, leaving detection_check null so the page keeps showing
+    # "tracking" instead of a zero that would later turn out to be wrong.
+    if report["eventCount"] == 0 and attempt < DETECTION_CHECK_MAX_ATTEMPTS:
+        logger.info(
+            "check_detection_coverage run=%s: no events yet on attempt %d, retrying",
+            run_id, attempt,
+        )
+        check_detection_coverage.apply_async(
+            args=[run_id, attempt + 1],
+            countdown=getattr(settings, "DETECTION_CHECK_DELAY_SECONDS", 15),
+        )
+        return {"run_id": run_id, "status": "retrying", "attempt": attempt}
 
     run.detection_check = report
     run.save(update_fields=["detection_check"])

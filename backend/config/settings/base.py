@@ -241,11 +241,13 @@ DETECTIONS_BUCKET = config("DETECTIONS_BUCKET", default="")
 DETECTIONS_PREFIX = config("DETECTIONS_PREFIX", default="detections/")
 DETECTIONS_BUCKET_REGION = config("DETECTIONS_BUCKET_REGION", default="")
 
-# Held after an attack completes before reading the archive. Measured delivery
-# lag from the notifier is 3 seconds median and 34 at worst, so this leaves
-# room without making the user wait on a page that says it is still settling.
+# Held after an attack completes before reading the archive, and again between
+# retries. Measured delivery lag from the notifier is 3 seconds median and 34 at
+# worst. Rather than wait out the worst case on every run, the check starts
+# early and retries while it finds nothing (see DETECTION_CHECK_MAX_ATTEMPTS),
+# so a fast run reports in about 15 seconds and a slow one is still correct.
 DETECTION_CHECK_DELAY_SECONDS = config(
-    "DETECTION_CHECK_DELAY_SECONDS", default=60, cast=int
+    "DETECTION_CHECK_DELAY_SECONDS", default=15, cast=int
 )
 
 # ---------------------------------------------------------------------------

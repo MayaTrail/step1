@@ -147,6 +147,60 @@ export async function destroyEmulationStack(stackId: string): Promise<void> {
  * @param onUpdate   - Optional callback invoked with each poll result.
  * @param signal     - Optional AbortSignal to cancel polling.
  */
+/**
+ * Keep polling a finished run until its detection coverage report appears.
+ *
+ * The report is written by a background job about a minute after the attack
+ * ends, so a run that has only just completed still carries
+ * `detection_check: null`. pollEmulationRunUntilDone stops the moment the run
+ * reaches a terminal status, which is before that job has run, so without this
+ * the Live view would hold the stale record until the user navigates away.
+ *
+ * Resolves as soon as the field is set, whatever its status: "not_configured"
+ * is an answer too, and the tile decides what to do with it. Gives up after
+ * timeoutMs so a stopped worker cannot leave this looping forever.
+ *
+ * @param runId - Run to watch.
+ * @param intervalMs - Gap between checks.
+ * @param timeoutMs - Total time to wait before giving up.
+ * @param onUpdate - Called with the run once the report lands.
+ * @param signal - Abort signal, so unmounting stops the poll.
+ */
+export async function pollDetectionCheckUntilReady(
+  runId: string,
+  intervalMs: number,
+  timeoutMs: number,
+  onUpdate?: (run: EmulationRunRecord) => void,
+  signal?: AbortSignal,
+): Promise<EmulationRunRecord | null> {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, intervalMs)
+      signal?.addEventListener(
+        'abort',
+        () => {
+          clearTimeout(timer)
+          reject(new DOMException('Polling aborted', 'AbortError'))
+        },
+        { once: true },
+      )
+    })
+
+    if (signal?.aborted) {
+      throw new DOMException('Polling aborted', 'AbortError')
+    }
+
+    const run = await getEmulationRun(runId)
+    if (run.detection_check) {
+      onUpdate?.(run)
+      return run
+    }
+  }
+  return null
+}
+
 export async function pollEmulationRunUntilDone(
   runId: string,
   intervalMs = 3000,

@@ -62,12 +62,22 @@ def build_credentials(user, connector: LLMConnector) -> tuple[dict | None, str |
     """
     Resolve the provider credentials for a stored connector.
 
-    Key-based providers decrypt their stored key. Bedrock instead assumes the
-    user's verified AWS role (the same STS trust path as the connectors app) and
-    returns short-lived credentials used in-memory only. Returns (creds, None)
-    on success or (None, error_detail) on a recoverable failure.
+    Key-based providers decrypt their stored key. Bedrock accepts either: a
+    stored Bedrock API key if the user saved one, otherwise the user's verified
+    AWS role (the same STS trust path as the connectors app), returning
+    short-lived credentials used in-memory only. Returns (creds, None) on
+    success or (None, error_detail) on a recoverable failure.
     """
     if connector.provider == LLMConnector.Provider.BEDROCK:
+        if connector.api_key_encrypted:
+            try:
+                return {
+                    "region": connector.region,
+                    "model": connector.model,
+                    "api_key": crypto.decrypt(connector.api_key_encrypted),
+                }, None
+            except (InvalidToken, EncryptionNotConfigured):
+                return None, "Stored key could not be decrypted."
         return _bedrock_credentials(user, connector.region)
     try:
         return {"api_key": crypto.decrypt(connector.api_key_encrypted)}, None
@@ -146,15 +156,17 @@ class LLMConnectorView(APIView):
         provider = data.get("provider") or (connector.provider if connector else None)
         is_bedrock = provider == LLMConnector.Provider.BEDROCK
 
-        # Bedrock authenticates via the assumed AWS role, so it needs no key.
+        # Bedrock can fall back to the assumed AWS role, so a key is optional
+        # there. Every other provider needs one to create a connector.
         if connector is None and not is_bedrock and not api_key:
             return Response(
                 {"api_key": ["An API key is required to create a connector."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if is_bedrock:
-            # Keep state honest: a Bedrock connector stores no key/hint.
+        # An explicit empty string is how the UI clears a Bedrock key to switch
+        # back to the assumed role. A missing key means "leave it as it is".
+        if is_bedrock and api_key == "":
             data["api_key_encrypted"] = None
             data["key_hint"] = ""
         elif api_key:
@@ -233,9 +245,22 @@ class LLMConnectorTestView(APIView):
         if provider == LLMConnector.Provider.BEDROCK:
             if not region:
                 region = connector.region if connector else ""
-            creds, error = _bedrock_credentials(request.user, region)
-            if error:
-                return Response({"ok": False, "detail": error})
+            # A key in the body tests that key; otherwise reuse a stored one;
+            # with neither, fall back to the assumed role.
+            if not api_key and connector and connector.api_key_encrypted:
+                try:
+                    api_key = crypto.decrypt(connector.api_key_encrypted)
+                except (InvalidToken, EncryptionNotConfigured):
+                    return Response({"ok": False, "detail": "Stored key could not be decrypted."})
+            if api_key:
+                model = request.data.get("model") or (connector.model if connector else "")
+                creds = {"region": region, "model": model, "api_key": api_key}
+                if not region:
+                    return Response({"ok": False, "detail": "An AWS region is required for Bedrock."})
+            else:
+                creds, error = _bedrock_credentials(request.user, region)
+                if error:
+                    return Response({"ok": False, "detail": error})
         else:
             if not api_key:
                 if connector is None or not connector.api_key_encrypted:

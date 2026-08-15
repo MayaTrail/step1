@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type {
   AttackPhase,
-  DetectionCheck,
   DetectionRuleSummary,
+  DetectionVerdict,
   Emulation,
   EmulationRunRecord,
   EmulationRunStatus,
@@ -12,6 +12,7 @@ import type {
 import {
   getEmulationRun,
   listEmulationRuns,
+  pollDetectionCheckUntilReady,
   pollEmulationRunUntilDone,
 } from '@/services/emulation.service'
 import { fetchDetections } from '@/services/platform.service'
@@ -24,6 +25,13 @@ const ACTIVE_STATUSES: EmulationRunStatus[] = ['pending', 'running']
 // never render as active, so it is kept at or below the backend's phase pacing
 // (EMULATION_PHASE_PACING_SECONDS) rather than above it.
 const POLL_INTERVAL_MS = 1000
+
+// The coverage report lands about a minute after the attack ends (the job waits
+// out the log pipeline's delivery lag). Checked every few seconds rather than
+// every second, since nothing can change in between, and given up on after
+// well past the expected arrival so a stopped worker does not poll forever.
+const COVERAGE_POLL_INTERVAL_MS = 5000
+const COVERAGE_POLL_TIMEOUT_MS = 180000
 
 // Equal, viewport-adaptive height for the phase-detail and live-output panels,
 // with a floor so they never collapse on short screens (both scroll inside).
@@ -74,10 +82,25 @@ export function LiveEmulationTab({
         const initial = await getEmulationRun(latest.id)
         if (cancelled) return
         setRun(initial)
+
+        let final = initial
         if (ACTIVE_STATUSES.includes(initial.status)) {
-          await pollEmulationRunUntilDone(
+          final = await pollEmulationRunUntilDone(
             latest.id,
             POLL_INTERVAL_MS,
+            (updated) => !cancelled && setRun(updated),
+            controller.signal,
+          )
+        }
+
+        // The coverage report is written about a minute after the attack ends,
+        // which is after the poll above has already stopped. Keep watching for
+        // it so the "check your logging" tile updates in place.
+        if (final.status === 'completed' && !final.detection_check) {
+          await pollDetectionCheckUntilReady(
+            latest.id,
+            COVERAGE_POLL_INTERVAL_MS,
+            COVERAGE_POLL_TIMEOUT_MS,
             (updated) => !cancelled && setRun(updated),
             controller.signal,
           )
@@ -235,11 +258,17 @@ function NextSteps({ emulation, run }: { emulation: Emulation; run: EmulationRun
   // Only a completed check has something to show, so the tile stays plain
   // guidance until then rather than linking to an empty page.
   const coverage = check?.status === 'ok' ? check : null
+  // A completed run with no report yet means the background check is still
+  // running. Saying so beats leaving the user staring at unchanged guidance
+  // and wondering whether anything is happening at all.
+  const tracking = run.status === 'completed' && !check
   return (
     <div className="bg-surface-card border border-border rounded-card p-5">
       <div className="text-[0.85rem] font-semibold text-content-primary mb-1">What to do next</div>
       <p className="text-[0.78rem] text-content-secondary leading-[1.55] mb-4">
-        The attack has run. Now validate whether your defenses caught it.
+        {coverage
+          ? 'The attack has run, and we have already checked it against your detection rules.'
+          : 'The attack has run. Now validate whether your defenses caught it.'}
       </p>
       <div className="grid gap-3 sm:grid-cols-3">
         <NextStep
@@ -252,15 +281,25 @@ function NextSteps({ emulation, run }: { emulation: Emulation; run: EmulationRun
           title="Review detection rules"
           body="Check the Sigma and KQL rules that should fire on this activity."
         />
+        {/* Once the coverage report lands this tile stops being advice and
+            becomes a result, so it changes its name and takes the accent
+            border. "Check your logging" describes a manual chore; nobody would
+            guess an answer is waiting behind it. */}
         <NextStep
           to={coverage ? `${base}/logging/${run.id}` : undefined}
-          title="Check your logging"
+          title={
+            coverage ? 'Detection coverage' : tracking ? 'Tracking detection coverage' : 'Check your logging'
+          }
           body={
             coverage
-              ? 'See which of this run’s detections actually fired in your logs.'
-              : 'Search your SIEM or CloudTrail for the API calls above to confirm they were recorded.'
+              ? 'We replayed this run against your detection rules.'
+              : tracking
+                ? 'Waiting for this run’s logs to arrive, then replaying your detection rules against them.'
+                : 'Search your SIEM or CloudTrail for the API calls above to confirm they were recorded.'
           }
-          result={coverage ? coverageSummary(coverage) : undefined}
+          counts={coverage?.counts}
+          highlight={Boolean(coverage)}
+          tracking={tracking}
         />
       </div>
     </div>
@@ -268,13 +307,32 @@ function NextSteps({ emulation, run }: { emulation: Emulation; run: EmulationRun
 }
 
 /**
- * Headline counts for the tile, so the answer is visible without leaving the run.
+ * The three coverage counts as coloured figures.
  *
- * @param check - A completed coverage report.
+ * Colour matches the coverage page so the two read as one feature: green for a
+ * detection that worked, amber for a logging gap the user can close, and plain
+ * grey for the informational middle case.
  */
-function coverageSummary(check: DetectionCheck): string {
-  const counts = check.counts ?? { fired: 0, silent: 0, no_logs: 0 }
-  return `${counts.fired} fired · ${counts.silent} silent · ${counts.no_logs} no logs`
+function CoverageCounts({ counts }: { counts: Record<DetectionVerdict, number> }) {
+  const cells: { key: DetectionVerdict; label: string; tone: string }[] = [
+    { key: 'fired', label: 'fired', tone: 'text-safe' },
+    { key: 'silent', label: 'silent', tone: 'text-content-secondary' },
+    { key: 'no_logs', label: 'no logs', tone: 'text-warning' },
+  ]
+  return (
+    <div className="flex gap-4 mt-2.5 pt-2.5 border-t border-border">
+      {cells.map(({ key, label, tone }) => (
+        <div key={key}>
+          <span className={`font-mono text-[0.95rem] font-bold tabular-nums ${tone}`}>
+            {counts[key] ?? 0}
+          </span>
+          <span className="font-mono text-[0.6rem] uppercase tracking-[0.5px] text-content-dim ml-1.5">
+            {label}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 /** One "what next" tile. Renders as a link when `to` is set, else static guidance. */
@@ -282,28 +340,41 @@ function NextStep({
   to,
   title,
   body,
-  result,
+  counts,
+  highlight = false,
+  tracking = false,
 }: {
   to?: string
   title: string
   body: string
-  /** Optional one-line outcome shown under a divider. */
-  result?: string
+  /** Coverage counts, shown under a divider when the tile carries a result. */
+  counts?: Record<DetectionVerdict, number>
+  /** Draws the accent border, marking this tile as the one with an answer. */
+  highlight?: boolean
+  /** Work is in progress: red pulsing dot, like a recording indicator. */
+  tracking?: boolean
 }) {
   const inner = (
     <>
-      <div className="text-[0.8rem] font-semibold text-content-primary mb-1">{title}</div>
+      <div className="flex items-center gap-1.5 mb-1">
+        {tracking && (
+          <span className="w-1.5 h-1.5 rounded-full bg-danger shadow-[0_0_8px_rgba(255,99,99,0.6)] animate-pulse shrink-0" />
+        )}
+        <span className="text-[0.8rem] font-semibold text-content-primary">{title}</span>
+        {highlight && <span className="text-accent-blue text-[0.8rem]">&#8594;</span>}
+      </div>
       <div className="text-[0.72rem] text-content-secondary leading-[1.5]">{body}</div>
-      {result && (
-        <div className="font-mono text-[0.65rem] text-content-dim mt-2 pt-2 border-t border-border">
-          {result}
-        </div>
-      )}
+      {counts && <CoverageCounts counts={counts} />}
     </>
   )
-  const cls = 'block border border-border rounded-btn px-3.5 py-3 bg-[rgba(255,255,255,0.01)] h-full'
+  const border = highlight
+    ? 'border-accent-blue/40 bg-accent-blue/[0.04]'
+    : tracking
+      ? 'border-danger/40 bg-danger/[0.04]'
+      : 'border-border bg-[rgba(255,255,255,0.01)]'
+  const cls = `block border rounded-btn px-3.5 py-3 h-full ${border}`
   return to ? (
-    <Link to={to} className={`${cls} no-underline transition-colors hover:border-accent-blue/40`}>
+    <Link to={to} className={`${cls} no-underline transition-colors hover:border-accent-blue/70`}>
       {inner}
     </Link>
   ) : (
