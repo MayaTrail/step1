@@ -55,6 +55,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       EMULATIONS_BASE_DIR: /opt/emulations
       GUARDRAILS_BASE_DIR: /opt/guardrails
+      THREATINTEL_DIR: /var/lib/threatintel
     ports:
       - "8000:8000"
     volumes:
@@ -62,6 +63,8 @@ services:
       - ./emulations:/opt/emulations:ro
       # Mount guardrails package so the API registry can discover policies.
       - ./guardrails:/opt/guardrails:ro
+      # Daily RSS snapshot, written by the worker and read by the API.
+      - threatintel_data:/var/lib/threatintel
     depends_on: # waits for db and redis to be healthy before starting backend.
       db:
         condition: service_healthy
@@ -102,12 +105,15 @@ services:
       DETECTIONS_BUCKET: mayatrail-detections
       DETECTIONS_PREFIX: detections/
       DETECTIONS_BUCKET_REGION: us-east-1
+      THREATINTEL_DIR: /var/lib/threatintel
       # Base directory where emulation packages are mounted.
       # Infra programs are resolved as {EMULATIONS_BASE_DIR}/{type}/infra/
       EMULATIONS_BASE_DIR: /opt/emulations
     volumes:
       # Emulation packages: attack scripts and per-emulation infra/ programs.
       - ./emulations:/opt/emulations:ro
+      # Daily RSS snapshot, shared with the backend that serves it.
+      - threatintel_data:/var/lib/threatintel
     depends_on:
       db:
         condition: service_healthy
@@ -181,3 +187,6 @@ services:
 
 volumes:
   postgres_data:
+  # Threat intel RSS snapshot. Shared so the worker can write it and the API can
+  # read it; a bind mount would put a generated file inside the repository.
+  threatintel_data:
