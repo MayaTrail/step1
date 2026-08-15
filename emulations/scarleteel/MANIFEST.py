@@ -101,7 +101,7 @@ MANIFEST = {
             "name": "Discovery",
             "techniques": [
                 {"id": "T1087.004", "name": "Cloud Account Discovery"},
-                {"id": "T1580", "name": "Cloud Infrastructure Discovery"},
+                {"id": "T1552.001", "name": "Credentials In Files"},
             ],
         },
         {
@@ -115,8 +115,7 @@ MANIFEST = {
             "phase": 5,
             "name": "Lateral Movement",
             "techniques": [
-                {"id": "T1548.005", "name": "Abuse Elevation Control — AssumeRole"},
-                {"id": "T1550.001", "name": "Application Access Token"},
+                {"id": "T1555.006", "name": "Cloud Secrets Management Stores"},
             ],
         },
         {
@@ -182,23 +181,25 @@ MANIFEST = {
             ),
         },
         {
-            "id": "T1548.005",
-            "name": "Abuse Elevation Control Mechanism",
-            "tactic": "Privilege Escalation",
-            "platform": "AWS STS / IAM",
+            "id": "T1555.006",
+            "name": "Cloud Secrets Management Stores",
+            "tactic": "Credential Access",
+            "platform": "AWS Secrets Manager",
             "description": (
-                "sts:AssumeRole to pivot to a target role with S3 read access on the "
-                "Terraform state bucket in the victim account."
+                "secretsmanager:GetSecretValue with the stolen EC2 instance-role "
+                "session, harvesting the planted secret's application credentials to "
+                "pivot into adjacent systems."
             ),
         },
         {
-            "id": "T1550.001",
-            "name": "Application Access Token",
-            "tactic": "Lateral Movement",
-            "platform": "AWS STS",
+            "id": "T1552.001",
+            "name": "Credentials In Files",
+            "tactic": "Credential Access",
+            "platform": "AWS S3",
             "description": (
-                "Temporary STS credentials from AssumeRole are used to access the "
-                "Terraform state bucket and extract plaintext secrets from the state file."
+                "Terraform state is plaintext by design and often holds long-lived IAM "
+                "keys. The emulation lists the state bucket and its objects; reading the "
+                "state file itself is the real campaign's pivot into a second account."
             ),
         },
         {

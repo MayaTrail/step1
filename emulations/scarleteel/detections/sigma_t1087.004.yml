@@ -1,27 +1,22 @@
-# SCARLETEEL Phase 3, IAM Enumeration Burst (T1087.004)
-#
-# The signal is RATE, not occurrence. Individual IAM and S3 read calls are the
-# most common events in any AWS account; twenty from one principal inside five
-# minutes is automated privilege discovery. The deployable detection is the
-# correlation document below; the base rule exists only to be referenced by it.
-#
-# The legacy Sigma v1 pipe form (`condition: selection | count() by ... > 20`
-# with `timeframe:` inside `detection:`) was removed from the specification.
-# pySigma rejects it and no current backend compiles it, so the rule as
-# previously written could not be deployed anywhere.
-title: SCARLETEEL cloud read API call
-id: c3d4e5f6-3333-4ccc-b333-333333333333
+# FILE: sigma_t1087.004.yml
+title: SCARLETEEL - IAM/S3/Secrets Manager Enumeration Base Events
+id: b5bf8996-4cd0-4a05-902d-db20b783c4a5
 name: scarleteel_enumeration_base
 status: experimental
-description: >-
-  Base rule. Matches every IAM, S3 and Secrets Manager read call by design and
-  is NOT intended for direct alerting, deploy the correlation that references
-  it.
+description: |
+  Base event stream for the SCARLETEEL discovery burst: read/list/describe calls
+  against IAM, S3, and Secrets Manager. On its own this matches routine activity;
+  the companion event_count correlation is what raises the alert. SCARLETEEL used
+  the stolen IMDS credentials to map the blast radius (identity, buckets, secrets)
+  before disabling CloudTrail.
 references:
   - https://sysdig.com/blog/cloud-breach-terraform-data-theft/
+  - https://sysdig.com/blog/scarleteel-2-0/
   - https://attack.mitre.org/techniques/T1087/004/
-author: MayaTrail Security Research
+  - https://attack.mitre.org/techniques/T1580/
+author: MayaTrail
 date: 2024/01/01
+modified: 2026/08/15
 tags:
   - attack.discovery
   - attack.t1087.004
@@ -31,7 +26,7 @@ logsource:
   service: cloudtrail
 detection:
   selection:
-    eventSource|contains:
+    eventSource:
       - 'iam.amazonaws.com'
       - 's3.amazonaws.com'
       - 'secretsmanager.amazonaws.com'
@@ -40,22 +35,26 @@ detection:
       - 'Describe'
       - 'Get'
   condition: selection
-level: low
+falsepositives:
+  - Base rule - not intended to alert directly. Deploy the correlation below.
+level: informational
 ---
-title: SCARLETEEL Phase 3 IAM enumeration burst from a single principal
-id: 62e90b4c-24f5-446c-98a5-36173c08f425
+title: SCARLETEEL - Enumeration Burst From a Single Principal
+id: 61392921-95de-42f4-b62c-4e51cecdf7d3
 status: experimental
-description: >-
-  More than twenty IAM, S3 and Secrets Manager reads from a single principal
-  within five minutes, consistent with automated privilege discovery after
-  initial access. SCARLETEEL used stolen IMDSv1 credentials to enumerate users,
-  roles, policies and buckets before disabling CloudTrail. Tune the threshold
-  to your own baseline, scanners and CSPM agents sit well above it.
+description: |
+  Fires when one principal makes 20 or more IAM/S3/Secrets Manager read
+  operations within a 5-minute window - the automated privilege-and-resource
+  discovery pattern SCARLETEEL performs immediately after credential theft.
+  NOTE: the MayaTrail emulation issues only a handful of discovery calls
+  (GetCallerIdentity, ListBuckets, ListObjectsV2, ListSecrets), so this
+  threshold is tuned for the real campaign and will NOT fire on an emulation run.
+  Lower the count for tighter environments.
 references:
   - https://sysdig.com/blog/cloud-breach-terraform-data-theft/
   - https://attack.mitre.org/techniques/T1087/004/
-author: MayaTrail Security Research
-date: 2024/01/01
+author: MayaTrail
+date: 2026/08/15
 tags:
   - attack.discovery
   - attack.t1087.004
@@ -68,8 +67,8 @@ correlation:
     - userIdentity.arn
   timespan: 5m
   condition:
-    gt: 20
+    gte: 20
 falsepositives:
-  - Automated compliance scanning tools such as Prowler or ScoutSuite
-  - Cloud Security Posture Management agents performing scheduled checks
+  - Automated compliance scanners (Prowler, ScoutSuite) and CSPM agents
+  - Backup or inventory tooling that sweeps IAM/S3/Secrets Manager on a schedule
 level: medium

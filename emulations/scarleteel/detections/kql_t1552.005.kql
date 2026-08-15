@@ -1,27 +1,32 @@
-// SCARLETEEL Phase 2 — T1552.005: Cloud Instance Metadata API
-// Detects EC2 instance role credentials being used from a source IP that is
-// not an AWS-internal address, indicating the credentials may have been stolen
-// via IMDSv1 and replayed from an attacker-controlled host.
+// FILE: kql_t1552.005.kql
+// SCARLETEEL - EC2 Instance-Role Credentials Used From Outside the VPC (T1552.005)
+// Highest-fidelity signal for IMDS credential theft. CloudTrail does not log the
+// IMDS request itself, but the stolen instance-role credentials, once replayed
+// from an attacker host, appear as API calls under an assumed-role session named
+// after the instance (session name = i-xxxx) from a non-internal source IP.
+// This is what the MayaTrail emulation produces: after the IMDSv1 theft it drives
+// boto3 off-instance, so the stolen session's calls arrive from an external IP.
+//
+// TIGHTEN THIS: replace the RFC1918 exclusion below with an explicit exclusion of
+// your workload VPC CIDR(s) plus any NAT gateway / Elastic IP egress addresses.
 //
 // Reference: https://attack.mitre.org/techniques/T1552/005/
 
 AWSCloudTrail
 | where TimeGenerated > ago(1h)
 | where UserIdentityType == "AssumedRole"
-// EC2 instance roles use session names matching the instance ID pattern
+// EC2 instance-role sessions use a principalId of AROA...:i-<instance id>
 | where UserIdentityPrincipalId matches regex @"AROA[A-Z0-9]+:i-[0-9a-f]+"
-// Exclude AWS-internal service calls and private network ranges
+// Exclude AWS service-to-service calls and private ranges
 | where SourceIpAddress !endswith ".amazonaws.com"
-    and SourceIpAddress !startswith "10."
-    and SourceIpAddress !startswith "172.16."
-    and SourceIpAddress !startswith "192.168."
-    and SourceIpAddress !startswith "169.254."
+| where not(ipv4_is_private(SourceIpAddress))
 | summarize
     CallCount = count(),
-    EventNames = make_set(EventName),
+    EventNames = make_set(EventName, 50),
+    Services = make_set(EventSource),
     FirstSeen = min(TimeGenerated),
     LastSeen = max(TimeGenerated)
     by UserIdentityArn, SourceIpAddress, AWSRegion
-| where CallCount > 1
-| extend AlertTitle = "EC2 instance role used from external IP — possible IMDSv1 theft"
+| extend AlertTitle = "EC2 instance-role credentials used from an external IP - likely IMDS theft"
+| project TimeGenerated = FirstSeen, AlertTitle, UserIdentityArn, SourceIpAddress, AWSRegion, CallCount, Services, EventNames
 | order by CallCount desc

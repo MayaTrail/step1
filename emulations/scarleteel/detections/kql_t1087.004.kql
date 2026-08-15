@@ -1,6 +1,13 @@
-// SCARLETEEL Phase 3 — T1087.004 / T1580: Cloud Account and Infrastructure Discovery
-// Detects an enumeration burst: more than 20 IAM/S3/SecretsManager read operations
-// from a single principal within a 5-minute window.
+// FILE: kql_t1087.004.kql
+// SCARLETEEL - IAM/S3/Secrets Manager Enumeration Burst (T1087.004 / T1580)
+// Detects an enumeration burst: 20+ IAM/S3/Secrets Manager read operations from a
+// single principal within a 5-minute window - the discovery pattern SCARLETEEL
+// runs immediately after credential theft to map the blast radius.
+//
+// NOTE: the MayaTrail emulation issues only a handful of discovery calls
+// (GetCallerIdentity, ListBuckets, ListObjectsV2, ListSecrets), so this threshold
+// is tuned for the real campaign and will not fire on an emulation run. Lower
+// EnumerationThreshold for tighter environments.
 //
 // References:
 //   https://attack.mitre.org/techniques/T1087/004/
@@ -8,17 +15,10 @@
 
 let LookbackWindow = 5m;
 let EnumerationThreshold = 20;
-
 AWSCloudTrail
 | where TimeGenerated > ago(1h)
-| where EventSource in (
-    "iam.amazonaws.com",
-    "s3.amazonaws.com",
-    "secretsmanager.amazonaws.com"
-  )
-| where EventName startswith "List"
-    or EventName startswith "Describe"
-    or EventName startswith "Get"
+| where EventSource in ("iam.amazonaws.com", "s3.amazonaws.com", "secretsmanager.amazonaws.com")
+| where EventName startswith "List" or EventName startswith "Describe" or EventName startswith "Get"
 | summarize
     CallCount = count(),
     EventNames = make_set(EventName, 50),
@@ -28,13 +28,6 @@ AWSCloudTrail
     by UserIdentityArn, bin(TimeGenerated, LookbackWindow)
 | where CallCount >= EnumerationThreshold
 | extend DurationSeconds = datetime_diff('second', LastSeen, FirstSeen)
-| extend AlertTitle = "IAM/S3/SecretsManager enumeration burst — possible post-exploitation discovery"
-| project
-    TimeGenerated,
-    AlertTitle,
-    UserIdentityArn,
-    CallCount,
-    DurationSeconds,
-    Services,
-    EventNames
+| extend AlertTitle = "IAM/S3/Secrets Manager enumeration burst - possible post-exploitation discovery"
+| project TimeGenerated, AlertTitle, UserIdentityArn, CallCount, DurationSeconds, Services, EventNames
 | order by CallCount desc

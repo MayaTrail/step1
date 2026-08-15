@@ -1,4 +1,5 @@
-// SCARLETEEL Phase 1 — T1190: Exploit Public-Facing Application
+// FILE: kql_t1190.kql
+// SCARLETEEL Phase 1 - T1190: Exploit Public-Facing Application
 // Detects GetCallerIdentity from an EC2 instance role arriving from a non-RFC-1918
 // source IP, which indicates IMDSv1 credentials were stolen and used externally.
 //

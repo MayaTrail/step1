@@ -1,0 +1,28 @@
+// FILE: kql_t1552.001.kql
+// SCARLETEEL - Terraform State File Read From a Non-Pipeline Principal (T1552.001)
+// Detects an S3 GetObject on a *.tfstate object by a principal that is not the
+// Terraform/CI-CD pipeline. Terraform state is plaintext and often carries
+// long-lived IAM keys - reading it is how SCARLETEEL pivoted into a second AWS
+// account. GetObject is an S3 DATA event, so this returns results only where
+// CloudTrail S3 data events are enabled on the state bucket.
+//
+// NOTE: the MayaTrail emulation lists the target bucket but does not read the
+// state object, so this rule is for the real campaign and will not fire on an
+// emulation run - pair it with the ListObjectsV2 management-event signal.
+//
+// Reference: https://attack.mitre.org/techniques/T1552/001/
+
+AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "s3.amazonaws.com"
+| where EventName == "GetObject"
+| extend ObjectKey = tostring(parse_json(RequestParameters).key)
+| extend BucketName = tostring(parse_json(RequestParameters).bucketName)
+| where ObjectKey endswith ".tfstate"
+// Exclude the sanctioned pipeline principal - replace with your Terraform runner role
+| where UserIdentityArn !contains "TerraformPipelineRole"
+| project
+    TimeGenerated, EventName, BucketName, ObjectKey, UserIdentityArn,
+    UserIdentityType, SourceIpAddress, AWSRegion
+| extend AlertTitle = "Terraform state file read by a non-pipeline principal - possible secret exfiltration"
+| order by TimeGenerated desc

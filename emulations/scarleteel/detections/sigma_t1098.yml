@@ -1,34 +1,45 @@
-title: SCARLETEEL Phase 6 — Lambda Function Created with Privileged IAM Role
-id: f6a7b8c9-6666-4fff-b666-666666666666
+# FILE: sigma_t1098.yml
+title: SCARLETEEL - Lambda Backdoor Created Outside a Deployment Pipeline
+id: 00542293-7843-4299-bfd5-824152167ad4
 status: experimental
 description: |
-  Detects a Lambda function being created with an IAM execution role that has
-  broad permissions, which is the persistence mechanism used in SCARLETEEL to
-  maintain backdoor access after the container is terminated.  The combination
-  of lambda:CreateFunction and attaching a privileged role is a strong signal
-  when it occurs outside of known deployment pipelines.
+  Detects lambda:CreateFunction originating from a principal that is not a known
+  deployment pipeline. SCARLETEEL creates a Lambda function attached to an
+  over-privileged execution role to hold persistent access that survives container
+  restarts and cluster remediation. The MayaTrail emulation creates
+  'mayatrail-scarleteel-backdoor' with the stolen instance-role session via boto3
+  (so the user-agent is Botocore, not an IaC tool). The CloudTrail eventName is
+  CreateFunction20150331 - the API version is part of the event name, and matching
+  on 'CreateFunction' alone returns nothing.
 references:
   - https://sysdig.com/blog/cloud-breach-terraform-data-theft/
+  - https://sysdig.com/blog/scarleteel-2-0/
   - https://attack.mitre.org/techniques/T1098/
-author: MayaTrail Security Research
+  - https://attack.mitre.org/techniques/T1648/
+author: MayaTrail
 date: 2024/01/01
+modified: 2026/08/15
 tags:
   - attack.persistence
   - attack.t1098
+  - attack.execution
+  - attack.t1648
 logsource:
   product: aws
   service: cloudtrail
 detection:
   selection:
-    eventSource: lambda.amazonaws.com
-    eventName: CreateFunction20150331
+    eventSource: 'lambda.amazonaws.com'
+    eventName: 'CreateFunction20150331'
   filter_known_pipelines:
     userAgent|contains:
-      - 'aws-cli'
       - 'Terraform'
       - 'CloudFormation'
+      - 'aws-cdk'
+      - 'pulumi'
+      - 'Serverless'
   condition: selection and not filter_known_pipelines
 falsepositives:
-  - Legitimate serverless deployments via unknown deployment tools
-  - Developer-initiated Lambda creation from the AWS console
+  - Serverless deployments via an IaC tool whose user-agent is not in the filter - add it
+  - Developer-initiated Lambda creation from the AWS console - scope by allowlisting your CI/CD principal instead of, or in addition to, user-agent
 level: medium

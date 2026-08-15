@@ -29,15 +29,27 @@ export function EmulationDetailPage() {
   const pid = platformId as PlatformId
   const meta = getPlatformMeta(pid)
   const { data: emulations, loading } = useEmulations(pid)
-  const [searchParams] = useSearchParams()
-  // Seed the initial tab from a `?tab=` deep link (e.g. Results "Open Live"
-  // navigates here with ?tab=live). Falls back to Overview for absent/unknown
-  // values so a stray param can never render a blank page.
-  const initialTab = searchParams.get('tab')
-  const [activeTab, setActiveTab] = useState<DetailTab>(
-    initialTab && initialTab in TAB_LABELS ? (initialTab as DetailTab) : 'overview',
-  )
+  const [searchParams, setSearchParams] = useSearchParams()
+  // The `?tab=` param is the source of truth rather than component state, so a
+  // reload or a shared link lands on the tab the user was actually looking at.
+  // Falls back to Overview for absent/unknown values so a stray param can never
+  // render a blank page.
+  const tabParam = searchParams.get('tab')
+  const activeTab: DetailTab =
+    tabParam && tabParam in TAB_LABELS ? (tabParam as DetailTab) : 'overview'
+
+  // Tabs replace the history entry instead of pushing one, so Back leaves the
+  // page rather than stepping through every tab the user tried.
+  const setActiveTab = (tab: DetailTab) => {
+    const next = new URLSearchParams(searchParams)
+    next.set('tab', tab)
+    setSearchParams(next, { replace: true })
+  }
+
   const [showRunModal, setShowRunModal] = useState(false)
+  // Bumped whenever a run is triggered or the run modal closes, so the live tab
+  // refetches instead of showing whatever it loaded when it first mounted.
+  const [runNonce, setRunNonce] = useState(0)
 
   const platformLabel = meta?.label ?? platformId?.toUpperCase() ?? ''
   const em = emulations?.find((e) => e.id === emulationId)
@@ -81,7 +93,14 @@ export function EmulationDetailPage() {
         <RunEmulationModal
           emulationId={em.id}
           emulationName={em.name}
-          onClose={() => setShowRunModal(false)}
+          onRunStarted={() => {
+            setRunNonce((n) => n + 1)
+            setActiveTab('live')
+          }}
+          onClose={() => {
+            setShowRunModal(false)
+            setRunNonce((n) => n + 1)
+          }}
         />
       )}
 
@@ -113,7 +132,9 @@ export function EmulationDetailPage() {
           playbookHref={`/${pid}/emulations/${em.id}/playbook`}
         />
       )}
-      {activeTab === 'live' && <LiveEmulationTab emulation={em} onRun={() => setShowRunModal(true)} />}
+      {activeTab === 'live' && (
+        <LiveEmulationTab emulation={em} onRun={() => setShowRunModal(true)} refreshKey={runNonce} />
+      )}
       {activeTab === 'path' && <AttackPathTab emulation={em} />}
       {activeTab === 'mitre' && <MitreMappingTab emulation={em} platformLabel={platformLabel} />}
       {activeTab === 'explain' && <ExplainPanel emulation={em} />}

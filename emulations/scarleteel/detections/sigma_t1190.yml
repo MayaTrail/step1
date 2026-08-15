@@ -1,5 +1,6 @@
-title: SCARLETEEL Phase 1 — GetCallerIdentity from EC2 Instance Role After Container RCE
-id: a1b2c3d4-1111-4aaa-b111-111111111111
+# FILE: sigma_t1190.yml
+title: SCARLETEEL Phase 1 - GetCallerIdentity from EC2 Instance Role After Container RCE
+id: 3d50109f-e3e2-4161-97ef-59c2c91cc9c7
 status: experimental
 description: |
   Detects an attacker verifying their foothold after container RCE by calling
@@ -10,7 +11,7 @@ description: |
 references:
   - https://sysdig.com/blog/cloud-breach-terraform-data-theft/
   - https://attack.mitre.org/techniques/T1190/
-author: MayaTrail Security Research
+author: MayaTrail
 date: 2024/01/01
 tags:
   - attack.initial_access

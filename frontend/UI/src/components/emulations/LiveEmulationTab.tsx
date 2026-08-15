@@ -39,7 +39,16 @@ type PhaseState = 'done' | 'active' | 'pending' | 'failed'
  * worker reports progress, and selecting one shows the techniques plus the AWS
  * services that phase touches (with service metadata from the catalogue).
  */
-export function LiveEmulationTab({ emulation, onRun }: { emulation: Emulation; onRun: () => void }) {
+export function LiveEmulationTab({
+  emulation,
+  onRun,
+  refreshKey = 0,
+}: {
+  emulation: Emulation
+  onRun: () => void
+  /** Changes when a run is triggered elsewhere, forcing this view to refetch. */
+  refreshKey?: number
+}) {
   const [run, setRun] = useState<EmulationRunRecord | null>(null)
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<number | null>(null)
@@ -84,7 +93,7 @@ export function LiveEmulationTab({ emulation, onRun }: { emulation: Emulation; o
       cancelled = true
       controller.abort()
     }
-  }, [emulation.id])
+  }, [emulation.id, refreshKey])
 
   // Detection rules are static per emulation, so they load once rather than on
   // every poll. Keyed by normalised technique id so a phase's technique can be

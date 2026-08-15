@@ -1,18 +1,24 @@
-title: SCARLETEEL Phase 2 — IMDSv1 Credential Theft via EC2 Instance Role Anomaly
-id: b2c3d4e5-2222-4bbb-b222-222222222222
+# FILE: sigma_t1552.005.yml
+title: SCARLETEEL - EC2 Instance-Role Credentials Used From Outside the VPC
+id: a1b5366b-9d85-4aeb-868a-6e89df5c77ad
 status: experimental
 description: |
-  Detects the downstream signal of IMDSv1 credential theft: an EC2 instance role
-  making API calls from an IP address that is not associated with any EC2 instance
-  in the account.  CloudTrail does not log IMDS requests directly, but the stolen
-  credentials leaving the instance are observable as API calls from an unexpected
-  source IP or user-agent.
+  Highest-fidelity signal for IMDS credential theft. CloudTrail does not log the
+  IMDS request itself, but once the stolen instance-role credentials are replayed
+  from an attacker-controlled host they appear as API calls whose principal is an
+  assumed-role session named after the instance (session name = i-xxxx) with a
+  sourceIPAddress that is not inside the workload's VPC. This is exactly what the
+  MayaTrail emulation produces: after the IMDSv1 theft it drives boto3 from
+  off-instance, so GetCallerIdentity / ListBuckets / ListSecrets all arrive from
+  an external IP under an i-xxxx session.
 references:
   - https://sysdig.com/blog/cloud-breach-terraform-data-theft/
+  - https://sysdig.com/blog/scarleteel-2-0/
   - https://attack.mitre.org/techniques/T1552/005/
   - https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html
-author: MayaTrail Security Research
+author: MayaTrail
 date: 2024/01/01
+modified: 2026/08/15
 tags:
   - attack.credential_access
   - attack.t1552.005
@@ -20,20 +26,38 @@ logsource:
   product: aws
   service: cloudtrail
 detection:
+  # Assumed-role sessions whose session name is an instance ID:
+  #   arn:aws:sts::ACCOUNT:assumed-role/ROLE_NAME/i-0123456789abcdef0
   selection:
-    userIdentity.type: AssumedRole
-    # EC2 instance roles have ARNs of the form:
-    # arn:aws:sts::ACCOUNT:assumed-role/ROLE_NAME/i-INSTANCE_ID
+    userIdentity.type: 'AssumedRole'
     userIdentity.arn|contains: '/i-'
-  filter_ec2_service:
+  # Exclude AWS service-to-service calls and RFC1918 source ranges. In your
+  # environment, replace this with an explicit exclusion of the workload VPC CIDR
+  # plus any NAT gateway / Elastic IP egress addresses for the tightest signal.
+  filter_aws_service:
     sourceIPAddress|endswith: '.amazonaws.com'
-  filter_internal:
+  filter_rfc1918:
     sourceIPAddress|startswith:
       - '10.'
-      - '172.16.'
       - '192.168.'
-  condition: selection and not filter_ec2_service and not filter_internal
+      - '172.16.'
+      - '172.17.'
+      - '172.18.'
+      - '172.19.'
+      - '172.20.'
+      - '172.21.'
+      - '172.22.'
+      - '172.23.'
+      - '172.24.'
+      - '172.25.'
+      - '172.26.'
+      - '172.27.'
+      - '172.28.'
+      - '172.29.'
+      - '172.30.'
+      - '172.31.'
+  condition: selection and not filter_aws_service and not filter_rfc1918
 falsepositives:
-  - EC2 instances with Elastic IPs that appear as external source IPs
-  - NAT gateway egress that appears as a non-private IP
+  - Instances behind an Elastic IP or NAT gateway whose egress appears as a public IP - exclude those addresses explicitly
+  - Legitimate automation that deliberately exports instance-role credentials off-box (rare; should be redesigned to use its own principal)
 level: high

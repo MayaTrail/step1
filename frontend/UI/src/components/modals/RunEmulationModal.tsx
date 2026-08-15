@@ -29,6 +29,8 @@ import { getStack, listStacks } from '@/services/stack.service'
 interface RunEmulationModalProps {
   emulationId: string
   emulationName: string
+  /** Fired once the attack task is accepted, so the page can show the live view. */
+  onRunStarted?: () => void
   onClose: () => void
 }
 
@@ -65,7 +67,12 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 /* ── Component ── */
-export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEmulationModalProps) {
+export function RunEmulationModal({
+  emulationId,
+  emulationName,
+  onRunStarted,
+  onClose,
+}: RunEmulationModalProps) {
   const [phase, setPhase] = useState<ModalPhase>('form')
   // Form sub-mode: deploy a brand-new stack, or run against an existing ready one.
   const [formMode, setFormMode] = useState<'new' | 'existing'>('new')
@@ -306,6 +313,9 @@ export function RunEmulationModal({ emulationId, emulationName, onClose }: RunEm
 
     try {
       const { runId } = await triggerEmulationAttack(targetStackId)
+      // The run record exists from here on, so the live view can pick it up
+      // while the attack is still executing.
+      onRunStarted?.()
 
       const controller = new AbortController()
       abortRef.current = controller
