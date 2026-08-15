@@ -16,16 +16,12 @@ would otherwise make the response roughly three times its size; the detail
 endpoint serves the document for the one policy a reader opened.
 """
 
-import logging
-
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .registry import get_guardrail, list_guardrails
-
-logger = logging.getLogger(__name__)
 
 # Catalogue keys the list response carries. "code" and "file" are detail-only.
 _SUMMARY_FIELDS = ("id", "type", "purpose", "services", "source")

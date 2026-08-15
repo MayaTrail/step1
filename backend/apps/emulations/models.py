@@ -88,6 +88,15 @@ class EmulationRun(models.Model):
         blank=True,
         help_text="UTC timestamp when the run reached a terminal status.",
     )
+    detection_check = models.JSONField(
+        null=True,
+        blank=True,
+        help_text=(
+            "Detection coverage report for this run: per-rule verdict, counts and "
+            "evidence, written by check_detection_coverage after the attack "
+            "finishes. Null until the check runs, or when no archive is configured."
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

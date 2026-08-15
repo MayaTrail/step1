@@ -405,6 +405,51 @@ export interface StackProgress {
 
 export type EmulationRunStatus = 'pending' | 'running' | 'completed' | 'failed'
 
+/**
+ * How a detection rule fared against the logs archived for a run.
+ *
+ * `silent` and `no_logs` are deliberately distinct. A silent rule had telemetry
+ * to work with and did not match, which is a finding about the rule or the
+ * attack. A `no_logs` rule never saw its event source at all, so it was never
+ * exercised and the fix belongs in the log pipeline.
+ */
+export type DetectionVerdict = 'fired' | 'silent' | 'no_logs'
+
+/** The first matching event, shown only under a rule that fired. */
+export interface DetectionEvidence {
+  eventTime: string | null
+  eventName: string | null
+  eventSource: string | null
+  sourceIPAddress: string | null
+  /** Who triggered it, so an operator's own session is not read as the attack. */
+  actor: string
+  isEmulation: boolean
+}
+
+export interface DetectionRuleOutcome {
+  ruleId: string
+  title: string
+  severity: string
+  verdict: DetectionVerdict
+  matchCount: number
+  /** AWS event sources the rule needs; empty when it declares none. */
+  requiredSources: string[]
+  evidence: DetectionEvidence | null
+  technique: { id?: string; name?: string; tactic?: string }
+}
+
+export interface DetectionCheck {
+  status: 'ok' | 'not_configured' | 'unknown_emulation' | 'error'
+  detail?: string
+  window?: { start?: string; end?: string }
+  eventCount?: number
+  /** Event sources the archive actually carried for this window. */
+  coveredSources?: string[]
+  ruleCount?: number
+  counts?: Record<DetectionVerdict, number>
+  rules?: DetectionRuleOutcome[]
+}
+
 export interface EmulationRunRecord {
   id: string
   stack: string
@@ -417,6 +462,8 @@ export interface EmulationRunRecord {
   stderr: string
   triggered_by: string
   triggered_by_email: string | null
+  /** Null until the coverage check runs, about a minute after the attack ends. */
+  detection_check: DetectionCheck | null
   started_at: string | null
   completed_at: string | null
   created_at: string

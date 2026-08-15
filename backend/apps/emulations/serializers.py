@@ -43,6 +43,7 @@ class EmulationRunSerializer(serializers.ModelSerializer):
             "stderr",
             "triggered_by",
             "triggered_by_email",
+            "detection_check",
             "started_at",
             "completed_at",
             "created_at",
