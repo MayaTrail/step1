@@ -124,7 +124,9 @@ class ThreatCoverageTests(SimpleTestCase):
         payload = aggregations.threat_coverage()
         rows = {r["id"]: r for r in payload["actors"]}
         self.assertIn("scarleteel", rows)
-        self.assertEqual(rows["scarleteel"]["techniqueCount"], 8)
+        # 8 mitre_mappings entries collapse to 7 distinct parent techniques:
+        # T1552.005 and T1552.001 both normalise to T1552.
+        self.assertEqual(rows["scarleteel"]["techniqueCount"], 7)
 
     def test_rows_sorted_by_coverage_descending(self):
         rows = aggregations.threat_coverage()["actors"]
@@ -142,12 +144,14 @@ class ThreatCoverageTests(SimpleTestCase):
             self.assertEqual(cbc["emulations"]["covered"], cbc["emulations"]["total"])
 
     def test_scarleteel_content_backing_matches_artifacts(self):
-        """scarleteel: 8 techniques, detections back 6, the playbook references 4."""
+        """scarleteel: 7 techniques, detections back 6, the playbook references 7."""
         rows = {r["id"]: r for r in aggregations.threat_coverage()["actors"]}
         cbc = rows["scarleteel"]["coverageByContent"]
-        self.assertEqual(cbc["emulations"], {"covered": 8, "total": 8, "pct": 100.0})
+        self.assertEqual(cbc["emulations"], {"covered": 7, "total": 7, "pct": 100.0})
+        # T1580 is the one technique with no rule of its own; the enumeration it
+        # describes is covered by the T1087.004 rule, which groups under T1087.
         self.assertEqual(cbc["detections"]["covered"], 6)
-        self.assertEqual(cbc["playbooks"]["covered"], 4)
+        self.assertEqual(cbc["playbooks"]["covered"], 7)
 
 
 class PlatformCoverageTests(SimpleTestCase):
