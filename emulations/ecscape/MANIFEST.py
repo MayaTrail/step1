@@ -20,7 +20,7 @@ MANIFEST = {
     "tier": "enterprise",
     "platform": "aws",
     "added": "2026-08",
-    "services": ["Amazon ECS", "EC2", "AWS IAM", "AWS STS", "Secrets Manager"],
+    "services": ["ECS", "EC2", "IAM", "STS", "Secrets Manager"],
     "readiness": {"type": "none"},
     "origin": "research-poc",
     "origin_label": "RESEARCH POC",

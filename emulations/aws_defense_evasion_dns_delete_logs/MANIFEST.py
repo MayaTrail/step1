@@ -17,7 +17,7 @@ MANIFEST = {
     'tier': 'atomic',
     'platform': 'aws',
     'added': '2026-08',
-    'services': ['Route 53 Resolver', 'VPC'],
+    'services': ['Route53', 'VPC'],
     'readiness': {'type': 'none'},
     'origin': 'stratus-red-team',
     'origin_label': 'ATOMIC TECHNIQUE',

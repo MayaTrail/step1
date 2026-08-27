@@ -203,7 +203,7 @@ def read_attacker_result(logs, log_group: str, container: str, task_arn: str) ->
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────
-def run(outputs: dict, region: str) -> dict:
+def run(outputs: dict, region: str = "us-east-1") -> dict:
     region = region or outputs.get("region") or "us-east-1"
     cluster = outputs.get("cluster_name")
     if not cluster:
