@@ -137,7 +137,9 @@ def _gen_db_password() -> str:
 
 
 class _Pw:
-    """Minimal shim so downstream `db_password.result` keeps working."""
+    """Shim replacing pulumi_random.RandomPassword (that provider is not in the
+    backend worker image). Exposes `.result` so the call site below is unchanged;
+    evaluated once at class-definition time."""
     result = _gen_db_password()
 
 

@@ -1,0 +1,45 @@
+# Exfiltrate RDS Snapshot by Sharing (T1537)
+#
+# rds:ModifyDBSnapshotAttribute with AttributeName "restore" and an account ID
+# in valuesToAdd grants that account permission to restore the snapshot — a full
+# copy of the database. CloudTrail records the added account IDs in
+# requestParameters.valuesToAdd. Sharing to "all" (public) is the most severe
+# variant. Legitimate sharing is rare and confined to DR partners, so scope the
+# allowlist to those known account IDs.
+title: RDS DB snapshot shared with an external account
+id: 6a1f4c8e-2d7b-4a19-9f3c-8e5b1d0a7c42
+status: experimental
+description: >-
+  Detects rds:ModifyDBSnapshotAttribute granting the "restore" permission on a
+  DB snapshot to an AWS account ID (or to "all"). An attacker who can share a
+  snapshot can restore the database in an account they control and read every
+  row, bypassing every network and IAM control on the source instance.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.exfiltration.rds-share-snapshot/
+  - https://attack.mitre.org/techniques/T1537/
+tags:
+  - attack.exfiltration
+  - attack.t1537
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'rds.amazonaws.com'
+    eventName: 'ModifyDBSnapshotAttribute'
+    requestParameters|contains: '"attributeName":"restore"'
+  shared_add:
+    requestParameters|contains:
+      - '"valuesToAdd":['
+      - '"valuesToAdd": ['
+  # REPLACE with the account IDs your org legitimately shares snapshots with
+  # (DR / partner accounts). The placeholder matches nothing, so until edited
+  # this rule fires on every share.
+  known_partners:
+    requestParameters|contains:
+      - '000000000000'
+  condition: selection and shared_add and not known_partners
+falsepositives:
+  - Disaster-recovery pipelines that copy snapshots to a partner or backup account.
+  - Cross-account database refresh for staging environments.
+level: high

@@ -1,0 +1,32 @@
+// Remove VPC Flow Logs (T1562.008)
+//
+// ec2:DeleteFlowLogs is rare and high-signal. Alert on any occurrence outside
+// your IaC destroy pipeline. Correlating a DeleteFlowLogs with other activity
+// from the same principal in the surrounding hour usually surfaces what the
+// attacker wanted hidden.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL.
+let IaCDestroyRoles = dynamic(["REPLACE-ME-iac-destroy"]);
+let Deletions =
+    AWSCloudTrail
+    | where TimeGenerated > ago(7d)
+    | where EventSource == "ec2.amazonaws.com"
+    | where EventName == "DeleteFlowLogs"
+    | where isempty(ErrorCode)
+    | where not(UserIdentityArn has_any (IaCDestroyRoles))
+    | extend Req = parse_json(RequestParameters)
+    | extend DeletedIds = tostring(Req.DeleteFlowLogsRequest.FlowLogId)
+    | project DeleteTime = TimeGenerated, PrincipalArn = UserIdentityArn,
+              SourceIp = SourceIpAddress, AWSRegion, DeletedIds, UserAgent;
+Deletions
+| join kind=leftouter (
+    AWSCloudTrail
+    | where TimeGenerated > ago(7d)
+    | project ActTime = TimeGenerated, PrincipalArn = UserIdentityArn,
+              ActEvent = EventName, ActSource = EventSource
+  ) on PrincipalArn
+| where ActTime between ((DeleteTime - 1h) .. (DeleteTime + 1h))
+| summarize SurroundingActivity = make_set(strcat(ActSource, ":", ActEvent), 25),
+            ActivityCount = count()
+        by DeleteTime, PrincipalArn, SourceIp, AWSRegion, DeletedIds
+| order by DeleteTime desc

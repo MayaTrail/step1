@@ -1,0 +1,40 @@
+# Delete Route53 Resolver Query Log Config (T1562.008)
+#
+# route53resolver:DeleteResolverQueryLogConfig removes a DNS query logging
+# configuration. CloudTrail records the config id in
+# requestParameters.resolverQueryLogConfigId. Like flow-log deletion this is a
+# rare, near-zero-false-positive event outside IaC teardown. A
+# DisassociateResolverQueryLogConfig (detaching the config from a VPC) achieves
+# the same blind spot without deleting the config — include it.
+title: Route53 Resolver query logging deleted or detached
+id: 8d1b6e04-4f27-49a3-b5c8-2a7e0c9f4d15
+status: experimental
+description: >-
+  Detects deletion or VPC-disassociation of a Route53 Resolver query log
+  configuration. Removing DNS query logging blinds detection of DNS-tunnelled
+  C2 and exfiltration and of lookups to known-bad domains.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.dns-delete-logs/
+  - https://attack.mitre.org/techniques/T1562/008/
+tags:
+  - attack.defense_evasion
+  - attack.t1562.008
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53resolver.amazonaws.com'
+    eventName:
+      - 'DeleteResolverQueryLogConfig'
+      - 'DisassociateResolverQueryLogConfig'
+  # REPLACE with the roles in YOUR account that legitimately tear down resolver
+  # logging (IaC destroy pipelines). The placeholder matches nothing.
+  iac_teardown:
+    userIdentity.arn|contains:
+      - ':role/REPLACE-ME-iac-destroy'
+  condition: selection and not iac_teardown
+falsepositives:
+  - Infrastructure-as-code pipelines destroying a VPC and its resolver logging.
+  - Consolidating multiple resolver log configs into one (change-managed).
+level: high
