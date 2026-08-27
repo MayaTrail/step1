@@ -1,0 +1,29 @@
+{
+  "campaign": "ATOMIC-codepipeline-inject-stage",
+  "csp": "aws",
+  "resources": {
+    "codecommit_repo_name":         "prod-build-service",
+    "canary_secret_name":           "prod/database/master_credentials",
+    "pipeline_service_role_name":   "codepipeline-inject-stage-pipeline-svc-role",
+    "build_service_role_name":      "codepipeline-inject-stage-build-svc-role",
+    "victim_role_name":             "codepipeline-inject-stage-victim-role",
+    "victim_user_name":             "codepipeline-inject-stage-victim-user",
+    "build_project_name":           "atomic-codepipeline-inject-stage-build",
+    "pipeline_name":                "atomic-codepipeline-inject-stage-prod-deploy"
+  },
+  "pulumi_export_keys": {
+    "artifact_bucket_name":           "artifact_bucket_name",
+    "codecommit_repo_name":           "codecommit_repo_name",
+    "codecommit_repo_clone_url_http": "codecommit_repo_clone_url_http",
+    "canary_secret_arn":              "canary_secret_arn",
+    "pipeline_service_role_arn":      "pipeline_service_role_arn",
+    "build_service_role_arn":         "build_service_role_arn",
+    "victim_role_arn":                "victim_role_arn",
+    "victim_role_name":               "victim_role_name",
+    "build_project_name":             "build_project_name",
+    "pipeline_arn":                   "pipeline_arn",
+    "pipeline_name":                  "pipeline_name",
+    "victim_access_key_id":           "victim_access_key_id",
+    "victim_secret_access_key":       "victim_secret_access_key"
+  }
+}

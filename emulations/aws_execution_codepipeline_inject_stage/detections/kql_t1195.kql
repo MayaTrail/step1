@@ -1,0 +1,261 @@
+// T1195 - Supply Chain Compromise: IAM User Assumes CICD Service Account Role
+// Detects an IAM user assuming a role whose ARN contains CICD naming patterns, excluding
+// known IaC tooling. Attackers with compromised static IAM user keys call AssumeRole as the
+// first step to obtain a short-lived CICD session scoped to pipeline write permissions.
+// The roleSessionName field (e.g. 'AtomicT1195') is projected for triage.
+// Table: AWSCloudTrail (Microsoft Sentinel)
+AWSCloudTrail
+| where EventSource == "sts.amazonaws.com"
+| where EventName == "AssumeRole"
+| where UserIdentityType == "IAMUser"
+| extend RequestedRoleArn = tostring(parse_json(RequestParameters).roleArn)
+| extend SessionName = tostring(parse_json(RequestParameters).roleSessionName)
+// Flag CICD-pattern role ARNs or suspicious session names
+| where (
+    RequestedRoleArn contains "codepipeline"
+    or RequestedRoleArn contains "cicd"
+    or RequestedRoleArn contains "pipeline-service"
+    or RequestedRoleArn contains "deploy-role"
+    or RequestedRoleArn contains "pipeline-svc"
+    or SessionName contains "Atomic"
+    or SessionName contains "attack"
+    or SessionName contains "backdoor"
+    or SessionName contains "redteam"
+    or SessionName contains "pentest"
+)
+// Exclude known IaC automation identities
+| where UserIdentityArn !contains "terraform"
+| where UserIdentityArn !contains "github-actions"
+| where UserIdentityArn !contains "atlantis"
+| where UserIdentityArn !contains "cdk"
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    RequestedRoleArn,
+    SessionName,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RecipientAccountId
+| sort by TimeGenerated desc
+
+// ======================================================================
+
+// T1195 - Supply Chain Compromise: Full Attack Chain Correlation
+// Correlates AssumeRole -> GetPipeline -> UpdatePipeline (inject) -> UpdatePipeline (restore)
+// within a 2-hour window. The double-UpdatePipeline pair from one session within minutes is the
+// strongest IOC: inject adds a stage (version N -> N+1), restore removes it (N+1 -> N+2).
+// Both share the same userIdentity.arn (assumed-role session ARN).
+//
+// JOIN FIX: the session ARN for an assumed-role is:
+//   arn:aws:sts::{account}:assumed-role/{role_name}/{session_name}
+// We derive this from the AssumeRole request parameters and join on it exactly, avoiding the
+// cartesian fan-out that a RecipientAccountId-only join produces.
+//
+// Table: AWSCloudTrail (Microsoft Sentinel)
+let LookbackHours = 2h;
+// Step 1: Find suspicious AssumeRole events - IAM users assuming CICD-patterned roles
+let CICDAssumedSessions =
+    AWSCloudTrail
+    | where TimeGenerated > ago(LookbackHours)
+    | where EventSource == "sts.amazonaws.com"
+    | where EventName == "AssumeRole"
+    | where UserIdentityType == "IAMUser"
+    | extend AssumedRoleArn = tostring(parse_json(RequestParameters).roleArn)
+    | extend SessionName = tostring(parse_json(RequestParameters).roleSessionName)
+    | where (
+        AssumedRoleArn contains "codepipeline"
+        or AssumedRoleArn contains "cicd"
+        or AssumedRoleArn contains "pipeline-service"
+        or AssumedRoleArn contains "deploy-role"
+        or AssumedRoleArn contains "pipeline-svc"
+        or SessionName contains "Atomic"
+        or SessionName contains "attack"
+        or SessionName contains "redteam"
+    )
+    | where UserIdentityArn !contains "terraform"
+    | where UserIdentityArn !contains "github-actions"
+    | where UserIdentityArn !contains "atlantis"
+    | where UserIdentityArn !contains "cdk"
+    // Derive the session ARN that will appear in subsequent CloudTrail events
+    // Format: arn:aws:sts::{account}:assumed-role/{role_name_only}/{session_name}
+    | extend RoleNameOnly = tostring(split(AssumedRoleArn, "/")[-1])
+    | extend DerivedSessionArn = strcat(
+        "arn:aws:sts::", RecipientAccountId,
+        ":assumed-role/", RoleNameOnly,
+        "/", SessionName)
+    | project
+        AssumeTime = TimeGenerated,
+        CallerArn = UserIdentityArn,
+        AssumedRoleArn,
+        SessionName,
+        DerivedSessionArn,
+        AssumeSourceIp = SourceIpAddress,
+        RecipientAccountId;
+// Step 2: Find GetPipeline and UpdatePipeline events from assumed-role sessions
+let PipelineEvents =
+    AWSCloudTrail
+    | where TimeGenerated > ago(LookbackHours)
+    | where EventSource == "codepipeline.amazonaws.com"
+    | where EventName in ("GetPipeline", "UpdatePipeline")
+    | where UserIdentityType == "AssumedRole"
+    | extend IssuerName = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.userName)
+    | extend PipelineName = tostring(coalesce(
+        parse_json(RequestParameters).name,
+        parse_json(RequestParameters).pipeline.name))
+    | where IssuerName !contains "terraform"
+    | where IssuerName !contains "github-actions"
+    | where IssuerName !contains "atlantis"
+    | where IssuerName !contains "cdk"
+    | where IssuerName !contains "selfmutate"
+    | project
+        EventTime = TimeGenerated,
+        EventName,
+        SessionArn = UserIdentityArn,
+        IssuerName,
+        PipelineName,
+        SourceIpAddress,
+        AWSRegion,
+        RecipientAccountId;
+// Step 3: Aggregate pipeline events per session ARN; flag inject+restore pairs
+let SessionSummary =
+    PipelineEvents
+    | summarize
+        GetPipelineCount = countif(EventName == "GetPipeline"),
+        UpdatePipelineCount = countif(EventName == "UpdatePipeline"),
+        FirstEvent = min(EventTime),
+        LastEvent = max(EventTime),
+        PipelineNames = make_set(PipelineName),
+        SourceIPs = make_set(SourceIpAddress)
+        by SessionArn, IssuerName, AWSRegion, RecipientAccountId
+    // At minimum one GetPipeline (recon) and one UpdatePipeline (injection)
+    | where GetPipelineCount >= 1 and UpdatePipelineCount >= 1
+    | extend ChainDurationMinutes = datetime_diff("minute", LastEvent, FirstEvent)
+    | extend IsInjectRestorePair = UpdatePipelineCount >= 2;
+// Step 4: Join session summary to originating AssumeRole event on derived session ARN
+// This is a precise join: DerivedSessionArn matches the assumed-role ARN in CloudTrail exactly,
+// preventing the cartesian fan-out that a RecipientAccountId-only join produces.
+SessionSummary
+| join kind=leftouter (CICDAssumedSessions)
+    on $left.SessionArn == $right.DerivedSessionArn
+| project
+    FirstEvent,
+    LastEvent,
+    ChainDurationMinutes,
+    SessionArn,
+    IssuerName,
+    CallerArn,
+    SessionName,
+    PipelineNames,
+    GetPipelineCount,
+    UpdatePipelineCount,
+    IsInjectRestorePair,
+    SourceIPs,
+    AssumeSourceIp,
+    AWSRegion,
+    RecipientAccountId
+| sort by FirstEvent desc
+
+// ======================================================================
+
+// T1195 - Supply Chain Compromise: GetPipeline Recon from Assumed CICD Role
+// Detects GetPipeline calls issued by an assumed-role session whose issuer matches CICD
+// naming patterns, excluding console sessions and known IaC automation. Attackers read the
+// pipeline definition to capture stage layout, version number, and CodeBuild project names
+// before crafting a tampered UpdatePipeline payload (no CreateProject permission needed when
+// an existing project is reused). Low-severity on its own; correlate with UpdatePipeline or
+// AssumeRole signals using kql_T1195_full_chain.kql for high-confidence triage.
+// Table: AWSCloudTrail (Microsoft Sentinel)
+AWSCloudTrail
+| where EventSource == "codepipeline.amazonaws.com"
+| where EventName == "GetPipeline"
+| where UserIdentityType == "AssumedRole"
+| extend IssuerArn = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.arn)
+| extend IssuerName = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.userName)
+| extend PipelineName = tostring(parse_json(RequestParameters).name)
+| extend SessionName = tostring(split(UserIdentityArn, "/")[-1])
+// Scope to sessions issued by CICD-named roles
+| where (
+    IssuerName contains "codepipeline"
+    or IssuerName contains "cicd"
+    or IssuerName contains "pipeline-service"
+    or IssuerName contains "deploy-role"
+    or IssuerName contains "pipeline-svc"
+    or IssuerName contains "victim"
+)
+// Exclude console sessions and known IaC automation
+| where UserAgent !contains "console.amazonaws.com"
+| where IssuerName !contains "terraform"
+| where IssuerName !contains "github-actions"
+| where IssuerName !contains "atlantis"
+| where IssuerName !contains "cdk"
+| project
+    TimeGenerated,
+    EventName,
+    PipelineName,
+    SessionName,
+    UserIdentityArn,
+    IssuerArn,
+    IssuerName,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RecipientAccountId
+| sort by TimeGenerated desc
+
+// ======================================================================
+
+// T1195 - Supply Chain Compromise: UpdatePipeline Stage Injection via Assumed Role
+// Detects UpdatePipeline calls from assumed-role sessions, excluding known IaC automation.
+// Extracts the post-update stage names from ResponseElements so analysts can identify
+// injected stage names (e.g. 'AttackerStage') inline without pivoting to pipeline console.
+// NOTE: The CodePipeline service does NOT generate UpdatePipeline CloudTrail events internally;
+// these events only appear when a caller (user, automation, attacker) modifies the definition.
+// Table: AWSCloudTrail (Microsoft Sentinel)
+AWSCloudTrail
+| where EventSource == "codepipeline.amazonaws.com"
+| where EventName == "UpdatePipeline"
+| where UserIdentityType == "AssumedRole"
+| extend IssuerArn = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.arn)
+| extend IssuerName = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.userName)
+| extend PipelineName = tostring(parse_json(RequestParameters).pipeline.name)
+| extend SessionName = tostring(split(UserIdentityArn, "/")[-1])
+// Exclude known IaC automation (extend this list with your org's deployer role names)
+| where IssuerName !contains "terraform"
+| where IssuerName !contains "github-actions"
+| where IssuerName !contains "atlantis"
+| where IssuerName !contains "cdk"
+| where IssuerName !contains "selfmutate"
+// Extract stage names from ResponseElements for inline triage
+// ResponseElements.pipeline.stages is an array of {name, actions, ...}
+| extend ResponseJSON = parse_json(ResponseElements)
+| extend PipelineStages = ResponseJSON.pipeline.stages
+// Surface each stage name as a comma-joined string for the project output
+| extend Stage0 = tostring(PipelineStages[0].name)
+| extend Stage1 = tostring(PipelineStages[1].name)
+| extend Stage2 = tostring(PipelineStages[2].name)
+| extend Stage3 = tostring(PipelineStages[3].name)
+| extend StageList = strcat(Stage0,
+    iff(Stage1 != "", strcat(", ", Stage1), ""),
+    iff(Stage2 != "", strcat(", ", Stage2), ""),
+    iff(Stage3 != "", strcat(", ", Stage3), ""))
+// Flag if a suspicious stage name is present in the response
+| extend HasSuspiciousStage = ResponseElements contains "AttackerStage"
+    or ResponseElements contains "Inject"
+    or ResponseElements contains "Backdoor"
+| project
+    TimeGenerated,
+    EventName,
+    PipelineName,
+    StageList,
+    HasSuspiciousStage,
+    SessionName,
+    UserIdentityArn,
+    IssuerArn,
+    IssuerName,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RecipientAccountId
+| sort by TimeGenerated desc

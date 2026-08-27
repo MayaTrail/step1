@@ -1,0 +1,3 @@
+name: mayatrail-atomic-sns-external-subscription
+runtime: python
+description: Atomic emulation - SNS external subscription exfiltration (T1567)

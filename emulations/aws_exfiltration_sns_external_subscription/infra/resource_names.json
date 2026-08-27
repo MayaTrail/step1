@@ -1,0 +1,25 @@
+{
+  "campaign": "ATOMIC_SNS_EXTERNAL_SUBSCRIPTION",
+  "csp": "aws",
+  "resources": {
+    "target_topic_name":  "atomic-sns-ext-sub-topic",
+    "bait_topic_name":    "atomic-sns-ext-sub-bait",
+    "sink_queue_name":    "atomic-sns-ext-sub-sink",
+    "victim_role_name":   "atomic-sns-external-subscription-victim-role",
+    "victim_policy_name": "atomic-sns-ext-sub-victim-policy"
+  },
+  "pulumi_export_keys": {
+    "target_topic_arn":  "target_topic_arn",
+    "bait_topic_arn":    "bait_topic_arn",
+    "sink_queue_url":    "sink_queue_url",
+    "sink_queue_arn":    "sink_queue_arn",
+    "victim_role_arn":   "victim_role_arn",
+    "target_topic_name": "target_topic_name",
+    "bait_topic_name":   "bait_topic_name",
+    "sink_queue_name":   "sink_queue_name",
+    "victim_role_name":  "victim_role_name",
+    "topic_arn":         "topic_arn",
+    "sqs_sink_arn":      "sqs_sink_arn",
+    "sqs_sink_url":      "sqs_sink_url"
+  }
+}

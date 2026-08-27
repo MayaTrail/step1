@@ -1,0 +1,104 @@
+title: ALB Listener Rule Injected Without authenticate-cognito Action
+id: b8e14f30-c672-5f9b-a135-9d2e4b8e3f56
+status: experimental
+description: >
+  Detects CreateRule events on an ELBv2 HTTPS listener where the new rule's
+  actions do NOT include an authenticate-cognito or authenticate-oidc step.
+  Adversaries with IAM write access to elasticloadbalancing:CreateRule can
+  inject a high-priority (low priority number) listener rule that forwards
+  requests matching a magic HTTP header directly to the protected backend,
+  bypassing Cognito authentication for any caller that knows the header value.
+  This is the primary detection signal for T1556 - Modify Authentication
+  Process on AWS ALB. Look especially for priority-1 or priority < 10 rules
+  with http-header conditions and forward-only actions.
+references:
+    - https://attack.mitre.org/techniques/T1556/
+    - https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_CreateRule.html
+    - https://docs.aws.amazon.com/elasticloadbalancing/latest/application/listener-authenticate-users.html
+author: MayaTrail
+date: 2026/08/27
+tags:
+    - attack.defense_evasion
+    - attack.t1556
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_createrule:
+        eventSource: 'elasticloadbalancing.amazonaws.com'
+        eventName: 'CreateRule'
+    filter_auth_action_present:
+        # Rules that DO include authenticate-cognito or authenticate-oidc are
+        # legitimate auth configuration changes, not bypasses.
+        requestParameters|contains:
+            - 'authenticate-cognito'
+            - 'authenticate-oidc'
+    condition: selection_createrule and not filter_auth_action_present
+falsepositives:
+    - Legitimate application traffic-routing rules added by DevOps for A/B testing
+      (e.g., path-pattern or host-header rules forwarding to non-auth endpoints)
+    - ALB rules for health-check paths that intentionally skip authentication
+    - Infrastructure pipelines creating ELB rules as part of a planned deployment
+    - Whitelisting rules for internal VPC-only paths that bypass Cognito by design
+level: high
+fields:
+    - eventName
+    - eventSource
+    - userIdentity.arn
+    - userIdentity.principalId
+    - sourceIPAddress
+    - userAgent
+    - awsRegion
+    - requestParameters
+    - responseElements
+---
+title: ELB Describe API Burst - Pre-Manipulation Reconnaissance
+id: a3f72c18-d591-4e8a-b024-8f1e3c7d2a45
+status: experimental
+description: >
+  Detects a burst of ELB v2 Describe* API calls (DescribeLoadBalancers,
+  DescribeListeners, DescribeTargetGroups, DescribeRules) from a single IAM
+  principal in a short window. Adversaries perform this reconnaissance to
+  enumerate the listener ARN, target group ARN, and existing rule priorities
+  before injecting a backdoor listener rule (T1556 - Modify Authentication
+  Process). A single principal issuing all four Describe calls within minutes
+  is a strong pre-attack indicator.
+references:
+    - https://attack.mitre.org/techniques/T1556/
+    - https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_DescribeRules.html
+author: MayaTrail
+date: 2026/08/27
+tags:
+    - attack.defense_evasion
+    - attack.t1556
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_describe_alb:
+        eventSource: 'elasticloadbalancing.amazonaws.com'
+        eventName|contains:
+            - 'DescribeLoadBalancers'
+            - 'DescribeListeners'
+            - 'DescribeTargetGroups'
+            - 'DescribeRules'
+    filter_legitimate_automation:
+        userIdentity.arn|contains:
+            - 'AWSServiceRoleFor'
+            - 'aws-elasticloadbalancing'
+            - 'AWSLambdaBasicExecutionRole'
+    condition: selection_describe_alb and not filter_legitimate_automation
+falsepositives:
+    - Infrastructure-as-code pipelines (Pulumi, Terraform, CDK) enumerating ELB resources during plan/apply
+    - CloudFormation stack updates touching ALB resources
+    - Monitoring tools polling ELB Describe APIs for health dashboards
+    - AWS Console sessions by administrators performing manual review
+level: low
+fields:
+    - eventName
+    - eventSource
+    - userIdentity.arn
+    - userIdentity.principalId
+    - sourceIPAddress
+    - userAgent
+    - awsRegion

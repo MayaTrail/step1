@@ -1,0 +1,23 @@
+{
+  "campaign": "ATOMIC-rds-modify-public-access",
+  "csp": "aws",
+  "resources": {
+    "db_instance_identifier": "customer-billing",
+    "attacker_role_name": "atomic-rds-modify-public-access-attacker-role",
+    "rds_subnet_group_name": "atomic-rds-modify-public-access-subnet-group",
+    "secret_name": "prod/rds/master_credentials"
+  },
+  "pulumi_export_keys": {
+    "attacker_role_arn": "attacker_role_arn",
+    "db_instance_id": "db_instance_id",
+    "db_endpoint": "db_endpoint",
+    "rds_security_group_id": "rds_security_group_id",
+    "db_instance_identifier": "db_instance_identifier",
+    "attacker_role_name": "attacker_role_name",
+    "rds_subnet_group_name": "rds_subnet_group_name",
+    "secret_name": "secret_name",
+    "db_master_password": "db_master_password",
+    "rds_instance_id": "rds_instance_id",
+    "prod_rds_master_secret_arn": "prod_rds_master_secret_arn"
+  }
+}

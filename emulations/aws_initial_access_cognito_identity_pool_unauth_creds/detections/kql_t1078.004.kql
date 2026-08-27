@@ -1,0 +1,395 @@
+// FILE: kql_T1078.004_cognito_anon_getcreds.kql
+// Anonymous GetCredentialsForIdentity - Unauthenticated Temporary AWS Credential Issuance
+// T1078.004 | Tactic: Credential Access
+//
+// Detects GetCredentialsForIdentity calls to a Cognito Identity Pool issued without
+// SigV4 signing. A successful response delivers temporary STS credentials scoped to
+// the pool's unauthenticated IAM role -- privilege escalation from zero credentials
+// to AWS API access. This is the moment of credential theft in T1078.004 Cognito abuse.
+//
+// CloudTrail principal for unsigned calls: UserIdentityType = "Unknown", UserIdentityArn empty.
+//
+// Pair with: kql_T1078.004_cognito_anon_getid.kql (same session, seconds earlier)
+//            kql_T1078.004_s3_unauth_cognito_access.kql (downstream collection)
+//            kql_T1078.004_correlation_cognito_unauth_chain.kql (full chain join)
+//
+// False positives: legitimate guest user flows, SDK integration tests.
+
+AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource =~ "cognito-identity.amazonaws.com"
+| where EventName =~ "GetCredentialsForIdentity"
+// Primary signal: no IAM principal (unsigned / anonymous caller)
+| where isempty(UserIdentityArn) or UserIdentityType =~ "Unknown"
+| project
+    TimeGenerated,
+    EventName,
+    EventSource,
+    UserIdentityType,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    RequestParameters,
+    RecipientAccountId
+| sort by TimeGenerated desc
+
+// ======================================================================
+
+// FILE: kql_T1078.004_cognito_anon_getid.kql
+// Anonymous Cognito GetId - Unauthenticated Identity Pool Credential Acquisition
+// T1078.004 | Tactic: Credential Access
+//
+// Detects GetId calls to Cognito Identity Pools issued without SigV4 signing.
+// CloudTrail records these as UserIdentityType = "Unknown" with no UserIdentityArn.
+// This is the first step an attacker takes to acquire a IdentityId before calling
+// GetCredentialsForIdentity (see kql_T1078.004_cognito_anon_getcreds.kql).
+//
+// Tune: UserIdentityArn is empty or UserIdentityType == "Unknown" -- both indicate
+// an unauthenticated/unsigned caller. Use whichever field your Sentinel connector
+// populates from the CloudTrail userIdentity block.
+//
+// False positives: legitimate mobile app guest flows, SDK integration tests.
+
+AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource =~ "cognito-identity.amazonaws.com"
+| where EventName =~ "GetId"
+// Primary signal: no IAM principal was authenticated (unsigned / anonymous call)
+| where isempty(UserIdentityArn) or UserIdentityType =~ "Unknown"
+| project
+    TimeGenerated,
+    EventName,
+    EventSource,
+    UserIdentityType,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    RequestParameters,
+    RecipientAccountId
+| sort by TimeGenerated desc
+
+// ======================================================================
+
+// FILE: kql_T1078.004_cognito_pool_enum.kql
+// Cognito Identity Pool Enumeration and Misconfiguration Discovery
+// T1078.004 | Tactic: Discovery
+//
+// Detects ListIdentityPools and DescribeIdentityPool calls from the same session
+// within a short window. An attacker with compromised credentials uses ListIdentityPools
+// to locate pools, then DescribeIdentityPool to confirm AllowUnauthenticatedIdentities=True
+// before attempting the unsigned credential acquisition path.
+//
+// Both calls alone are medium signal; both from the same principal within 10 minutes
+// is high confidence for targeted discovery.
+//
+// False positives: CSPM tools (Prowler, ScoutSuite), developer CLI troubleshooting,
+// IaC deployment pipelines reading pool config. Tune filter_automation to match
+// your environment's known service account ARN patterns.
+
+let lookback = 1d;
+let enum_window = 10m;
+let filter_automation = dynamic(["ci-service", "deploy-role", "health-check", "terraform", "pulumi"]);
+
+let cognito_enum_events =
+    AWSCloudTrail
+    | where TimeGenerated > ago(lookback)
+    | where EventSource =~ "cognito-identity.amazonaws.com"
+    | where EventName in~ ("ListIdentityPools", "DescribeIdentityPool")
+    // Filter known automation principals
+    | where not(UserIdentityArn has_any (filter_automation))
+    | project
+        TimeGenerated,
+        EventName,
+        EventSource,
+        UserIdentityArn,
+        UserIdentityType,
+        SourceIpAddress,
+        UserAgent,
+        AwsRegion,
+        SessionId = UserIdentityPrincipalid,
+        RequestParameters,
+        RecipientAccountId;
+
+// Find sessions that called both ListIdentityPools AND DescribeIdentityPool
+let list_events = cognito_enum_events | where EventName =~ "ListIdentityPools";
+let describe_events = cognito_enum_events | where EventName =~ "DescribeIdentityPool";
+
+list_events
+| join kind=inner (
+    describe_events
+    | project
+        DescribeTime = TimeGenerated,
+        SessionId,
+        DescribeRequestParams = RequestParameters
+) on SessionId
+| where abs(datetime_diff('second', TimeGenerated, DescribeTime)) < 600  // within 10 minutes
+| project
+    ListTime = TimeGenerated,
+    DescribeTime,
+    SessionId,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    RecipientAccountId,
+    DescribeRequestParams
+| sort by ListTime desc
+
+// ======================================================================
+
+// FILE: kql_T1078.004_correlation_cognito_unauth_chain.kql
+// Cognito Unauthenticated Credential Abuse Chain - Full Kill Chain Correlation
+// T1078.004 | Tactics: Initial Access, Discovery, Credential Access, Collection
+//
+// Expresses the complete attack chain as a temporal join across CloudTrail events.
+// The high-confidence anchor is: anonymous GetCredentialsForIdentity (no SigV4 principal)
+// followed within 15 minutes by S3 data access from a session whose issuer is an
+// unauth Cognito role. This combination is essentially unambiguous in production.
+//
+// Chain steps correlated:
+//   Phase 1 (informational): IAM user AssumeRole into victim-role
+//   Phase 2 (medium): ListIdentityPools + DescribeIdentityPool from victim session
+//   Phase 3 (critical): GetId + GetCredentialsForIdentity with no IAM principal
+//   Phase 3 (informational): GetCallerIdentity from unauth-role session
+//   Phase 3 (high): ListObjectsV2 + GetObject from unauth-role session
+//
+// PREREQUISITE for S3 join: S3 data events must be enabled in CloudTrail.
+// Without them, alert on the GetCredentialsForIdentity anchor alone -- it is
+// critical-severity and requires no additional data sources.
+//
+// False positives: legitimate anonymous guest flows, SDK tests, CSPM scanners.
+
+let lookback = 2h;
+let credential_chain_window = 15m;
+
+// ── Anchor: anonymous GetCredentialsForIdentity (primary IOC, no data-event dependency) ──
+let anon_getcreds =
+    AWSCloudTrail
+    | where TimeGenerated > ago(lookback)
+    | where EventSource =~ "cognito-identity.amazonaws.com"
+    | where EventName =~ "GetCredentialsForIdentity"
+    | where isempty(UserIdentityArn) or UserIdentityType =~ "Unknown"
+    | project
+        AnonymousCredTime = TimeGenerated,
+        SourceIpAddress,
+        AwsRegion,
+        RecipientAccountId,
+        RequestParameters;  // contains IdentityId
+
+// ── Anchor: anonymous GetId (same source IP, seconds before GetCredentialsForIdentity) ──
+let anon_getid =
+    AWSCloudTrail
+    | where TimeGenerated > ago(lookback)
+    | where EventSource =~ "cognito-identity.amazonaws.com"
+    | where EventName =~ "GetId"
+    | where isempty(UserIdentityArn) or UserIdentityType =~ "Unknown"
+    | project
+        GetIdTime = TimeGenerated,
+        SourceIpAddress,
+        AwsRegion,
+        RecipientAccountId;
+
+// ── Anchor: S3 data access from unauth Cognito session ──
+// Requires S3 data events. Returns empty if not enabled.
+let unauth_s3_access =
+    AWSCloudTrail
+    | where TimeGenerated > ago(lookback)
+    | where EventSource =~ "s3.amazonaws.com"
+    | where EventName in~ ("ListObjectsV2", "ListObjects", "GetObject")
+    | where UserIdentityType =~ "AssumedRole"
+    | where UserIdentitySessionContextSessionIssuerArn has_any (dynamic(["unauth", "cognito", "anonymous"]))
+    | project
+        S3AccessTime = TimeGenerated,
+        S3EventName = EventName,
+        S3UserIdentityArn = UserIdentityArn,
+        S3IssuerArn = UserIdentitySessionContextSessionIssuerArn,
+        S3SourceIp = SourceIpAddress,
+        AwsRegion,
+        RecipientAccountId,
+        S3RequestParams = RequestParameters;
+
+// ── Discovery: Cognito pool enumeration from a signed (victim) session ──
+let cognito_discovery =
+    AWSCloudTrail
+    | where TimeGenerated > ago(lookback)
+    | where EventSource =~ "cognito-identity.amazonaws.com"
+    | where EventName in~ ("ListIdentityPools", "DescribeIdentityPool")
+    | where isnotempty(UserIdentityArn)  // must be authenticated (victim session)
+    | project
+        DiscoveryTime = TimeGenerated,
+        DiscoveryEvent = EventName,
+        DiscoveryPrincipal = UserIdentityArn,
+        DiscoverySourceIp = SourceIpAddress,
+        AwsRegion,
+        RecipientAccountId;
+
+// ── Join 1 (core): anonymous GetCredentialsForIdentity -> S3 data access ──
+// This join is the high-confidence signal. Each row = one confirmed chain.
+let core_chain =
+    anon_getcreds
+    | join kind=leftouter (
+        unauth_s3_access
+        | project
+            S3AccessTime,
+            S3EventName,
+            S3IssuerArn,
+            S3UserIdentityArn,
+            S3SourceIp,
+            AwsRegion_S3 = AwsRegion,
+            RecipientAccountId
+    ) on RecipientAccountId
+    | where isnull(S3AccessTime) or (S3AccessTime > AnonymousCredTime and S3AccessTime < AnonymousCredTime + credential_chain_window)
+    | project
+        AnonymousCredTime,
+        SourceIpAddress,
+        AwsRegion,
+        RecipientAccountId,
+        S3AccessTime,
+        S3EventName,
+        S3IssuerArn,
+        S3UserIdentityArn,
+        S3SourceIp,
+        HasS3Evidence = isnotnull(S3AccessTime);
+
+// ── Join 2: prepend discovery phase ──
+core_chain
+| join kind=leftouter (
+    cognito_discovery
+    | project
+        DiscoveryTime,
+        DiscoveryEvent,
+        DiscoveryPrincipal,
+        DiscoverySourceIp,
+        RecipientAccountId
+) on RecipientAccountId
+| where isnull(DiscoveryTime) or DiscoveryTime < AnonymousCredTime
+| summarize
+    ChainStart = min(DiscoveryTime),
+    AnonymousCredTime = min(AnonymousCredTime),
+    FirstS3Access = min(S3AccessTime),
+    S3EventsSeen = make_set(S3EventName),
+    DiscoveryEvents = make_set(DiscoveryEvent),
+    AttackerSourceIPs = make_set(SourceIpAddress),
+    UnauthRoleArn = take_any(S3IssuerArn),
+    HasS3Evidence = take_any(HasS3Evidence)
+    by RecipientAccountId, AwsRegion
+| extend
+    // Severity guidance: credential acquisition alone is critical; full chain with S3 is critical+contextual
+    AlertSeverity = iff(HasS3Evidence, "Critical - Full Chain", "Critical - Credential Issuance Only"),
+    RecommendedAction = iff(HasS3Evidence,
+        "Revoke unauth role session tokens, audit S3 bucket access, rotate Cognito pool credentials",
+        "Confirm S3 data events enabled; alert on GetCredentialsForIdentity alone indicates credential theft")
+| project
+    ChainStart,
+    AnonymousCredTime,
+    FirstS3Access,
+    RecipientAccountId,
+    AwsRegion,
+    DiscoveryEvents,
+    S3EventsSeen,
+    AttackerSourceIPs,
+    UnauthRoleArn,
+    AlertSeverity,
+    RecommendedAction
+| sort by AnonymousCredTime desc
+
+// ======================================================================
+
+// FILE: kql_T1078.004_s3_unauth_cognito_access.kql
+// S3 Data Access from Unauthenticated Cognito Identity Pool Session
+// T1078.004 | Tactic: Collection
+//
+// Detects S3 ListObjectsV2 and GetObject calls from a session whose originating
+// IAM role was assumed via a Cognito Identity Pool unauthenticated flow.
+// The session issuer ARN carries the pool's unauth IAM role; the session name
+// (tail of UserIdentityArn after the role name) is a Cognito Identity ID
+// (region:UUID format, e.g. us-east-1:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).
+//
+// !! PREREQUISITE: S3 data events must be enabled in CloudTrail.
+// !! GetObject and ListObjectsV2 are data plane events and do NOT appear in
+// !! CloudTrail by default. Enable via trail configuration or bucket event selectors.
+// !! Without data events, this query returns zero results regardless of attack activity.
+//
+// Note: attack.py (step 7) calls list_objects_v2() which CloudTrail records as
+// "ListObjectsV2" -- NOT "ListObjects". Both are included below for completeness.
+//
+// False positives: legitimate app guest flows reading S3 via unauth Cognito creds.
+// Tune UserIdentitySessionContextSessionIssuerArn to your specific unauth role name(s).
+
+let lookback = 1d;
+// Tune: replace with your actual unauth role name or ARN fragment
+let cognito_unauth_role_patterns = dynamic(["unauth", "cognito", "anonymous"]);
+// Known legitimate service roles that may match the name patterns (exclude them)
+let known_services = dynamic(["app-backend-svc", "data-pipeline"]);
+
+AWSCloudTrail
+| where TimeGenerated > ago(lookback)
+| where EventSource =~ "s3.amazonaws.com"
+| where EventName in~ ("ListObjectsV2", "ListObjects", "GetObject")
+| where UserIdentityType =~ "AssumedRole"
+// Session issuer ARN contains the unauth role name (generic pattern -- tune to your role)
+| where UserIdentitySessionContextSessionIssuerArn has_any (cognito_unauth_role_patterns)
+// Exclude known legitimate services that happen to match the role name patterns
+| where not(UserIdentitySessionContextSessionIssuerArn has_any (known_services))
+// Optional: additionally filter by Cognito Identity ID session name pattern (region:UUID)
+// | where UserIdentityArn matches regex @"assumed-role/[^/]+/[a-z]{2}-[a-z]+-\d:[0-9a-f-]{36}"
+| project
+    TimeGenerated,
+    EventName,
+    EventSource,
+    UserIdentityArn,
+    UserIdentityType,
+    UserIdentitySessionContextSessionIssuerArn,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    RequestParameters,   // contains bucket name and key
+    RecipientAccountId
+| sort by TimeGenerated desc
+
+// ======================================================================
+
+// FILE: kql_T1078.004_sts_assumerole_lateral.kql
+// AssumeRole from IAM User into Target Role - Initial Lateral Movement
+// T1078.004 | Tactic: Initial Access
+//
+// Detects an IAM user (not a role or service principal) performing AssumeRole.
+// Standalone AssumeRole by IAM users is very noisy; this query is most valuable
+// as input to the correlation chain (kql_T1078.004_correlation_cognito_unauth_chain.kql)
+// where it anchors the initial access step before Cognito pool enumeration.
+//
+// In the emulated chain, the attacker IAM user assumes a victim-role using
+// session name "emulation-cognito-unauth". The requestParameters field (JSON)
+// contains roleSessionName which can anchor emulation-specific hunts.
+//
+// False positives: essentially all IAM user-based role assumptions in the account.
+// Tune filter_automation to exclude your CI/CD and deployment principals.
+// Consider restricting to off-hours or unusual source IPs before alerting.
+
+let lookback = 1d;
+let filter_automation = dynamic(["ci-deploy", "automation", "terraform", "pulumi", "deploy-role"]);
+
+AWSCloudTrail
+| where TimeGenerated > ago(lookback)
+| where EventSource =~ "sts.amazonaws.com"
+| where EventName =~ "AssumeRole"
+| where UserIdentityType =~ "IAMUser"
+// Exclude known automation accounts by principal ARN fragment
+| where not(UserIdentityArn has_any (filter_automation))
+// Optionally narrow to emulation-specific session names during threat hunts:
+// | where RequestParameters has "emulation-cognito-unauth"
+| project
+    TimeGenerated,
+    EventName,
+    EventSource,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    RequestParameters,   // contains roleArn and roleSessionName
+    RecipientAccountId
+| sort by TimeGenerated desc

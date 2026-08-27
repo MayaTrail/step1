@@ -1,0 +1,19 @@
+{
+  "campaign": "ATOMIC-cognito-identity-pool-unauth-creds",
+  "csp": "aws",
+  "resources": {
+    "identity_pool_name":        "prod-mobile-identities",
+    "unauth_role_name":          "atomic-cognito-identity-pool-unauth-creds-unauth-role",
+    "victim_role_name":          "atomic-cognito-identity-pool-unauth-creds-victim-role",
+    "attacker_user_name":        "atomic-cognito-identity-pool-unauth-creds-attacker",
+    "target_bucket_name_prefix": "atomic-cognito-unauth-assets"
+  },
+  "pulumi_export_keys": {
+    "identity_pool_id":           "identity_pool_id",
+    "unauth_role_arn":            "unauth_role_arn",
+    "victim_role_arn":            "victim_role_arn",
+    "target_bucket_name":         "target_bucket_name",
+    "attacker_access_key_id":     "attacker_access_key_id",
+    "attacker_secret_access_key": "attacker_secret_access_key"
+  }
+}

@@ -1,0 +1,281 @@
+// T1530 - Composite: Full DynamoDB Export Kill Chain in Single STS Session
+// Correlates ListTables -> DescribeTable -> ExportTableToPointInTime from the
+// same assumed-role session (grouped by sessionIssuerArn) within 30 minutes.
+// Individual rules fire in real time; use this for retrospective hunting and
+// high-confidence incident confirmation. Each role in the chain is scored:
+// enumeration (1pt) + recon (1pt) + export trigger (3pt) = max 5pt.
+
+let LookbackWindow = 30m;
+let ExportEvents =
+    AWSCloudTrail
+    | where EventSource == "dynamodb.amazonaws.com"
+    | where EventName in ("ListTables", "DescribeTable", "ExportTableToPointInTime", "DescribeExport")
+    | where UserIdentityType == "AssumedRole"
+    | where not (UserIdentityArn has_any (
+        "AWSServiceRole", "aws-service-role", "AWSBackup",
+        "DynamoDBBackupAutomation", "scheduled-backup"
+    ))
+    // Normalize the session issuer ARN as the correlation key
+    | extend SessionIssuerArn = tostring(parse_json(UserIdentitySessionContext).["sessionIssuer"].["arn"])
+    | extend TableName = tostring(parse_json(RequestParameters)["tableName"])
+    | extend TableArn  = tostring(parse_json(RequestParameters)["tableArn"])
+    | extend S3Bucket  = tostring(parse_json(RequestParameters)["s3Bucket"])
+    | extend ExportArn = tostring(parse_json(ResponseElements)
+                            .["exportDescription"].["exportArn"]);
+// Build per-session summary within 30-minute windows
+ExportEvents
+| summarize
+    HasListTables         = countif(EventName == "ListTables") > 0,
+    HasDescribeTable      = countif(EventName == "DescribeTable") > 0,
+    HasExportTrigger      = countif(EventName == "ExportTableToPointInTime") > 0,
+    HasDescribeExport     = countif(EventName == "DescribeExport") > 0,
+    TotalEvents           = count(),
+    FirstEvent            = min(TimeGenerated),
+    LastEvent             = max(TimeGenerated),
+    TablesReconned        = make_set(TableName, 10),
+    ExportedTableArns     = make_set(TableArn, 5),
+    DestinationBuckets    = make_set(S3Bucket, 5),
+    ExportArns            = make_set(ExportArn, 5),
+    CallerArn             = any(UserIdentityArn),
+    DistinctSourceIPs     = make_set(SourceIpAddress, 5),
+    AWSRegion             = any(AWSRegion),
+    AccountId             = any(RecipientAccountId)
+    by
+    SessionIssuerArn,
+    bin(TimeGenerated, LookbackWindow)
+// Score the chain: require at minimum the export trigger
+| where HasExportTrigger == true
+// Compute a risk score based on how many chain steps are present
+| extend RiskScore = toint(HasListTables) + toint(HasDescribeTable)
+                   + (toint(HasExportTrigger) * 3)
+                   + toint(HasDescribeExport)
+| extend ChainComplete = HasListTables and HasDescribeTable
+                       and HasExportTrigger and HasDescribeExport
+| project
+    FirstEvent,
+    LastEvent,
+    RiskScore,
+    ChainComplete,
+    SessionIssuerArn,
+    CallerArn,
+    HasListTables,
+    HasDescribeTable,
+    HasExportTrigger,
+    HasDescribeExport,
+    TablesReconned,
+    ExportedTableArns,
+    DestinationBuckets,
+    ExportArns,
+    TotalEvents,
+    DistinctSourceIPs,
+    AWSRegion,
+    AccountId
+| sort by RiskScore desc, FirstEvent desc
+
+// ======================================================================
+
+// T1530 - DynamoDB Export Chain: Step 6 - DescribeExport attacker polling
+// Detects repeated DescribeExport calls within a short window from the same
+// AssumedRole session, indicating an attacker confirming export completion.
+// The atomic emulation polls every 15 seconds for up to 600 seconds (40 calls).
+// Legitimate orchestration uses EventBridge notifications rather than polling.
+
+AWSCloudTrail
+| where EventSource == "dynamodb.amazonaws.com"
+| where EventName == "DescribeExport"
+| extend ExportArn = tostring(parse_json(RequestParameters)["exportArn"])
+| extend ExportStatus = tostring(parse_json(ResponseElements)
+                            .["exportDescription"]
+                            .["exportStatus"])
+| where not (UserIdentityArn has_any (
+    "DynamoDBBackupAutomation",
+    "scheduled-backup",
+    "backup-service-role",
+    "AWSBackup"
+))
+// Count polling calls per ExportArn and session within a 15-minute window
+| summarize
+    PollCount    = count(),
+    FirstPoll    = min(TimeGenerated),
+    LastPoll     = max(TimeGenerated),
+    FinalStatus  = arg_max(TimeGenerated, ExportStatus),
+    CallerArn    = any(UserIdentityArn),
+    SampleIPs    = make_set(SourceIpAddress, 3),
+    Region       = any(AWSRegion),
+    AccountId    = any(RecipientAccountId)
+    by
+    ExportArn,
+    UserIdentityArn,
+    bin(TimeGenerated, 15m)
+// Threshold: 3+ polls in a 15-minute window is anomalous for legitimate services
+| where PollCount >= 3
+| extend PollDurationSeconds = datetime_diff("second", LastPoll, FirstPoll)
+| project
+    FirstPoll,
+    LastPoll,
+    PollCount,
+    PollDurationSeconds,
+    CallerArn,
+    ExportArn,
+    FinalStatus,
+    SampleIPs,
+    Region,
+    AccountId
+| sort by PollCount desc
+
+// ======================================================================
+
+// T1530 - DynamoDB Export Chain: Steps 3 & 4 - DescribeTable reconnaissance
+// Detects DescribeTable calls on tables whose names suggest PII, credentials,
+// or honey-token data. The internal-api-keys honey table is a near-certain IOC
+// when accessed via an AssumedRole session that was not present in baseline.
+
+AWSCloudTrail
+| where EventSource == "dynamodb.amazonaws.com"
+| where EventName == "DescribeTable"
+| extend TableName = tostring(parse_json(RequestParameters)["tableName"])
+// Flag tables with sensitive or honey-token naming patterns
+| extend IsSensitive = TableName has_any (
+    "customer", "api-key", "api-keys", "secret", "credential",
+    "password", "token", "pii", "prod", "internal", "honey"
+)
+| where IsSensitive == true
+// Honey table access: always critical regardless of caller type
+| extend IsHoneyTable = TableName has_any (
+    "internal-api-keys", "api-keys", "honey-token", "canary"
+)
+| extend AlertLevel = iff(IsHoneyTable, "CRITICAL", "HIGH")
+| where UserIdentityType == "AssumedRole" or IsHoneyTable == true
+| where not (UserIdentityArn has_any (
+    "AWSServiceRole",
+    "aws-service-role"
+))
+| project
+    TimeGenerated,
+    AlertLevel,
+    EventName,
+    EventSource,
+    UserIdentityArn,
+    UserIdentityType,
+    TableName,
+    IsHoneyTable,
+    SourceIpAddress,
+    AWSRegion,
+    RecipientAccountId
+| sort by AlertLevel asc, TimeGenerated desc
+
+// ======================================================================
+
+// T1530 - DynamoDB Export Chain: Step 5 - ExportTableToPointInTime
+// PRIMARY DETECTION: Bulk DynamoDB table dump to S3 via native export API.
+// This is the stealth exfiltration vector -- no GetItem/Scan in CloudTrail,
+// actual S3 writes appear under the DynamoDB service principal, not the caller.
+// Any call to this API that is not from a known backup automation role should
+// be treated as critical.
+
+AWSCloudTrail
+| where EventSource == "dynamodb.amazonaws.com"
+| where EventName == "ExportTableToPointInTime"
+// Parse export details from RequestParameters
+| extend TableArn  = tostring(parse_json(RequestParameters)["tableArn"])
+| extend S3Bucket  = tostring(parse_json(RequestParameters)["s3Bucket"])
+| extend S3Prefix  = tostring(parse_json(RequestParameters)["s3Prefix"])
+| extend ExportFormat = tostring(parse_json(RequestParameters)["exportFormat"])
+// Parse ExportArn from ResponseElements for correlation with DescribeExport
+| extend ExportArn = tostring(parse_json(ResponseElements)
+                        .["exportDescription"]
+                        .["exportArn"])
+| extend ExportStatus = tostring(parse_json(ResponseElements)
+                        .["exportDescription"]
+                        .["exportStatus"])
+// Exclude approved backup automation roles -- update with environment-specific values
+| where not (UserIdentityArn has_any (
+    "DynamoDBBackupAutomation",
+    "scheduled-backup",
+    "backup-service-role",
+    "AWSBackup"
+))
+| project
+    TimeGenerated,
+    EventName,
+    EventSource,
+    UserIdentityArn,
+    UserIdentityType,
+    TableArn,
+    S3Bucket,
+    S3Prefix,
+    ExportFormat,
+    ExportArn,
+    ExportStatus,
+    SourceIpAddress,
+    AWSRegion,
+    RecipientAccountId
+| sort by TimeGenerated desc
+
+// ======================================================================
+
+// T1530 - DynamoDB Export Chain: Step 2 - DynamoDB ListTables enumeration
+// Detects DynamoDB ListTables calls from AssumedRole principals, indicating
+// an attacker enumerating tables after assuming a victim role. Legitimate
+// services that use DynamoDB access tables by name and rarely enumerate.
+
+AWSCloudTrail
+| where EventSource == "dynamodb.amazonaws.com"
+| where EventName == "ListTables"
+| where UserIdentityType == "AssumedRole"
+// Exclude known AWS service roles performing legitimate automation
+| where not (UserIdentityArn has_any (
+    "AWSServiceRole",
+    "aws-service-role",
+    "lambda_basic_execution",
+    "LambdaExecution"
+))
+// Count calls per role session within a 10-minute bucket to detect burst enumeration
+| summarize
+    CallCount = count(),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated),
+    DistinctIPs = dcount(SourceIpAddress),
+    SampleIPs = make_set(SourceIpAddress, 5)
+    by
+    UserIdentityArn,
+    bin(TimeGenerated, 10m),
+    AWSRegion,
+    RecipientAccountId
+| sort by CallCount desc
+
+// ======================================================================
+
+// T1530 - DynamoDB Export Chain: Step 1 - STS AssumeRole into victim role
+// Detects an IAM user assuming a role scoped for DynamoDB export access,
+// especially when the roleSessionName follows attacker naming conventions.
+// In the atomic emulation the attacker uses roleSessionName='atomic-t1530-session'.
+// Sentinel table: AWSCloudTrail (via AWS connector or S3 ingestion)
+
+AWSCloudTrail
+| where EventName == "AssumeRole"
+| where EventSource == "sts.amazonaws.com"
+// Parse roleArn and roleSessionName out of the JSON RequestParameters blob
+| extend RoleArn = tostring(parse_json(RequestParameters)["roleArn"])
+| extend SessionName = tostring(parse_json(RequestParameters)["roleSessionName"])
+// Flag roles with DynamoDB-export-related names
+| where RoleArn has_any ("export-to-s3", "dynamodb-export", "atomic")
+      or SessionName has_any ("t1530", "atomic", "export")
+// Exclude known AWS service roles
+| where not (UserIdentityArn has_any (
+    "AWSServiceRole",
+    "aws-service-role",
+    "AWSBackup"
+))
+| project
+    TimeGenerated,
+    EventName,
+    EventSource,
+    UserIdentityArn,
+    UserIdentityType,
+    RoleArn,
+    SessionName,
+    SourceIpAddress,
+    AWSRegion,
+    RecipientAccountId
+| sort by TimeGenerated desc

@@ -1,0 +1,93 @@
+// FILE: kql_T1567_assume_role.kql
+// T1567 SNS Exfiltration - AssumeRole for Over-Permissioned Victim Role
+// Detects role assumption targeting SNS/SQS-permissioned roles from non-service principals.
+// Correlate with subsequent ListTopics + Subscribe from the same sessionId for chain detection.
+
+AWSCloudTrail
+| where EventName == "AssumeRole"
+| where EventSource == "sts.amazonaws.com"
+| where RequestParameters has_any ("sns-external-subscription", "sns-exfil", "sns-victim")
+| where UserIdentityArn !contains ":role/aws-service-role/"
+| where UserIdentityArn !contains ":role/AWSServiceRole"
+| extend
+    CallerArn       = UserIdentityArn,
+    AssumedRoleArn  = tostring(parse_json(RequestParameters).roleArn),
+    SessionName     = tostring(parse_json(RequestParameters).roleSessionName),
+    SourceIP        = SourceIpAddress,
+    UserAgent       = UserAgent
+| project
+    TimeGenerated,
+    CallerArn,
+    AssumedRoleArn,
+    SessionName,
+    SourceIP,
+    UserAgent,
+    AWSRegion
+| sort by TimeGenerated desc
+
+// ======================================================================
+
+// FILE: kql_T1567_sns_list_topics.kql
+// T1567 SNS Exfiltration - SNS Topic Enumeration (ListTopics from AssumedRole)
+// Low-fidelity standalone; correlate with Subscribe from the same UserIdentitySessionContext
+// to build a high-confidence exfiltration chain (AssumeRole -> ListTopics -> Subscribe).
+
+AWSCloudTrail
+| where EventName == "ListTopics"
+| where EventSource == "sns.amazonaws.com"
+| where UserIdentityType == "AssumedRole"
+| where UserIdentityArn !contains ":assumed-role/AWSServiceRole"
+| where UserIdentityArn !contains ":assumed-role/aws-service-role"
+| where UserIdentityArn !contains ":assumed-role/OrganizationAccountAccessRole"
+| extend
+    CallerArn   = UserIdentityArn,
+    SessionId   = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.arn),
+    SourceIP    = SourceIpAddress,
+    UserAgent   = UserAgent
+| project
+    TimeGenerated,
+    CallerArn,
+    SessionId,
+    SourceIP,
+    UserAgent,
+    AWSRegion
+| sort by TimeGenerated desc
+
+// ======================================================================
+
+// FILE: kql_T1567_sns_subscribe.kql
+// T1567 SNS Exfiltration - External/SQS Subscription Registration on SNS Topic
+// Detects SNS Subscribe calls using external protocols (email, https, http) or SQS
+// subscriptions from AssumedRole sessions. This is the primary exfiltration IOC:
+// a malicious endpoint registered to receive all future topic deliveries.
+//
+// For highest confidence: join against AssumeRole and ListTopics on the same CallerArn
+// within a 10-minute window.
+
+AWSCloudTrail
+| where EventName == "Subscribe"
+| where EventSource == "sns.amazonaws.com"
+| extend
+    Protocol    = tostring(parse_json(RequestParameters).protocol),
+    Endpoint    = tostring(parse_json(RequestParameters).endpoint),
+    TopicArn    = tostring(parse_json(RequestParameters).topicArn),
+    CallerArn   = UserIdentityArn,
+    CallerType  = UserIdentityType,
+    SourceIP    = SourceIpAddress,
+    UserAgent   = UserAgent
+// Alert on email/https/http regardless of caller; alert on sqs only from AssumedRole
+| where Protocol in ("email", "email-json", "https", "http")
+    or (Protocol == "sqs" and CallerType == "AssumedRole"
+        and CallerArn !contains ":assumed-role/AWSServiceRole"
+        and CallerArn !contains ":assumed-role/aws-service-role")
+| project
+    TimeGenerated,
+    CallerArn,
+    CallerType,
+    Protocol,
+    Endpoint,
+    TopicArn,
+    SourceIP,
+    UserAgent,
+    AWSRegion
+| sort by TimeGenerated desc
