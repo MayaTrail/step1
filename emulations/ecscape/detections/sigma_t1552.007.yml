@@ -1,0 +1,33 @@
+title: ECS DiscoverPollEndpoint from EC2 Instance Role (Possible ECScape)
+id: 8f2a1c40-6b7e-4a2d-9c1e-ec5cape000001
+status: experimental
+description: >
+  Detects ecs:DiscoverPollEndpoint calls made with EC2 instance-profile
+  credentials in a pattern consistent with ECScape, where a compromised task
+  impersonates the ECS agent. DiscoverPollEndpoint is normally issued by the ECS
+  agent at startup; a second/repeated caller, or one correlated with new ACS
+  WebSocket traffic from a task, is suspicious. Tune to your environment — expect
+  benign agent calls at instance registration.
+references:
+  - https://github.com/naorhaziz/ecscape
+  - https://www.sweet.security/blog/ecscape-understanding-iam-privilege-boundaries-in-amazon-ecs
+author: apt_pipeline (ecscape emulation)
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: ecs.amazonaws.com
+    eventName: DiscoverPollEndpoint
+    userIdentity.type: AssumedRole
+    userIdentity.arn|contains: ':assumed-role/ecscape-instance-role/'
+  timeframe: 10m
+  condition: selection | count() by userIdentity.arn > 1
+falsepositives:
+  - Normal ECS agent startup / re-registration (single call per instance boot).
+  - Agent reconnect after network blips.
+level: medium
+tags:
+  - attack.credential-access
+  - attack.t1552.007
+  - attack.t1552.005
