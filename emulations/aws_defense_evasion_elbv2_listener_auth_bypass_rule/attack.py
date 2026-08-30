@@ -93,7 +93,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
         aws_secret_access_key=secret_access_key,
         region_name=region,
     )
-    elb = victim_session.client("elasticloadbalancingv2")
+    elb = victim_session.client("elbv2")  # boto3 service id is "elbv2", not "elasticloadbalancingv2"
 
     # Track cleanup state across all steps
     bypass_rule_arn  = None
@@ -249,7 +249,19 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
         # PriorityInUse after our cleanup attempt means the environment is inconsistent
         raise RuntimeError(f"create_rule failed ({code}): {exc}")
 
-    op_delay(3, 8)
+    # ALB listener-rule changes propagate to all LB nodes eventually-consistently
+    # (seconds to tens of seconds). Without this wait the A/B test races the
+    # propagation and the bypass request falls through to authenticate-cognito.
+    _probe_url = f"https://{dns_name}/"
+    _ok("Waiting up to 90s for the injected rule to take effect on all ALB nodes...")
+    for _wait in range(18):
+        time.sleep(5)
+        probe = _get_with_retry(_probe_url, headers={"X-Bypass-Auth": bypass_token})
+        if probe is not None and probe.status_code != 302:
+            _ok(f"Rule live after ~{_wait * 5 + 5}s (bypass probe returned HTTP {probe.status_code})")
+            break
+    else:
+        _err("Injected rule did not take effect within 90s -- A/B result may be a false negative")
 
     # ────────────────────────────────────────────────────────────────────────
     # Step 3 -- A/B verification: bypass vs. baseline

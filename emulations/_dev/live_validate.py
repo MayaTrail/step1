@@ -255,7 +255,8 @@ for et in BATCH:
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%H%M%S")
     stack = Stack.objects.create(
         name=f"porttest-{et[:34]}-{ts}", owner=user, status=Stack.Status.DEPLOYING,
-        emulation_type=et, region=REGION, expires_at=timezone.now() + timedelta(hours=2),
+        emulation_type=et, region=REGION,
+        expires_at=timezone.now() + timedelta(hours=int(os.environ.get("TTL_HOURS", "1"))),
     )
     row["stack"] = str(stack.id)
     print(f"\n{'=' * 78}\n>>> {et}\n{'=' * 78}", flush=True)
@@ -267,16 +268,21 @@ for et in BATCH:
         print("!! HARNESS EXCEPTION\n" + row["harness_err"], flush=True)
     finally:
         t0 = time.time()
-        try:
-            res = destroy_emulation_stack.apply(args=[str(stack.id)]).get(propagate=True)
-            row["destroy"] = res.get("status", "?") if isinstance(res, dict) else str(res)
-            row["destroy_s"] = round(time.time() - t0)
-        except Stack.DoesNotExist:
-            row["destroy"] = "already-gone"
-        except Exception as e:
-            row["destroy"] = "EXCEPTION"
-            row["destroy_err"] = str(e)[:2000]
-            print("!! DESTROY FAILED\n" + row["destroy_err"], flush=True)
+        for attempt in range(1, 4):  # destroy is the cost-critical step — retry
+            try:
+                res = destroy_emulation_stack.apply(args=[str(stack.id)]).get(propagate=True)
+                row["destroy"] = res.get("status", "?") if isinstance(res, dict) else str(res)
+                row["destroy_s"] = round(time.time() - t0)
+                break
+            except Stack.DoesNotExist:
+                row["destroy"] = "already-gone"
+                break
+            except Exception as e:
+                row["destroy"] = "EXCEPTION"
+                row["destroy_err"] = str(e)[:2000]
+                print(f"!! DESTROY attempt {attempt}/3 FAILED\n{row['destroy_err']}", flush=True)
+                if attempt < 3:
+                    time.sleep(20)
         time.sleep(20)  # SQS/other deletions are eventually consistent (~60s worst case)
         try:
             row["orphans"] = sorted(sweep() - baseline)
@@ -306,4 +312,22 @@ for r in results:
                 print(f'-- {k} --\n{r[k]}')
         if r.get("orphans"):
             print("-- orphans --\n" + "\n".join(str(x) for x in r["orphans"]))
+
+# -- safety net: force-destroy any porttest stack row still present ---------
+leftover = list(Stack.objects.filter(owner=user))
+if leftover:
+    print(f"\n!! {len(leftover)} porttest stack row(s) still present — force-destroying", flush=True)
+    for s in leftover:
+        print(f"   {s.name} ({s.emulation_type}) status={s.status}", flush=True)
+        try:
+            destroy_emulation_stack.apply(args=[str(s.id)]).get(propagate=True)
+            print("   -> destroyed", flush=True)
+        except Exception as e:
+            print(f"   -> STILL FAILING: {str(e)[:400]}  — DESTROY MANUALLY", flush=True)
+else:
+    print("\n# all porttest stack rows cleaned", flush=True)
+
+# final direct sweep
+final = sweep() - baseline
+print("# final orphan sweep:", sorted(final) if final else "CLEAN", flush=True)
 print("\n# DONE", flush=True)

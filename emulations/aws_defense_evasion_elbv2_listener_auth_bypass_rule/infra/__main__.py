@@ -350,6 +350,11 @@ protected_tg = aws.alb.TargetGroup(
     target_type="lambda",
     health_check=aws.alb.TargetGroupHealthCheckArgs(
         enabled=False,
+        # Even with enabled=False the ELBv2 API validates interval > timeout;
+        # the pulumi-aws v7 SDK-v2 provider sends defaults that violate this for
+        # a lambda target group, so pin a valid pair.
+        interval=30,
+        timeout=5,
     ),
     tags=TAGS,
 )
