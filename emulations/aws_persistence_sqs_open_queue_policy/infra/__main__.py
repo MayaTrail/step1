@@ -112,6 +112,8 @@ victim_role = aws.iam.Role(
 # 6. Inline policy - sqs:* on orders-ingest-prod (depends on queue + role)
 #    Intentionally broad: mirrors real-world workload roles so the detection
 #    fires on the anomalous queue policy content, not a principal anomaly.
+#    sqs:ListQueues / sqs:GetQueueUrl do not support resource-level permissions
+#    and must be granted on "*" (attack Step 1 enumerates queues).
 # --------------------------------------------------------------------------- #
 victim_inline_policy = orders_queue.arn.apply(
     lambda arn: json.dumps({
@@ -122,7 +124,13 @@ victim_inline_policy = orders_queue.arn.apply(
                 "Effect": "Allow",
                 "Action": ["sqs:*"],
                 "Resource": arn,
-            }
+            },
+            {
+                "Sid": "SQSListEnumerate",
+                "Effect": "Allow",
+                "Action": ["sqs:ListQueues", "sqs:GetQueueUrl"],
+                "Resource": "*",
+            },
         ],
     })
 )

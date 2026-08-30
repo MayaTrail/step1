@@ -14,7 +14,7 @@ if _P.exists():
 else:
     _R = {
         "codecommit_repo_name":       "prod-build-service",
-        "canary_secret_name":         "prod/database/master_credentials",
+        "canary_secret_name":         "prod/build-service/db-master-credentials",
         "pipeline_service_role_name": "codepipeline-inject-stage-pipeline-svc-role",
         "build_service_role_name":    "codepipeline-inject-stage-build-svc-role",
         "victim_role_name":           "codepipeline-inject-stage-victim-role",
@@ -93,7 +93,7 @@ aws.s3.BucketPublicAccessBlock(
 # 2. CodeCommit Repository  (bait source repo)
 # ══════════════════════════════════════════════════════════════════════════════
 # Post-provision step (documented in attack.py): seed branch 'main' with a
-# buildspec.yml referencing prod/database/master_credentials via PutFile API.
+# buildspec.yml referencing the canary secret via PutFile API.
 codecommit_repo = aws.codecommit.Repository(
     "codecommit-repo",
     repository_name=CODECOMMIT_REPO_NAME,
@@ -407,36 +407,51 @@ aws.iam.RolePolicy(
     "victim-role-policy",
     name="codepipeline-inject-stage-victim-role-policy",
     role=victim_role.id,
-    policy=pipeline.arn.apply(lambda arn: json.dumps({
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Sid":      "PipelineInjection",
-                "Effect":   "Allow",
-                "Action":   [
-                    "codepipeline:GetPipeline",
-                    "codepipeline:UpdatePipeline",
-                ],
-                "Resource": arn,
-            },
-            {
-                "Sid":      "PipelineExecutionAndObservation",
-                "Effect":   "Allow",
-                "Action":   [
-                    "codepipeline:StartPipelineExecution",
-                    "codepipeline:GetPipelineState",
-                    "codepipeline:ListPipelineExecutions",
-                ],
-                "Resource": arn,
-            },
-            {
-                "Sid":      "PipelineEnumeration",
-                "Effect":   "Allow",
-                "Action":   ["codepipeline:ListPipelines"],
-                "Resource": "*",
-            },
-        ],
-    })),
+    policy=pulumi.Output.all(pipeline.arn, pipeline_service_role.arn).apply(
+        lambda args: json.dumps({
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid":      "PipelineInjection",
+                    "Effect":   "Allow",
+                    "Action":   [
+                        "codepipeline:GetPipeline",
+                        "codepipeline:UpdatePipeline",
+                    ],
+                    # UpdatePipeline is authorized against the pipeline ARN *and*
+                    # the per-stage sub-resources (arn/<stage>), so both are needed.
+                    "Resource": [args[0], args[0] + "/*"],
+                },
+                {
+                    # UpdatePipeline re-submits the full definition, which names the
+                    # pipeline service role -> the caller needs iam:PassRole for it.
+                    "Sid":      "PassPipelineServiceRole",
+                    "Effect":   "Allow",
+                    "Action":   "iam:PassRole",
+                    "Resource": args[1],
+                    "Condition": {
+                        "StringEquals": {"iam:PassedToService": "codepipeline.amazonaws.com"}
+                    },
+                },
+                {
+                    "Sid":      "PipelineExecutionAndObservation",
+                    "Effect":   "Allow",
+                    "Action":   [
+                        "codepipeline:StartPipelineExecution",
+                        "codepipeline:GetPipelineState",
+                        "codepipeline:ListPipelineExecutions",
+                    ],
+                    "Resource": args[0],
+                },
+                {
+                    "Sid":      "PipelineEnumeration",
+                    "Effect":   "Allow",
+                    "Action":   ["codepipeline:ListPipelines"],
+                    "Resource": "*",
+                },
+            ],
+        })
+    ),
     opts=pulumi.ResourceOptions(depends_on=[victim_role, pipeline]),
 )
 

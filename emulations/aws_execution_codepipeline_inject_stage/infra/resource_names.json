@@ -3,7 +3,7 @@
   "csp": "aws",
   "resources": {
     "codecommit_repo_name":         "prod-build-service",
-    "canary_secret_name":           "prod/database/master_credentials",
+    "canary_secret_name":           "prod/build-service/db-master-credentials",
     "pipeline_service_role_name":   "codepipeline-inject-stage-pipeline-svc-role",
     "build_service_role_name":      "codepipeline-inject-stage-build-svc-role",
     "victim_role_name":             "codepipeline-inject-stage-victim-role",
