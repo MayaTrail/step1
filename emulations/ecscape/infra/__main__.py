@@ -67,7 +67,7 @@ aws.ec2.RouteTableAssociation(f"{PREFIX}-rta", subnet_id=subnet.id, route_table_
 sg = aws.ec2.SecurityGroup(
     f"{PREFIX}-sg",
     vpc_id=vpc.id,
-    description="ECScape ECS instance — egress only",
+    description="ECScape ECS instance - egress only",
     egress=[aws.ec2.SecurityGroupEgressArgs(
         from_port=0, to_port=0, protocol="-1", cidr_blocks=["0.0.0.0/0"],
     )],
@@ -198,7 +198,9 @@ asg = aws.autoscaling.Group(
 
 capacity_provider = aws.ecs.CapacityProvider(
     f"{PREFIX}-cp",
-    name=f"{PREFIX}-cp",
+    # ECS capacity-provider names may not start with "ecs" (or "aws"/"fargate"),
+    # and PREFIX="ecscape" does — hence the "cp-" prefix instead of "{PREFIX}-cp".
+    name=f"cp-{PREFIX}",
     auto_scaling_group_provider=aws.ecs.CapacityProviderAutoScalingGroupProviderArgs(
         auto_scaling_group_arn=asg.arn,
         managed_termination_protection="DISABLED",
@@ -233,8 +235,10 @@ def _log_config(stream_prefix: str):
         },
     }
 
-# Attacker task def — command is overridden by attack.py's RunTask with the
-# base64 ECScape payload; base command just idles if launched bare.
+# Attacker task def — `command` (NOT `entryPoint`) is overridden by attack.py's
+# RunTask with the base64 ECScape payload; the base `command` just idles if the
+# task is launched bare. Using entryPoint here would prepend `sleep 3600` to the
+# override args, so the override would run `sleep 3600 sh -c "..."`.
 attacker_container = "ecscape"
 attacker_task = aws.ecs.TaskDefinition(
     f"{PREFIX}-attacker-task",
@@ -248,7 +252,7 @@ attacker_task = aws.ecs.TaskDefinition(
         "essential": True,
         "memory": TASK_MEMORY,
         "cpu": TASK_CPU,
-        "entryPoint": ["sleep", "3600"],
+        "command": ["sleep", "3600"],
         "logConfiguration": _log_config("attacker"),
     }]),
     tags=TAGS,
