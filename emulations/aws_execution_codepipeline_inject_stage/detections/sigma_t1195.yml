@@ -110,6 +110,7 @@ level: low
 ---
 title: CICD Supply Chain - UpdatePipeline Stage Injection via Assumed Role
 id: c3d4e5f6-a7b8-9012-cd34-ef56ab789003
+name: cicd_updatepipeline_base
 status: experimental
 description: >
   Detects UpdatePipeline API calls originating from an assumed-role session, filtered to exclude
@@ -158,19 +159,22 @@ falsepositives:
     - On-call engineer assuming a CICD role to modify a stuck pipeline under incident conditions
 level: high
 ---
+# The deployable rule below is a correlation over the injection base rule above.
+# The legacy Sigma v1 pipe form (`condition: ... | count(userIdentity.arn) >= 2`
+# with `timeframe:` and `group-by:` inside `detection:`) was removed from the
+# specification -- pySigma rejects it and no current backend compiles it.
 title: CICD Supply Chain - Rapid UpdatePipeline Pair from Same Session (Inject then Restore)
 id: d4e5f6a7-b8c9-0123-de45-fa67bc890104
 status: experimental
 description: >
-  Detects two or more UpdatePipeline calls from the same assumed-role session ARN within a 10-
+  Two or more UpdatePipeline calls from the same assumed-role session ARN within a 10-
   minute window, excluding known IaC automation. This temporal pattern is the strongest IOC for
   the T1195 pipeline injection + restore cycle: an attacker injects a malicious stage (first
   UpdatePipeline, version N -> N+1) then immediately restores the original definition to cover
-  tracks (second UpdatePipeline, version N+1 -> N+2). The inject call alone is caught by
-  sigma_T1195_update_pipeline.yml; the rapid pair is a near-unfalsifiable signal that a version
-  of the pipeline existed briefly with an unauthorized stage, even if the post-restore state
-  appears clean. Requires a SIEM backend that supports SIGMA temporal aggregation (e.g., Splunk,
-  Elastic with SIGMA transpiler).
+  tracks (second UpdatePipeline, version N+1 -> N+2). The inject call alone is caught by the
+  base rule cicd_updatepipeline_base; the rapid pair is a near-unfalsifiable signal that a
+  version of the pipeline existed briefly with an unauthorized stage, even if the post-restore
+  state appears clean.
 references:
     - https://attack.mitre.org/techniques/T1195/
 author: MayaTrail
@@ -178,25 +182,15 @@ date: 2026/08/27
 tags:
     - attack.initial_access
     - attack.t1195
-logsource:
-    product: aws
-    service: cloudtrail
-detection:
-    selection:
-        eventSource: codepipeline.amazonaws.com
-        eventName: UpdatePipeline
-        userIdentity.type: AssumedRole
-    filter_known_iac:
-        userIdentity.sessionContext.sessionIssuer.userName|contains:
-            - 'terraform'
-            - 'github-actions'
-            - 'atlantis'
-            - 'cdk'
-            - 'selfmutate'
-    condition: (selection and not filter_known_iac) | count(userIdentity.arn) >= 2
-timeframe: 10m
-group-by:
-    - userIdentity.arn
+correlation:
+    type: event_count
+    rules:
+        - cicd_updatepipeline_base
+    group-by:
+        - userIdentity.arn
+    timespan: 10m
+    condition:
+        gte: 2
 falsepositives:
     - Pipeline-as-code retry logic that calls UpdatePipeline twice in rapid succession on failure
     - Automated rollback tooling that reads current state, updates, then verifies by re-reading

@@ -51,7 +51,7 @@ MANIFEST = {
                     'type': 'MITRE',
                     'color': 'purple',
                     'url': 'https://attack.mitre.org/techniques/T1078/004/'}],
-    'phase_count': 3,
+    'phase_count': 1,
     'estimated_duration_minutes': 8,
     'estimated_cost_per_hour_usd': 0.0,
     'default_ttl_hours': 1,
