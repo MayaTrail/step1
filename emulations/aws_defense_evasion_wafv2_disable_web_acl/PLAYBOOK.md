@@ -109,7 +109,7 @@ for e in events:
 
 ```bash
 # Get all WAFv2 events by a specific principal
-PRINCIPAL="arn:aws:sts::940482414561:assumed-role/atomic-wafv2-disable-web-acl-attacker-role/atomic-t1562007-session"
+PRINCIPAL="arn:aws:sts::123456789012:assumed-role/atomic-wafv2-disable-web-acl-attacker-role/atomic-t1562007-session"
 
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=Username,AttributeValue=atomic-t1562007-session \
@@ -185,7 +185,7 @@ aws wafv2 list-web-acls \
 ```bash
 # Get logging configuration for the ACL
 aws wafv2 get-logging-configuration \
-  --resource-arn "arn:aws:wafv2:us-east-1:940482414561:regional/webacl/${WEB_ACL_NAME}/${WEB_ACL_ID}" \
+  --resource-arn "arn:aws:wafv2:us-east-1:123456789012:regional/webacl/${WEB_ACL_NAME}/${WEB_ACL_ID}" \
   --region us-east-1
 
 # If logging to CloudWatch Logs, query for requests matching the magic header
@@ -445,14 +445,14 @@ for r in d['WebACL']['Rules']:
 ```bash
 # Check logging config
 aws wafv2 get-logging-configuration \
-  --resource-arn "arn:aws:wafv2:us-east-1:940482414561:regional/webacl/${WEB_ACL_NAME}/${WEB_ACL_ID}" \
+  --resource-arn "arn:aws:wafv2:us-east-1:123456789012:regional/webacl/${WEB_ACL_NAME}/${WEB_ACL_ID}" \
   --region us-east-1
 
 # Re-enable if missing or modified
 aws wafv2 put-logging-configuration \
   --logging-configuration '{
-    "ResourceArn": "arn:aws:wafv2:us-east-1:940482414561:regional/webacl/'"$WEB_ACL_NAME"'/'"$WEB_ACL_ID"'",
-    "LogDestinationConfigs": ["arn:aws:firehose:us-east-1:940482414561:deliverystream/aws-waf-logs-<your-stream>"],
+    "ResourceArn": "arn:aws:wafv2:us-east-1:123456789012:regional/webacl/'"$WEB_ACL_NAME"'/'"$WEB_ACL_ID"'",
+    "LogDestinationConfigs": ["arn:aws:firehose:us-east-1:123456789012:deliverystream/aws-waf-logs-<your-stream>"],
     "LoggingFilter": {
       "DefaultBehavior": "KEEP",
       "Filters": []
