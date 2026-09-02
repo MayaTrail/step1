@@ -17,10 +17,15 @@ Detection signal:
 Revert:
   - Automated: ModifyDBSnapshotAttribute with valuesToRemove in the finally block.
 
+Credential model:
+  Option B. Sharing a snapshot externally is destructive, so the attack assumes
+  the scoped attacker role created by infra/. That role's policy is pinned to
+  this emulation's own snapshot ARN, so no other snapshot in the account can be
+  shared even if this script were wrong.
+
 Backend contract:
   run(outputs: dict, region: str = "us-east-1") -> None
-  Reads `snapshot_id` from the Pulumi stack outputs; credentials come from
-  outputs["_aws_credentials"] (worker-injected) or the ambient session.
+  Reads `snapshot_id` and `attacker_role_arn` from the Pulumi stack outputs.
 """
 
 import sys
@@ -57,6 +62,57 @@ def _bootstrap_session(outputs: dict, region: str):
     return boto3.Session(region_name=region)
 
 
+def _assume_role_with_retry(sts_client, role_arn, session_name, duration=3600, max_attempts=5):
+    """
+    AssumeRole with propagation retry.
+
+    A freshly created IAM role and its inline policy take a few seconds to become
+    consistent; sts:AssumeRole can return AccessDenied during that window.
+    """
+    retryable = {"AccessDenied", "InvalidClientTokenId", "AuthFailure"}
+    last_exc = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return sts_client.assume_role(
+                RoleArn=role_arn,
+                RoleSessionName=session_name,
+                DurationSeconds=duration,
+            )
+        except ClientError as exc:
+            code = exc.response["Error"]["Code"]
+            if code in retryable and attempt < max_attempts:
+                print(f"  [~] AssumeRole attempt {attempt}/{max_attempts} got {code}, retrying in 5s")
+                time.sleep(5)
+                last_exc = exc
+            else:
+                raise
+    raise RuntimeError(f"AssumeRole failed after {max_attempts} attempts: {last_exc}")
+
+
+def _attacker_session(outputs: dict, region: str, session_name: str):
+    """
+    Build the session the technique runs as.
+
+    The tenant credentials injected by the worker are used only to assume the
+    scoped attacker role this emulation's infra creates. The destructive call is
+    then made by that role, so IAM bounds the blast radius rather than the
+    correctness of this script.
+    """
+    role_arn = (outputs or {}).get("attacker_role_arn", "")
+    if not role_arn:
+        raise RuntimeError("Missing required Pulumi output: attacker_role_arn")
+
+    sts = _bootstrap_session(outputs, region).client("sts")
+    creds = _assume_role_with_retry(sts, role_arn, session_name)["Credentials"]
+    print(f"  [+] Assumed scoped attacker role: {role_arn}")
+    print("  [!] CloudTrail event: sts:AssumeRole")
+    return boto3.Session(
+        aws_access_key_id=creds["AccessKeyId"],
+        aws_secret_access_key=creds["SecretAccessKey"],
+        aws_session_token=creds["SessionToken"],
+        region_name=region,
+    )
+
 def banner(msg: str) -> None:
     print(f"\n{'=' * 60}\n  {msg}\n{'=' * 60}")
 
@@ -66,7 +122,9 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     if not snapshot_id:
         raise RuntimeError("Missing required Pulumi output: snapshot_id")
 
-    rds_client = _bootstrap_session(outputs, region).client("rds", region_name=region)
+    banner("Step 0 - Assume the scoped attacker role (AssumeRole)")
+    session = _attacker_session(outputs, region, "atomic-t1537-rdsshare")
+    rds_client = session.client("rds", region_name=region)
 
     try:
         # ── Step 1: Share snapshot with attacker account ──────────────────────
@@ -104,4 +162,5 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
             print(f"  [!] ModifyDBSnapshotAttribute (remove) failed: {exc}")
 
     banner("Complete")
-    print("CloudTrail events: rds:ModifyDBSnapshotAttribute x2, rds:DescribeDBSnapshotAttributes")
+    print("CloudTrail events: sts:AssumeRole, rds:ModifyDBSnapshotAttribute x2, "
+          "rds:DescribeDBSnapshotAttributes")
