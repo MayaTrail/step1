@@ -1,0 +1,128 @@
+// FILE: kql_T1556_elb_createrule_auth_bypass.kql
+// T1556 - Modify Authentication Process: ALB CreateRule Without Auth Action (Primary Signal)
+//
+// Detects CreateRule events on an ELBv2 listener where the injected rule's
+// actions do NOT include authenticate-cognito or authenticate-oidc.
+// An adversary with elasticloadbalancing:CreateRule can insert a priority-1
+// http-header-conditioned rule that forwards matching requests directly to the
+// protected backend, creating a selective authentication bypass backdoor.
+//
+// Platform: AWS CloudTrail -> Microsoft Sentinel (AWSCloudTrail table)
+// High-fidelity query: CreateRule without any auth action is nearly always suspicious.
+
+AWSCloudTrail
+| where TimeGenerated >= ago(24h)
+| where EventSource == "elasticloadbalancing.amazonaws.com"
+| where EventName == "CreateRule"
+| extend RequestParams = tostring(RequestParameters)
+// Keep only rules whose action list omits both authenticate-cognito and authenticate-oidc
+| where RequestParams !contains "authenticate-cognito"
+      and RequestParams !contains "authenticate-oidc"
+// Parse relevant fields from the JSON request blob
+| extend
+    ListenerArn = tostring(parse_json(RequestParameters).listenerArn),
+    RulePriority = tostring(parse_json(RequestParameters).priority),
+    RuleActions   = tostring(parse_json(RequestParameters).actions),
+    RuleConditions = tostring(parse_json(RequestParameters).conditions),
+    NewRuleArn    = tostring(parse_json(ResponseElements).rules[0].ruleArn)
+| extend
+    HasHttpHeaderCondition = RuleConditions contains "http-header",
+    HasForwardAction       = RuleActions contains "forward",
+    AlertTitle = "ALB CreateRule without authenticate-cognito - potential auth bypass"
+| project
+    TimeGenerated,
+    AlertTitle,
+    UserIdentityArn,
+    UserIdentityPrincipalid,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    ListenerArn,
+    RulePriority,
+    HasHttpHeaderCondition,
+    HasForwardAction,
+    RuleConditions,
+    RuleActions,
+    NewRuleArn,
+    ErrorCode,
+    ErrorMessage
+| sort by TimeGenerated desc
+
+// -----------------------------------------------------------------------
+// Correlated hunt: pair the CreateRule event with prior Describe* recon
+// from the same principal within the preceding 60 minutes
+// -----------------------------------------------------------------------
+// let BypassRuleCreators =
+//     AWSCloudTrail
+//     | where TimeGenerated >= ago(24h)
+//     | where EventSource == "elasticloadbalancing.amazonaws.com"
+//     | where EventName == "CreateRule"
+//     | where tostring(RequestParameters) !contains "authenticate-cognito"
+//         and tostring(RequestParameters) !contains "authenticate-oidc"
+//     | project CreateTime = TimeGenerated, CreatorArn = UserIdentityArn,
+//               CreatorIp = SourceIpAddress, AWSRegion;
+// AWSCloudTrail
+// | where TimeGenerated >= ago(24h)
+// | where EventSource == "elasticloadbalancing.amazonaws.com"
+// | where EventName in ("DescribeLoadBalancers","DescribeListeners",
+//                       "DescribeTargetGroups","DescribeRules")
+// | join kind=inner BypassRuleCreators
+//       on $left.UserIdentityArn == $right.CreatorArn
+//       and $left.AWSRegion == $right.AWSRegion
+// | where TimeGenerated between ((CreateTime - 60min) .. CreateTime)
+// | summarize ReconEvents = count(), ReconCalls = make_set(EventName)
+//   by CreatorArn, CreatorIp, CreateTime, AWSRegion
+// | project-rename TimeGenerated = CreateTime
+// | sort by TimeGenerated desc
+
+// ======================================================================
+
+// FILE: kql_T1556_elb_describe_burst.kql
+// T1556 - Modify Authentication Process: ELB Describe* Reconnaissance Burst
+//
+// Detects a single IAM principal issuing multiple ELB Describe API calls
+// (DescribeLoadBalancers, DescribeListeners, DescribeTargetGroups, DescribeRules)
+// within a short window. Adversaries enumerate these resources to collect
+// the ARNs needed to inject a backdoor listener rule.
+//
+// Platform: AWS CloudTrail -> Microsoft Sentinel (AWSCloudTrail table)
+// Adjust lookback window (timeframe) to match your ELB change baseline.
+
+let lookback = 30min;
+let min_describe_variants = 3; // require at least 3 distinct Describe* calls
+AWSCloudTrail
+| where TimeGenerated >= ago(lookback)
+| where EventSource == "elasticloadbalancing.amazonaws.com"
+| where EventName in (
+    "DescribeLoadBalancers",
+    "DescribeListeners",
+    "DescribeTargetGroups",
+    "DescribeRules"
+  )
+| where UserIdentityArn !contains "AWSServiceRoleFor"
+      and UserIdentityArn !contains "aws-elasticloadbalancing"
+| summarize
+    DescribeCallCount = count(),
+    DistinctDescribeCalls = dcount(EventName),
+    DescribeEventNames = make_set(EventName),
+    SourceIPs = make_set(SourceIpAddress),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated)
+  by UserIdentityArn, UserIdentityPrincipalid, AWSRegion
+| where DistinctDescribeCalls >= min_describe_variants
+| extend
+    WindowMinutes = datetime_diff("minute", LastSeen, FirstSeen),
+    AlertTitle = "ELB Describe* burst - possible pre-manipulation recon"
+| project
+    TimeGenerated = FirstSeen,
+    AlertTitle,
+    UserIdentityArn,
+    UserIdentityPrincipalid,
+    AWSRegion,
+    DescribeCallCount,
+    DistinctDescribeCalls,
+    DescribeEventNames,
+    SourceIPs,
+    WindowMinutes,
+    LastSeen
+| sort by TimeGenerated desc

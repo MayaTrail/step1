@@ -1,0 +1,307 @@
+title: Anonymous Cognito GetCredentialsForIdentity - Unauthenticated Temporary AWS Credential Issuance
+id: b2c3d4e5-f6a7-4901-bc23-f12345678902
+status: experimental
+description: >
+  Detects a GetCredentialsForIdentity request to an AWS Cognito Identity Pool
+  issued without SigV4 signing (no IAM credentials presented). CloudTrail records
+  these calls with no principal ARN or account ID. A successful response hands the
+  caller temporary STS credentials scoped to the pool's unauthenticated IAM role,
+  enabling privilege escalation from zero credentials to AWS API access. This is
+  the moment of credential theft in T1078.004 Cognito unauthenticated abuse.
+  Pair with sigma_T1078.004_cognito_anon_getid.yml (same session, seconds earlier)
+  and sigma_T1078.004_s3_unauth_cognito_access.yml (downstream abuse).
+references:
+    - https://attack.mitre.org/techniques/T1078/004/
+    - https://docs.aws.amazon.com/cognitoidentity/latest/APIReference/API_GetCredentialsForIdentity.html
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.credential_access
+    - attack.t1078.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_event:
+        eventSource: 'cognito-identity.amazonaws.com'
+        eventName: 'GetCredentialsForIdentity'
+    # Absence of userIdentity.arn means no SigV4 credentials were presented --
+    # the caller is the anonymous unauthenticated Cognito principal.
+    # Tune: also match userIdentity.type == 'Unknown' in SIEMs that expose it.
+    filter_has_identity:
+        userIdentity.arn|exists: true
+    condition: selection_event and not filter_has_identity
+falsepositives:
+    - Legitimate guest user flows in mobile and web applications that issue
+      Cognito unauthenticated credentials before the user logs in. Tune by
+      known source IP ranges for production CDN/mobile NAT egress, or by
+      rate-limiting to suppress high-volume guest traffic.
+    - SDK integration tests exercising the anonymous Cognito credential path.
+level: critical
+---
+title: Anonymous Cognito GetId - Unauthenticated Identity Pool Credential Acquisition
+id: a1b2c3d4-e5f6-4890-ab12-ef1234567801
+status: experimental
+description: >
+  Detects a GetId request to an AWS Cognito Identity Pool issued without SigV4
+  signing (botocore UNSIGNED client or equivalent). CloudTrail records these calls
+  with no associated IAM principal ARN or account ID because no credentials were
+  presented. An attacker targeting a pool with AllowUnauthenticatedIdentities=True
+  uses this call to obtain a Cognito IdentityId, which is the prerequisite for
+  GetCredentialsForIdentity. See also sigma_T1078.004_cognito_anon_getcreds.yml.
+references:
+    - https://attack.mitre.org/techniques/T1078/004/
+    - https://docs.aws.amazon.com/cognito/latest/developerguide/authentication-flow.html
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.credential_access
+    - attack.t1078.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_event:
+        eventSource: 'cognito-identity.amazonaws.com'
+        eventName: 'GetId'
+    # Absence of userIdentity.arn is the primary signal for an unsigned/unauthenticated caller.
+    # Tune: also check userIdentity.type == 'Unknown' if your SIEM surfaces that field directly.
+    filter_has_identity:
+        userIdentity.arn|exists: true
+    condition: selection_event and not filter_has_identity
+falsepositives:
+    - Legitimate mobile or web application guest/unauthenticated user flows that call
+      GetId before login. Alert volume will be high for pools intentionally serving
+      anonymous users. Scope by source IP allowlist or restrict to unexpected AWS regions.
+    - SDK test harnesses and CI pipelines exercising anonymous Cognito paths.
+level: high
+---
+title: Cognito Identity Pool Enumeration and Misconfiguration Discovery
+id: c3d4e5f6-a7b8-4012-cd34-123456789003
+status: experimental
+description: >
+  Detects an attacker using compromised AWS credentials to enumerate Cognito
+  Identity Pools (ListIdentityPools) and then probe a specific pool to confirm
+  it allows unauthenticated identities (DescribeIdentityPool). This discovery
+  pattern precedes the anonymous GetId/GetCredentialsForIdentity credential
+  acquisition path (T1078.004). Either API call from a non-automated, interactive
+  session warrants investigation; both from the same session within a short window
+  is high confidence.
+references:
+    - https://attack.mitre.org/techniques/T1078/004/
+    - https://docs.aws.amazon.com/cognitoidentity/latest/APIReference/API_ListIdentityPools.html
+    - https://docs.aws.amazon.com/cognitoidentity/latest/APIReference/API_DescribeIdentityPool.html
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.discovery
+    - attack.t1078.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_enum:
+        eventSource: 'cognito-identity.amazonaws.com'
+        eventName:
+            - 'ListIdentityPools'
+            - 'DescribeIdentityPool'
+    # Filter known automation and CI service accounts performing health checks.
+    # Tune: add your deployment role ARNs and CI principal patterns here.
+    filter_known_automation:
+        userIdentity.arn|contains:
+            - 'ci-service'
+            - 'deploy-role'
+            - 'health-check'
+    condition: selection_enum and not filter_known_automation
+falsepositives:
+    - Security scanning tools and cloud posture management platforms (e.g., Prowler,
+      ScoutSuite, AWS Config rules) that enumerate Cognito pools as part of routine
+      compliance checks.
+    - Developer troubleshooting sessions from the AWS Console or CLI using personal IAM credentials.
+    - Automated infrastructure pipelines that read pool configuration during deployment.
+level: medium
+---
+title: Cognito Unauthenticated Credential Abuse Chain - Anonymous Cred Issuance Followed by S3 Data Access
+id: f6a7b8c9-d0e1-4345-f067-456789012006
+status: experimental
+description: >
+  Correlation rule covering the full T1078.004 Cognito unauthenticated credential
+  abuse kill chain: anonymous GetCredentialsForIdentity (no SigV4 principal)
+  followed within a short window by S3 data access (ListObjectsV2 or GetObject)
+  from the unauth role session the Cognito call produced.
+
+  Tactic coverage per step:
+    - Initial Access: IAM user AssumeRole into victim-role (informational, noisy alone)
+    - Discovery: ListIdentityPools + DescribeIdentityPool from victim session
+    - Credential Access: GetId + GetCredentialsForIdentity with no IAM principal (primary IOC)
+    - Verification: GetCallerIdentity from unauth-role session (informational alone, high FP)
+    - Collection: ListObjectsV2 + GetObject from unauth-role session (REQUIRES S3 data events)
+
+  The high-confidence join is: anonymous Cognito credential acquisition (no userIdentity.arn)
+  AND subsequent S3 access whose session issuer is the unauth pool role, within 15 minutes.
+  This combination is essentially unambiguous in production environments.
+
+  PREREQUISITE: S3 data events must be enabled for Collection steps to appear.
+  Without them, alert on anonymous GetCredentialsForIdentity alone (critical).
+references:
+    - https://attack.mitre.org/techniques/T1078/004/
+    - https://docs.aws.amazon.com/cognito/latest/developerguide/authentication-flow.html
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.initial_access
+    - attack.discovery
+    - attack.credential_access
+    - attack.collection
+    - attack.t1078.004
+logsource:
+    product: aws
+    service: cloudtrail
+# SIGMA does not have native temporal correlation; implement this as a SIEM-side
+# detection using the KQL version (kql_T1078.004_correlation_cognito_unauth_chain.kql)
+# which expresses the join explicitly with a 15-minute window.
+# The SIGMA rules below represent the two anchoring events for documentation purposes.
+detection:
+    # Anchor 1: anonymous credential acquisition (primary IOC)
+    anchor_anon_getcreds:
+        eventSource: 'cognito-identity.amazonaws.com'
+        eventName:
+            - 'GetId'
+            - 'GetCredentialsForIdentity'
+    filter_has_principal:
+        userIdentity.arn|exists: true
+
+    # Anchor 2: S3 access from unauth Cognito session (requires data events)
+    anchor_s3_unauth:
+        eventSource: 's3.amazonaws.com'
+        eventName:
+            - 'ListObjectsV2'
+            - 'GetObject'
+        userIdentity.type: 'AssumedRole'
+    anchor_s3_cognito_issuer:
+        userIdentity.sessionContext.sessionIssuer.arn|contains:
+            - 'unauth'
+            - 'cognito'
+
+    # Informational: GetCallerIdentity from unauth role session (confirms successful
+    # privilege acquisition but is extremely noisy as a standalone signal).
+    anchor_getcalleridentity_unauth:
+        eventSource: 'sts.amazonaws.com'
+        eventName: 'GetCallerIdentity'
+        userIdentity.type: 'AssumedRole'
+        userIdentity.arn|contains:
+            - 'unauth'
+            - 'cognito'
+
+    # Primary condition: detect the Credential Access anchor alone (highest value,
+    # lowest FP, no data-event dependency).
+    condition: (anchor_anon_getcreds and not filter_has_principal) or
+               (anchor_s3_unauth and anchor_s3_cognito_issuer)
+falsepositives:
+    - Legitimate anonymous user flows in applications designed for guest access.
+    - Development and test environments exercising the Cognito unauthenticated path.
+    - Cloud security posture tools (Prowler, ScoutSuite) performing enumeration.
+level: critical
+---
+title: S3 Data Access from Unauthenticated Cognito Identity Pool Session
+id: e5f6a7b8-c9d0-4234-ef56-345678901005
+status: experimental
+description: >
+  Detects S3 ListObjectsV2 and GetObject calls issued by a session whose
+  originating IAM role was assumed via a Cognito Identity Pool unauthenticated
+  flow. The session issuer ARN in CloudTrail identifies the pool's unauth role;
+  the session name (principalId) carries a Cognito Identity ID (region:UUID format).
+  This pattern indicates lateral movement from an anonymous Cognito credential
+  acquisition (T1078.004) into cloud storage access.
+
+  PREREQUISITE: S3 data events must be enabled in the CloudTrail trail or on the
+  bucket directly. GetObject and ListObjectsV2 do NOT appear in CloudTrail by
+  default (they are data plane events). Without data events enabled, this rule
+  produces zero matches. Enable via trail configuration or S3 bucket event selectors.
+references:
+    - https://attack.mitre.org/techniques/T1078/004/
+    - https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
+    - https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.collection
+    - attack.t1078.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_s3_data_access:
+        eventSource: 's3.amazonaws.com'
+        eventName:
+            - 'ListObjectsV2'
+            - 'GetObject'
+        userIdentity.type: 'AssumedRole'
+    # A Cognito unauth session's sessionIssuer.arn points to the pool's unauth IAM role.
+    # The session name (tail of userIdentity.arn after the role name) is a Cognito
+    # Identity ID -- a UUID prefixed with the AWS region, e.g. us-east-1:uuid.
+    # Tune: replace the pattern below with your actual unauth role name(s).
+    # Example issuer pattern: arn:aws:iam::ACCOUNT:role/<your-unauth-role-name>
+    selection_cognito_session:
+        userIdentity.sessionContext.sessionIssuer.arn|contains:
+            - 'unauth'
+            - 'cognito'
+            - 'anonymous'
+    # Filter legitimate app back-end service roles if they match the name patterns above.
+    filter_known_services:
+        userIdentity.sessionContext.sessionIssuer.arn|contains:
+            - 'app-backend-svc'
+            - 'data-pipeline'
+    condition: selection_s3_data_access and selection_cognito_session and not filter_known_services
+falsepositives:
+    - Legitimate application guest-mode flows where the app intentionally reads S3
+      objects via unauthenticated Cognito credentials (e.g., public asset serving).
+      Scope by bucket ARN or object key prefix to exclude known guest-accessible paths.
+    - Security scanner or audit tooling that assumes a Cognito unauth role during
+      posture assessment.
+level: high
+---
+title: AssumeRole from IAM User into Sensitive Role - Initial Lateral Movement
+id: d4e5f6a7-b8c9-4123-de45-234567890004
+status: experimental
+description: >
+  Detects an IAM user (not a role or service) performing AssumeRole into a target
+  role, which is the initial access step before Cognito identity pool enumeration
+  in T1078.004 campaigns. Standalone AssumeRole by IAM users is common and noisy;
+  this rule is most valuable when correlated with subsequent Cognito enumeration
+  (ListIdentityPools, DescribeIdentityPool) from the resulting session within the
+  same attack chain. Use at level: informational unless further correlated.
+  In the emulated chain: attacker IAM user assumes victim-role
+  (session name 'emulation-cognito-unauth'), then uses that session to enumerate pools.
+references:
+    - https://attack.mitre.org/techniques/T1078/004/
+    - https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.initial_access
+    - attack.t1078.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_assumerole_by_user:
+        eventSource: 'sts.amazonaws.com'
+        eventName: 'AssumeRole'
+        userIdentity.type: 'IAMUser'
+    # Tune: narrow to roles with Cognito permissions or sensitive resource access.
+    # The attacker emulation uses session name 'emulation-cognito-unauth' --
+    # requestParameters.roleSessionName can anchor this in lab environments.
+    filter_known_automation:
+        userIdentity.arn|contains:
+            - 'ci-deploy'
+            - 'automation'
+            - 'terraform'
+            - 'pulumi'
+    condition: selection_assumerole_by_user and not filter_known_automation
+falsepositives:
+    - Developers and operators assuming roles via the AWS CLI or Console for
+      routine work. This is the highest-volume management event in most accounts.
+    - Automated tooling (IaC, CI/CD) using long-lived IAM user keys to assume
+      deployment roles. Tune filter_known_automation to cover your environment.
+level: low

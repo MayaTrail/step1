@@ -1,0 +1,22 @@
+{
+  "campaign": "ATOMIC-DYNAMODB-EXPORT-TO-S3",
+  "csp": "aws",
+  "resources": {
+    "prod_customers_table":    "prod-customers",
+    "internal_api_keys_table": "internal-api-keys",
+    "victim_role":             "atomic-dynamodb-export-to-s3-victim-role",
+    "victim_policy":           "atomic-dynamodb-export-to-s3-victim-policy",
+    "attacker_user":           "atomic-dynamodb-export-to-s3-attacker-user"
+  },
+  "pulumi_export_keys": {
+    "victim_role_arn":               "victim_role_arn",
+    "victim_role_name":              "victim_role_name",
+    "export_bucket_name":            "export_bucket_name",
+    "prod_customers_table_name":     "prod_customers_table_name",
+    "prod_customers_table_arn":      "prod_customers_table_arn",
+    "internal_api_keys_table_name":  "internal_api_keys_table_name",
+    "attacker_access_key_id":        "attacker_access_key_id",
+    "attacker_secret_access_key":    "attacker_secret_access_key",
+    "sink_bucket_name":              "sink_bucket_name"
+  }
+}

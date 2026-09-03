@@ -1,0 +1,33 @@
+{
+  "campaign": "ATOMIC-ELBV2-LISTENER-AUTH-BYPASS",
+  "csp": "aws",
+  "resources": {
+    "flow_log_bucket":        "elbv2-bypass-flow-log-bucket",
+    "cognito_pool_name":      "elbv2-bypass-pool",
+    "cognito_client_name":    "elbv2-bypass-alb-client",
+    "cognito_domain_prefix":  "elbv2bypass",
+    "lambda_exec_role_name":  "elbv2-bypass-lambda-exec-role",
+    "backend_lambda_name":    "elbv2-bypass-backend-lambda",
+    "protected_tg_name":      "elbv2-bypass-protected-tg",
+    "alb_name":               "elbv2-bypass-alb",
+    "victim_user_name":       "elbv2-bypass-devops-svc",
+    "victim_policy_name":     "elbv2-bypass-victim-policy",
+    "canary_secret_name":     "prod/internal-portal/db-master"
+  },
+  "pulumi_export_keys": {
+    "alb_dns_name":             "alb_dns_name",
+    "listener_arn":             "listener_arn",
+    "health_rule_arn":          "health_rule_arn",
+    "protected_tg_arn":         "protected_tg_arn",
+    "cognito_pool_id":          "cognito_pool_id",
+    "cognito_client_id":        "cognito_client_id",
+    "cognito_domain":           "cognito_domain",
+    "victim_access_key_id":     "victim_access_key_id",
+    "victim_secret_access_key": "victim_secret_access_key",
+    "victim_user_name":         "victim_user_name",
+    "flow_log_bucket_name":     "flow_log_bucket_name",
+    "access_key_id":            "access_key_id",
+    "secret_access_key":        "secret_access_key",
+    "dns_name":                 "dns_name"
+  }
+}

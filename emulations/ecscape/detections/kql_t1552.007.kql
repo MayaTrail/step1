@@ -1,0 +1,24 @@
+// ECScape — ECS task/execution role credentials used away from their owning task.
+// Sentinel / Log Analytics (AWSCloudTrail table).
+//
+// Highest-fidelity ECScape signal: a *task execution* role (agent-only identity)
+// or a task role making API calls from a source IP that is not the container
+// instance it was issued to. ECScape harvests these over the ACS WebSocket, so
+// the theft is invisible — but the subsequent *use* of the stolen role is not.
+//
+// Adjust the role-name patterns and the known-instance IP set to your environment.
+let attackerRoles = dynamic(["s3-control-role", "secret-execution-role"]);
+AWSCloudTrail
+| where TimeGenerated > ago(1h)
+| extend RoleArn = tostring(parse_json(UserIdentity).arn)
+| where RoleArn has_any (attackerRoles)
+| extend SessionIssuer = tostring(parse_json(UserIdentity).sessionContext.sessionIssuer.userName)
+| summarize
+    Calls = count(),
+    Events = make_set(EventName, 20),
+    SourceIPs = make_set(SourceIpAddress, 20)
+    by RoleArn, SessionIssuer, bin(TimeGenerated, 5m)
+// Flag execution-role usage at all (should never appear in app calls),
+// or task-role usage from more than one distinct source IP in the window.
+| where RoleArn has "execution" or array_length(SourceIPs) > 1
+| project TimeGenerated, RoleArn, Calls, SourceIPs, Events

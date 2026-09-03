@@ -1,0 +1,34 @@
+// Exfiltrate RDS Snapshot by Sharing (T1537)
+//
+// rds:ModifyDBSnapshotAttribute with attributeName == "restore" and a non-empty
+// valuesToAdd shares a database snapshot with another AWS account. Compare the
+// added account IDs against your org's known DR/partner accounts; anything else
+// is a full-database exfiltration primitive. "all" in valuesToAdd = public.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL.
+let KnownPartnerAccounts = dynamic([]);  // <- add your DR/partner account IDs
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "rds.amazonaws.com"
+| where EventName == "ModifyDBSnapshotAttribute"
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend AttributeName = tostring(Req.attributeName)
+| where AttributeName == "restore"
+| extend AddedRaw = Req.valuesToAdd
+| mv-expand AddedAccount = AddedRaw to typeof(string)
+| where isnotempty(AddedAccount)
+| where AddedAccount !in (KnownPartnerAccounts)
+| extend SnapshotId = tostring(Req.dBSnapshotIdentifier)
+| extend Verdict = iff(AddedAccount == "all",
+                       "SNAPSHOT MADE PUBLIC - P0",
+                       "SNAPSHOT SHARED WITH EXTERNAL ACCOUNT - P1")
+| project TimeGenerated, SnapshotId, AddedAccount, Verdict,
+          PrincipalArn = UserIdentityArn, SourceIp = SourceIpAddress,
+          AWSRegion, UserAgent
+| order by TimeGenerated desc
+//
+// Pair with a scheduled inventory check: describe-db-snapshots
+// --snapshot-type manual then describe-db-snapshot-attributes for each, and
+// alert on any snapshot whose restore attribute lists an account outside the org.
+// The event-driven rule misses shares that predate log collection.

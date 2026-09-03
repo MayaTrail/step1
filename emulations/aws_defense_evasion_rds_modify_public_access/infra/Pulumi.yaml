@@ -1,0 +1,3 @@
+name: mayatrail-atomic-rds-modify-public-access
+runtime: python
+description: Atomic emulation - RDS ModifyDBInstance public access T1562.007

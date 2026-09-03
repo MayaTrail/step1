@@ -1,0 +1,198 @@
+title: CICD Supply Chain - IAM User Assumes CICD Service Account Role
+id: a1b2c3d4-e5f6-7890-ab12-cd34ef567801
+status: experimental
+description: >
+  Detects an IAM user directly assuming a role whose ARN matches common CICD service-account
+  naming patterns (codepipeline, cicd, pipeline-service, deploy-role). In the T1195 supply
+  chain scenario, an attacker who has obtained static IAM user credentials calls sts:AssumeRole
+  to acquire a short-lived session scoped to pipeline write permissions. Legitimate CodePipeline
+  role assumptions come from service principals or IaC automation (Terraform, CDK, GitHub Actions
+  OIDC), not from plain IAM users. The roleSessionName field surfaces attacker-controlled session
+  naming conventions such as 'AtomicT1195' used in emulation.
+references:
+    - https://attack.mitre.org/techniques/T1195/
+    - https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html
+author: MayaTrail
+date: 2026/08/27
+tags:
+    - attack.initial_access
+    - attack.t1195
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_cicd_role:
+        eventSource: sts.amazonaws.com
+        eventName: AssumeRole
+        userIdentity.type: IAMUser
+        requestParameters.roleArn|contains:
+            - 'codepipeline'
+            - 'cicd'
+            - 'pipeline-service'
+            - 'deploy-role'
+            - 'pipeline-svc'
+    selection_suspicious_session_name:
+        eventSource: sts.amazonaws.com
+        eventName: AssumeRole
+        userIdentity.type: IAMUser
+        requestParameters.roleSessionName|contains:
+            - 'Atomic'
+            - 'attack'
+            - 'backdoor'
+            - 'redteam'
+            - 'pentest'
+    filter_known_iac:
+        userIdentity.arn|contains:
+            - ':assumed-role/terraform'
+            - ':assumed-role/github-actions'
+            - ':assumed-role/atlantis'
+            - ':assumed-role/cdk'
+    condition: (selection_cicd_role or selection_suspicious_session_name) and not filter_known_iac
+falsepositives:
+    - Developer manually assuming a CICD role for debugging a stuck pipeline execution
+    - Break-glass operations where an ops engineer assumes the pipeline role under incident conditions
+    - Automated tooling that uses a static IAM user key to assume CICD roles (should migrate to OIDC)
+level: medium
+---
+title: CICD Supply Chain - GetPipeline Recon from AssumedRole Session
+id: b2c3d4e5-f6a7-8901-bc23-de45fa678902
+status: experimental
+description: >
+  Detects CodePipeline GetPipeline calls made by an assumed-role session whose issuer ARN
+  matches CICD service-account naming patterns. Attackers who have assumed a compromised
+  CICD role call GetPipeline to read the full pipeline definition, capture the stage list,
+  discover CodeBuild project names (to reuse without CreateProject permission), and obtain
+  the version number required for a subsequent UpdatePipeline write. Legitimate GetPipeline
+  calls from assumed-role sessions are typically IaC automation reading pipeline state;
+  a session named after a non-IaC pattern accessing pipeline configuration warrants review.
+  Low severity on its own -- combine with UpdatePipeline or AssumeRole signals for high-confidence
+  triage using the chain correlation query (kql_T1195_full_chain.kql).
+references:
+    - https://attack.mitre.org/techniques/T1195/
+    - https://docs.aws.amazon.com/codepipeline/latest/APIReference/API_GetPipeline.html
+author: MayaTrail
+date: 2026/08/27
+tags:
+    - attack.initial_access
+    - attack.t1195
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: codepipeline.amazonaws.com
+        eventName: GetPipeline
+        userIdentity.type: AssumedRole
+        userIdentity.sessionContext.sessionIssuer.userName|contains:
+            - 'codepipeline'
+            - 'cicd'
+            - 'pipeline-service'
+            - 'deploy-role'
+            - 'pipeline-svc'
+            - 'victim'
+    # Console sessions use console.amazonaws.com as invokedBy; keep as filter
+    filter_console:
+        userAgent|contains: 'console.amazonaws.com'
+    # IaC automation that legitimately assumes service account roles to read pipeline state
+    filter_known_iac:
+        userIdentity.sessionContext.sessionIssuer.userName|contains:
+            - 'terraform'
+            - 'github-actions'
+            - 'atlantis'
+            - 'cdk'
+    condition: selection and not (filter_console or filter_known_iac)
+falsepositives:
+    - Automated compliance or posture-management tooling that reads pipeline definitions
+      using a CICD role via cross-account or within-account role-chaining
+    - DevSecOps scanning jobs that assume service account roles to audit pipeline config
+    - Engineers debugging pipeline state by assuming the service account role in non-prod accounts
+level: low
+---
+title: CICD Supply Chain - UpdatePipeline Stage Injection via Assumed Role
+id: c3d4e5f6-a7b8-9012-cd34-ef56ab789003
+name: cicd_updatepipeline_base
+status: experimental
+description: >
+  Detects UpdatePipeline API calls originating from an assumed-role session, filtered to exclude
+  known IaC automation patterns (Terraform, CDK, GitHub Actions). UpdatePipeline is a management-
+  plane API that modifies the pipeline definition; the CodePipeline service itself does not call
+  this API internally -- only callers (users, automation) do. An assumed-role session calling
+  UpdatePipeline is suspicious when the session issuer does not match a recognized infrastructure-
+  as-code role: attackers who have compromised a CICD service account use this API to inject a
+  malicious build stage (e.g., 'AttackerStage') between the Source and Build stages, achieving
+  arbitrary code execution on the next pipeline run without touching source control.
+  Note: CDK Pipelines self-mutation is a legitimate AssumedRole UpdatePipeline call via a CodeBuild
+  action -- add 'selfmutate' and 'cdk' to the filter_known_iac list to suppress those.
+  NOTE: The CodePipeline service does NOT generate UpdatePipeline CloudTrail events via the
+  codepipeline.amazonaws.com service principal -- that filter has been intentionally omitted.
+references:
+    - https://attack.mitre.org/techniques/T1195/
+    - https://docs.aws.amazon.com/codepipeline/latest/APIReference/API_UpdatePipeline.html
+author: MayaTrail
+date: 2026/08/27
+tags:
+    - attack.initial_access
+    - attack.t1195
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: codepipeline.amazonaws.com
+        eventName: UpdatePipeline
+        userIdentity.type: AssumedRole
+    # Allowlist: IaC automation and CDK self-mutation are legitimate UpdatePipeline callers
+    filter_known_iac:
+        userIdentity.sessionContext.sessionIssuer.userName|contains:
+            - 'terraform'
+            - 'github-actions'
+            - 'atlantis'
+            - 'cdk'
+            - 'selfmutate'
+            - 'codebuild-cdk'
+    condition: selection and not filter_known_iac
+falsepositives:
+    - Terraform or CDK pipeline-as-code runs that update pipeline definitions using a role not
+      matching the known_iac filter -- extend the filter list with your organization's IaC role names
+    - CDK Pipelines self-mutation where the CodeBuild service role calls UpdatePipeline; add
+      'selfmutate' or 'cdk' to the filter if not already matched
+    - On-call engineer assuming a CICD role to modify a stuck pipeline under incident conditions
+level: high
+---
+# The deployable rule below is a correlation over the injection base rule above.
+# The legacy Sigma v1 pipe form (`condition: ... | count(userIdentity.arn) >= 2`
+# with `timeframe:` and `group-by:` inside `detection:`) was removed from the
+# specification -- pySigma rejects it and no current backend compiles it.
+title: CICD Supply Chain - Rapid UpdatePipeline Pair from Same Session (Inject then Restore)
+id: d4e5f6a7-b8c9-0123-de45-fa67bc890104
+status: experimental
+description: >
+  Two or more UpdatePipeline calls from the same assumed-role session ARN within a 10-
+  minute window, excluding known IaC automation. This temporal pattern is the strongest IOC for
+  the T1195 pipeline injection + restore cycle: an attacker injects a malicious stage (first
+  UpdatePipeline, version N -> N+1) then immediately restores the original definition to cover
+  tracks (second UpdatePipeline, version N+1 -> N+2). The inject call alone is caught by the
+  base rule cicd_updatepipeline_base; the rapid pair is a near-unfalsifiable signal that a
+  version of the pipeline existed briefly with an unauthorized stage, even if the post-restore
+  state appears clean.
+references:
+    - https://attack.mitre.org/techniques/T1195/
+author: MayaTrail
+date: 2026/08/27
+tags:
+    - attack.initial_access
+    - attack.t1195
+correlation:
+    type: event_count
+    rules:
+        - cicd_updatepipeline_base
+    group-by:
+        - userIdentity.arn
+    timespan: 10m
+    condition:
+        gte: 2
+falsepositives:
+    - Pipeline-as-code retry logic that calls UpdatePipeline twice in rapid succession on failure
+    - Automated rollback tooling that reads current state, updates, then verifies by re-reading
+      (though re-reading would be GetPipeline, not a second UpdatePipeline)
+level: critical

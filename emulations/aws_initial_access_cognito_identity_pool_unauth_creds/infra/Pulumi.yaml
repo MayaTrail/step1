@@ -1,0 +1,3 @@
+name: mayatrail-atomic-cognito-identity-pool-unauth-creds
+runtime: python
+description: Atomic emulation - Cognito Identity Pool unauthenticated credential access (T1078.004)

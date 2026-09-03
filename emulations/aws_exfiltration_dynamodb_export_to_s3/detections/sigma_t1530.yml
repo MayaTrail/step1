@@ -1,0 +1,331 @@
+title: DynamoDB Export Exfiltration Chain - Full Attack Sequence Composite
+id: f6a7b8c9-d0e1-2345-f012-456789012306
+status: experimental
+description: |
+    High-confidence composite rule detecting the full ATOMIC-dynamodb-export-to-s3
+    kill chain within a single STS session: ListTables followed by DescribeTable
+    followed by ExportTableToPointInTime from the same assumed-role ARN. Each event
+    alone has moderate FP potential; the sequence within one STS session (same
+    userIdentity.sessionContext.sessionIssuer and roleSessionName) is highly
+    anomalous. The combination of enumeration + reconnaissance + bulk export is the
+    definitive indicator of T1530 via the DynamoDB native export path.
+    Implementation note: correlate by userIdentity.sessionContext.sessionIssuer.arn
+    within a 30-minute sliding window. Use the individual component rules for
+    real-time alerting; use this rule for retrospective threat hunting.
+references:
+    - https://attack.mitre.org/techniques/T1530/
+    - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_ExportTableToPointInTime.html
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.collection
+    - attack.t1530
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_enumeration:
+        eventSource: 'dynamodb.amazonaws.com'
+        eventName: 'ListTables'
+        userIdentity.type: 'AssumedRole'
+    selection_describe:
+        eventSource: 'dynamodb.amazonaws.com'
+        eventName: 'DescribeTable'
+        userIdentity.type: 'AssumedRole'
+    selection_export:
+        eventSource: 'dynamodb.amazonaws.com'
+        eventName: 'ExportTableToPointInTime'
+        userIdentity.type: 'AssumedRole'
+    # Temporal correlation: all three events from the same assumed-role session
+    # within a 30-minute window. Backend SIEM must group by:
+    #   userIdentity.sessionContext.sessionIssuer.arn
+    # and check that all three selections match within the time window.
+    condition: selection_enumeration and selection_describe and selection_export
+falsepositives:
+    - Fully automated DynamoDB backup scripts that enumerate, describe, and export
+      tables in sequence using a dedicated backup role -- verify role ARN against
+      known backup automation before dismissing
+level: critical
+fields:
+    - eventName
+    - eventSource
+    - userIdentity.arn
+    - userIdentity.type
+    - userIdentity.sessionContext.sessionIssuer.arn
+    - requestParameters.tableName
+    - requestParameters.tableArn
+    - requestParameters.s3Bucket
+    - sourceIPAddress
+    - awsRegion
+---
+title: DynamoDB DescribeExport Polling - Attacker Confirming Export Completion
+id: e5f6a7b8-c9d0-1234-ef01-345678901205
+status: experimental
+description: |
+    Detects repeated DynamoDB DescribeExport API calls from the same principal
+    within a short time window. After triggering ExportTableToPointInTime, an
+    attacker polls DescribeExport to confirm the export has reached COMPLETED
+    status before attempting to access the S3 output. In the ATOMIC emulation the
+    attack script polls at 15-second intervals for up to 40 attempts (600 seconds
+    total). Legitimate orchestration services typically use EventBridge or Lambda
+    to receive export completion events rather than polling. Multiple DescribeExport
+    calls from the same AssumedRole session within 10 minutes is a strong indicator
+    of attacker confirmation behavior following ExportTableToPointInTime.
+references:
+    - https://attack.mitre.org/techniques/T1530/
+    - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_DescribeExport.html
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.collection
+    - attack.t1530
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_event:
+        eventSource: 'dynamodb.amazonaws.com'
+        eventName: 'DescribeExport'
+    filter_known_backup_roles:
+        userIdentity.arn|contains:
+            - 'DynamoDBBackupAutomation'
+            - 'scheduled-backup'
+            - 'backup-service-role'
+    condition: selection_event and not filter_known_backup_roles
+falsepositives:
+    - Backup monitoring scripts that poll export status via DescribeExport
+    - Data pipeline orchestrators (Step Functions, Airflow) checking export progress
+level: medium
+fields:
+    - eventName
+    - eventSource
+    - userIdentity.arn
+    - userIdentity.sessionContext.sessionIssuer.arn
+    - requestParameters.exportArn
+    - responseElements.exportDescription.exportStatus
+    - sourceIPAddress
+    - awsRegion
+---
+title: DynamoDB DescribeTable Reconnaissance on Sensitive or Honey Tables
+id: c3d4e5f6-a7b8-9012-cdef-123456789003
+status: experimental
+description: |
+    Detects DescribeTable calls on DynamoDB tables whose names suggest PII,
+    credentials, or honey-token data. In the ATOMIC-dynamodb-export-to-s3
+    emulation, the attacker calls DescribeTable on both 'prod-customers' (to obtain
+    the ARN for ExportTableToPointInTime) and 'internal-api-keys' (credential-named
+    honey table). DescribeTable is the attacker's pre-export reconnaissance step --
+    it reveals item count and table ARN required to trigger the export. Accessing a
+    honey table named 'internal-api-keys' is a near-certain indicator of malicious
+    intent. Correlate with ListTables in the same session to identify full
+    enumeration sequences.
+references:
+    - https://attack.mitre.org/techniques/T1530/
+    - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_DescribeTable.html
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.collection
+    - attack.t1530
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_event:
+        eventSource: 'dynamodb.amazonaws.com'
+        eventName: 'DescribeTable'
+    selection_sensitive_table:
+        requestParameters.tableName|contains:
+            - 'customer'
+            - 'api-key'
+            - 'secret'
+            - 'credential'
+            - 'password'
+            - 'token'
+            - 'pii'
+            - 'prod'
+            - 'internal'
+    selection_honey_table:
+        requestParameters.tableName|contains:
+            - 'internal-api-keys'
+            - 'api-keys'
+            - 'honey'
+    filter_legitimate_services:
+        userIdentity.arn|contains:
+            - ':assumed-role/AWSServiceRole'
+            - ':assumed-role/aws-service-role'
+    # High-confidence: DescribeTable on a honey table is almost always malicious
+    condition: selection_event and (selection_honey_table or (selection_sensitive_table and not filter_legitimate_services))
+falsepositives:
+    - Application monitoring tools that inspect DynamoDB table metrics by name pattern
+    - Database administrators performing routine table health checks
+    - IaC deployments verifying existing table configurations before apply
+level: high
+fields:
+    - eventName
+    - eventSource
+    - userIdentity.arn
+    - userIdentity.type
+    - requestParameters.tableName
+    - sourceIPAddress
+    - awsRegion
+---
+title: DynamoDB ExportTableToPointInTime - Bulk Data Exfiltration to S3
+id: d4e5f6a7-b8c9-0123-def0-234567890104
+status: experimental
+description: |
+    Detects DynamoDB ExportTableToPointInTime API calls, which trigger a full
+    table dump to an S3 bucket. This API bypasses per-item visibility entirely --
+    no GetItem or Scan calls appear in CloudTrail, and the actual S3 writes are
+    performed by the DynamoDB service principal rather than the caller. This makes
+    it a stealthy bulk-exfiltration path: the only CloudTrail signal is this single
+    control-plane event. In the ATOMIC-dynamodb-export-to-s3 emulation the attacker
+    calls this on 'prod-customers' (PII table) using a victim-role STS session,
+    routing the exported data to an in-account S3 sink bucket. Any use of this API
+    from an AssumedRole principal should be treated with high suspicion unless the
+    caller is a known backup automation service account.
+references:
+    - https://attack.mitre.org/techniques/T1530/
+    - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_ExportTableToPointInTime.html
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.collection
+    - attack.t1530
+    - attack.exfiltration
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_event:
+        eventSource: 'dynamodb.amazonaws.com'
+        eventName: 'ExportTableToPointInTime'
+    filter_known_backup_roles:
+        # Adjust to match your environment's approved DynamoDB backup automation roles
+        userIdentity.arn|contains:
+            - 'DynamoDBBackupAutomation'
+            - 'scheduled-backup'
+            - 'backup-service-role'
+    condition: selection_event and not filter_known_backup_roles
+falsepositives:
+    - Scheduled DynamoDB backup jobs using ExportTableToPointInTime
+    - Data engineering pipelines exporting DynamoDB data to S3 for analytics (Glue, EMR)
+    - Disaster recovery procedures run by authorized operations teams
+level: critical
+fields:
+    - eventName
+    - eventSource
+    - userIdentity.arn
+    - userIdentity.type
+    - userIdentity.sessionContext.sessionIssuer.arn
+    - requestParameters.tableArn
+    - requestParameters.s3Bucket
+    - requestParameters.s3Prefix
+    - responseElements.exportDescription.exportArn
+    - responseElements.exportDescription.exportStatus
+    - sourceIPAddress
+    - awsRegion
+---
+title: DynamoDB Table Enumeration via ListTables
+id: b2c3d4e5-f6a7-8901-bcde-f12345678902
+status: experimental
+description: |
+    Detects DynamoDB ListTables API calls issued from an STS assumed-role session
+    (AssumedRole principal type). In the ATOMIC-dynamodb-export-to-s3 emulation,
+    the attacker enumerates all tables in the region immediately after assuming the
+    victim role, scanning for high-value PII and credential-named tables before
+    triggering ExportTableToPointInTime. Legitimate services that read DynamoDB
+    tables reference them by name directly and rarely need to enumerate all tables
+    from a role that was assumed by an external IAM user.
+references:
+    - https://attack.mitre.org/techniques/T1530/
+    - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_ListTables.html
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.collection
+    - attack.t1530
+    - attack.discovery
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_event:
+        eventSource: 'dynamodb.amazonaws.com'
+        eventName: 'ListTables'
+    selection_caller_type:
+        userIdentity.type: 'AssumedRole'
+    filter_legitimate_services:
+        userIdentity.arn|contains:
+            - ':assumed-role/AWSServiceRole'
+            - ':assumed-role/aws-service-role'
+            - 'lambda_basic_execution'
+            - 'LambdaExecution'
+    condition: selection_event and selection_caller_type and not filter_legitimate_services
+falsepositives:
+    - DynamoDB management dashboards that enumerate tables for display
+    - IaC frameworks (Pulumi, Terraform) inspecting existing infrastructure during plan/apply
+    - Application bootstrapping code that discovers tables dynamically at startup
+level: medium
+fields:
+    - eventName
+    - eventSource
+    - userIdentity.arn
+    - userIdentity.type
+    - userIdentity.sessionContext.sessionIssuer.arn
+    - sourceIPAddress
+    - awsRegion
+---
+title: Attacker STS AssumeRole into DynamoDB Victim Role
+id: a1b2c3d4-e5f6-7890-abcd-ef1234567801
+status: experimental
+description: |
+    Detects an IAM user assuming a role whose name contains patterns consistent
+    with a DynamoDB data-export victim role. In the ATOMIC-dynamodb-export-to-s3
+    emulation, an attacker assumes 'atomic-dynamodb-export-to-s3-victim-role' with
+    roleSessionName 'atomic-t1530-session' using a long-lived static access key.
+    Legitimate automation does not typically create named STS sessions with
+    T1530-style session names or assume roles scoped explicitly for DynamoDB export
+    access from interactive/external principals.
+references:
+    - https://attack.mitre.org/techniques/T1530/
+    - https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.collection
+    - attack.t1530
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_event:
+        eventSource: 'sts.amazonaws.com'
+        eventName: 'AssumeRole'
+    selection_session_name:
+        requestParameters.roleSessionName|contains:
+            - 't1530'
+            - 'atomic'
+            - 'export-to-s3'
+    selection_role_name:
+        requestParameters.roleArn|contains:
+            - 'export-to-s3'
+            - 'dynamodb-export'
+    filter_service_accounts:
+        userIdentity.arn|contains:
+            - ':assumed-role/AWSServiceRole'
+            - ':assumed-role/aws-service-role'
+    condition: selection_event and (selection_session_name or selection_role_name) and not filter_service_accounts
+falsepositives:
+    - Automated CI/CD pipelines that assume DynamoDB backup roles with verbose session names
+    - Disaster recovery scripts that export DynamoDB to S3 on a schedule
+level: high
+fields:
+    - eventName
+    - eventSource
+    - userIdentity.arn
+    - userIdentity.type
+    - requestParameters.roleArn
+    - requestParameters.roleSessionName
+    - sourceIPAddress
+    - awsRegion

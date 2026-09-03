@@ -1,0 +1,24 @@
+{
+  "campaign": "ATOMIC-WAFV2-DISABLE-WEB-ACL",
+  "csp": "aws",
+  "resources": {
+    "victim_web_acl":   "atomic-wafv2-disable-web-acl-victim-web-acl",
+    "attacker_role":    "atomic-wafv2-disable-web-acl-attacker-role",
+    "attacker_policy":  "atomic-wafv2-disable-web-acl-attacker-policy",
+    "decoy_ssm_param":  "/prod/security/waf-bypass-runbook",
+    "trail_bucket":     "atomic-wafv2-disable-web-acl-trail-bucket",
+    "cloudtrail":       "atomic-wafv2-disable-web-acl-cloudtrail",
+    "web_acl_scope":    "REGIONAL"
+  },
+  "pulumi_export_keys": {
+    "web_acl_id":           "web_acl_id",
+    "web_acl_name":         "web_acl_name",
+    "web_acl_arn":          "web_acl_arn",
+    "web_acl_scope":        "web_acl_scope",
+    "attacker_role_arn":    "attacker_role_arn",
+    "attacker_role_name":   "attacker_role_name",
+    "trail_name":           "trail_name",
+    "trail_bucket_name":    "trail_bucket_name",
+    "decoy_ssm_param_name": "decoy_ssm_param_name"
+  }
+}

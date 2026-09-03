@@ -1,0 +1,120 @@
+# FILE: sigma_T1567_assume_role.yml
+title: SNS Exfil - AssumeRole for Over-Permissioned Victim Role
+id: a3f2d891-4c6b-4e7a-b1c3-8d9e2f5a6b7c
+status: experimental
+description: >
+  Detects an AssumeRole call targeting an IAM role with broad SNS/SQS permissions
+  (sns:Subscribe, sns:ListTopics, sns:Publish, sqs:ReceiveMessage). In T1567 SNS
+  exfiltration chains an attacker assumes such a role to enumerate topics and register
+  an attacker-controlled subscription endpoint. Alert when the calling principal is not
+  an expected automation or CI/CD service account.
+references:
+    - https://attack.mitre.org/techniques/T1567/
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.exfiltration
+    - attack.t1567
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: sts.amazonaws.com
+        eventName: AssumeRole
+        requestParameters.roleArn|contains:
+            - 'sns-external-subscription'
+            - 'sns-exfil'
+            - 'sns-victim'
+    filter_legitimate:
+        userIdentity.arn|contains:
+            - ':role/aws-service-role/'
+            - ':role/AWSServiceRole'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - Authorized penetration testing or red team exercises
+    - Legitimate cross-account federation using the named role pattern
+level: medium
+---
+# FILE: sigma_T1567_sns_list_topics.yml
+title: SNS Exfil - Topic Enumeration via ListTopics
+id: b7e1a234-5d8f-4a9c-c2e4-9f0b36d7e8f1
+status: experimental
+description: >
+  Detects SNS ListTopics API calls made from a short-lived STS session (indicated by
+  userIdentity.type AssumedRole). In T1567 exfiltration chains, an adversary enumerates
+  SNS topics immediately after role assumption to identify candidate targets for
+  malicious subscription registration. Standalone ListTopics is low signal, but in
+  combination with a Subscribe event from the same session it becomes high confidence.
+references:
+    - https://attack.mitre.org/techniques/T1567/
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.exfiltration
+    - attack.t1567
+    - attack.discovery
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: sns.amazonaws.com
+        eventName: ListTopics
+        userIdentity.type: AssumedRole
+    filter_legitimate:
+        userIdentity.arn|contains:
+            - ':assumed-role/AWSServiceRole'
+            - ':assumed-role/aws-service-role'
+            - ':assumed-role/OrganizationAccountAccessRole'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - Monitoring tools and compliance scanners running under assumed roles
+    - Infrastructure-as-code pipelines auditing SNS topic inventory
+level: low
+---
+# FILE: sigma_T1567_sns_subscribe.yml
+title: SNS Exfil - External Subscription Registration on SNS Topic
+id: c4d8b567-6e9a-4f1d-d3f5-0a1c47e8f9a2
+status: experimental
+description: >
+  Detects SNS Subscribe calls where the subscription protocol is email, email-json,
+  https, http, or sqs (especially a cross-account SQS ARN). This is the core T1567
+  action: an adversary registers an attacker-controlled endpoint (HTTP webhook, email
+  inbox, or external SQS queue) to receive all future topic deliveries. SQS subscriptions
+  auto-confirm without a handshake, making them immediately active. Correlate with a
+  preceding AssumeRole and ListTopics from the same session for highest confidence.
+references:
+    - https://attack.mitre.org/techniques/T1567/
+    - https://docs.aws.amazon.com/sns/latest/dg/sns-http-https-endpoint-as-subscriber.html
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.exfiltration
+    - attack.t1567
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_external_protocol:
+        eventSource: sns.amazonaws.com
+        eventName: Subscribe
+        requestParameters.protocol:
+            - email
+            - email-json
+            - https
+            - http
+    selection_sqs_assumed_role:
+        eventSource: sns.amazonaws.com
+        eventName: Subscribe
+        requestParameters.protocol: sqs
+        userIdentity.type: AssumedRole
+    filter_legitimate_sqs:
+        userIdentity.arn|contains:
+            - ':assumed-role/AWSServiceRole'
+            - ':assumed-role/aws-service-role'
+    condition: selection_external_protocol or (selection_sqs_assumed_role and not filter_legitimate_sqs)
+falsepositives:
+    - Authorized notification pipelines subscribing SQS queues to SNS topics via automation roles
+    - Internal alerting systems using email or HTTPS webhooks
+level: high

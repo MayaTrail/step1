@@ -1,0 +1,3 @@
+name: mayatrail-elbv2-listener-auth-bypass
+runtime: python
+description: ELBv2 Listener Authentication Bypass (T1556) atomic emulation infrastructure

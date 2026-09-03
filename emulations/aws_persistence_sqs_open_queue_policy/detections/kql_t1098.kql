@@ -1,0 +1,213 @@
+
+
+// ======================================================================
+
+
+// FILE: kql_T1098_sqs_wildcard_policy.kql
+// SQS Wildcard Policy Injection (T1098) - Account Manipulation via Open Queue Policy
+//
+// Detects SetQueueAttributes calls that embed a wildcard Principal ("*") in the
+// SQS resource-based policy. CloudTrail records the Policy JSON inside
+// requestParameters. A wildcard principal grants public access to any AWS identity.
+//
+// Table: AWSCloudTrail (Sentinel / Log Analytics workspace with CloudTrail connector)
+// Required fields: EventName, EventSource, UserIdentityArn, RequestParameters,
+//                  SourceIpAddress, UserAgent, AWSRegion, TimeGenerated
+
+AWSCloudTrail
+| where EventName == "SetQueueAttributes"
+| where EventSource == "sqs.amazonaws.com"
+| where RequestParameters has_any (
+    '"Principal":"*"',
+    '"Principal": "*"',
+    '"Principal":{"AWS":"*"}',
+    '"Principal": {"AWS": "*"}'
+  )
+// Exclude known IaC deployer roles — adjust ARN suffixes to match your environment
+| where UserIdentityArn !endswith "/PulumiDeployer"
+      and UserIdentityArn !endswith "/TerraformDeployer"
+      and UserIdentityArn !endswith "/CDKToolkit"
+| extend
+    QueueUrl         = tostring(parse_json(RequestParameters).queueUrl),
+    PolicyRaw        = tostring(parse_json(RequestParameters).["attributes.Policy"]),
+    PrincipalArn     = UserIdentityArn,
+    CallerType       = UserIdentityType,
+    SessionIssuer    = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.arn)
+| project
+    TimeGenerated,
+    EventName,
+    QueueUrl,
+    PrincipalArn,
+    CallerType,
+    SessionIssuer,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    PolicyRaw
+| sort by TimeGenerated desc
+
+// FILE: kql_T1098_sqs_enumeration.kql
+// SQS Enumeration Reconnaissance (T1098 precursor) - ListQueues + GetQueueAttributes
+//
+// Detects principals that call ListQueues followed by GetQueueAttributes within
+// a 10-minute window from the same source IP. This two-step pattern is the
+// reconnaissance phase of the SQS open-queue-policy attack: attacker identifies
+// target queues then resolves the queue ARN before injecting a wildcard policy.
+//
+// Low-severity standalone; escalate when the same principal subsequently calls
+// SetQueueAttributes (see kql_T1098_sqs_chain.kql for correlated version).
+
+let LookbackWindow = 1d;
+let ReconWindow = 10m;
+
+let ListQueuesEvents =
+    AWSCloudTrail
+    | where TimeGenerated > ago(LookbackWindow)
+    | where EventName == "ListQueues"
+    | where EventSource == "sqs.amazonaws.com"
+    | where UserIdentityArn !endswith "/PulumiDeployer"
+          and UserIdentityArn !endswith "/TerraformDeployer"
+    | project
+        ListTime     = TimeGenerated,
+        PrincipalArn = UserIdentityArn,
+        SourceIp     = SourceIpAddress,
+        UserAgent,
+        AWSRegion;
+
+let GetAttrEvents =
+    AWSCloudTrail
+    | where TimeGenerated > ago(LookbackWindow)
+    | where EventName == "GetQueueAttributes"
+    | where EventSource == "sqs.amazonaws.com"
+    | where UserIdentityArn !endswith "/PulumiDeployer"
+          and UserIdentityArn !endswith "/TerraformDeployer"
+    | extend QueueUrl = tostring(parse_json(RequestParameters).queueUrl)
+    | project
+        GetTime      = TimeGenerated,
+        PrincipalArn = UserIdentityArn,
+        SourceIp     = SourceIpAddress,
+        QueueUrl,
+        UserAgent,
+        AWSRegion;
+
+ListQueuesEvents
+| join kind=inner GetAttrEvents on PrincipalArn, SourceIp
+| where GetTime between (ListTime .. (ListTime + ReconWindow))
+| project
+    ListTime,
+    GetTime,
+    PrincipalArn,
+    SourceIp,
+    QueueUrl,
+    UserAgent,
+    AWSRegion
+| sort by ListTime desc
+
+// FILE: kql_T1098_sqs_chain.kql
+// SQS Open-Policy Attack Chain Correlation (T1098) - Full 5-Step Sequence
+//
+// Correlates all five CloudTrail events from the atomic attack chain:
+//   Step 1: ListQueues          (enumeration)
+//   Step 2: GetQueueAttributes  (ARN resolution)
+//   Step 3: SetQueueAttributes  with wildcard Principal (policy injection)
+//   Step 4: GetQueueAttributes  (verification that open policy is live)
+//   Step 5: SetQueueAttributes  with empty Policy (cleanup / cover tracks)
+//
+// A principal that completes steps 1-3 within the correlation window is
+// HIGH confidence; steps 1-5 together are the complete attack sequence.
+// Tune CorrelationWindow to match your environment's baseline IaC job durations.
+
+let LookbackWindow    = 1d;
+let CorrelationWindow = 30m;
+
+let SqsEvents =
+    AWSCloudTrail
+    | where TimeGenerated > ago(LookbackWindow)
+    | where EventSource == "sqs.amazonaws.com"
+    | where EventName in ("ListQueues", "GetQueueAttributes", "SetQueueAttributes")
+    | where UserIdentityArn !endswith "/PulumiDeployer"
+          and UserIdentityArn !endswith "/TerraformDeployer"
+          and UserIdentityArn !endswith "/CDKToolkit"
+    | extend
+        QueueUrl  = tostring(parse_json(RequestParameters).queueUrl),
+        PolicyRaw = tostring(parse_json(RequestParameters).["attributes.Policy"])
+    | project
+        TimeGenerated,
+        EventName,
+        PrincipalArn = UserIdentityArn,
+        SourceIp     = SourceIpAddress,
+        UserAgent,
+        AWSRegion,
+        QueueUrl,
+        PolicyRaw;
+
+// Step 3 anchor: wildcard-policy injection
+let WildcardInjections =
+    SqsEvents
+    | where EventName == "SetQueueAttributes"
+    | where PolicyRaw has_any (
+        '"Principal":"*"',
+        '"Principal": "*"',
+        '"Principal":{"AWS":"*"}',
+        '"Principal": {"AWS": "*"}'
+      )
+    | project
+        InjectionTime = TimeGenerated,
+        PrincipalArn,
+        SourceIp,
+        QueueUrl,
+        PolicyRaw,
+        AWSRegion;
+
+// Correlate all other events within CorrelationWindow around each injection
+WildcardInjections
+| join kind=leftouter (
+    SqsEvents
+    | project
+        EventTime   = TimeGenerated,
+        EventName,
+        PrincipalArn,
+        SourceIp,
+        OtherQueue  = QueueUrl,
+        OtherPolicy = PolicyRaw
+) on PrincipalArn, SourceIp
+| where EventTime between (
+    (InjectionTime - CorrelationWindow) ..
+    (InjectionTime + CorrelationWindow)
+  )
+| summarize
+    EventSequence     = make_set(EventName),
+    EarliestEvent     = min(EventTime),
+    LatestEvent       = max(EventTime),
+    QueuesObserved    = make_set(OtherQueue),
+    PolicyInjected    = take_any(PolicyRaw)
+  by PrincipalArn, SourceIp, InjectionTime, AWSRegion
+| extend
+    HasEnumeration    = set_has_element(EventSequence, "ListQueues"),
+    HasVerification   = array_length(
+        set_intersect(EventSequence, dynamic(["GetQueueAttributes"]))
+      ) > 0,
+    HasCleanup        = set_has_element(EventSequence, "SetQueueAttributes"),
+    AttackStepsCount  = array_length(EventSequence)
+| extend
+    RiskScore = case(
+        HasEnumeration and HasVerification and HasCleanup, "CRITICAL",
+        HasEnumeration and HasVerification,                 "HIGH",
+        HasVerification,                                    "MEDIUM",
+        "LOW"
+    )
+| project
+    InjectionTime,
+    RiskScore,
+    PrincipalArn,
+    SourceIp,
+    AWSRegion,
+    EventSequence,
+    HasEnumeration,
+    HasVerification,
+    HasCleanup,
+    QueuesObserved,
+    PolicyInjected,
+    EarliestEvent,
+    LatestEvent
+| sort by InjectionTime desc

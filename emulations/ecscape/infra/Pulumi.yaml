@@ -1,0 +1,3 @@
+name: mayatrail-ecscape
+runtime: python
+description: Prerequisites for ecscape (ECS-on-EC2 cluster + co-resident victim tasks)

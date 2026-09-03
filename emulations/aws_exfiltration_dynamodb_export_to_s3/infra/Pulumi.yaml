@@ -1,0 +1,3 @@
+name: mayatrail-atomic-dynamodb-export-to-s3
+runtime: python
+description: T1530 DynamoDB ExportTableToPointInTime to S3 emulation infrastructure

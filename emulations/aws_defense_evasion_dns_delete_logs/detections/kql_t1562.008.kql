@@ -1,0 +1,27 @@
+// Delete Route53 Resolver Query Log Config (T1562.008)
+//
+// route53resolver:DeleteResolverQueryLogConfig / DisassociateResolverQueryLogConfig
+// both eliminate DNS query visibility. Rare and high-signal outside IaC teardown.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL.
+let IaCDestroyRoles = dynamic(["REPLACE-ME-iac-destroy"]);
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "route53resolver.amazonaws.com"
+| where EventName in ("DeleteResolverQueryLogConfig", "DisassociateResolverQueryLogConfig")
+| where isempty(ErrorCode)
+| where not(UserIdentityArn has_any (IaCDestroyRoles))
+| extend Req = parse_json(RequestParameters)
+| extend ConfigId = tostring(coalesce(Req.resolverQueryLogConfigId, Req.ResolverQueryLogConfigId))
+| extend AffectedVpc = tostring(coalesce(Req.resourceId, Req.ResourceId))
+| extend Verdict = iff(EventName == "DeleteResolverQueryLogConfig",
+                       "DNS QUERY LOGGING DELETED - P1",
+                       "DNS QUERY LOGGING DETACHED FROM VPC - P1")
+| project TimeGenerated, EventName, Verdict, ConfigId, AffectedVpc,
+          PrincipalArn = UserIdentityArn, SourceIp = SourceIpAddress,
+          AWSRegion, UserAgent
+| order by TimeGenerated desc
+//
+// Follow with a scheduled check: list-resolver-query-log-configs and
+// list-resolver-query-log-config-associations, and alert on any VPC that
+// carries no active association.

@@ -1,0 +1,3 @@
+name: mayatrail-codepipeline-inject-stage
+runtime: python
+description: CodePipeline stage injection atomic emulation - T1195
