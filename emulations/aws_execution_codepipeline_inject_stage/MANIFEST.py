@@ -55,7 +55,7 @@ MANIFEST = {
     'estimated_duration_minutes': 12,
     'estimated_cost_per_hour_usd': 0.0,
     'default_ttl_hours': 2,
-    'total_resources': 0,
+    'total_resources': 19,
     'resources': {'ec2_count': 0, 'instance_types': []},
     'resource_costs': [],
 }
