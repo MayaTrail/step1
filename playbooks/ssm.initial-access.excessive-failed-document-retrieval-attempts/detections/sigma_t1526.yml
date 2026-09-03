@@ -1,0 +1,153 @@
+# Excessive Failed Document Retrieval Attempts (T1526)
+#
+# The original rule matched
+#   eventSource:"ssm.amazonaws.com" AND eventName:"getdocument" AND errorCode:"AccessDenied"
+# at more than 10 in five minutes, grouped by
+# userIdentity.sessionContext.sessionIssuer.userName.
+#
+# The error code is the defect. AWS documents GetDocument's InvalidDocument error
+# as "The SSM document doesn't exist or the document isn't available to the user",
+# and that is the error a principal guessing document names receives — for names
+# that do not exist AND for documents that exist but are not shared with it. The
+# original rule filters that entire path out. What it keeps, AccessDenied, is the
+# IAM-denied case: a principal that lacks ssm:GetDocument outright, which is a
+# misconfigured client far more often than an actor.
+#
+# Two more problems. Counting ATTEMPTS rather than distinct NAMES makes ten
+# retries of one document by a broken script indistinguishable from ten names
+# probed; the rules below count distinct requestParameters.name. And
+# sessionContext is present only for role sessions, so every IAM user's events
+# carry a null group-by key and either bucket together or drop out of the
+# aggregation entirely — the rules below group by userIdentity.arn.
+#
+# The enumerator who has permission produces no errors at all and is invisible to
+# any error-based rule. That case is covered by the third correlation here,
+# counting distinct document names read successfully.
+title: SSM document name enumeration through failed retrievals
+id: 608de217-3602-40d1-b5f6-d8efdd222c4b
+name: ssm_document_enumeration_burst
+status: experimental
+description: >-
+  Ten or more distinct SSM document names failing retrieval for one principal in
+  five minutes. Distinct names, not attempts — a retry loop against one name is a
+  broken client, ten names is a principal mapping what exists.
+references:
+  - https://attack.mitre.org/techniques/T1526/
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetDocument.html
+tags:
+  - attack.discovery
+  - attack.t1526
+correlation:
+  type: value_count
+  rules:
+    - ssm_getdocument_failed
+  group-by:
+    - userIdentity.arn
+  timespan: 5m
+  field: requestParameters.name
+  condition:
+    gte: 10
+falsepositives:
+  - A deployment tool iterating a document list that has drifted from what exists — the names will look like a coherent naming scheme rather than a wordlist
+level: medium
+---
+title: SSM document retrieval failed
+id: 8b45abc0-5a79-41ba-8ef1-eec592237da1
+name: ssm_getdocument_failed
+status: experimental
+description: >-
+  Base rule — count component only, not for direct alerting. A GetDocument that
+  failed. `contains` rather than equality so both AccessDenied and
+  AccessDeniedException match, and both InvalidDocument and InvalidDocumentVersion.
+references:
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetDocument.html
+tags:
+  - attack.discovery
+  - attack.t1526
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName: 'GetDocument'
+  failed:
+    errorCode|contains:
+      - 'AccessDenied'
+      - 'InvalidDocument'
+  condition: selection and failed
+level: low
+---
+title: SSM document enumeration followed by a successful retrieval
+id: 5b776591-a210-4782-b13b-fcb85fcc426d
+status: experimental
+description: >-
+  A burst of failed name probes and then a document read successfully by the same
+  principal. The enumeration found something, and whatever it found is now in the
+  actor's hands — including any credential or endpoint embedded in the document.
+references:
+  - https://attack.mitre.org/techniques/T1526/
+tags:
+  - attack.discovery
+  - attack.t1526
+correlation:
+  type: temporal_ordered
+  rules:
+    - ssm_document_enumeration_burst
+    - ssm_document_read_success
+  group-by:
+    - userIdentity.arn
+  timespan: 15m
+level: high
+---
+title: SSM document read successfully
+id: f9f3d8a1-6c2b-4e0d-9a77-3d1c8b5e2f04
+name: ssm_document_read_success
+status: experimental
+description: >-
+  Base rule — sequence and count component only, not for direct alerting. A
+  successful GetDocument or DescribeDocument. Both carry requestParameters.name.
+references:
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetDocument.html
+tags:
+  - attack.discovery
+  - attack.t1526
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName:
+      - 'GetDocument'
+      - 'DescribeDocument'
+  success:
+    errorCode: null
+  condition: selection and success
+level: low
+---
+title: SSM document enumeration by a principal that has permission
+id: 0e6b1c94-58a3-4f2d-8c11-7ab9e4d05c63
+status: experimental
+description: >-
+  Twenty-five or more distinct document names read successfully by one principal
+  in five minutes. A principal with ssm:GetDocument on everything enumerates
+  without producing a single error, so no error-based rule sees it at all.
+references:
+  - https://attack.mitre.org/techniques/T1526/
+tags:
+  - attack.discovery
+  - attack.t1526
+correlation:
+  type: value_count
+  rules:
+    - ssm_document_read_success
+  group-by:
+    - userIdentity.arn
+  timespan: 5m
+  field: requestParameters.name
+  condition:
+    gte: 25
+falsepositives:
+  - The Systems Manager console listing documents, and inventory tooling that reads every document on a schedule — both are allowlistable by principal and by user agent
+level: medium

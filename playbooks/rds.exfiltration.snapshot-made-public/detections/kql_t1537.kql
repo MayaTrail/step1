@@ -1,0 +1,133 @@
+// RDS Snapshot Shared Publicly or Cross-Account (T1537 / T1578.001)
+//
+// Signal: ModifyDBSnapshotAttribute or ModifyDBClusterSnapshotAttribute setting the `restore`
+// attribute, split by whether the value added is `all` (the whole world) or a 12-digit AWS
+// account ID (one identified party).
+//
+// This query does three things the Sigma rules structurally cannot.
+//
+//   1. IT MEASURES THE EXPOSURE WINDOW. Sigma fires on the share and stops. Pairing each share
+//      with the later removal of the same value on the same snapshot gives the number of hours
+//      the data was reachable, which is the figure the incident record needs and the figure
+//      nobody can reconstruct later.
+//   2. IT READS THE CUMULATIVE SHARE LIST FROM THE RESPONSE, not just the delta from the
+//      request. The response carries the FULL post-change attribute list, so a share that adds
+//      one account to a snapshot already shared with four shows all five. Those earlier four
+//      may have been added outside the retention window, in which case this is the only place
+//      they appear.
+//   3. IT SEPARATES SHARES FROM UNSHARES. valuesToRemove is the remediation for this very
+//      alert. A rule that matches the `restore` attribute without distinguishing the direction
+//      buries the exposure inside its own cleanup.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let Lookback = 90d;
+let Attr =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "rds.amazonaws.com"
+    | where EventName in ("ModifyDBSnapshotAttribute", "ModifyDBClusterSnapshotAttribute")
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    | where tostring(Req.attributeName) == "restore"
+    | extend SnapId = coalesce(tostring(Req.dBSnapshotIdentifier), tostring(Req.dBClusterSnapshotIdentifier))
+    | extend Added   = Req.valuesToAdd
+    | extend Removed = Req.valuesToRemove
+    // The response nests two levels deep: DBSnapshotAttributesResult { DBSnapshotAttributes[] {
+    // AttributeName, AttributeValues[] } }. AWS publishes no CloudTrail sample for this API, so
+    // both the wrapped and the flattened rendering are tried - a path the backend does not
+    // produce yields null with no error, and a single guess would silently drop the field.
+    | extend AttrList = coalesce(Resp.dBSnapshotAttributesResult.dBSnapshotAttributes,
+                                 Resp.dBClusterSnapshotAttributesResult.dBClusterSnapshotAttributes,
+                                 Resp.dBSnapshotAttributes, Resp.dBClusterSnapshotAttributes);
+let Shares =
+    Attr
+    | where isempty(ErrorCode)
+    | mv-expand AddedValue = Added to typeof(string)
+    | where isnotempty(AddedValue)
+    // `contains`, never `has`: "all" is a bare alphanumeric term but an ARN and an account ID
+    // in a flattened list are not, and mixing the two operators is how a rule drifts.
+    | extend ShareKind = iff(AddedValue == "all", "PUBLIC", "cross-account")
+    | project SharedAt = TimeGenerated, SnapId, AddedValue, ShareKind,
+              Actor = UserIdentityArn, ShareIp = SourceIpAddress, ShareAgent = UserAgent,
+              CumulativeList = tostring(AttrList);
+let Unshares =
+    Attr
+    | where isempty(ErrorCode)
+    | mv-expand RemovedValue = Removed to typeof(string)
+    | where isnotempty(RemovedValue)
+    | project UnsharedAt = TimeGenerated, SnapId, AddedValue = RemovedValue, Unsharer = UserIdentityArn;
+// Refusals are counted apart and never as exposures. SharedSnapshotQuotaExceeded means the
+// 20-account cap was hit - an actor sharing at volume, not a failure to ignore. And
+// InvalidDBSnapshotState on an `all` attempt is very often AWS refusing to make an ENCRYPTED
+// snapshot public, which is the control working.
+let Refusals =
+    Attr
+    | where isnotempty(ErrorCode)
+    | summarize Refused = count(), RefusedCodes = make_set(ErrorCode, 6) by Actor = UserIdentityArn;
+Shares
+| join kind=leftouter Unshares on SnapId, AddedValue
+| extend StillShared = isempty(UnsharedAt) or UnsharedAt < SharedAt
+| extend ExposedHours = round(iff(StillShared,
+             datetime_diff('minute', now(), SharedAt) / 60.0,
+             datetime_diff('minute', UnsharedAt, SharedAt) / 60.0), 1)
+| summarize
+    Shares         = count(),
+    FirstShared    = min(SharedAt),
+    LastShared     = max(SharedAt),
+    Snapshots      = make_set(SnapId, 20),
+    SnapshotCount  = dcount(SnapId),
+    Recipients     = make_set(AddedValue, 20),
+    Kinds          = make_set(ShareKind, 2),
+    MaxExposedHours = max(ExposedHours),
+    AnyStillShared = max(StillShared),
+    CumulativeLists = make_set(CumulativeList, 5),
+    SourceIPs      = make_set(ShareIp, 5),
+    Agents         = make_set(ShareAgent, 3)
+    by Actor
+| join kind=leftouter Refusals on Actor
+| extend PublicShare = set_has_element(Kinds, "PUBLIC")
+| extend Verdict = case(
+    PublicShare and AnyStillShared == true,
+        "PUBLIC SNAPSHOT, STILL SHARED - every AWS account can restore a full copy of this database right now. A public snapshot is necessarily UNENCRYPTED, because AWS refuses `all` on an encrypted one",
+    PublicShare,
+        "PUBLIC SNAPSHOT, SINCE UNSHARED - the window is closed but any copy taken during it is permanent and invisible to this account",
+    SnapshotCount >= 3,
+        "MULTIPLE SNAPSHOTS SHARED CROSS-ACCOUNT - a sweep across snapshots rather than across accounts, which is what the 20-recipient cap pushes an actor towards",
+    AnyStillShared == true,
+        "CROSS-ACCOUNT SHARE, STILL ACTIVE - one identified party can restore a full copy. Verify the recipient account IDs against the partner list",
+        "CROSS-ACCOUNT SHARE, SINCE REVOKED - confirm the recipient never copied it, which this account cannot observe")
+| project FirstShared, LastShared, Verdict, Actor, SnapshotCount, Snapshots, Recipients, Kinds,
+          MaxExposedHours, AnyStillShared, CumulativeLists, Refused, RefusedCodes, SourceIPs, Agents
+| order by LastShared desc
+
+//
+// WHAT THIS QUERY CANNOT SEE, AND WHY THAT IS STRUCTURAL RATHER THAN A GAP IN THE QUERY
+//
+// WHO CONSUMED THE SNAPSHOT. Nothing. There is no event, no notification and no API. The RDS
+// event catalogue carries entries for snapshot creation, deletion, cross-Region and local copy,
+// export and restoration, and none for an attribute change or for third-party consumption. A
+// foreign account's CopyDBSnapshot or RestoreDBInstanceFromDBSnapshot is recorded in ITS trail
+// under ITS recipientAccountId. `describe-db-snapshot-attributes` answers who is AUTHORISED,
+// never who acted. AWS also notes "You aren't billed for the backup storage of public snapshots
+// owned by other accounts" - so the copy is invisible in the bill as well as in the log.
+//
+// AND THE ONE BREADCRUMB THAT WOULD EXIST DOES NOT EXIST HERE. For an ENCRYPTED snapshot shared
+// with a named account, the consumer must call the owner's KMS key, producing a
+// kms.amazonaws.com event in the owner's trail - which is why the cross-account case is
+// sometimes traceable and the public case never is. AWS refuses `all` on encrypted snapshots, so
+// a public snapshot is unencrypted by construction and generates no KMS activity at all.
+//
+// THE EXPOSURE WINDOW IS A FLOOR, NOT A MEASURE. The join above pairs a share with the removal
+// of the SAME value on the SAME snapshot. A share added before the lookback window has no
+// matching row and does not appear at all, so a snapshot shared two years ago and never revoked
+// is invisible here. The authoritative enumeration is live and must be run first:
+//   aws rds describe-db-snapshots --snapshot-type public --include-public \
+//     --query "DBSnapshots[?OwnerId=='<this-account-id>'].DBSnapshotIdentifier"
+//
+// PREVENTION AND POSTURE. AWS Config `rds-snapshots-public-prohibited`
+// (RDS_SNAPSHOTS_PUBLIC_PROHIBITED) is the managed control, and its own documentation warns "It
+// can take up to 12 hours for compliance results to be captured" - it is a posture check, not a
+// detection path, and it is unavailable in six Regions. Security Hub control RDS.1 aggregates it
+// at Critical. Trusted Advisor check rSs93HQwa1 ("Amazon RDS Public Snapshots") refreshes several
+// times daily and cannot be refreshed on demand. GuardDuty does not cover this at all: there is
+// no Policy:RDS/* finding namespace, and its nine RDS finding types are login-behaviour only.
+// CloudTrail on ModifyDBSnapshotAttribute is the only near-real-time signal that exists.

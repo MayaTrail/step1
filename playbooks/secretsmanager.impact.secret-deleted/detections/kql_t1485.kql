@@ -1,0 +1,58 @@
+// Secrets Manager secret deleted (T1485)
+//
+// The source rule matches `deletesecret` — lowercase, against a case-sensitive field, so it cannot
+// fire. It also reads none of the request body, so a reversible deletion and a permanent one arrive
+// as the same alert.
+//
+// `forceDeleteWithoutRecovery` and `recoveryWindowInDays` are OPTIONAL parameters. When the caller
+// omits them they are absent from RequestParameters entirely, so this query tests for the value
+// `true` being present rather than for the absence of `false`.
+//
+// The recovery window is not an outage window: the value cannot be retrieved from the moment the
+// call succeeds, so consumers are failing already.
+//
+// `contains` throughout, never `has` — secret names and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+let WINDOW = 30m;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "secretsmanager.amazonaws.com"
+| where EventName in ("DeleteSecret", "RestoreSecret", "GetSecretValue", "BatchGetSecretValue")
+| extend Req = parse_json(RequestParameters)
+| extend SecretId = tostring(Req.secretId)
+| extend Forced = tostring(Req.forceDeleteWithoutRecovery) == "true"
+| extend WindowDays = toint(Req.recoveryWindowInDays)
+| extend Deleted  = EventName == "DeleteSecret" and isempty(ErrorCode)
+| extend Refused  = EventName == "DeleteSecret" and isnotempty(ErrorCode)
+| extend Restored = EventName == "RestoreSecret" and isempty(ErrorCode)
+// Reading the value before destroying it is disclosure followed by destruction, which is a larger
+// incident than either alone.
+| extend ReadFirst = EventName in ("GetSecretValue", "BatchGetSecretValue") and isempty(ErrorCode)
+| summarize
+    Deletions      = countif(Deleted),
+    ForcedDeletes  = countif(Deleted and Forced),
+    MinWindowDays  = minif(WindowDays, Deleted and isnotnull(WindowDays)),
+    Refusals       = countif(Refused),
+    Restores       = countif(Restored),
+    ValuesRead     = countif(ReadFirst),
+    SecretsDeleted = dcountif(SecretId, Deleted),
+    Secrets        = make_set(iff(Deleted, SecretId, ""), 20),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated)
+    by bin(TimeGenerated, WINDOW), UserIdentityArn, SourceIpAddress
+| where Deletions > 0 or Refusals > 0
+| extend Verdict = case(
+    ForcedDeletes > 0 and ValuesRead > 0, "CRITICAL - value read then permanently destroyed",
+    ForcedDeletes > 0,                    "CRITICAL - permanent; RestoreSecret will not work",
+    SecretsDeleted >= 3,                  "HIGH - bulk deletion, not decommissioning",
+    MinWindowDays == 7,                   "MEDIUM - minimum window chosen deliberately over the 30-day default",
+    Deletions > 0,                        "MEDIUM - reversible until DeletionDate, but consumers are already failing",
+    "LOW - deletion refused")
+// Restores inside the same window usually mean an operator caught their own mistake.
+| extend SelfCorrected = Restores >= Deletions and Deletions > 0
+| project TimeGenerated, Verdict, SelfCorrected, UserIdentityArn, SourceIpAddress,
+          Deletions, ForcedDeletes, MinWindowDays, Refusals, Restores, ValuesRead,
+          SecretsDeleted, Secrets, FirstSeen, LastSeen
+| order by ForcedDeletes desc, SecretsDeleted desc, TimeGenerated desc

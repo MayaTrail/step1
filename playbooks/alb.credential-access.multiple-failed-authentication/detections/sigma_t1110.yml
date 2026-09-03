@@ -1,0 +1,206 @@
+# Authentication failures at the load balancer (T1110 / T1212)
+#
+# THE SOURCE RULE CONFLATES AN ATTACK WITH AN OUTAGE, AND THE OUTAGE IS LOUDER. It matches
+# `actions_executed:"authenticate" AND NOT error_reason:"-"` — every non-empty error reason. AWS
+# splits those codes into two families with two different CloudWatch metrics:
+#
+#   ELBAuthFailure — the REQUEST was bad: AuthInvalidCookie, AuthInvalidGrantError,
+#     AuthInvalidIdToken, AuthInvalidStateParam, AuthInvalidTokenResponse,
+#     AuthInvalidUserinfoResponse, AuthMissingCodeParam, AuthMissingStateParam.
+#     These are attack signals.
+#   ELBAuthError — the IDENTITY PROVIDER was unreachable or misbehaving:
+#     AuthTokenEpRequestFailed, AuthTokenEpRequestTimeout, AuthUserinfoEpRequestFailed,
+#     AuthUserinfoEpRequestTimeout, AuthUnhandledException, AuthMissingHostHeader,
+#     AuthUserinfoResponseSizeExceeded. These are somebody else's availability problem.
+#
+# During an IdP outage EVERY client produces the second family, so a rule thresholding at 14 in
+# five minutes fires for every source address at once, pages the security on-call for an identity
+# team's incident, and is muted by the end of the week. The families are separate rules below and
+# the outage family ships at informational, deliberately routed away from the security queue.
+#
+# IT ALSO MISSES THE STRONGEST SIGNAL AVAILABLE. JWT validation failures are recorded in the same
+# error_reason field but arise from a `jwt-validation` action rather than `authenticate`, so the
+# source rule's action filter excludes them entirely. JWTSignatureValidationError means a token was
+# presented whose signature does not verify — forged, or signed with the wrong key. There is no
+# benign explanation for that at volume, and it is the single highest-confidence authentication
+# event this log source produces.
+#
+# THE GROUPING KEY MAY NOT BE THE CLIENT. AWS on the client:port field: "If there is a proxy in
+# front of the load balancer, this field contains the IP address of the proxy." Behind CloudFront
+# or any reverse proxy, every request collapses onto a handful of edge addresses — a per-client
+# threshold then either never attributes anything or fires constantly on aggregate traffic. ALB
+# access logs carry no X-Forwarded-For field, so in that topology the correct detection point is
+# the CloudFront log or the web ACL, not here. Stated rather than silently mis-grouped.
+#
+# COUNTS IN THIS SERVICE ARE APPROXIMATE IN BOTH DIRECTIONS. AWS: "Elastic Load Balancing logs
+# requests on a best-effort basis. We recommend that you use access logs to understand the nature
+# of the requests, not as a complete accounting of all requests." Delivery is eventually consistent
+# and "the load balancer can deliver multiple logs for the same period". Thresholds below are set
+# where an order-of-magnitude error would not change the verdict.
+title: Load balancer authentication request rejected
+id: 6a04f2c7-9b18-4e53-80d6-13c7e5a94f28
+name: alb_auth_request_failure
+status: experimental
+description: >-
+  An authenticate action failed for a reason attributable to the request rather than to the
+  identity provider — a bad or forged cookie, an invalid grant code, a tampered ID token, a missing
+  authorization code. Base rule for the correlation below and a low-volume signal in its own right.
+  Only the ELBAuthFailure family is matched; the ELBAuthError family is a separate rule at
+  informational so an IdP outage cannot page this queue.
+references:
+  - https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html
+  - https://attack.mitre.org/techniques/T1110/
+tags:
+  - attack.credential-access
+  - attack.t1110
+logsource:
+  product: aws
+  service: elb
+detection:
+  auth_failure:
+    error_reason:
+      - 'AuthInvalidCookie'
+      - 'AuthInvalidGrantError'
+      - 'AuthInvalidIdToken'
+      - 'AuthInvalidTokenResponse'
+      - 'AuthInvalidUserinfoResponse'
+      - 'AuthMissingCodeParam'
+  condition: auth_failure
+falsepositives:
+  - >-
+    A user with a stale session cookie after an application redeploy or a cookie-secret rotation.
+    Genuinely common, which is why this ships as a base rule feeding a correlation rather than as
+    an alert on a single occurrence.
+level: low
+---
+title: OAuth state parameter invalid or missing at the load balancer
+id: d51b8e40-2c97-4a16-bf03-7e6905c2ad81
+name: alb_auth_state_param_failure
+status: experimental
+description: >-
+  The authenticate action failed on the `state` parameter. This is separated from the other request
+  failures because the state parameter is the OAuth CSRF defence — it binds an authorization
+  response to the browser session that started it. A response arriving with a missing or
+  non-matching state is the shape of an authorization-code interception or a login-CSRF attempt,
+  not of a user with an expired tab. It is rare in normal traffic, so it does not need a threshold.
+references:
+  - https://docs.aws.amazon.com/elasticloadbalancing/latest/application/listener-authenticate-users.html
+  - https://attack.mitre.org/techniques/T1212/
+tags:
+  - attack.credential-access
+  - attack.t1212
+logsource:
+  product: aws
+  service: elb
+detection:
+  state_failure:
+    error_reason:
+      - 'AuthInvalidStateParam'
+      - 'AuthMissingStateParam'
+  condition: state_failure
+falsepositives:
+  - >-
+    A user who bookmarked a callback URL, or a browser that stripped the cookie carrying the state.
+    Both happen; both are single events. A repeat from one source is not either of those.
+level: high
+---
+title: JWT presented to the load balancer failed validation
+id: 8f36c9a2-4071-4de8-95b4-c208a1e73b6d
+name: alb_jwt_validation_failure
+status: experimental
+description: >-
+  A jwt-validation action rejected the token in the Authorization header. The source rule cannot
+  see any of these, because it filters on actions_executed containing `authenticate` and JWT
+  validation is a different action. JWTSignatureValidationError is the one worth paging on: it
+  means a token was presented whose signature does not verify — forged, signed with the wrong key,
+  or using an algorithm the configuration does not permit. JWTClaimValueInvalid means the signature
+  verified and a claim did not, which is a valid token being used where it should not be.
+references:
+  - https://docs.aws.amazon.com/elasticloadbalancing/latest/application/listener-verify-jwt.html
+  - https://attack.mitre.org/techniques/T1212/
+tags:
+  - attack.credential-access
+  - attack.t1212
+logsource:
+  product: aws
+  service: elb
+detection:
+  jwt_forged:
+    error_reason:
+      - 'JWTSignatureValidationError'
+      - 'JWTClaimValueInvalid'
+      - 'JWTClaimNotPresent'
+      - 'JWTClaimFormatInvalid'
+  condition: jwt_forged
+falsepositives:
+  - >-
+    A client still presenting tokens signed by a retired key during a key rotation. Real, bounded
+    in time, and it should be correlated with the rotation rather than allowlisted permanently.
+level: high
+---
+title: Repeated authentication rejections from one source
+id: 2e7a5013-b8c4-49f7-a06d-51938fe2c74b
+status: experimental
+description: >-
+  One source address accumulated request-side authentication failures. The threshold is set where
+  an order-of-magnitude counting error would not change the verdict, because AWS documents these
+  logs as best-effort with possible duplicate delivery — a precise threshold on an imprecise count
+  is false precision. READ THE GROUPING CAVEAT: behind CloudFront or any reverse proxy the client
+  field carries the PROXY's address, so this correlation groups the whole internet into a few
+  values. In that topology this rule is not the control and the web ACL or CloudFront log is.
+references:
+  - https://attack.mitre.org/techniques/T1110/
+tags:
+  - attack.credential-access
+  - attack.t1110
+correlation:
+  type: event_count
+  rules:
+    - alb_auth_request_failure
+  group-by:
+    - client_ip
+  timespan: 15m
+  condition:
+    gte: 50
+falsepositives:
+  - >-
+    A misconfigured client retrying a rejected token in a loop. Distinguished by the error reason
+    being identical every time and by the source being a known service address.
+level: medium
+---
+title: Load balancer could not reach the identity provider
+id: 9c8d13f5-6e20-4b74-83a1-0f47c6b528de
+name: alb_idp_unreachable
+status: experimental
+description: >-
+  Base rule and availability signal — NOT for the security queue, and shipped at informational so
+  that routing is explicit rather than a matter of taste. These are the ELBAuthError family: the
+  token endpoint or the user-info endpoint failed or timed out, or the load balancer hit an
+  unhandled exception. During an identity provider outage every client produces these
+  simultaneously, which is exactly the burst the source rule interprets as a brute-force attack
+  from every address at once. Route to the identity or platform team.
+references:
+  - https://docs.aws.amazon.com/elasticloadbalancing/latest/application/listener-authenticate-users.html
+tags:
+  - attack.credential-access
+  - attack.t1110
+logsource:
+  product: aws
+  service: elb
+detection:
+  idp_error:
+    error_reason:
+      - 'AuthTokenEpRequestFailed'
+      - 'AuthTokenEpRequestTimeout'
+      - 'AuthUserinfoEpRequestFailed'
+      - 'AuthUserinfoEpRequestTimeout'
+      - 'AuthUnhandledException'
+      - 'AuthMissingHostHeader'
+      - 'AuthUserinfoResponseSizeExceeded'
+  condition: idp_error
+falsepositives:
+  - >-
+    Not false positives — these are genuine availability events. The rule exists so they are
+    counted somewhere other than the brute-force detection, and so an IdP outage is legible as an
+    outage rather than as an attack from every address on the internet.
+level: informational

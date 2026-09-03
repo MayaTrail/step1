@@ -1,0 +1,150 @@
+// Resource-Based Permission Policy Attached to a Secret — T1098
+//
+// Signals covered:
+//   1. PutResourcePolicy succeeding for a principal outside the policy-admin baseline,
+//      with the grant's account IDs and confining conditions surfaced for triage.
+//   2. A policy granting secretsmanager:PutResourcePolicy or secretsmanager:* — the
+//      self-perpetuating grant AWS documents as escalation to full administrative
+//      access to the secret.
+//   3. PublicPolicyException — a broad-access policy that BlockPublicPolicy rejected.
+//   4. Secrets read after a policy was attached to them (the grant being cashed in),
+//      including reads whose recipientAccountId differs from userIdentity.accountId.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+// AWSCloudTrail columns are FLATTENED (UserIdentityArn, UserIdentityAccountId,
+// SessionIssuerUserName, EventName, ErrorCode, RecipientAccountId); RequestParameters is
+// dynamic JSON and needs parse_json.
+//
+// ENCODING AND SPACING. requestParameters.resourcePolicy is a RAW JSON string in
+// whatever whitespace the client sent — it is NOT percent-encoded, because encoding is a
+// property of what IAM returns, not of a CloudTrail request parameter. So do not decode
+// it, and do not match punctuation whose spacing the client controls: a document sent
+// from a file is pretty-printed, so `contains '"Resource":"*"'` misses it while
+// `contains '"Resource": "*"'` misses the compact form. Every match below is on a bare
+// action token, which has no interior spacing. The structural questions — is the
+// Principal external, does a Condition confine it — are answered by parsing, in the
+// playbook's §2 Query 2, not here.
+
+// ---------------------------------------------------------------------------
+// 1. PutResourcePolicy by an unbaselined principal, with the grant surfaced
+// ---------------------------------------------------------------------------
+// The baseline is an explicit chain of `contains`, not a whole-term set operator: term
+// matching breaks on non-alphanumerics and an ARN is punctuated.
+let orgAccounts = dynamic(["111122223333", "444455556666"]);   // tune: your own accounts
+AWSCloudTrail
+| where TimeGenerated > ago(30d)
+| where EventSource == "secretsmanager.amazonaws.com"
+| where EventName == "PutResourcePolicy"
+| extend Req = parse_json(RequestParameters)
+| extend SecretId    = tostring(Req.secretId)
+| extend PolicyDoc   = tostring(Req.resourcePolicy)
+| extend BlockPublic = tostring(Req.blockPublicPolicy)   // absent means false: AWS default
+| extend IsPolicyAdmin = iff(UserIdentityArn contains "SecretsPolicyAdmin"
+                          or UserIdentityArn contains "iac-deploy"
+                          or UserIdentityArn contains "BreakGlassResponder", true, false)
+// Account IDs named anywhere in the document, minus your own — a triage hint, not a
+// verdict. A document can name an account inside a Resource ARN as well as inside a
+// Principal, so treat a hit as "read this document" rather than as proof of a grant.
+| extend NamedAccounts = extract_all(@"(?<!\d)(\d{12})(?!\d)", PolicyDoc)
+| extend ForeignAccounts = set_difference(todynamic(NamedAccounts), orgAccounts)
+| extend GrantsPolicyControl = PolicyDoc contains "secretsmanager:PutResourcePolicy"
+                            or PolicyDoc contains "secretsmanager:*"
+| extend HasCondition = PolicyDoc contains "Condition"
+| extend Verdict = case(
+        isnotempty(ErrorCode) and ErrorCode == "PublicPolicyException",
+            "P0 - broad-access policy submitted and REJECTED by BlockPublicPolicy - investigate the caller",
+        isnotempty(ErrorCode),
+            strcat("P3 - attempt failed with ", ErrorCode),
+        GrantsPolicyControl,
+            "P0 - grant includes policy control: the grantee can rewrite the policy that granted it",
+        array_length(ForeignAccounts) > 0 and not(HasCondition),
+            "P0 - names an account outside the org with no Condition in the document",
+        array_length(ForeignAccounts) > 0,
+            "P1 - names an account outside the org WITH a Condition - parse the document, a condition is not automatically a confinement",
+        not(IsPolicyAdmin),
+            "P1 - resource policy attached by a principal outside the policy-admin baseline",
+        "P2 - baselined policy admin attached a same-account policy - confirm against the change record")
+| project TimeGenerated, Verdict, UserIdentityArn, SessionIssuerUserName, SecretId,
+          ForeignAccounts, GrantsPolicyControl, HasCondition, BlockPublic, ErrorCode,
+          SourceIpAddress, PolicyDoc
+| order by TimeGenerated desc
+
+// ---------------------------------------------------------------------------
+// 2. Was the grant exercised — reads of a secret after a policy was attached to it
+// ---------------------------------------------------------------------------
+// Grouped by the SECRET, not the principal: the principal that attaches the policy and
+// the principal that uses it are deliberately different, often in different accounts.
+//
+// let grants =
+//     AWSCloudTrail
+//     | where TimeGenerated > ago(30d)
+//     | where EventSource == "secretsmanager.amazonaws.com" and EventName == "PutResourcePolicy"
+//     | where isempty(ErrorCode)
+//     | extend SecretId = tostring(parse_json(RequestParameters).secretId)
+//     | project GrantTime = TimeGenerated, SecretId, Granter = UserIdentityArn,
+//               PolicyDoc = tostring(parse_json(RequestParameters).resourcePolicy);
+// let reads =
+//     AWSCloudTrail
+//     | where TimeGenerated > ago(30d)
+//     | where EventSource == "secretsmanager.amazonaws.com" and EventName == "GetSecretValue"
+//     | where isempty(ErrorCode)
+//     | extend SecretId = tostring(parse_json(RequestParameters).secretId)
+//     // The cross-account proof: the event lands in the SECRET OWNER's trail with
+//     // UserIdentityAccountId = the calling account and RecipientAccountId = the owner.
+//     | extend CrossAccount = UserIdentityAccountId != RecipientAccountId
+//     | project ReadTime = TimeGenerated, SecretId, Reader = UserIdentityArn,
+//               ReaderAccount = UserIdentityAccountId, OwnerAccount = RecipientAccountId,
+//               CrossAccount;
+// grants
+// | join kind=inner reads on SecretId
+// | where ReadTime > GrantTime
+// | summarize Reads = count(), Readers = make_set(Reader, 10),
+//             AnyCrossAccount = max(tolong(CrossAccount)),
+//             FirstRead = min(ReadTime), LastRead = max(ReadTime)
+//     by SecretId, GrantTime, Granter
+// | extend Verdict = iff(AnyCrossAccount == 1,
+//         "P0 - secret read from ANOTHER ACCOUNT after the grant - the plaintext has left this account",
+//         "P1 - secret read after the grant - confirm the reader was the intended grantee")
+// | project GrantTime, Verdict, SecretId, Granter, Readers, Reads, FirstRead, LastRead
+// | order by GrantTime desc
+
+// ---------------------------------------------------------------------------
+// 3. ValidateResourcePolicy — the dry run before the attach
+// ---------------------------------------------------------------------------
+// AWSCloudTrail
+// | where TimeGenerated > ago(30d)
+// | where EventSource == "secretsmanager.amazonaws.com"
+// | where EventName == "ValidateResourcePolicy"
+// | where not(UserIdentityArn contains "SecretsPolicyAdmin" or UserIdentityArn contains "iac-deploy")
+// | extend SecretId = tostring(parse_json(RequestParameters).secretId)
+// | project TimeGenerated, UserIdentityArn, UserIdentityType, SecretId, SourceIpAddress, ErrorCode
+// | order by TimeGenerated desc
+
+// ---------------------------------------------------------------------------
+// What these queries cannot tell you
+// ---------------------------------------------------------------------------
+// ForeignAccounts above is a REGEX over the whole document, so it will also flag an
+// account ID that appears only inside a Resource ARN, and it will miss a grant to an
+// AWS Organizations path or an IAM identity provider that names no 12-digit account. It
+// is a triage hint. The verdict on whether a Principal is external and whether a
+// Condition genuinely confines it requires the document to be parsed with the Statement,
+// Principal and Action shapes normalised — Statement is an object OR an array, Principal
+// is an object OR the bare string "*", Action is a string OR an array — and an unguarded
+// iteration over any of those silently reports clean on exactly the grant it exists to
+// find. Use the shared decoder, as the playbook's §2 Query 2 does.
+//
+// A cross-account read lands in the SECRET OWNER's trail, not the caller's. If you are
+// hunting from the calling account you will see nothing at all; the inequality between
+// UserIdentityAccountId and RecipientAccountId in query 2 is the proof, and it is only
+// visible where the secret lives.
+//
+// The policy is not echoed in the response — PutResourcePolicy returns only ARN and Name
+// — and DeleteResourcePolicy returns nothing either. The request parameter is the ONLY
+// record of what was granted. Once the policy is deleted, the document exists nowhere
+// except in this log.
+//
+// PREVENTION, not detection: set BlockPublicPolicy=true on every PutResourcePolicy your
+// tooling makes (it defaults to FALSE — AWS: "By default, public policies aren't
+// blocked"), deny secretsmanager:PutResourcePolicy to everything except a named
+// policy-admin role, and use IAM Access Analyzer to report existing external grants
+// continuously rather than at incident time.

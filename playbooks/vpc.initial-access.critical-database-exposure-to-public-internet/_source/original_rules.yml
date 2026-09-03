@@ -1,0 +1,21 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Critical Database Exposure to Public Internet
+  priority: P1
+  type: logs_threshold
+  mitre: T1190/TA0001
+  query: |
+    dstport:("3306" OR "5432" OR "1521" OR "1433" OR "3303" OR "3309" OR "5429") AND source_ip_geoip.is_local:"false" AND NOT action:"reject"
+  threshold: 0.0  window: 10m
+  group_by: ['source_ip', 'destination_ip']
+

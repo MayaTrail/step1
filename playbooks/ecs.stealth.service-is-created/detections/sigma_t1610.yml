@@ -1,0 +1,201 @@
+# ECS Service Created (T1610 / T1053.007)
+#
+# WHAT THE SOURCE RULE DOES NOT DO. It matches `eventName:"CreateService"` with a success
+# filter and nothing else, at P3, mapped to T1578 under TA0005. It fires on every deployment
+# of every new service in the account, it never looks at who called, and it reads none of the
+# fields that make one CreateService different from another. P3 is also the wrong level for an
+# event that is the cloud-native equivalent of installing a service on a host.
+#
+# CREATE SERVICE IS A POINTER, NOT A PAYLOAD. This is the fact the rule has to be built
+# around. `CreateService` names `taskDefinition` — a family:revision string or an ARN — and
+# carries NO image, NO command and NO role. The image, the entrypoint, the environment, the
+# secrets and `taskRoleArn` all live in the task definition registered by a SEPARATE
+# `RegisterTaskDefinition` call. So the blast radius of a created service is not in the event
+# that creates it, and any rule that inspects only `CreateService` is inspecting the wrapper.
+# The `temporal_ordered` correlation below pairs the two calls, which is the shape of an actor
+# deploying their own workload: register a definition pointing at their image, then create a
+# service that keeps it running.
+#
+# WHY A SERVICE AND NOT A TASK. `RunTask` launches tasks that run once and stay dead. A
+# SERVICE is a maintained invariant: ECS keeps `desiredCount` tasks running and replaces any
+# that stop. Killing the attacker's containers therefore achieves nothing until the service is
+# scaled or deleted — which is why this is persistence (T1053.007, Container Orchestration
+# Job) as much as it is execution (T1610, Deploy Container), and why the response ordering in
+# ../PLAYBOOK.md §3 is scale-then-stop rather than stop-then-scale.
+#
+# THE TWO FIELDS THAT ARE IN THE EVENT AND WORTH READING.
+# `requestParameters.networkConfiguration.awsvpcConfiguration.assignPublicIp` — AWS documents
+# the valid values as ENABLED|DISABLED and the default for create-service as DISABLED, so an
+# ENABLED value is an explicit choice to give the task a public address. And
+# `requestParameters.enableExecuteCommand` — a service created with ECS Exec already on is a
+# service built for interactive access (see
+# ../../ecs.initial-access.command-executed-inside-a-container/). Rule 2 reads both, and it is
+# deliberately NOT gated on the principal allowlist: a pipeline role creating a public,
+# exec-enabled service is a finding about the pipeline.
+title: ECS service created by a principal outside the service-lifecycle pipeline
+id: 6061e915-0afb-474b-a293-70d1d60f96f7
+name: ecs_service_created_nonpipeline
+status: experimental
+description: >-
+  A service was created by a principal that does not deploy services. An ECS service is a
+  maintained invariant — the scheduler keeps desiredCount tasks running and replaces any that
+  stop — so this is durable execution, not a one-off run, and the image and task role it
+  carries are in the referenced task definition rather than in this event.
+references:
+  - https://attack.mitre.org/techniques/T1610/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_CreateService.html  # retrieved 2026-08-29
+tags:
+  - attack.execution
+  - attack.t1610
+  - attack.persistence
+  - attack.t1053.007
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecs.amazonaws.com'
+    eventName: 'CreateService'
+  # POPULATE BEFORE DEPLOYING. Unpopulated, this fires on every deployment. The allowlist IS
+  # the discriminator - CreateService carries no field that separates a deployment from an
+  # attacker's workload, because the image and role are in the task definition, not here.
+  service_lifecycle_pipeline:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'          # replace with this account's deployment role
+      - ':role/BreakGlassAdmin'     # replace with this account's break-glass role
+  success:
+    errorCode: null
+  condition: selection and success and not service_lifecycle_pipeline
+falsepositives:
+  - >-
+    An engineer deploying a service by hand outside the pipeline. Expected in development
+    accounts; in production it is the finding, because it means service deployment is not
+    owned by the pipeline.
+level: high
+---
+# Not gated on the principal: a service created with a public IP or with ECS Exec already
+# turned on is worth a look whoever created it, and a pipeline that emits either by default is
+# itself the finding. The two blocks are SIBLINGS and ORed - they can co-occur, but requiring
+# both would miss the single-condition cases, which are the common ones.
+title: ECS service created with a public address or with ECS Exec enabled
+id: ca06763b-a1a9-4d50-8d3c-a73833748376
+name: ecs_service_created_exposed
+status: experimental
+description: >-
+  A service was created whose tasks receive a public IP address, or with execute-command
+  functionality enabled on every container in the service. AWS documents assignPublicIp as
+  defaulting to DISABLED for create-service, so ENABLED is an explicit choice; enabling ECS
+  Exec at creation builds interactive shell access into the service from the start.
+references:
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_AwsVpcConfiguration.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html  # retrieved 2026-08-29
+tags:
+  - attack.execution
+  - attack.t1610
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecs.amazonaws.com'
+    eventName: 'CreateService'
+  public_ip:
+    requestParameters.networkConfiguration.awsvpcConfiguration.assignPublicIp: 'ENABLED'
+  exec_enabled:
+    requestParameters.enableExecuteCommand: true
+  success:
+    errorCode: null
+  condition: selection and success and (public_ip or exec_enabled)
+falsepositives:
+  - >-
+    Public-facing services in a public subnet without a NAT gateway legitimately set
+    assignPublicIp ENABLED. Baseline which services do so; the alert is for the ones that
+    are new.
+level: medium
+---
+# Base rule — sequence component only, not for direct alerting. This is where the image, the
+# command, the environment, the secrets and taskRoleArn actually are. Carries the success
+# filter so a rejected registration cannot compose into the correlation below.
+title: ECS task definition registered
+id: f7b09142-c323-45df-b877-9f7664aec946
+name: ecs_task_definition_registered_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_RegisterTaskDefinition.html  # retrieved 2026-08-29
+tags:
+  - attack.execution
+  - attack.t1610
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecs.amazonaws.com'
+    eventName: 'RegisterTaskDefinition'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+# Register-then-create is an actor bringing their OWN workload, and it is the shape that
+# matters most here. A deployment pipeline does this too — which is exactly why the
+# CreateService half is the principal-filtered rule rather than a bare event match.
+#
+# TIMESPAN BASIS. Thirty minutes. A definition is registered and the service referencing it is
+# created in the same operation, usually seconds apart; half an hour absorbs a slow apply and
+# a retry without spanning an unrelated deployment later in the day.
+title: ECS task definition registered and a service created by the same principal
+id: 6510438f-fafb-41f1-a793-b3b900f3676f
+status: experimental
+description: >-
+  One non-pipeline principal registered a task definition and then created a service from it
+  inside thirty minutes. The task definition is where the image, entrypoint, environment,
+  secrets and task role are; the service is what keeps them running and restarts them.
+references:
+  - https://attack.mitre.org/techniques/T1610/  # retrieved 2026-08-29
+tags:
+  - attack.execution
+  - attack.t1610
+  - attack.persistence
+  - attack.t1053.007
+correlation:
+  type: temporal_ordered
+  rules:
+    - ecs_task_definition_registered_bb
+    - ecs_service_created_nonpipeline
+  group-by:
+    - userIdentity.arn
+  timespan: 30m
+level: high
+---
+# Threshold basis, because a number without one is an invented number. There is no observed
+# baseline here, so the reasoning is structural: ECS allows 5,000 services per cluster, so the
+# quota is no constraint and cannot supply a threshold. What can is the shape of the work —
+# a person deploying by hand outside the pipeline creates one service and then watches it,
+# while three or more inside ten minutes is machine-paced, and the one process that
+# legitimately does that is the pipeline, which the base rule already excludes. `gte` at the
+# baseline, never `gt`, so a run that creates exactly three does not fall through.
+# Re-baseline against your own account before deploying.
+title: ECS services created at volume by one non-pipeline principal
+id: 6ac58c04-5c18-4ae1-8b4c-1189b3dc4309
+status: experimental
+description: >-
+  One principal outside the deployment pipeline created three or more services inside ten
+  minutes. Each service independently maintains its own task count, so the eradication
+  work-list is every service in the group and stopping tasks accomplishes nothing.
+references:
+  - https://docs.aws.amazon.com/general/latest/gr/ecs-service.html  # retrieved 2026-08-29
+tags:
+  - attack.execution
+  - attack.t1610
+correlation:
+  type: event_count
+  rules:
+    - ecs_service_created_nonpipeline
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gte: 3
+level: high

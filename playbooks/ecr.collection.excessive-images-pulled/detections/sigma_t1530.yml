@@ -1,0 +1,150 @@
+# Container images pulled from ECR at breadth (T1530)
+#
+# THE RULE CANNOT FIRE, AND CORRECTING IT BARELY HELPS. It matches
+# `userIdentity.type:"iamuser"` — CloudTrail emits `IAMUser`, so on a case-sensitive field it
+# matches nothing. Corrected, it still excludes `AssumedRole`, and image pulls are almost entirely
+# AssumedRole: every ECS task role, every EKS node role, every CI runner. The identity type is not a
+# useful discriminator for this operation in either spelling.
+#
+# `BatchGetImage` COUNTS PULLS BUT DOES NOT MEAN CONTENT MOVED. AWS: "When an image is pulled, the
+# BatchGetImage API is called once to retrieve the image manifest." So it is a fair proxy for pull
+# COUNT — better than it first looks — but its response carries `imageManifest` only. The layer
+# bytes come from `GetDownloadUrlForLayer`, and a client that already has the layers cached pulls
+# the manifest and downloads nothing. Where the question is exfiltration, the layer call is the one
+# that corresponds to data movement, and the source rule does not watch it.
+#
+# VOLUME IS THE WRONG AXIS; BREADTH IS THE RIGHT ONE. Ten pulls in fifteen minutes is an ordinary
+# node starting up or a deployment rolling out — all from ONE or TWO repositories. Ten pulls across
+# ten DIFFERENT repositories by one principal is someone walking the registry. The source rule
+# counts pulls and cannot tell those apart; the correlation below counts distinct repositories.
+#
+# AND IT EXCLUDES THE SAME NAMED HUMAN AS EVERY OTHER RULE IN THE ECR SET, by ARN, inline. See
+# ../../_ground-truth/ecr.md §3.
+title: ECR images pulled across many repositories by one principal
+id: 4c8e17b3-52da-4f09-a761-e3805db2c46f
+status: experimental
+description: >-
+  One principal pulled images from five or more distinct repositories within fifteen minutes.
+  Breadth is the signal, not volume: a node starting up or a deployment rolling out produces many
+  pulls from one or two repositories, while walking the registry produces few pulls from many. The
+  source rule counts pulls and cannot separate the two.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_BatchGetImage.html
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+correlation:
+  type: value_count
+  rules:
+    - ecr_image_pulled
+  group-by:
+    - userIdentity.arn
+  timespan: 15m
+  condition:
+    gte: 5
+    field: requestParameters.repositoryName
+falsepositives:
+  - >-
+    A build agent that pulls base images from many repositories, or a mirroring job. Both are real
+    and both should be allowlisted by role on the base rule — the threshold cannot distinguish them
+    because they are behaviourally identical to the technique.
+level: high
+---
+title: ECR image pulled by a principal outside the workload and build roles
+id: 9a02f7e5-6c31-4b48-80d7-152ea94c6b03
+name: ecr_pull_by_unexpected_principal
+status: experimental
+description: >-
+  A successful BatchGetImage from a principal that is neither a workload role nor a build role.
+  Pulling an image is how its contents leave the registry, and a human or a standalone IAM user
+  doing it is not how images normally reach anything. Rated medium rather than high because a single
+  pull has ordinary explanations — an engineer debugging — and the breadth correlation carries the
+  severity.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_BatchGetImage.html
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource:
+      - 'ecr.amazonaws.com'
+      - 'ecr-public.amazonaws.com'
+    eventName: 'BatchGetImage'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the workload and build roles that legitimately pull. Deployed
+  # empty this fires on every container start in the estate.
+  known_pullers:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/ci-build'
+      - ':role/ecsTaskExecutionRole'
+      - ':role/eks-node'
+  condition: selection and success and not known_pullers
+falsepositives:
+  - >-
+    A workload role missing from the list. In an estate with many task roles this list is long and
+    keeping it current is the maintenance cost of this rule — which is why the breadth correlation,
+    which needs no such list, is the one rated high.
+level: medium
+---
+title: ECR image layers downloaded
+id: 7f31d5a0-84b6-4e27-9c50-a6e0138b2f4d
+name: ecr_layer_download_issued
+status: experimental
+description: >-
+  Base rule — correlation component and change accounting, never for direct alerting. A successful
+  GetDownloadUrlForLayer. This is the call that corresponds to image content actually transferring,
+  unlike BatchGetImage which returns only the manifest. It fires many times per pull, once per
+  layer, so its volume is not comparable to a pull count.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_GetDownloadUrlForLayer.html
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource:
+      - 'ecr.amazonaws.com'
+      - 'ecr-public.amazonaws.com'
+    eventName: 'GetDownloadUrlForLayer'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+title: ECR image pulled
+id: b5720ce8-1e49-4a63-95f1-08d3ea6b71c9
+name: ecr_image_pulled
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. A successful BatchGetImage,
+  which AWS documents as being called once per pull to retrieve the manifest. Every container start
+  in the estate produces one.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_BatchGetImage.html
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource:
+      - 'ecr.amazonaws.com'
+      - 'ecr-public.amazonaws.com'
+    eventName: 'BatchGetImage'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational

@@ -1,0 +1,241 @@
+# Resource-Based Permission Policy Attached to a Secret (T1098)
+#
+# The original rule matched PutResourcePolicy AND the literal substrings
+# "secretsmanager:*" AND ""Resource":"*"" with no errorCode. The action token is a safe
+# substring; the second one is not. requestParameters.resourcePolicy is RAW JSON in
+# whatever whitespace the client sent (rule A4), and a document submitted from a file —
+# which is how anyone attaching a real policy does it — is pretty-printed as
+# "Resource": "*" with a space. The rule's own canonical target therefore does not match
+# it. Worse, ANDing the two substrings means the rule only ever fires on a document that
+# grants EVERY Secrets Manager action on EVERY resource, and misses the actual backdoor:
+# "Action": "secretsmanager:GetSecretValue" to an external account, which grants a
+# stranger the secret's plaintext forever and contains neither substring.
+#
+# THE DISCRIMINATOR IS THE PRINCIPAL, NOT THE ACTION. A secret's resource policy exists
+# to name who outside the secret's own identity policies may use it. AWS's own warning is
+# explicit: "Resource-based policies granting secretsmanager:PutResourcePolicy permission
+# gives principals, even those in other accounts, the ability to modify your
+# resource-based policies. This permission lets principals escalate existing permissions
+# like obtaining full administrative access to secrets." Whether a Principal is external,
+# and whether a Condition confines it, cannot be decided by substring matching — it needs
+# the document parsed, which Sigma cannot do. So the primary rule below keys on the one
+# thing Sigma can decide reliably: PutResourcePolicy is a rare administrative call, and a
+# principal outside the small set permitted to make it has no business making it. The
+# document is then graded by the shared decoder in the playbook's §2.
+#
+# BlockPublicPolicy defaults to FALSE — AWS: "By default, public policies aren't
+# blocked." Nothing stops a wildcard-principal policy unless the caller opts in, and an
+# attacker will not. The one case where the guard fires produces PublicPolicyException,
+# which is its own rule below: a blocked attempt to make a secret world-readable is a
+# stronger signal than most successes.
+title: Secrets Manager resource policy attached by an unauthorised principal
+id: d8a2fc4c-4c01-49c2-86bf-c418da927793
+status: experimental
+description: >-
+  PutResourcePolicy on a secret is a rare administrative call that grants access
+  from outside the secret's own account boundary. A successful call by a principal
+  that is not on the short list permitted to manage secret policies is the signal;
+  the grant's contents are graded separately because a substring cannot decide
+  whether a Principal is external or a Condition confines it.
+references:
+  - https://attack.mitre.org/techniques/T1098/
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_PutResourcePolicy.html
+  - https://docs.aws.amazon.com/secretsmanager/latest/userguide/auth-and-access_examples_cross.html
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'secretsmanager.amazonaws.com'
+    eventName: 'PutResourcePolicy'
+  success:
+    errorCode: null
+  policy_admins:                       # tune: principals permitted to manage secret policies
+    userIdentity.arn|contains:
+      - ':role/SecretsPolicyAdmin'
+      - ':role/iac-deploy'
+      - ':role/BreakGlassResponder'
+  condition: selection and success and not policy_admins
+falsepositives:
+  - Infrastructure-as-code applying a reviewed cross-account grant — allowlist the deploy role by ARN, and keep the grant itself under review because the allowlist exempts the caller, not the document
+level: high
+---
+title: Secrets Manager resource policy granting policy control or full service access
+id: ac3fac9a-4f76-4c57-b61a-e530d8e59ac4
+status: experimental
+description: >-
+  The self-perpetuating grant. A resource policy that hands out
+  secretsmanager:PutResourcePolicy lets the grantee rewrite the policy that
+  granted it, so removing the grantee from the document does not remove them;
+  secretsmanager:* includes it. AWS documents this as escalation to full
+  administrative access to the secret, and it works for principals in other
+  accounts. Both operands are bare action tokens, which are safe substrings — the
+  rule does not attempt to match punctuation whose spacing the client controls.
+references:
+  - https://attack.mitre.org/techniques/T1098/
+  - https://docs.aws.amazon.com/secretsmanager/latest/userguide/auth-and-access_examples_cross.html
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'secretsmanager.amazonaws.com'
+    eventName: 'PutResourcePolicy'
+  escalating_action:
+    requestParameters.resourcePolicy|contains:
+      - 'secretsmanager:PutResourcePolicy'
+      - 'secretsmanager:*'
+  success:
+    errorCode: null
+  condition: selection and escalating_action and success
+falsepositives:
+  - A delegated-administration pattern where a security account is deliberately given policy control over another account's secrets — rare, and it should be visible in infrastructure-as-code
+level: high
+---
+title: Secrets Manager resource policy attached
+id: 1f8e4584-1981-49ff-ad18-71fb4344897b
+name: secretsmanager_putresourcepolicy_success
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. One event per
+  successful PutResourcePolicy. requestParameters.secretId names the secret and
+  requestParameters.resourcePolicy carries the document as a raw JSON string.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_PutResourcePolicy.html
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'secretsmanager.amazonaws.com'
+    eventName: 'PutResourcePolicy'
+  success:
+    errorCode: null
+  # justified: base rule feeding the temporal_ordered correlation below;
+  # informational level, never routed to an analyst on its own.
+  condition: selection and success
+level: informational
+---
+title: Secrets Manager secret value retrieved successfully
+id: 690fae08-2d32-4877-980b-d5422e3b90b1
+name: secretsmanager_getsecretvalue_success
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. Used here only to
+  answer whether a secret was read after a resource policy was attached to it.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/userguide/cloudtrail_log_entries.html
+tags:
+  - attack.credential-access
+  - attack.t1555.006
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'secretsmanager.amazonaws.com'
+    eventName: 'GetSecretValue'
+  success:
+    errorCode: null
+  # justified: base rule feeding the temporal_ordered correlation below;
+  # informational level, never routed to an analyst on its own.
+  condition: selection and success
+level: informational
+---
+title: Secret read after a resource policy was attached to it
+id: fa7cb02e-36e0-4e2c-8726-ca5b1c2263fc
+status: experimental
+description: >-
+  The "was the grant exercised" pivot expressed as a rule. Grouped by the secret
+  rather than by the principal, because the principal that attaches the policy and
+  the principal that uses it are deliberately different — often in different
+  accounts. A read following an attach within a day is the grant being cashed in.
+references:
+  - https://attack.mitre.org/techniques/T1098/
+  - https://attack.mitre.org/techniques/T1555/006/
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098
+correlation:
+  type: temporal_ordered
+  rules:
+    - secretsmanager_putresourcepolicy_success
+    - secretsmanager_getsecretvalue_success
+  group-by:
+    - requestParameters.secretId
+  timespan: 24h
+falsepositives:
+  - A legitimate cross-account integration being provisioned and then immediately smoke-tested — should correlate with a change record
+level: high
+---
+title: Public Secrets Manager resource policy blocked by BlockPublicPolicy
+id: 7a159cb1-8ece-4625-8d48-6984eff236e0
+status: experimental
+description: >-
+  PublicPolicyException means the caller attached a policy granting broad access
+  and the BlockPublicPolicy guard rejected it. The guard is opt-in and defaults to
+  off, so this only fires where someone deliberately turned it on — which makes
+  the event an attempt that was stopped, not a misconfiguration. Treat it as a
+  confirmed attempt to make a secret world-readable and investigate the caller.
+references:
+  - https://attack.mitre.org/techniques/T1098/
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_PutResourcePolicy.html
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'secretsmanager.amazonaws.com'
+    eventName: 'PutResourcePolicy'
+  blocked_as_public:
+    errorCode: 'PublicPolicyException'
+  # justified: a single documented error code that only occurs when a broad-access
+  # policy was submitted and rejected — there is no benign form of this event.
+  condition: selection and blocked_as_public
+level: medium
+---
+title: Secrets Manager resource policy validated without being attached
+id: b8244ad2-ba6e-4f4f-ae26-6fd97868d0a3
+status: experimental
+description: >-
+  ValidateResourcePolicy checks a document against Secrets Manager's own policy
+  validation and IAM Access Analyzer without storing it. Legitimate use is almost
+  entirely inside deployment tooling; an interactive principal validating a policy
+  is someone testing what will be accepted before they attach it. Low volume, so
+  cheap to watch.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/userguide/cloudtrail_log_entries.html
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'secretsmanager.amazonaws.com'
+    eventName: 'ValidateResourcePolicy'
+  policy_admins:
+    userIdentity.arn|contains:
+      - ':role/SecretsPolicyAdmin'
+      - ':role/iac-deploy'
+  condition: selection and not policy_admins
+falsepositives:
+  - A policy linter or CI check running under a role not yet in policy_admins
+level: medium

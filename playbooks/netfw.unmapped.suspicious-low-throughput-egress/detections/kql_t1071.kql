@@ -1,0 +1,97 @@
+// Long-lived low-rate egress, and beaconing (T1071 / T1041)
+//
+// Two shapes, and the source rule detects only one. A long-lived flow moving 5 MB over an hour is
+// slow exfiltration. Beaconing is many SHORT flows at regular intervals, each a few hundred bytes —
+// every one of which falls far below any volumetric threshold. This query computes both, and adds
+// the interval regularity that distinguishes a beacon from a busy client.
+//
+// `contains` throughout, never `has` — addresses and SNIs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. Table name depends on ingestion.
+let LOOKBACK = 24h;
+AWSNetworkFirewallLogs
+| where TimeGenerated > ago(LOOKBACK)
+| extend E = todynamic(event)
+| where tostring(E.event_type) == "netflow"
+// netflow is UNI-DIRECTIONAL: each event is one leg. Reading direction rather than inferring it
+// from volume is what separates an upload from a download — both produce a large byte count.
+| extend Direction = tostring(E.direction)
+| where Direction == "to_server"
+| extend SrcIp   = tostring(E.src_ip)
+| extend DestIp  = tostring(E.dest_ip)
+| extend DestPort= toint(E.dest_port)
+| extend Bytes   = tolong(E.netflow.bytes)
+| extend Pkts    = tolong(E.netflow.pkts)
+| extend Age     = tolong(E.netflow.age)
+| extend AppProto= tostring(E.app_proto)
+| extend Sni     = tostring(E.tls.sni)
+| extend Fw      = tostring(firewall_name)
+| extend DestPrivate = DestIp startswith "10." or DestIp startswith "192.168."
+                    or (DestIp matches regex @"^172\.(1[6-9]|2[0-9]|3[01])\.")
+| where not(DestPrivate)
+| extend Rate = iff(Age > 0, todouble(Bytes) / todouble(Age), todouble(Bytes))
+| summarize
+    Flows        = count(),
+    TotalBytes   = sum(Bytes),
+    TotalPkts    = sum(Pkts),
+    MaxAge       = max(Age),
+    MaxFlowBytes = max(Bytes),
+    MedianRate   = percentile(Rate, 50),
+    Ports        = make_set(DestPort, 10),
+    Protos       = make_set(AppProto, 5),
+    Snis         = make_set(Sni, 5),
+    Firewalls    = make_set(Fw, 3),
+    // Interval regularity: the standard deviation of the gaps between flow starts. A beacon has a
+    // near-constant interval and therefore a very small deviation relative to its mean. This is the
+    // measure Sigma correlations cannot express, which is why it lives here.
+    Starts       = make_list(TimeGenerated, 500),
+    FirstSeen    = min(TimeGenerated),
+    LastSeen     = max(TimeGenerated)
+    by SrcIp, DestIp
+| extend Gaps = array_iff(array_length(Starts) > 2,
+                          series_subtract(array_slice(Starts, 1, -1), array_slice(Starts, 0, -2)),
+                          dynamic([]))
+| extend GapStats = series_stats_dynamic(Gaps)
+| extend MeanGap = todouble(GapStats.avg), GapStdev = todouble(GapStats.stdev)
+| extend Regularity = iff(MeanGap > 0, GapStdev / MeanGap, todouble(999))
+| where (MaxAge >= 3600 and MaxFlowBytes >= 5000000) or Flows >= 60
+| extend Verdict = case(
+    Flows >= 60 and Regularity < 0.15 and TotalBytes < 5000000,
+        "BEACONING — many short flows at a near-constant interval carrying little data each. This is the shape the source rule is named for and cannot detect, because every individual flow is far below its thresholds, P0",
+    MaxAge >= 3600 and MaxFlowBytes >= 5000000 and MedianRate < 5000,
+        "SLOW EXFILTRATION — a long-lived outbound flow moving substantial volume at a low rate, which is how a transfer stays under volumetric thresholds. The record was emitted at flow END, so the data has already moved, P0",
+    MaxAge >= 3600 and MaxFlowBytes >= 5000000,
+        "LONG-LIVED HIGH-VOLUME OUTBOUND FLOW — backups, log shipping and image pulls look like this. Tune by destination, not by threshold, P1",
+    Flows >= 60 and Regularity < 0.3,
+        "REGULAR OUTBOUND POLLING — could be a monitoring agent or a beacon imitating one. The SNI and port are the discriminator, P2",
+    Flows >= 60,
+        "MANY OUTBOUND FLOWS TO ONE DESTINATION, IRREGULAR — ordinary client behaviour to a busy service, P3",
+    "Outbound flow above threshold — read the destination")
+| project FirstSeen, LastSeen, SrcIp, DestIp, Verdict, Flows, TotalBytes, MaxFlowBytes,
+          MaxAge, MedianRate, MeanGap, Regularity, Ports, Protos, Snis, Firewalls
+| order by Regularity asc, TotalBytes desc
+//
+// ============================================================================
+// THE ALERT IS STRUCTURALLY LATE, AND NO WINDOW SETTING CHANGES THAT
+// ============================================================================
+// Netflow records are emitted when a flow ENDS or times out, not continuously. A flow matching
+// age >= 3600 produces its record at least an hour after it began, so any evaluation window is a
+// window on RECORD ARRIVAL rather than on traffic. By the time the slow-exfiltration verdict
+// fires, the data has moved. This is a property of the log format and it is stated rather than
+// tuned away — the value of the detection is scoping the loss, not preventing it.
+//
+// Beaconing is the opposite: each flow is short, so records arrive continuously and the
+// correlation can fire while the channel is still live.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHAT WAS SENT. Netflow is a counter. Bytes and packets, no payload. Where app_proto is tls and
+// tls_inspected is absent, even the SNI may be all that is known about the destination.
+//
+// WHETHER THE STATELESS ENGINE HANDLED SOMETHING ELSE. AWS logs only traffic forwarded to the
+// stateful engine, so absence of a netflow record is not evidence that no transfer occurred.
+//
+// WHETHER REGULARITY MEANS BEACONING. Monitoring agents, telemetry SDKs and health checks are
+// regular by design and will dominate the low-Regularity rows. The measure narrows the candidate
+// set; the destination is what settles it.

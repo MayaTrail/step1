@@ -1,0 +1,156 @@
+// IAM Privilege Escalation via Managed Policy (T1098.003)
+//
+// Three signals: a new policy version whose decoded document escalates, the ordered
+// CreatePolicyVersion -> SetDefaultPolicyVersion sequence that puts it into effect, and
+// an administrator-equivalent AWS managed policy attached outright. Denied attempts are
+// surfaced by the companion in the inline-route sibling, never folded in here.
+//
+// What makes this route different from the inline one: a promoted version applies at
+// once to EVERY principal the policy is attached to, so the blast radius is a count, not
+// a name. And because managed policies are versioned, the prior document stays
+// retrievable — rollback is clean, which the inline route cannot offer.
+// Inline route: ../../../iam.privilege-escalation.inline-policy-grant/
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName == "CreatePolicyVersion"
+| where isempty(ErrorCode)
+| extend Req  = parse_json(RequestParameters)
+| extend Resp = parse_json(ResponseElements)
+| extend PolicyArn = tostring(Req.policyArn)
+// CreatePolicyVersion NESTS its response. The flat path is null on every event:
+//   responseElements.policyVersion.versionId   (correct)
+//   responseElements.versionId                 (null, always)
+| extend NewVersion = tostring(Resp.policyVersion.versionId)
+| extend PromotedAtCreate = tobool(Resp.policyVersion.isDefaultVersion)
+//
+// NO DECODE. `requestParameters.policyDocument` is RAW JSON. Percent-encoding is a
+// property of what IAM RETURNS — `responseElements` and the Get*Policy APIs. Decoding
+// here would corrupt a literal "%2F" in an S3 key-prefix condition.
+| extend Doc = parse_json(tostring(Req.policyDocument))
+//
+// SHAPE GUARD. IAM permits Statement as a single object OR an array, and Action and
+// Resource as a string OR an array. mv-expand over a bare object expands its PROPERTIES,
+// not the statement — normalise before expanding or the sweep evaluates the wrong thing.
+| extend Stmts = iff(gettype(Doc.Statement) == "array", Doc.Statement, pack_array(Doc.Statement))
+| mv-expand Stmt = Stmts
+| extend Effect  = tostring(Stmt.Effect)
+| where Effect =~ "Allow"                       // only Allow can escalate
+| extend Actions = iff(gettype(Stmt.Action)   == "array", Stmt.Action,   pack_array(Stmt.Action))
+| extend Res     = iff(gettype(Stmt.Resource) == "array", Stmt.Resource, pack_array(Stmt.Resource))
+| extend NotActions   = iff(gettype(Stmt.NotAction) == "array", Stmt.NotAction, pack_array(Stmt.NotAction))
+| extend HasNotAction = array_length(NotActions) > 0 and isnotnull(Stmt.NotAction)
+// isnotnull, not isnotempty: an empty Condition object {} stringifies to "{}" and would
+// read as present.
+| extend HasCondition = isnotnull(Stmt.Condition)
+| extend ActionStr = tostring(strcat_array(Actions, ","))
+| extend ResStr    = tostring(strcat_array(Res, ","))
+//
+// `contains` throughout, never `has`. `has` is whole-term and breaks on every one of
+// these operands — "iam:*", "arn:aws:iam::*" and "*" are all punctuated.
+// set_has_element tests the ARRAY, not a joined string. strcat_array strips quotes, so
+// a `contains "\"*\""` test is dead code, and `ActionStr == "*"` silently drops
+// ["s3:GetObject","*"] — an unconditioned administrator grant.
+| extend UnrestrictedAction   = set_has_element(Actions, "*")
+| extend UnrestrictedResource = set_has_element(Res, "*")
+| extend EscalationPrimitive  = ActionStr contains "CreateAccessKey"
+                             or ActionStr contains "CreateLoginProfile"
+                             or ActionStr contains "UpdateLoginProfile"
+                             or ActionStr contains "AttachUserPolicy"
+                             or ActionStr contains "AttachRolePolicy"
+                             or ActionStr contains "AttachGroupPolicy"
+                             or ActionStr contains "PutUserPolicy"
+                             or ActionStr contains "PutRolePolicy"
+                             or ActionStr contains "PutGroupPolicy"
+                             or ActionStr contains "CreatePolicyVersion"
+                             or ActionStr contains "SetDefaultPolicyVersion"
+                             or ActionStr contains "AddUserToGroup"
+                             or ActionStr contains "UpdateAssumeRolePolicy"
+                             or ActionStr contains "PassRole"
+                             or ActionStr contains "iam:*"
+                             or ActionStr contains "sts:*"
+| where UnrestrictedAction or EscalationPrimitive or HasNotAction
+| summarize
+    Versions      = make_set(NewVersion, 5),
+    ActionsSeen   = make_set(ActionStr, 5),
+    ResourcesSeen = make_set(ResStr, 5),
+    AnyFullAdmin  = max(UnrestrictedAction and UnrestrictedResource and not(HasCondition)),
+    LiveAtCreate  = max(PromotedAtCreate),
+    Callers       = make_set(UserIdentityArn, 5),
+    SourceIPs     = make_set(SourceIpAddress, 5),
+    FirstSeen     = min(TimeGenerated),
+    LastSeen      = max(TimeGenerated)
+    by PolicyArn, bin(TimeGenerated, 15m)
+| extend Verdict = case(
+    AnyFullAdmin and LiveAtCreate,
+        "FULL ADMIN VERSION CREATED AND ALREADY DEFAULT — live on every attached principal, P0",
+    AnyFullAdmin,
+        "FULL ADMIN VERSION CREATED — dormant until promoted; check for SetDefaultPolicyVersion, P0",
+    LiveAtCreate,
+        "ESCALATION VERSION CREATED AND ALREADY DEFAULT — live on every attached principal, P1",
+    "ESCALATION VERSION CREATED — dormant until promoted, P1")
+| project FirstSeen, LastSeen, PolicyArn, Verdict, Versions, ActionsSeen, ResourcesSeen,
+          LiveAtCreate, Callers, SourceIPs
+| order by LastSeen desc
+//
+// ============================================================================
+// COMPANION 1 — the two-call sequence, which is what actually puts it live
+// ============================================================================
+// Neither half is suspicious alone. CreatePolicyVersion without --set-as-default changes
+// nothing; SetDefaultPolicyVersion is what every legitimate rollback looks like. The
+// original rule alerted P2 on the latter by itself, which is why it fires on rollbacks
+// and gets muted. Correlate on principal AND policy ARN.
+//
+// AWSCloudTrail
+// | where TimeGenerated > ago(7d)
+// | where EventSource == "iam.amazonaws.com"
+// | where EventName in ("CreatePolicyVersion", "SetDefaultPolicyVersion")
+// | where isempty(ErrorCode)
+// | extend PolicyArn = tostring(parse_json(RequestParameters).policyArn)
+// | summarize Created  = countif(EventName == "CreatePolicyVersion"),
+//             Promoted = countif(EventName == "SetDefaultPolicyVersion"),
+//             FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated)
+//             by UserIdentityArn, PolicyArn, bin(TimeGenerated, 15m)
+// | where Created > 0 and Promoted > 0
+// | extend Verdict = "POLICY VERSION CREATED THEN PROMOTED BY SAME PRINCIPAL — P1"
+// | order by LastSeen desc
+//
+// ============================================================================
+// COMPANION 2 — administrator-equivalent managed policy attached
+// ============================================================================
+// Anchored on the ARN suffix. The original building block matched the bare term
+// "AdministratorAccess", which also matches AdministratorAccess-Amplify and
+// AdministratorAccess-AWSElasticBeanstalk — narrow service policies that are routine
+// wherever those services run, so the block fired on benign attaches.
+//
+// AWSCloudTrail
+// | where TimeGenerated > ago(7d)
+// | where EventSource == "iam.amazonaws.com"
+// | where EventName in ("AttachUserPolicy", "AttachRolePolicy", "AttachGroupPolicy")
+// | where isempty(ErrorCode)
+// | extend Req = parse_json(RequestParameters)
+// | extend PolicyArn = tostring(Req.policyArn)
+// | where PolicyArn endswith ":policy/AdministratorAccess"
+//      or PolicyArn endswith ":policy/IAMFullAccess"
+// | extend Grantee = tostring(coalesce(Req.userName, Req.roleName, Req.groupName))
+// | project TimeGenerated, UserIdentityArn, EventName, Grantee, PolicyArn, SourceIpAddress
+// | order by TimeGenerated desc
+//
+// ============================================================================
+// BLAST RADIUS — the number this route needs and the inline route does not
+// ============================================================================
+// A promoted version applies to every principal the policy is attached to, and that
+// count is not in the event. It comes from iam:ListEntitiesForPolicy at response time:
+//   aws iam list-entities-for-policy --policy-arn <arn>
+// Run it before rolling back, because rollback does not tell you who was exposed.
+//
+// ============================================================================
+// EVIDENCE LIMIT — the five-version cap
+// ============================================================================
+// A managed policy holds at most five versions. An actor escalating through a policy
+// that is already at the cap must call DeletePolicyVersion first, and that deleted
+// document is unrecoverable from IAM. DeletePolicyVersion immediately preceding
+// CreatePolicyVersion on the same ARN is both a reliable precursor signal and a warning
+// that the version history you are about to diff is already incomplete.

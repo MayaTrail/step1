@@ -1,0 +1,42 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+#
+# NOTE ON COMPLETENESS. This flow's two building blocks are reproduced by NAME and
+# SHAPE only. The source set carries them as Building Blocks, which are rule
+# components rather than standalone use cases, and their query text was not
+# available at authoring time. Where the query is not reproduced below, the Quality
+# Notes entry that refers to it says so rather than asserting logic that was not read.
+
+- name: Amazon EKS - Building Block - User Attempts Multiple Denied Actions
+  priority: building-block
+  type: logs_threshold
+  mitre: T1078/TA0004
+  telemetry: kubernetes-audit
+  fields_referenced: [user.username, verb, objectRef.resource, responseStatus.code, sourceIPAddresses]
+  group_by: ['user.username']
+
+- name: Amazon EKS - Building Block - User Assigned Cluster-Level Administrative Permissions
+  priority: building-block
+  type: logs_immediate
+  mitre: T1548/TA0004
+  telemetry: kubernetes-audit
+  fields_referenced: [user.username, user.groups, verb, objectRef.resource, responseStatus.code]
+  group_by: []
+
+- name: Amazon EKS - Flow Alert - Cluster Admin Access Granted After Multiple Unauthorized Operations
+  priority: P1
+  type: flow
+  mitre: T1078/TA0004
+  telemetry: kubernetes-audit
+  flow_stage: (1)  timeframeMs: 0
+  flow_stage: (2)  timeframeMs: 3600000
+  group_by: []

@@ -1,0 +1,99 @@
+// SQS Queue Deletion, single and at volume (T1485 / T1070)
+//
+// Signal: DeleteQueue by a principal that does not own queue lifecycle; the same at volume;
+// and the delete-then-recreate pair that constitutes queue-NAME TAKEOVER.
+//
+// This query does what the Sigma rules structurally cannot: it JOINS the deletion to the
+// recreation ON THE QUEUE NAME. DeleteQueue names the queue inside requestParameters.queueUrl
+// and CreateQueue names it in requestParameters.queueName, so a Sigma correlation can only
+// group by principal; here the URL's last path segment is extracted and compared directly to
+// the created name, which turns "the same person deleted something and created something"
+// into "the same queue name came back under new ownership".
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE PipelineRoles BELOW BEFORE DEPLOYING. Unpopulated, every teardown reads as an
+// incident - noisy in the direction that surfaces the deletion rather than hiding it.
+let Lookback = 30d;
+let Sqs =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "sqs.amazonaws.com"
+    | where EventName in ("DeleteQueue", "CreateQueue")
+    // RequestParameters and ResponseElements are typed `string` in this table, not dynamic -
+    // parse_json is required before any field access.
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    // DeleteQueue: queueUrl only, and NO responseElements at all (HTTP 200, empty body).
+    // CreateQueue: queueName in the request, queueUrl in the response - flat, not nested,
+    // because the API's Response Syntax is a bare {"QueueUrl": "..."} with no wrapper object.
+    | extend QueueUrl  = coalesce(tostring(Req.queueUrl), tostring(Resp.queueUrl))
+    | extend QueueName = coalesce(tostring(Req.queueName), tostring(split(QueueUrl, "/")[-1]))
+    // `contains`, never `has`: a role path and an ARN are punctuated, and `has` is whole-term.
+    | extend IsPipeline = (UserIdentityArn contains ":role/iac-deploy")
+                       or (UserIdentityArn contains ":role/BreakGlassAdmin");
+let Deletes = Sqs | where EventName == "DeleteQueue" and isempty(ErrorCode) and not(IsPipeline)
+                  | project DeletedAt = TimeGenerated, QueueName, Actor = UserIdentityArn,
+                            DeleteIp = SourceIpAddress, DeleteAgent = UserAgent;
+let Creates = Sqs | where EventName == "CreateQueue" and isempty(ErrorCode)
+                  | project CreatedAt = TimeGenerated, QueueName, Creator = UserIdentityArn;
+// Denied attempts are kept separately and never counted as deletions: a principal probing
+// its boundary produces the same volume as a real destruction if the two are conflated.
+let DeniedProbes = Sqs
+    | where EventName == "DeleteQueue" and isnotempty(ErrorCode)
+    | summarize DeniedAttempts = count(), DeniedCodes = make_set(ErrorCode, 5) by Actor = UserIdentityArn;
+Deletes
+| join kind=leftouter Creates on QueueName
+// The recreate has to come AFTER the delete and after the documented 60-second
+// QueueDeletedRecently wait; anything earlier is an unrelated queue of the same name in
+// another region, and anything much later is ordinary rebuild activity.
+| extend NameTakenOver = isnotempty(CreatedAt) and CreatedAt > DeletedAt
+                         and CreatedAt < DeletedAt + 15m
+| extend TakenOverByOther = NameTakenOver and Creator != Actor
+| summarize
+    Deletions     = count(),
+    FirstDeleted  = min(DeletedAt),
+    LastDeleted   = max(DeletedAt),
+    Queues        = make_set(QueueName, 20),
+    QueueCount    = dcount(QueueName),
+    SourceIPs     = make_set(DeleteIp, 5),
+    Agents        = make_set(DeleteAgent, 3),
+    Recreated     = make_set(iff(NameTakenOver, QueueName, ""), 20),
+    AnyTakeover   = max(NameTakenOver),
+    AnyForeignRecreate = max(TakenOverByOther)
+    by Actor
+| join kind=leftouter DeniedProbes on Actor
+// Burst rate is the volume signal the source's second rule expressed as 5-in-5-minutes.
+// Reported as a rate rather than a boolean so the analyst sees how far past the line it is.
+| extend BurstMinutes = max_of(1.0, datetime_diff('second', LastDeleted, FirstDeleted) / 60.0)
+| extend DeletionsPerFiveMinutes = round(Deletions / BurstMinutes * 5.0, 1)
+| extend Verdict = case(
+    AnyForeignRecreate == true,          "QUEUE NAME TAKEOVER - a queue this principal deleted was recreated by a DIFFERENT principal within 15 minutes",
+    AnyTakeover == true,                 "DELETE AND RECREATE - the same principal recreated a deleted queue name; the new queue has none of the original policy, encryption or redrive",
+    DeletionsPerFiveMinutes >= 5.0,      "MASS DELETION - five or more queues per five minutes by one non-pipeline principal",
+    isnotempty(DeniedCodes),             "DELETION WITH DENIED ATTEMPTS - the principal was also refused on other queues; treat the denials as boundary mapping, not as deletions",
+                                         "UNAUTHORISED QUEUE DELETION - a queue was destroyed by a principal outside the lifecycle pipeline")
+| project FirstDeleted, LastDeleted, Verdict, Actor, QueueCount, Queues, Deletions,
+          DeletionsPerFiveMinutes, Recreated, DeniedAttempts, DeniedCodes, SourceIPs, Agents
+| order by LastDeleted desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// How many messages were destroyed. DeleteQueue's event carries only the queue URL - no
+// depth, no policy, no encryption setting - and there is no responseElements to pivot from.
+// The only surviving measure of what was lost is the AWS/SQS CloudWatch metric
+// ApproximateNumberOfMessagesVisible read at its LAST datapoint BEFORE the deletion, because
+// AWS emits SQS metrics only "when the queue is active" and a deleted queue emits nothing.
+// Reading that metric after the fact returns no datapoints, which is the absence of a queue,
+// not the absence of a backlog - never report it as zero messages lost.
+//
+// Whether producers kept writing during the deletion. AWS documents a 60-second window in
+// which "requests you send involving that queue during the 60 seconds might succeed... but
+// after 60 seconds the queue and the message you sent no longer exist." Those SendMessage
+// calls are DATA events, off by default, so they are invisible unless an advanced event
+// selector on AWS::SQS::Queue was configured beforehand.
+//
+// PREVENTION. sqs:DeleteQueue is not needed by any workload at runtime - only by whatever
+// owns queue lifecycle. An SCP denying it outside the pipeline role is reachable here because
+// AWS states cross-account permissions do not apply to DeleteQueue, so the caller is always an
+// in-organisation principal.

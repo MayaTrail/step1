@@ -1,0 +1,93 @@
+// DNS rebinding toward the metadata service (T1552.005)
+//
+// The field is the meaning. `rdata` carrying 169.254.169.254 is an attacker-controlled name
+// answering with the metadata address — DNS rebinding. `query_name` containing that literal is
+// somebody looking up an IP as a name. The source rule matches the string anywhere in the record
+// and cannot tell them apart; this query reads rdata and projects query_name beside it.
+//
+// `contains` throughout, never `has` — domain names and addresses are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. Table name depends on ingestion.
+let LOOKBACK = 7d;
+// POPULATE: the domain suffixes this organisation resolves privately. The tuning surface is the
+// ZONE, not the address range — private hosted zones legitimately answer with RFC 1918 space.
+let InternalZones = @"\.internal$|\.local$|\.compute\.internal$";
+Route53ResolverQueryLogs
+| where TimeGenerated > ago(LOOKBACK)
+| extend Answer = tostring(rdata)
+| extend Name   = tostring(query_name)
+| extend QType  = tostring(query_type)
+| extend Rcode  = tostring(rcode)
+| extend SrcIp  = tostring(srcaddr)
+| extend Vpc    = tostring(vpc_id)
+// srcids is a nested object, not a scalar. And AWS warns the instance ID may name something not
+// visible in the account — CloudShell, Lambda, EKS or Fargate — so an empty describe-instances for
+// one of these is not evidence the record is wrong.
+| extend Instance = tostring(todynamic(srcids).instance)
+| extend Endpoint = tostring(todynamic(srcids).resolver_endpoint)
+// firewall_rule_action is populated ONLY on an alert or block match. Empty means no match, never
+// "allowed by policy". Projected, never filtered on.
+| extend FwAction = tostring(firewall_rule_action)
+| extend LinkLocal = Answer startswith "169.254."
+| extend Private = Answer startswith "10." or Answer startswith "192.168." or Answer startswith "127."
+                or (Answer matches regex @"^172\.(1[6-9]|2[0-9]|3[01])\.")
+| extend InternalZone = Name matches regex InternalZones
+| where LinkLocal or (Private and not(InternalZone))
+| extend Endpoint2 = case(
+    Answer == "169.254.169.254", "EC2 instance metadata (IMDS)",
+    Answer == "169.254.170.2",   "ECS task metadata and task-role credentials",
+    Answer == "169.254.170.23",  "EKS Pod Identity credentials",
+    LinkLocal,                   "link-local (other)",
+    "private address")
+| summarize
+    Queries    = count(),
+    Answers    = make_set(Answer, 10),
+    Names      = make_set(Name, 20),
+    QTypes     = make_set(QType, 5),
+    Rcodes     = make_set(Rcode, 5),
+    Instances  = make_set(Instance, 10),
+    Endpoints  = make_set(Endpoint, 5),
+    FwActions  = make_set(FwAction, 5),
+    Sources    = make_set(SrcIp, 10),
+    Vpcs       = make_set(Vpc, 5),
+    FirstSeen  = min(TimeGenerated),
+    LastSeen   = max(TimeGenerated)
+    by Target = Endpoint2, RegisteredName = strcat_array(array_slice(split(Name, "."), -2, -1), ".")
+| extend Verdict = case(
+    Target contains "IMDS",
+        "DNS REBINDING TO INSTANCE METADATA — a name resolved to 169.254.169.254. Any fetcher that validated the hostname and then connected has reached the credential endpoint. Treat the instance profile as compromised, P0",
+    Target contains "ECS" or Target contains "EKS",
+        strcat("DNS REBINDING TO ", Target, " — the same primitive aimed at a container credential endpoint, P0"),
+    Target contains "link-local",
+        "DNS ANSWER IN LINK-LOCAL SPACE — no public name resolves here legitimately. Read the queried name, P0",
+    "PUBLIC NAME RESOLVED TO PRIVATE SPACE — rebinding toward an internal service, or a private zone missing from the allowlist. Confirm which, P1")
+| project FirstSeen, LastSeen, Target, RegisteredName, Verdict, Queries,
+          Answers, Names, QTypes, Rcodes, Sources, Instances, Endpoints, Vpcs, FwActions
+| order by Queries desc
+//
+// ============================================================================
+// WHY THE CACHE LIMITATION DOES NOT WEAKEN THIS QUERY
+// ============================================================================
+// AWS logs only unique queries: "VPC Resolver query logging logs only unique queries, not queries
+// that VPC Resolver is able to respond to from the cache." That ruins volume reasoning about
+// stable domains — but rebinding depends on a very short TTL by construction, so every rebinding
+// query is a cache miss and every one is logged. The count here is close to complete for exactly
+// the traffic this rule cares about, which is not true of most rules over this source.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHETHER ANYTHING CONNECTED TO THE ANSWER. A DNS log records a resolution, not a session. And the
+// connection that follows is invisible in VPC flow logs too, which explicitly do not capture
+// "Traffic to and from 169.254.169.254 for instance metadata" — so for the IMDS case there is NO
+// network record of the connection at either layer. The evidence that it worked is the resulting
+// role session appearing in CloudTrail from somewhere the instance is not; see
+// ../../ec2.credential-access.imds-credential-theft/.
+//
+// WHICH PROCESS ASKED. srcids.instance names a host at best, and AWS notes it may name something
+// invisible in the account — "AWS CloudShell, AWS Lambda, Amazon EKS, or Fargate". Host-level
+// telemetry is the only way to reach a process.
+//
+// WHETHER THE FIREWALL ALLOWED IT. An empty FwActions column means DNS Firewall did not MATCH,
+// which is not the same as deciding to allow. Reading it as approval is the most common misuse of
+// this field.

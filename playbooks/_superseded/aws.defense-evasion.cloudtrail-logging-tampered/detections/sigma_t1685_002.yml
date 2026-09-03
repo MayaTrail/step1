@@ -1,0 +1,398 @@
+# CloudTrail Logging Tampered (T1685.002)
+#
+# The source rules match `StopLogging`, `DeleteTrail` and `UpdateTrail` by event name with
+# a bare success filter and no content inspection. Two of the three are adequate because
+# the API itself is unambiguous — `StopLogging` has exactly one effect. The third is not:
+# `UpdateTrail` is the same call an operator makes to turn multi-Region logging ON, to
+# point a trail at a new bucket during a migration, or to attach a CloudWatch Logs group.
+# Matching the event name cannot distinguish a narrowing from a widening, so the rule
+# either pages on every legitimate trail change or gets muted. Nothing in the set matches
+# `PutEventSelectors` or `PutInsightSelectors` at all — the quiet forms of this technique
+# leave no event the deployed rules look at.
+#
+# The discriminator is that the change REDUCES recorded scope. `UpdateTrail` leaves
+# unspecified parameters unchanged, so a narrowing flag appears in requestParameters only
+# when it was explicitly sent: `isMultiRegionTrail: false` is a narrowing and
+# `isMultiRegionTrail: true` is a widening, and they are separable on the event. The same
+# is true of `includeGlobalServiceEvents` and `enableLogFileValidation`.
+#
+# `PutEventSelectors` carries the RESULTING configuration, not the delta. What AWS states
+# in a sentence is the cross-type overwrite — "If you apply `AdvancedEventSelectors` to a
+# trail, any existing `EventSelectors` are overwritten", and the converse. Same-type
+# wholesale replacement is demonstrated rather than stated: the API has no patch or delete
+# verb, and the user guide's instruction for reversing a KMS exclusion is to "remove the
+# `eventSource` selector, and run the command again" — i.e. resubmit the complete desired
+# set. Either way the event shows the end state and never the change. Some end states are
+# narrowings on their face — management events off, ReadWriteType restricted to ReadOnly,
+# a non-empty ExcludeManagementEventSources, an advanced selector keyed on
+# `userIdentity.arn`. The general case is not, and needs a diff against a known-good
+# selector baseline. That baseline check is the load-bearing complement to these rules and
+# it is not expressible in Sigma. See `detection_note_t1685_002.md`.
+#
+# FIELD SHAPE — the casing is DOCUMENTED, the array addressing is not.
+# The API Reference names the wire parameters `Name`, `S3BucketName`, `IsMultiRegionTrail`,
+# `EventSelectors[].ReadWriteType`, `AdvancedEventSelectors[].FieldSelectors[].Field`. What
+# CloudTrail writes into `requestParameters` is the INITIAL-LOWERCASE form, and AWS
+# publishes two records that show it outright. The success-path one is `StartLogging`:
+# `"requestParameters": {"name": "myTrail"}` (CloudTrail concepts, retrieved 2026-08-29).
+# The `UpdateTrail` one reads
+# `"requestParameters": {"name": "myTrail2", "isMultiRegionTrail": true}` — but read where
+# it sits: it is the "Error code and message log example", and carries
+# `"errorCode": "TrailNotFoundException"`. It fixes the CASING, which is all the field
+# paths below need. It does NOT establish the partial-update semantics claimed above,
+# because that call failed and changed nothing; the evidence for that is the CLI example
+# cited on `narrow_region`. So the scalar paths are not a guess and do not need confirming.
+# What DOES vary is how your backend addresses an element of a selector ARRAY. The dotted
+# form used below is what Elastic-family and Sentinel backends produce; a backend that
+# requires an explicit index needs `[0]` inserted. AWS publishes no `PutEventSelectors`
+# log record, so confirm the selector-array paths — not the scalar ones — against a real
+# event before deploying. An unmatched field path fails silently, and this rule set is the
+# one where a silent failure is least survivable.
+title: CloudTrail trail stopped, deleted, or narrowed in scope
+id: 6aa02757-a52b-4125-9029-d4aebc05e3b6
+name: cloudtrail_scope_reduced
+status: experimental
+description: >-
+  A CloudTrail trail stopped logging, was deleted, or had its recorded scope reduced —
+  multi-Region coverage turned off, global service events dropped, or log file integrity
+  validation disabled. Every subsequent action by the caller is unrecorded by that trail
+  for as long as the change stands.
+references:
+  - https://attack.mitre.org/techniques/T1685/002/                                     # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_UpdateTrail.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_StopLogging.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_DeleteTrail.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-log-file-examples.html  # retrieved 2026-08-29 — the UpdateTrail record that fixes the requestParameters casing
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  service:
+    eventSource: 'cloudtrail.amazonaws.com'
+  # StopLogging and DeleteTrail have exactly one effect each. No content check is possible
+  # and none is needed — the API name IS the discriminator for these two. Both carry
+  # `requestParameters: {"name": "<trail>"}` and return an empty body, so there is no
+  # responseElements object to pivot from either.
+  stop_or_delete:
+    eventName:
+      - 'StopLogging'
+      - 'DeleteTrail'
+  update_call:
+    eventName: 'UpdateTrail'
+  # UpdateTrail behaves as a partial update: an omitted optional parameter leaves the
+  # setting alone, and requestParameters carries only what was actually sent. AWS never
+  # states this in a sentence — the API description says only that UpdateTrail "updates
+  # trail settings" — so it is asserted here on a DEMONSTRATION, not a quote: the user
+  # guide's `aws cloudtrail update-trail --name my-trail --is-multi-region-trail` example
+  # passes that one flag and the returned trail still carries S3BucketName,
+  # IncludeGlobalServiceEvents, LogFileValidationEnabled and IsOrganizationTrail unchanged.
+  # So a `false` here was explicitly sent, and the widening (`true`) does not match. This
+  # is what separates a narrowing from a routine trail edit; the source rule's bare
+  # `eventName:"UpdateTrail"` cannot. Confirm it against one real UpdateTrail event from
+  # your own IaC pipeline before tuning anything on the absence of a flag.
+  narrow_region:
+    requestParameters.isMultiRegionTrail: false
+  # Narrow, but check the shape before you tune on volume: AWS requires
+  # IncludeGlobalServiceEvents to be `true` on a multi-Region trail, and since 22 Nov 2021
+  # the events AWS names — CloudFront, IAM and STS; NOT Route 53, which that sentence does
+  # not list — are recorded in us-east-1 only. So a successful `false` here means a
+  # SINGLE-Region trail, and it only removes anything real when that trail's home Region is
+  # us-east-1. Rare, which is why it stays at this level.
+  narrow_global_events:
+    requestParameters.includeGlobalServiceEvents: false
+  # Disabling validation breaks the digest chain one hour later and CloudTrail creates no
+  # digest files for the period it stays off — so it destroys the ability to prove the
+  # remaining logs are complete, without stopping logging.
+  narrow_validation:
+    requestParameters.enableLogFileValidation: false
+  success:
+    errorCode: null
+  condition: service and success and (stop_or_delete or (update_call and (narrow_region or narrow_global_events or narrow_validation)))
+falsepositives:
+  - 'A migration that legitimately consolidates several single-Region trails into one
+    multi-Region trail will emit `isMultiRegionTrail: false` on the trails being wound
+    down. Correlate against a change record; the winding-down trails should also be
+    deleted shortly afterwards by the same pipeline principal.'
+  - Infrastructure-as-code drift reconciliation re-applying a stored trail definition.
+    Filter on the pipeline role ARN once baselined — not on the event name.
+  - '`enableLogFileValidation: false` is occasionally sent by an older IaC provider that
+    writes every parameter on every apply rather than only the changed ones. Confirm
+    whether your provider does this before tuning it out; if it does, the narrowing flags
+    are not trustworthy from that principal and the selector baseline in the playbook
+    becomes the primary control for it.'
+level: high
+---
+# Repointing the destination bucket is a scope reduction that leaves every other trail
+# setting intact, so it matches none of the flags above. It is separated from Rule 1
+# because it needs an allowlist of legitimate destination buckets to be meaningful, and an
+# allowlist is a deployment-time input rather than a property of the event.
+title: CloudTrail trail destination repointed to an unapproved bucket
+id: 6b249eab-0e57-4e34-9ed3-d32ca982a216
+name: cloudtrail_destination_repointed
+status: experimental
+description: >-
+  A trail's S3 destination bucket was changed to a bucket that is not on the approved
+  log-destination list. Delivery continues and the trail still reports IsLogging true,
+  but the logs land somewhere the detection pipeline does not read and the retention,
+  object-lock and access controls of the approved bucket no longer apply.
+references:
+  - https://attack.mitre.org/techniques/T1685/002/                                     # retrieved 2026-08-28
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_UpdateTrail.html  # retrieved 2026-08-28
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'UpdateTrail'
+  # Non-empty test. UpdateTrail is a partial update, so an edit that did not touch the
+  # bucket carries no s3BucketName at all — and an absent field does not match the
+  # allowlist below, which would make `not approved_destination` true on every unrelated
+  # trail edit. `|re: '\S'` matches any non-empty value; `|exists: true` is the
+  # spec-native equivalent if your backend supports it.
+  repoint:
+    requestParameters.s3BucketName|re: '\S'
+  # REPLACE THESE with your own approved log-destination bucket names before deploying.
+  # Left as placeholders deliberately: a shipped allowlist of somebody else's bucket names
+  # is an allowlist of nothing, and this rule fires on every trail edit until it is filled
+  # in — which is the correct failure mode for a rule whose whole content is an allowlist.
+  approved_destination:
+    requestParameters.s3BucketName:
+      - '<approved-log-archive-bucket>'
+      - '<approved-log-archive-bucket-secondary>'
+  success:
+    errorCode: null
+  condition: selection and success and repoint and not approved_destination
+falsepositives:
+  - A genuine log-archive migration. It should appear in change control and should be
+    followed by the new bucket being added to this allowlist.
+level: high
+---
+# None of the source rules match this call at all. It is the quiet form of the technique:
+# the trail keeps running, `IsLogging` stays true, `DescribeTrails` looks unchanged, and
+# the events the actor is about to generate simply stop matching any selector.
+title: CloudTrail event selectors narrowed or Insights disabled
+id: a2fefb16-3c15-4529-90cd-6fa8673c9fac
+name: cloudtrail_selectors_narrowed
+status: experimental
+description: >-
+  A trail's event selectors, or an event data store's advanced event selectors, were
+  rewritten into a configuration that records less — management events excluded, write
+  events dropped by restricting ReadWriteType to ReadOnly, a management event source
+  excluded, a selector filtering by the caller's own identity, or Insights event
+  collection turned off. The trail continues to report that it is logging.
+references:
+  - https://attack.mitre.org/techniques/T1685/002/                                            # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_PutEventSelectors.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_AdvancedFieldSelector.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_EventSelector.html     # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/awscloudtrail/latest/userguide/logging-management-events-with-cloudtrail.html  # retrieved 2026-08-29
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selectors_call:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'PutEventSelectors'
+  # A trail configured NOT to include management events records no control-plane activity
+  # at all. There is no prior state in which this is a widening.
+  mgmt_off:
+    requestParameters.eventSelectors.includeManagementEvents: false
+  # ReadOnly means every mutating call disappears while the trail still reports management
+  # events as enabled. The sharpest quiet form available on this API.
+  read_only:
+    requestParameters.eventSelectors.readWriteType: 'ReadOnly'
+  # A non-empty ExcludeManagementEventSources removes one service's control plane from the
+  # trail. The value set is CLOSED: AWS documents it as empty, or containing
+  # `kms.amazonaws.com` or `rdsdata.amazonaws.com`, and nothing else — so this block cannot
+  # fire on "an actor excluding some other service", because the API will not accept one.
+  # It fires on the documented cost-control configuration, which is both a real reduction
+  # in what is recorded and common. Baseline it per trail and filter the trails that
+  # legitimately carry it; do not delete the block, because the same value on the trail
+  # that is your KMS audit source is the attack.
+  excluded_source:
+    requestParameters.eventSelectors.excludeManagementEventSources|contains: 'amazonaws.com'
+  # Self-exclusion by caller identity — but read the scope carefully, because it is not
+  # what it first looks like. On a TRAIL, AWS documents `userIdentity.arn` as available to
+  # filter DATA events and network activity events only; the management-event field set for
+  # a trail is `eventCategory`, `eventSource` and `readOnly`. `eventName`, `eventType`,
+  # `sessionCredentialFromConsole` and `userIdentity.arn` become available for management
+  # events only on an EVENT DATA STORE. So:
+  #   PutEventSelectors  + userIdentity.arn -> one principal's DATA-event activity vanishes
+  #   Update/CreateEventDataStore + same    -> one principal's MANAGEMENT activity vanishes
+  # Both are self-exclusion and both are matched, via the two branches in `condition:`.
+  # Neither has a benign form: there is no operational reason to stop recording one
+  # principal while recording every other. The management-event branch is the sharper one.
+  self_exclusion:
+    requestParameters.advancedEventSelectors.fieldSelectors.field: 'userIdentity.arn'
+  # Event data stores take the same advancedEventSelectors structure at the top level of
+  # requestParameters, which is why `self_exclusion` resolves against them unchanged. The
+  # eventSelectors-shaped blocks above do not apply here and simply never match — they are
+  # ORed, so that costs nothing.
+  eds_call:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName:
+      - 'CreateEventDataStore'
+      - 'UpdateEventDataStore'
+  insights_call:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'PutInsightSelectors'
+  # Insights is turned off by passing an EMPTY selector list, so the discriminator is the
+  # ABSENCE of an insightType under insightSelectors. `field: null` matches when the field
+  # is absent, which is exactly the empty-array case after flattening. Verify this renders
+  # as an absent field on your backend rather than an empty array before relying on it.
+  insights_emptied:
+    requestParameters.insightSelectors.insightType: null
+  success:
+    errorCode: null
+  condition: success and ((selectors_call and (mgmt_off or read_only or excluded_source or self_exclusion)) or (eds_call and self_exclusion) or (insights_call and insights_emptied))
+falsepositives:
+  - '`excludeManagementEventSources` is the dominant false positive here and the one to
+    tune first. Its documented value set is exactly `kms.amazonaws.com` and
+    `rdsdata.amazonaws.com`, both of which are the standard cost-control configuration, so
+    this block fires on a common benign change. Filter by TRAIL NAME once you have
+    baselined which trails legitimately carry it — never by value, which would disable the
+    block outright on the trail that is your KMS audit source.'
+  - A trail deliberately dedicated to read-only events as one half of a read/write split
+    across two buckets. That configuration is documented by AWS and is legitimate; it must
+    be baselined per trail, since the same value on the trail that carries your write
+    events is the attack.
+  - Insights being disabled during a cost review. Rare, traceable, and worth confirming.
+level: high
+---
+title: CloudTrail logging configuration read
+id: 30df39a0-e436-4206-b4b6-1403634acffa
+name: cloudtrail_config_read
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_GetTrailStatus.html  # retrieved 2026-08-28
+tags:
+  - attack.discovery
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # justified: base rule for the temporal correlation below. These are ordinary read calls
+  # that every console visit to the CloudTrail page emits; they carry no signal alone and
+  # this rule is deployed at informational level solely so the sequence can resolve it.
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName:
+      - 'DescribeTrails'
+      - 'ListTrails'
+      - 'GetTrailStatus'
+      - 'GetEventSelectors'
+      - 'GetInsightSelectors'
+  # The success filter is on the BASE rule, not only on the correlation. A denied read
+  # followed by a successful tamper is a different story from a successful survey followed
+  # by a tamper, and folding them together would let a failed probe raise a `high`.
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+# The survey-then-degrade fingerprint. An actor who does not already know the trail
+# topology has to ask, and CloudTrail answers with the trail names, their home Regions,
+# their buckets and their selectors — everything needed to choose which trail to degrade
+# and how. An operator who edits a trail through the console also reads first, so this is
+# a sequence, not a signature: it is worth `high` only because the second half is already
+# `high` on its own and the ordering raises confidence, not because reading is suspicious.
+title: CloudTrail configuration surveyed then trail scope reduced by the same principal
+id: 3ea80b9a-e628-4ebc-b716-5aa230861c83
+status: experimental
+description: >-
+  One principal read the account's CloudTrail configuration and then, within fifteen
+  minutes, stopped, deleted or narrowed a trail. The read tells the actor which trail
+  covers the Region it intends to work in; the write removes it.
+references:
+  - https://attack.mitre.org/techniques/T1685/002/   # retrieved 2026-08-28
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+correlation:
+  type: temporal_ordered
+  rules:
+    - cloudtrail_config_read
+    - cloudtrail_scope_reduced
+  group-by:
+    - userIdentity.arn
+  timespan: 15m
+level: high
+---
+title: CloudTrail configuration write denied
+id: 046aa464-575d-491b-a104-6b8f96a6377a
+name: cloudtrail_tamper_denied
+status: experimental
+description: Base rule — volume component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_StopLogging.html  # retrieved 2026-08-28
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName:
+      - 'StopLogging'
+      - 'DeleteTrail'
+      - 'UpdateTrail'
+      - 'PutEventSelectors'
+      - 'PutInsightSelectors'
+      - 'CreateEventDataStore'
+      - 'DeleteEventDataStore'
+      - 'UpdateEventDataStore'
+      - 'StopEventDataStoreIngestion'
+  # AccessDenied is the IAM-evaluated denial. AccessDeniedException is the
+  # service-evaluated form. Match both prefix-tolerantly, and confirm which one your
+  # account actually produces against a real denied event before tuning anything on it.
+  denied:
+    errorCode|contains: 'AccessDenied'
+  condition: selection and denied
+level: low
+---
+# Kept strictly separate from the success-path rules. A principal collecting AccessDenied
+# across CloudTrail writes is finding out whether it can blind the account before it tries
+# anything else, and it must not share an alert with a trail that is actually down.
+#
+# Threshold basis: derived from the API surface, not from an observed baseline. Degrading
+# a single trail takes ONE call, so the success path carries no threshold at all — putting
+# one there would gate the technique's own footprint out of existence. The denial path is
+# different: an operator who lacks CloudTrail permissions discovers it on the first or
+# second call and stops. Three or more distinct denied CloudTrail writes in fifteen
+# minutes is an actor working through the API surface. Baseline against your own account
+# before deploying; this is a starting point, not a measurement.
+title: CloudTrail configuration writes denied repeatedly for one principal
+id: e7ce3531-afb7-4cfb-8c73-fe898212bc92
+status: experimental
+description: >-
+  One principal was denied three or more CloudTrail configuration writes within fifteen
+  minutes — an actor establishing whether it can degrade logging before acting.
+references:
+  - https://attack.mitre.org/techniques/T1685/002/   # retrieved 2026-08-28
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+correlation:
+  type: event_count
+  rules:
+    - cloudtrail_tamper_denied
+  group-by:
+    - userIdentity.arn
+  timespan: 15m
+  condition:
+    gt: 2
+level: medium

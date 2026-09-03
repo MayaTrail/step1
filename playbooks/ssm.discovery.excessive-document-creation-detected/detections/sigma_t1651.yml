@@ -1,0 +1,201 @@
+# Excessive Document Creation Detected (T1651)
+#
+# The original rule counted `createdocument` events, more than 10 in five minutes,
+# grouped by userIdentity.sessionContext.sessionIssuer.userName, with no other
+# condition. Volume is the wrong axis. A CloudFormation stack that ships fifteen
+# Automation runbooks raises it; the single document that matters — one Command
+# document wrapping a shell payload, or a Session document that changes what every
+# Session Manager session runs — never does, because one is not more than ten.
+#
+# The group-by is also empty for IAM users: sessionContext is present only for role
+# sessions, so every IAM user collapses into one null bucket or is dropped
+# altogether. The rules below group by userIdentity.arn, which every event carries.
+#
+# The sharpest single event in this API is a write to the Session-type document
+# named SSM-SessionManagerRunShell. AWS documents it as the document Session
+# Manager stores its preferences in — the log destination (S3 / CloudWatch), the
+# KMS key, Run As, and shellProfile, which runs commands at the start of every
+# session. Creating it is one call, needs no volume, and both executes code on
+# every managed node a session opens on and controls whether that session is
+# recorded.
+#
+# CONTENT IS NOT MATCHED HERE ON PURPOSE. Document content is a request parameter
+# capped at 64 KB, well under CloudTrail's 100 KB omission threshold, but AWS does
+# not document whether `requestParameters.content` is recorded for CreateDocument.
+# A content-matching rule that silently never fires is worse than no rule, so
+# content inspection is done with GetDocument in the playbook instead.
+title: Session Manager preferences document created or updated
+id: 1628fd95-6e5b-4553-9cfe-60f277bd67ca
+name: ssm_session_prefs_document_written
+status: experimental
+description: >-
+  A write to the Session-type document SSM-SessionManagerRunShell changes what
+  every Session Manager session on every managed node runs at start-up, and where
+  or whether that session is logged. One event, no volume required.
+references:
+  - https://attack.mitre.org/techniques/T1651/
+  - https://docs.aws.amazon.com/systems-manager/latest/userguide/session-preferences-shell-config.html
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_CreateDocument.html
+tags:
+  - attack.execution
+  - attack.t1651
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName:
+      - 'CreateDocument'
+      - 'UpdateDocument'
+      - 'UpdateDocumentDefaultVersion'
+  session_prefs:
+    requestParameters.name: 'SSM-SessionManagerRunShell'
+  success:
+    errorCode: null
+  session_admins:                      # tune: the principals that own session preferences
+    userIdentity.arn|contains:
+      - ':role/ssm-session-admin'
+      - ':role/iac-deploy'
+  condition: selection and session_prefs and success and not session_admins
+falsepositives:
+  - A first-time Session Manager configuration, or a deliberate preferences change — both should be traceable to a change record and are rare after initial setup
+level: high
+---
+title: Executable SSM document created outside the deployment pipeline
+id: a3295a70-c239-45bc-a47a-335ca4d50bb6
+name: ssm_exec_document_created
+status: experimental
+description: >-
+  A Command, Automation or Session document created by a principal that is not the
+  deployment pipeline. These are the document types that run code on managed nodes;
+  the remaining types are configuration schemas and calendars.
+references:
+  - https://attack.mitre.org/techniques/T1651/
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_CreateDocument.html
+tags:
+  - attack.execution
+  - attack.t1651
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName: 'CreateDocument'
+  executable_types:
+    requestParameters.documentType:
+      - 'Command'
+      - 'Automation'
+      - 'Session'
+  success:
+    errorCode: null
+  pipeline:                            # tune: principals that legitimately author documents
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'
+      - ':role/ci-cd'
+      - ':role/ssm-runbook-author'
+  condition: selection and executable_types and success and not pipeline
+falsepositives:
+  - An engineer authoring a runbook by hand outside the pipeline — should be rare and attributable
+level: medium
+---
+title: SSM document created then executed by the same principal
+id: b86aef22-1ff8-4033-addb-c52203fec5be
+status: experimental
+description: >-
+  An executable document created outside the pipeline and then dispatched to
+  managed nodes by the same principal within thirty minutes. Creation alone is
+  staging; this is the pair that proves the payload ran.
+references:
+  - https://attack.mitre.org/techniques/T1651/
+tags:
+  - attack.execution
+  - attack.t1651
+correlation:
+  type: temporal_ordered
+  rules:
+    - ssm_exec_document_created
+    - ssm_document_dispatched
+  group-by:
+    - userIdentity.arn
+  timespan: 30m
+level: high
+---
+title: SSM document dispatched to managed nodes
+id: 3b0c841b-0128-4d73-afcf-a631092fd311
+name: ssm_document_dispatched
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. A successful call
+  that runs an SSM document against nodes or opens a session with it.
+references:
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_SendCommand.html
+tags:
+  - attack.execution
+  - attack.t1651
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName:
+      - 'SendCommand'
+      - 'StartAutomationExecution'
+      - 'StartSession'
+      - 'CreateAssociation'
+  success:
+    errorCode: null
+  condition: selection and success
+level: low
+---
+title: High volume of SSM document creation by one principal
+id: f3b0f789-4e1e-4f8f-8eb0-09471a2425da
+status: experimental
+description: >-
+  The corrected form of the original volume rule — successful creations only, and
+  grouped by userIdentity.arn rather than a session-issuer field that is absent for
+  IAM users. Retained as a secondary signal; the type and content rules above are
+  the ones that catch a single deliberate document.
+references:
+  - https://attack.mitre.org/techniques/T1651/
+tags:
+  - attack.execution
+  - attack.t1651
+correlation:
+  type: event_count
+  rules:
+    - ssm_document_created
+  group-by:
+    - userIdentity.arn
+  timespan: 5m
+  condition:
+    gte: 10
+falsepositives:
+  - Infrastructure-as-code applying a stack that ships many runbooks at once — allowlist the deployment role, which is the only principal that should do this in bulk
+level: low
+---
+title: SSM document created
+id: 99248ed3-9447-4f45-8bfe-691d7930fc7d
+name: ssm_document_created
+status: experimental
+description: >-
+  Base rule — count component only, not for direct alerting. A successful
+  CreateDocument of any type.
+references:
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_CreateDocument.html
+tags:
+  - attack.execution
+  - attack.t1651
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName: 'CreateDocument'
+  success:
+    errorCode: null
+  condition: selection and success
+level: low

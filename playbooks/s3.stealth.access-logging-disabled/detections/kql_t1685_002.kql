@@ -1,0 +1,80 @@
+// S3 server access logging disabled or redirected (T1685.002)
+//
+// Two shapes of the same call, separated because only one of them looks like a disable:
+//   empty BucketLoggingStatus            -> logging OFF   (what the source rule catches)
+//   LoggingEnabled with a new TargetBucket -> logging REDIRECTED (what it does not)
+// Both end the flow of records into whatever anyone actually queries.
+//
+// `contains` throughout, never `has` — bucket names carry hyphens and dots.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+// POPULATE: buckets that legitimately receive server access logs in this account.
+let KnownLogDestinations = dynamic(["org-access-logs", "org-access-logs-archive"]);
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "s3.amazonaws.com"
+| where EventName in ("PutBucketLogging", "PutBucketPolicy", "PutBucketAcl",
+                      "PutBucketPublicAccessBlock", "DeleteBucketPublicAccessBlock")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Bucket = tostring(Req.bucketName)
+| extend LoggingEnabled = Req.BucketLoggingStatus.LoggingEnabled
+| extend TargetBucket = tostring(LoggingEnabled.TargetBucket)
+| extend TargetPrefix = tostring(LoggingEnabled.TargetPrefix)
+// AWS: "To disable logging, you use an empty BucketLoggingStatus request element." So an absent
+// LoggingEnabled on a PutBucketLogging IS the disable, and it is the only thing separating a
+// disable from a reconfiguration.
+| extend LoggingOff = EventName == "PutBucketLogging" and isnull(LoggingEnabled)
+| extend LoggingRedirected = EventName == "PutBucketLogging" and isnotnull(LoggingEnabled)
+                             and TargetBucket !in (KnownLogDestinations)
+| summarize
+    Disabled    = countif(LoggingOff),
+    Redirected  = countif(LoggingRedirected),
+    PolicyOrAcl = countif(EventName in ("PutBucketPolicy", "PutBucketAcl")),
+    PabTouched  = countif(EventName contains "PublicAccessBlock"),
+    Buckets     = make_set(Bucket, 20),
+    NewTargets  = make_set_if(strcat(TargetBucket, "/", TargetPrefix), LoggingRedirected, 10),
+    FirstLogChange = minif(TimeGenerated, LoggingOff or LoggingRedirected),
+    FirstOtherChange = minif(TimeGenerated, EventName != "PutBucketLogging"),
+    SourceIps   = make_set(SourceIpAddress, 5),
+    LastSeen    = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where Disabled > 0 or Redirected > 0
+// The ORDER is the finding. Reducing visibility BEFORE changing the bucket is the sequence worth
+// waking someone for; the reverse is a bucket being tidied up after a legitimate change.
+| extend SilencedFirst = isnotempty(FirstOtherChange) and FirstLogChange < FirstOtherChange
+| extend Verdict = case(
+    SilencedFirst and PolicyOrAcl > 0,
+        "LOGGING SILENCED, THEN THE BUCKET POLICY OR ACL REWRITTEN by the same principal — reducing visibility before acting is the sequence, P0",
+    SilencedFirst and PabTouched > 0,
+        "LOGGING SILENCED, THEN BLOCK PUBLIC ACCESS TOUCHED by the same principal — same sequence, exposure path rather than policy, P0",
+    Redirected > 0,
+        "ACCESS LOGGING REDIRECTED to an unrecognised destination — logging still reads as ENABLED, so a disable-only rule sees nothing while the pipeline goes dry, P1",
+    Disabled > 0 and PolicyOrAcl > 0,
+        "logging disabled and the bucket also changed, but NOT in that order — likely a rebuild; confirm the principal is a provisioner, P2",
+    "ACCESS LOGGING DISABLED — no authoritative record is lost (CloudTrail data events are separate and unaffected), but request-level visibility on this bucket is gone, P1")
+| project FirstLogChange, LastSeen, UserIdentityArn, Verdict, Disabled, Redirected,
+          PolicyOrAcl, PabTouched, SilencedFirst, Buckets, NewTargets, SourceIps
+| order by SilencedFirst desc, Redirected desc
+//
+// ============================================================================
+// WHY THIS IS NOT RATED AS AUDIT-LOG DESTRUCTION
+// ============================================================================
+// AWS documents server access logs as best-effort: "The completeness and timeliness of server
+// logging is not guaranteed... it might not be delivered at all... server logging is not meant to
+// be a complete accounting of all requests." They are a traffic signal, not an audit record.
+// CloudTrail data events are the authoritative record of object access and this call does not
+// touch them. Rating a disable as P0 on its own inverts that — the sequence is what matters.
+//
+// ============================================================================
+// WHAT THIS CANNOT SEE
+// ============================================================================
+// THE CLOUDWATCH LOGS DELIVERY PATH. Server access logs can now be delivered to CloudWatch Logs,
+// configured through the CloudWatch Logs APIs rather than PutBucketLogging. A change made there
+// never appears in an S3 event and no rule here will catch it.
+//
+// THAT A DISABLE TOOK EFFECT. AWS: "Changes to the logging status of a bucket take time to
+// actually affect the delivery of log files." Records may keep arriving for about an hour after
+// the call, and stop arriving for about an hour after it is undone. Do not use log arrival to
+// confirm either the incident or the recovery.

@@ -1,0 +1,143 @@
+# Critical-severity GuardDuty finding (T1078 / T1526)
+#
+# A GUARDDUTY FINDING IS AN INDEX ENTRY, NOT EVIDENCE, AND AWS SAYS SO. Findings are aggregated:
+# "If GuardDuty detects a new activity related to the same security issue, then instead of creating
+# a new finding, GuardDuty will update the original finding with the latest details."
+#
+# And the sentence that decides how every one of these must be read:
+#   "the finding details will be updated to reflect the remote IP of the most recent source and
+#    OLDER INFORMATION WILL BE REPLACED. Complete information about individual activity attempts
+#    will still be available in your CloudTrail logs or VPC Flow Logs."
+#
+# So a brute-force campaign from fifty addresses produces ONE finding naming ONE address — the last
+# one. A responder who builds a blocklist from the finding blocks one attacker in fifty and believes
+# the list is complete. detail.service.count carries how many occurrences were folded in; the
+# finding count does not. Every rule here treats the finding as a pointer and CloudTrail or VPC Flow
+# Logs as the record, which is AWS's own instruction.
+#
+# THE userFeedback EXCLUSION IS INVERTED AND IT IS THE DEFECT WORTH FIXING. The source rules filter
+# out findings carrying detail.service.userFeedback. That field records whether a user marked the
+# finding USEFUL or NOT USEFUL — it is feedback on GuardDuty's accuracy, not a decision to stop
+# alerting. So marking a finding USEFUL, which means confirming it is a true positive, silences it.
+# The suppression mechanism is a suppression rule with auto-archive, whose effect is
+# service.archived. The rules below exclude archived findings and ignore userFeedback entirely.
+#
+# SEVERITY BANDS ARE CORRECT IN THE SOURCE PACK AND ARE PRESERVED. AWS: Critical 9.0-10.0,
+# High 7.0-8.9, Medium 4.0-6.9, Low 1.0-3.9. Recorded because they are easy to get wrong and a
+# reviewer should not "fix" them.
+#
+# SAMPLE FINDINGS ARE PREFIXED [SAMPLE] and carry fictitious detail. A rule that does not exclude
+# them fires on a console demonstration.
+title: GuardDuty critical-severity finding
+id: 7d15a03e-64c2-4b98-a70f-53e816bc9204
+name: guardduty_critical_finding
+status: experimental
+description: >-
+  A finding in the 9.0-10.0 band. AWS: "a critical severity level indicates that an attack sequence
+  may be in progress or had recently happened. One or more AWS resources... are potentially being
+  compromised or may have already been compromised." Archived findings are excluded because
+  archiving is the deliberate suppression mechanism; userFeedback is NOT used as an exclusion,
+  because marking a finding useful would otherwise silence it. Sample findings are excluded by the
+  [SAMPLE] prefix AWS applies to their type.
+references:
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_findings-severity.html
+  - https://docs.aws.amazon.com/guardduty/latest/ug/finding-aggregation.html
+  - https://attack.mitre.org/techniques/T1078/
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1078
+logsource:
+  product: aws
+  service: guardduty
+detection:
+  finding:
+    detail.service.serviceName: 'guardduty'
+  critical:
+    detail.severity|gte: 9.0
+  archived:
+    detail.service.archived: true
+  sample:
+    detail.type|startswith: '[SAMPLE]'
+  condition: finding and critical and not archived and not sample
+falsepositives:
+  - >-
+    Authorised penetration testing, which produces genuine findings from genuine activity. The
+    correct handling is a suppression rule scoped to the tester's addresses and the engagement
+    window, not a permanently muted detection.
+level: critical
+---
+title: GuardDuty finding naming one of your own resources as the actor
+id: 2a90c847-3fb1-4e56-9d02-71c4805ea3b6
+name: guardduty_resource_is_actor
+status: experimental
+description: >-
+  A finding whose service.resourceRole is ACTOR — meaning the resource in your account was the one
+  performing the activity, not the one it was aimed at. This is the single most useful field in a
+  GuardDuty finding and no rule in the source pack reads it. TARGET means something attacked you;
+  ACTOR means something of yours attacked someone, which is a compromised host by definition and a
+  materially different incident. Shipped at high across all severities above Low, because an ACTOR
+  finding at medium severity outranks a TARGET finding at high.
+references:
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_findings-summary.html
+  - https://attack.mitre.org/techniques/T1078/
+tags:
+  - attack.persistence
+  - attack.t1078
+logsource:
+  product: aws
+  service: guardduty
+detection:
+  finding:
+    detail.service.serviceName: 'guardduty'
+  actor:
+    detail.service.resourceRole: 'ACTOR'
+  above_low:
+    detail.severity|gte: 4.0
+  archived:
+    detail.service.archived: true
+  sample:
+    detail.type|startswith: '[SAMPLE]'
+  condition: finding and actor and above_low and not archived and not sample
+falsepositives:
+  - >-
+    Security scanning tools you run yourself, which are genuinely the actor. Nameable by resource
+    and worth an explicit suppression rule rather than a filter in the detection.
+level: high
+---
+title: GuardDuty finding representing a large number of aggregated occurrences
+id: c463e781-05da-42bf-8916-b0e7259cf34d
+name: guardduty_high_occurrence_finding
+status: experimental
+description: >-
+  A finding whose service.count is large. Because GuardDuty aggregates repeat activity into one
+  finding rather than creating new ones, the count is the only field that says how much activity
+  the finding represents — and a rule that counts FINDINGS undercounts activity by whatever this
+  number is. A count in the thousands on a medium-severity finding is a sustained campaign wearing
+  a moderate label, and it is invisible to any severity-based rule. Shipped at high for that reason:
+  the volume is the signal, not the severity.
+references:
+  - https://docs.aws.amazon.com/guardduty/latest/ug/finding-aggregation.html
+  - https://attack.mitre.org/techniques/T1526/
+tags:
+  - attack.discovery
+  - attack.t1526
+logsource:
+  product: aws
+  service: guardduty
+detection:
+  finding:
+    detail.service.serviceName: 'guardduty'
+  many_occurrences:
+    detail.service.count|gte: 500
+  archived:
+    detail.service.archived: true
+  sample:
+    detail.type|startswith: '[SAMPLE]'
+  condition: finding and many_occurrences and not archived and not sample
+falsepositives:
+  - >-
+    Internet background scanning against a public endpoint, which accumulates a large count on a
+    low-severity finding legitimately. Pair the count with a severity floor when tuning, and note
+    that the count keeps rising on the same finding ID rather than producing new ones.
+level: high

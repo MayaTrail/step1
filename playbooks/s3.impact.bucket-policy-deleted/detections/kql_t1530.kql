@@ -1,0 +1,92 @@
+// S3 bucket policy deleted (T1530)
+//
+// The event records that a policy was removed and NOT what it said. So this query does not try to
+// classify the deletion on its own — it reconstructs the direction from the last PutBucketPolicy
+// for the same bucket, which is usually the only surviving copy of the policy's contents.
+//
+// `contains` throughout, never `has` — policy documents and bucket names are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 90d;
+let PolicyWrites =
+    AWSCloudTrail
+    | where TimeGenerated > ago(LOOKBACK)
+    | where EventSource == "s3.amazonaws.com" and EventName == "PutBucketPolicy"
+    | where isempty(ErrorCode)
+    | extend Bucket = tostring(parse_json(RequestParameters).bucketName)
+    | extend Doc = tostring(parse_json(RequestParameters).bucketPolicy)
+    | project WriteTime = TimeGenerated, Bucket, Doc,
+              HadDeny = Doc contains '"Deny"',
+              HadWildcardAllow = (Doc contains '"Principal":"*"' or Doc contains '"Principal": "*"'
+                                  or Doc contains '"AWS":"*"' or Doc contains '"AWS": "*"'),
+              // A policy that denied s3:PutBucketPolicy could not survive its own deletion — the
+              // self-protection goes with it.
+              WasSelfProtecting = Doc contains "s3:PutBucketPolicy",
+              HadNamedGrant = Doc contains "arn:aws:iam::";
+let Deletions =
+    AWSCloudTrail
+    | where TimeGenerated > ago(LOOKBACK)
+    | where EventSource == "s3.amazonaws.com" and EventName == "DeleteBucketPolicy"
+    | where isempty(ErrorCode)
+    | extend Bucket = tostring(parse_json(RequestParameters).bucketName)
+    | project DeleteTime = TimeGenerated, Bucket, UserIdentityArn, SourceIpAddress;
+Deletions
+| join kind=leftouter (PolicyWrites) on Bucket
+// Keep only writes that PRECEDE the deletion, then the latest of those: that is the policy that
+// was actually removed. A leftouter join with no surviving write means the policy predates the
+// lookback and its contents are unrecoverable.
+| where isnull(WriteTime) or WriteTime < DeleteTime
+| summarize arg_max(WriteTime, HadDeny, HadWildcardAllow, WasSelfProtecting, HadNamedGrant)
+    by DeleteTime, Bucket, UserIdentityArn, SourceIpAddress
+| extend Direction = case(
+    isnull(WriteTime),
+        "UNKNOWN — no PutBucketPolicy for this bucket inside the lookback, so the removed policy's contents are unrecoverable",
+    HadDeny and HadWildcardAllow,
+        "BOTH — the policy contained Deny statements and a wildcard Allow; removal narrows and widens at once",
+    HadDeny,
+        "WIDENS ACCESS — the removed policy contained Deny statements, usually transport, encryption or VPC-endpoint controls implemented nowhere else",
+    HadWildcardAllow,
+        "NARROWS ACCESS — the removed policy was public; this deletion CLOSED an exposure",
+    HadNamedGrant,
+        "AVAILABILITY — the removed policy granted named principals; their access is gone and will be reported as an unrelated outage",
+    "no Deny and no grant detected in the removed policy")
+| extend SelfProtectionLost = coalesce(WasSelfProtecting, false)
+| summarize
+    Deletions = count(),
+    Buckets   = make_set(Bucket, 30),
+    Directions= make_set(Direction, 6),
+    LostSelfProtection = countif(SelfProtectionLost),
+    Widened   = countif(Direction startswith "WIDENS"),
+    Unknown   = countif(Direction startswith "UNKNOWN"),
+    SourceIps = make_set(SourceIpAddress, 5),
+    FirstSeen = min(DeleteTime),
+    LastSeen  = max(DeleteTime)
+    by UserIdentityArn, bin(DeleteTime, 1h)
+| extend Verdict = case(
+    array_length(Buckets) >= 3,
+        strcat("POLICIES DELETED ACROSS ", tostring(array_length(Buckets)),
+               " BUCKETS BY ONE PRINCIPAL IN AN HOUR — a single deletion is ambiguous, this is not, P0"),
+    Widened > 0,
+        "DENY STATEMENTS REMOVED — access widened for every identity already holding IAM-based S3 permissions. Recover the policy text from the prior PutBucketPolicy event, P1",
+    Unknown > 0,
+        "REMOVED POLICY'S CONTENTS ARE UNRECOVERABLE — no PutBucketPolicy inside the lookback. Verdict is 'unknown', not 'clean', P1",
+    "bucket policy deleted — read Directions before rating")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, Deletions, Widened, Unknown,
+          LostSelfProtection, Directions, Buckets, SourceIps
+| order by Deletions desc
+//
+// ============================================================================
+// THIS DOES NOT MAKE A BUCKET PUBLIC, AND SAYING SO IS THE POINT
+// ============================================================================
+// Public access requires a wildcard Allow. Deleting a policy removes statements; it adds none. A
+// responder who treats this as an exposure will run the public-bucket playbook and find nothing,
+// then close the ticket — while the removed Deny statements stay removed. The exposure case is the
+// PAIR: deletion followed by a public write, which is the temporal_ordered rule.
+//
+// ============================================================================
+// AND UNLIKE PutBucketPolicy, THE SUCCESS TELLS YOU NOTHING ABOUT THE GUARDRAIL
+// ============================================================================
+// A successful public PutBucketPolicy proves BlockPublicPolicy was false, because S3 rejects that
+// call when the flag is set. DeleteBucketPolicy has no such interlock — Block Public Access does
+// not gate it, because removing a policy cannot make a bucket public. The two events sit next to
+// each other in every log and reason completely differently.

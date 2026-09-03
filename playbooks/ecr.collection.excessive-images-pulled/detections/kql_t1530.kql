@@ -1,0 +1,84 @@
+// Container images pulled from ECR at breadth (T1530)
+//
+// The source rule counts pulls with a threshold of ten in fifteen minutes. That is an ordinary node
+// start or a deployment rollout — all from one or two repositories. This query counts DISTINCT
+// REPOSITORIES instead, which separates walking the registry from running the estate.
+//
+// `contains` throughout, never `has` — repository names and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+// POPULATE: the workload and build roles that legitimately pull.
+let KnownPullers = dynamic(["PlatformAutomation", "ci-build", "ecsTaskExecutionRole", "eks-node"]);
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource in ("ecr.amazonaws.com", "ecr-public.amazonaws.com")
+| where EventName in ("BatchGetImage", "GetDownloadUrlForLayer", "DescribeRepositories",
+                      "ListImages", "DescribeImages")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Repo = tostring(Req.repositoryName)
+| extend IdentityType = tostring(parse_json(UserIdentity).type)
+| extend IsKnownPuller = UserIdentityArn contains "PlatformAutomation" or UserIdentityArn contains "ci-build"
+                         or UserIdentityArn contains "ecsTaskExecutionRole" or UserIdentityArn contains "eks-node"
+// BatchGetImage is one call per pull and returns the MANIFEST only. GetDownloadUrlForLayer is where
+// content actually moves — many calls per pull, one per layer — so the two counts are not
+// comparable and are kept apart deliberately.
+| extend IsPull = EventName == "BatchGetImage"
+| extend IsLayerFetch = EventName == "GetDownloadUrlForLayer"
+// Enumeration precedes a walk: listing repositories and images is how an actor learns what exists.
+| extend IsEnumeration = EventName in ("DescribeRepositories", "ListImages", "DescribeImages")
+| summarize
+    Pulls          = countif(IsPull),
+    DistinctRepos  = dcountif(Repo, IsPull),
+    LayerFetches   = countif(IsLayerFetch),
+    Enumeration    = countif(IsEnumeration),
+    PublicRegistry = countif(EventSource == "ecr-public.amazonaws.com"),
+    Repos          = make_set_if(Repo, IsPull, 25),
+    IdentityTypes  = make_set(IdentityType, 5),
+    ByKnownPuller  = countif(IsPull and IsKnownPuller),
+    FirstEnum      = minif(TimeGenerated, IsEnumeration),
+    FirstPull      = minif(TimeGenerated, IsPull),
+    SourceIps      = make_set(SourceIpAddress, 5),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 15m)
+| where Pulls > 0
+| extend EnumeratedFirst = Enumeration > 0 and isnotempty(FirstEnum) and isnotempty(FirstPull)
+                           and FirstEnum < FirstPull
+// Ratio, not count: many pulls from one repository is a rollout; few pulls from many repositories
+// is a walk. The source rule's flat threshold cannot express this.
+| extend ReposPerPull = round(todouble(DistinctRepos) / todouble(Pulls), 2)
+| extend Verdict = case(
+    EnumeratedFirst and DistinctRepos >= 5,
+        strcat("REGISTRY ENUMERATED THEN WALKED — repositories listed, then images pulled from ",
+               tostring(DistinctRepos), " of them. That sequence has no deployment reading, P0"),
+    DistinctRepos >= 5 and ByKnownPuller == 0,
+        strcat("IMAGES PULLED FROM ", tostring(DistinctRepos),
+               " DISTINCT REPOSITORIES by a principal that is not a workload or build role, P0"),
+    DistinctRepos >= 5,
+        strcat("IMAGES PULLED FROM ", tostring(DistinctRepos),
+               " DISTINCT REPOSITORIES — breadth, not volume. Confirm this is a build agent or a mirror job, P1"),
+    ByKnownPuller == 0 and Pulls > 0,
+        "IMAGE PULLED BY A PRINCIPAL OUTSIDE THE WORKLOAD AND BUILD ROLES — one pull has ordinary explanations, so read it against the repository, P2",
+    "image pulls by a known workload or build role")
+| project FirstSeen, LastSeen, UserIdentityArn, IdentityTypes, Verdict, Pulls, DistinctRepos,
+          ReposPerPull, LayerFetches, Enumeration, PublicRegistry, Repos, SourceIps
+| order by DistinctRepos desc, Pulls desc
+//
+// ============================================================================
+// PULL COUNT IS NOT BYTES TRANSFERRED
+// ============================================================================
+// AWS: "When an image is pulled, the BatchGetImage API is called once to retrieve the image
+// manifest." The response carries imageManifest and nothing else. A client that already has the
+// layers cached pulls the manifest and downloads NOTHING, so a high Pulls count with a low
+// LayerFetches count is a fleet restarting on cached images rather than content leaving.
+// Where the question is exfiltration, LayerFetches is the column that corresponds to data movement.
+//
+// ============================================================================
+// THE IDENTITY-TYPE FILTER IS UNUSABLE HERE IN EITHER SPELLING
+// ============================================================================
+// The source rule required userIdentity.type == "IAMUser" and spelled it "iamuser", which matches
+// nothing. Corrected, it would exclude AssumedRole — and image pulls are almost entirely
+// AssumedRole: every task role, every node role, every CI runner. The IdentityTypes column will
+// normally contain nothing else, which is the whole point.

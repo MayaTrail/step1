@@ -1,0 +1,120 @@
+// ECS Cluster Deleted (T1070 / T1578.003)
+//
+// Signal: DeleteCluster succeeding for a principal that does not own cluster lifecycle,
+// the teardown chain that had to run before it could succeed, and the delete-then-recreate
+// pair that makes the cluster's stopped-task history unreachable.
+//
+// This query does three things the Sigma rules structurally cannot.
+//
+// 1. It JOINS the deletion to the recreation ON THE CLUSTER NAME. DeleteCluster names the
+//    cluster in requestParameters.cluster, which AWS documents as "the short name or full
+//    Amazon Resource Name (ARN)" - so the value is caller-typed and arrives in either form.
+//    CreateCluster names it in requestParameters.clusterName, always short. Both sides are
+//    normalised to a bare name here before the join.
+// 2. It counts the PRECURSORS. ECS refuses to delete a non-empty cluster, so a successful
+//    DeleteCluster is always preceded by scale-to-zero, service deletion or container
+//    instance deregistration. The count of those calls in the hour before is the size of
+//    what was destroyed, and it is the only surviving measure of it.
+// 3. It separates DENIALS by kind. ClusterContainsServicesException and its siblings mean
+//    the cluster was still populated - an ATTEMPT against a live cluster, which is a
+//    different and often more urgent finding than a successful deletion of an empty one.
+//    AccessDeniedException and NotAuthorized mean the principal lacked the permission.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE PipelineRoles BELOW BEFORE DEPLOYING. Unpopulated, every teardown reads as an
+// incident - noisy in the direction that surfaces the deletion rather than hiding it.
+let Lookback = 30d;
+let Ecs =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "ecs.amazonaws.com"
+    // RequestParameters and ResponseElements are typed `string` in this table, not dynamic -
+    // parse_json is required before any field access.
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    // `contains`, never `has`: a role path and an ARN are punctuated, and `has` is whole-term.
+    | extend IsPipeline = (UserIdentityArn contains ":role/iac-deploy")
+                       or (UserIdentityArn contains ":role/BreakGlassAdmin")
+    // DeleteCluster -> `cluster` (short name or ARN). CreateCluster -> `clusterName` (short).
+    // UpdateService/DeleteService also carry `cluster`, so the same normalisation serves the
+    // precursor half of the query.
+    | extend RawCluster = coalesce(tostring(Req.clusterName), tostring(Req.cluster))
+    | extend ClusterName = tostring(split(RawCluster, "/")[-1]);
+let Deletes = Ecs
+    | where EventName == "DeleteCluster" and isempty(ErrorCode) and not(IsPipeline)
+    | project DeletedAt = TimeGenerated, ClusterName, Actor = UserIdentityArn,
+              DeleteIp = SourceIpAddress, DeleteAgent = UserAgent,
+              DeleteKey = UserIdentityAccessKeyId;
+let Creates = Ecs
+    | where EventName == "CreateCluster" and isempty(ErrorCode)
+    | project CreatedAt = TimeGenerated, ClusterName, Creator = UserIdentityArn;
+// The calls that must succeed before DeleteCluster can. UpdateService is counted only when it
+// sets desiredCount to zero - an UpdateService that raises the count is the opposite
+// technique and belongs to ecs.impact.updateservice-with-high-desiredcount.
+let Precursors = Ecs
+    | where isempty(ErrorCode)
+    | where EventName in ("DeleteService", "DeregisterContainerInstance", "StopTask", "DeleteCapacityProvider")
+         or (EventName == "UpdateService" and toint(Req.desiredCount) == 0)
+    | project PrecursorAt = TimeGenerated, ClusterName, Actor = UserIdentityArn,
+              PrecursorEvent = EventName,
+              Target = coalesce(tostring(Req.service), tostring(Req.containerInstance), tostring(Req.task), "");
+// Denials, kept apart from successes and split by MEANING. A ClusterContains* denial is an
+// attempt against a POPULATED cluster; an access denial is an attempt by a principal that
+// never had the permission. Conflating them puts an attack on a live production cluster in
+// the same bucket as a failed permission probe.
+let Denials = Ecs
+    | where EventName == "DeleteCluster" and isnotempty(ErrorCode)
+    | summarize DeniedAttempts = count(), DeniedCodes = make_set(ErrorCode, 6),
+                DeniedClusters = make_set(ClusterName, 10)
+             by Actor = UserIdentityArn;
+Deletes
+| join kind=leftouter Creates on ClusterName
+| join kind=leftouter (
+    Precursors
+    | summarize PrecursorCount = count(), PrecursorEvents = make_set(PrecursorEvent, 6),
+                PrecursorTargets = make_set(Target, 20), FirstPrecursor = min(PrecursorAt)
+             by ClusterName, Actor
+  ) on ClusterName, Actor
+// The recreate has to come AFTER the deletion. Thirty minutes is the window in which a
+// same-name recreate is plausibly part of the same operation rather than an ordinary rebuild.
+| extend NameRecreated = isnotempty(CreatedAt) and CreatedAt > DeletedAt
+                         and CreatedAt < DeletedAt + 30m
+| extend RecreatedByOther = NameRecreated and Creator != Actor
+| join kind=leftouter Denials on Actor
+| extend PrecursorLeadMinutes = iff(isnotempty(FirstPrecursor),
+             datetime_diff('minute', DeletedAt, FirstPrecursor), int(null))
+| extend Verdict = case(
+    RecreatedByOther == true,      "CLUSTER NAME REPLACED BY ANOTHER PRINCIPAL - a cluster this principal deleted was recreated under the same name by someone else within 30 minutes; the tagged stopped-task records are now unretrievable",
+    NameRecreated == true,         "DELETE AND RECREATE - the same principal recreated the cluster name; AWS documents that this makes the deleted cluster's tagged tasks unreturnable by DescribeTasks",
+    PrecursorCount >= 1,           "FULL TEARDOWN CHAIN - this principal emptied the cluster and then deleted it; the precursor targets are the recovery work-list",
+    isnotempty(DeniedCodes),       "DELETION WITH DENIED ATTEMPTS - the principal was also refused elsewhere; read ClusterContains* as an attempt on a POPULATED cluster and AccessDeniedException as a permission probe",
+                                   "UNEXPLAINED CLUSTER DELETION - the cluster was empty before this event and no precursor was found in the lookback; the emptying happened outside the window, or under a different principal")
+| project DeletedAt, Verdict, Actor, ClusterName, PrecursorCount, PrecursorEvents,
+          PrecursorTargets, PrecursorLeadMinutes, NameRecreated, Creator, CreatedAt,
+          DeniedAttempts, DeniedCodes, DeniedClusters, DeleteIp, DeleteAgent, DeleteKey
+| order by DeletedAt desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// What was running. DeleteCluster's responseElements.cluster carries
+// registeredContainerInstancesCount, runningTasksCount, pendingTasksCount and
+// activeServicesCount - but by construction they are all ZERO on a successful call, because
+// ECS refuses the deletion otherwise. Those fields are informative only on a DENIED call,
+// where they say how populated the cluster was when the attempt was made. Never read a zero
+// from a successful deletion as "the cluster was empty all along".
+//
+// What ran inside the tasks. ECS logs control-plane calls as management events. The only ECS
+// data events AWS documents are ecs:Poll, ecs:StartTelemetrySession and
+// ecs:PutSystemLogEvents under resources.type AWS::ECS::ContainerInstance - there is no
+// AWS::ECS::Task data event type. Container output lives wherever the task definition's log
+// driver sent it, and nothing in CloudTrail records it.
+//
+// Whether the stopped-task records still exist. AWS documents that "stopped tasks appear in
+// the returned results for at least one hour" - a floor, not a guarantee - so a DescribeTasks
+// sweep is time-critical and its result is not reconstructible from this table.
+//
+// PREVENTION. ecs:DeleteCluster is needed by nothing at runtime. An SCP denying it, plus
+// ecs:DeleteService and ecs:DeregisterContainerInstance, outside the pipeline role reaches
+// every in-organisation caller. Pair it with cluster configuration in infrastructure code:
+// after a deletion, the cluster's settings, capacity providers and tags exist nowhere else.

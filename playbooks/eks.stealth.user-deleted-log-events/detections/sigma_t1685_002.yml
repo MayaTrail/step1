@@ -1,0 +1,132 @@
+# Kubernetes Events Deleted (T1685.002 — Disable or Modify Cloud Log)
+#
+# THE SOURCE RULE CANNOT FIRE ON EKS. It matches
+#   verb:"delete" AND objectRef.resource:"events"
+# against the Kubernetes audit log. EKS runs a MANAGED control plane, so the audit policy is
+# a kube-apiserver flag AWS controls and customers cannot modify or read through any EKS API.
+# In AWS's published policy, core `events` — any verb, any user — is level `None`. Level None
+# means the request is NOT LOGGED AT ALL. Deleting Kubernetes Events on an EKS cluster
+# produces no audit record, so this rule has matched nothing since the day it was deployed
+# and its silence is indistinguishable from nobody deleting anything.
+#
+# There is no fix inside the audit log. The rules below detect the two things that ARE
+# observable and that an actor clearing traces has to touch:
+#   1. Deletion of the CloudWatch log group that holds the audit stream — CloudTrail.
+#   2. Disabling control-plane log types on the cluster — CloudTrail.
+# Both survive, because both are AWS-plane calls rather than Kubernetes-plane ones.
+title: EKS control-plane logging disabled
+id: 8c1e47b2-06fa-4d59-b3e8-72905c1fa4d6
+name: eks_control_plane_logging_disabled
+status: experimental
+description: >-
+  UpdateClusterConfig turned off one or more EKS control-plane log types. The audit and
+  authenticator streams stop; the cluster keeps running and the gap is unrecoverable.
+references:
+  - https://attack.mitre.org/techniques/T1685/002/                            # retrieved 2026-08-30
+  - https://docs.aws.amazon.com/eks/latest/userguide/control-plane-logs.html  # retrieved 2026-08-30
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'eks.amazonaws.com'
+    eventName: 'UpdateClusterConfig'
+  # The five types are api, audit, authenticator, controllerManager, scheduler. A disable
+  # sends enabled:false for one or more of them; the event name alone cannot tell a disable
+  # from an enable, so the parameter is the discriminator (D-a).
+  disabling:
+    requestParameters.logging.clusterLogging|contains: '"enabled":false'
+  success:
+    errorCode: null
+  condition: selection and disabling and success
+falsepositives:
+  - Cost-driven reduction of log types in a non-production cluster. Legitimate and should be
+    a named, scheduled change; an ad-hoc disable on a production cluster is the finding.
+level: high
+---
+# The other way the audit trail stops, and it touches no EKS API at all. The audit stream is
+# delivered to a CloudWatch log group named /aws/eks/<cluster>/cluster. Deleting that group,
+# or shortening its retention, removes the records with the cluster's logging configuration
+# still reading as fully enabled.
+title: EKS audit log group deleted or retention shortened
+id: 4f0b93d5-8e21-4a67-95c3-1d68e0b7fa29
+name: eks_audit_log_group_tampered
+status: experimental
+description: >-
+  The CloudWatch log group carrying an EKS cluster's control-plane logs was deleted, or its
+  retention reduced. The cluster's own logging configuration is untouched and still reports
+  as enabled.
+references:
+  - https://docs.aws.amazon.com/eks/latest/userguide/control-plane-logs.html  # retrieved 2026-08-30
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'logs.amazonaws.com'
+    eventName:
+      - 'DeleteLogGroup'
+      - 'PutRetentionPolicy'
+      - 'DeleteRetentionPolicy'
+  # EKS control-plane logs always land under this prefix, which scopes the otherwise very
+  # noisy generic CloudWatch Logs calls to this technique.
+  eks_log_group:
+    requestParameters.logGroupName|startswith: '/aws/eks/'
+  success:
+    errorCode: null
+  condition: selection and eks_log_group and success
+falsepositives:
+  - Log-group lifecycle managed by IaC when a cluster is decommissioned. Correlate with the
+    cluster's own deletion in the same window; a deletion that stands alone is the finding.
+level: high
+---
+# What remains available INSIDE the audit log once the above is understood. Kubernetes
+# Events are unlogged, but the RBAC changes an actor needs in order to be able to delete
+# them are logged at RequestResponse — the policy's rbac.authorization.k8s.io rules carry
+# full request and response bodies. This is the nearest in-cluster signal and it is a
+# precursor rather than the act itself. Deliberately `medium`: it is one step removed.
+title: RBAC grant covering Kubernetes events
+id: b95a2c07-fd34-41e8-8a06-3f7c15e9d842
+status: experimental
+description: >-
+  A Role or ClusterRole granting delete on core events was created or modified. Deleting
+  events is itself unlogged on EKS, so the grant that permits it is the closest observable.
+references:
+  - https://attack.mitre.org/techniques/T1685/002/                            # retrieved 2026-08-30
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  category: application
+  product: kubernetes
+  service: audit
+detection:
+  # B4 confirmed: objectRef.apiGroup and verb DO co-occur on a single audit Event — every
+  # event carries both. ANDing them here is correct.
+  selection:
+    objectRef.apiGroup: 'rbac.authorization.k8s.io'
+    verb:
+      - 'create'
+      - 'update'
+      - 'patch'
+  # These rules are logged at RequestResponse, so the rule body is in requestObject.
+  events_rule:
+    requestObject|contains: 'events'
+  delete_verb:
+    requestObject|contains: 'delete'
+  # 200 and 201 both mean it worked; responseStatus.code is int32, so do not quote it.
+  applied:
+    responseStatus.code:
+      - 200
+      - 201
+  condition: selection and events_rule and delete_verb and applied
+falsepositives:
+  - Any controller or operator legitimately granted event cleanup — several ship with it.
+    Baseline the grants that exist before deploying, and alert on additions.
+level: medium

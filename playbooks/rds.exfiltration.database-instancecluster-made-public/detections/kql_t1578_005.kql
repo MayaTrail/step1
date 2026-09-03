@@ -1,0 +1,158 @@
+// RDS Database Made Publicly Accessible (T1578.005 / T1133)
+//
+// Signal: a DB instance or Multi-AZ DB cluster entering a publicly accessible state, by
+// explicit request OR by the documented default-true behaviour of a create that omits a DB
+// subnet group or names the `default` one.
+//
+// This query does two things the Sigma rules structurally cannot.
+//
+//   1. IT SEPARATES THE EXPLICIT CASE FROM THE DEFAULTED CASE. A create whose request carries
+//      no publiclyAccessible and whose response carries `true` was made public by AWS's own
+//      default, not by an instruction. That is a different conversation with a different
+//      engineer, and the source rule - which reads only requestParameters - cannot see it at
+//      all. AWS: "If DBSubnetGroup isn't specified, PubliclyAccessible defaults to false for
+//      Aurora instances and true for non-Aurora instances. If DBSubnetGroup is specified,
+//      PubliclyAccessible defaults to false unless the value of DBSubnetGroup is `default`,
+//      in which case PubliclyAccessible defaults to true."
+//
+//   2. IT JOINS THE ADDRESSING HALF TO THE FIREWALL HALF ON THE SECURITY GROUP ID. The RDS
+//      event's responseElements carry the groups actually attached to the database; the EC2
+//      event carries the group the ingress rule was added to. Matching those two identifiers
+//      is the difference between "somebody opened a security group somewhere" and "the group
+//      in front of this database was opened". A Sigma correlation can only group by principal.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE PipelineRoles BELOW BEFORE DEPLOYING.
+let Lookback = 30d;
+let PipelineRoles = dynamic([":role/iac-deploy", ":role/BreakGlassAdmin"]);
+// ModifyDBCluster is absent on purpose: that API has no PubliclyAccessible parameter, so
+// including it would only add noise. CreateDBClusterFromSnapshot is absent because it is not
+// an RDS API action.
+let PublicApis = dynamic(["CreateDBInstance","ModifyDBInstance","CreateDBInstanceReadReplica",
+                          "RestoreDBInstanceFromDBSnapshot","RestoreDBInstanceToPointInTime",
+                          "RestoreDBInstanceFromS3","CreateDBCluster","RestoreDBClusterFromSnapshot",
+                          "RestoreDBClusterToPointInTime","CreateDBShardGroup"]);
+let RdsPublic =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "rds.amazonaws.com"
+    | where EventName in (PublicApis)
+    // RequestParameters and ResponseElements are typed `string` in this table, not dynamic.
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    // Booleans arrive as JSON true/false; tostring() normalises both that and the string form
+    // some pipelines produce, so one comparison covers both without a silent miss.
+    | extend ReqPublic  = tolower(tostring(Req.publiclyAccessible))
+    | extend RespPublic = tolower(tostring(Resp.publiclyAccessible))
+    | where ReqPublic == "true" or RespPublic == "true"
+    | extend DbId = coalesce(tostring(Req.dBInstanceIdentifier), tostring(Req.dBClusterIdentifier),
+                             tostring(Resp.dBInstanceIdentifier), tostring(Resp.dBClusterIdentifier))
+    | extend DbArn = coalesce(tostring(Resp.dBInstanceArn), tostring(Resp.dBClusterArn))
+    | extend SubnetGroup = coalesce(tostring(Req.dBSubnetGroupName), tostring(Resp.dBSubnetGroup.dBSubnetGroupName))
+    | extend Engine = coalesce(tostring(Req.engine), tostring(Resp.engine))
+    // The distinction the source rule cannot draw. `isempty` on the tostring() of an absent
+    // key is the test for "the caller never mentioned it".
+    | extend HowItBecamePublic = case(
+        ReqPublic == "true",                                  "explicitly requested",
+        isempty(ReqPublic) and RespPublic == "true",          "AWS default, no publiclyAccessible in the request",
+                                                              "unclear - read the raw event")
+    // `contains`, never `has`: an ARN with a role path is punctuated and `has` is whole-term.
+    | extend IsPipeline = UserIdentityArn contains ":role/iac-deploy"
+                       or UserIdentityArn contains ":role/BreakGlassAdmin"
+    | where isempty(ErrorCode);
+// Every security group attached to the database at the moment of the call. responseElements
+// for RDS is FLAT - the DBInstance wrapper does not appear - so this is Resp.vpcSecurityGroups,
+// not Resp.dBInstance.vpcSecurityGroups.
+let RdsGroups =
+    RdsPublic
+    | mv-expand Sg = parse_json(tostring(Resp.vpcSecurityGroups))
+    | extend GroupId = tostring(Sg.vpcSecurityGroupId)
+    | where isnotempty(GroupId)
+    | project DbId, GroupId, ExposedAt = TimeGenerated, Actor = UserIdentityArn;
+// Ingress opened to an unrestricted source. `endswith "/0"` rather than the literal
+// 0.0.0.0/0: AWS canonicalizes CIDRs, and no other prefix length ends in "/0".
+let WorldOpen =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "ec2.amazonaws.com" and EventName == "AuthorizeSecurityGroupIngress"
+    | where isempty(ErrorCode)
+    | extend Req = parse_json(RequestParameters)
+    | extend GroupId = tostring(Req.groupId)
+    | extend Cidr = tostring(Req.cidrIp)
+    | where Cidr endswith "/0"
+    | project GroupId, OpenedAt = TimeGenerated, Opener = UserIdentityArn, Cidr;
+let OpenGroups =
+    RdsGroups
+    | join kind=inner WorldOpen on GroupId
+    | summarize OpenRules = count(), OpenCidrs = make_set(Cidr, 5), Openers = make_set(Opener, 5),
+                LastOpened = max(OpenedAt) by DbId;
+// Denied attempts are counted separately and never as exposures: the source rule conflates
+// them, so a principal refused ten times outranks one successful exposure.
+let DeniedProbes =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "rds.amazonaws.com" and EventName in (PublicApis)
+    | where isnotempty(ErrorCode)
+    | extend Req = parse_json(RequestParameters)
+    | where tolower(tostring(Req.publiclyAccessible)) == "true"
+    | summarize DeniedAttempts = count(), DeniedCodes = make_set(ErrorCode, 5) by Actor = UserIdentityArn;
+RdsPublic
+| summarize
+    Events        = count(),
+    FirstSeen     = min(TimeGenerated),
+    LastSeen      = max(TimeGenerated),
+    Apis          = make_set(EventName, 6),
+    HowSet        = make_set(HowItBecamePublic, 3),
+    SubnetGroups  = make_set(SubnetGroup, 5),
+    Engines       = make_set(Engine, 5),
+    Arns          = make_set(DbArn, 3),
+    SourceIPs     = make_set(SourceIpAddress, 5),
+    Agents        = make_set(UserAgent, 3),
+    Pipeline      = max(IsPipeline)
+    by DbId, Actor = UserIdentityArn
+| join kind=leftouter OpenGroups on DbId
+| join kind=leftouter DeniedProbes on Actor
+| extend FirewallOpen = coalesce(OpenRules, 0) > 0
+| extend DefaultedPublic = set_has_element(HowSet, "AWS default, no publiclyAccessible in the request")
+| extend Verdict = case(
+    FirewallOpen and not(Pipeline),  "LIVE INTERNET EXPOSURE - the database is publicly addressable AND a security group attached to it permits an unrestricted source. Treat as reachable until a route-table and NACL walk says otherwise",
+    FirewallOpen and Pipeline,       "PIPELINE-DEPLOYED PUBLIC DATABASE WITH AN OPEN GROUP - deployed by an allowlisted principal, but the exposure is real. Fix the infrastructure code, not the alert",
+    DefaultedPublic,                 "PUBLIC BY AWS DEFAULT - the create carried no publiclyAccessible and inherited default-true from an absent or `default` DB subnet group. Nobody asked for this and nobody knows it happened",
+    not(Pipeline),                   "PUBLICLY ADDRESSABLE, FIREWALL NOT CONFIRMED OPEN - no world-open ingress found on the attached groups in this window. NOT proof of safety: an ingress rule added before the lookback is invisible here",
+                                     "PIPELINE-DEPLOYED PUBLIC DATABASE - review against the intended architecture")
+| project FirstSeen, LastSeen, Verdict, DbId, Actor, Apis, HowSet, Engines, SubnetGroups,
+          FirewallOpen, OpenCidrs, Openers, LastOpened, Arns, DeniedAttempts, DeniedCodes,
+          SourceIPs, Agents, Events
+| order by LastSeen desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// Whether the security group is open TODAY. Both halves of this join are events, and an
+// ingress rule opened before the lookback window - or inherited from a shared group nobody
+// owns - produces no event inside it. `FirewallOpen == false` therefore means "no opening
+// event in the window", never "the group is closed". The authoritative check is live:
+// describe-db-instances for the attached groups, then describe-security-group-rules on each.
+// Query 2 of ../PLAYBOOK.md runs that walk.
+//
+// The route table and the network ACL. AWS requires that every subnet in the DB subnet group
+// have an internet gateway route, and the subnet's NACL permit the port inbound and the
+// ephemeral range outbound, before a permissive security group means anything. Neither is in
+// CloudTrail as a property of the database. Two inverted defaults make this dangerous to check
+// by hand: a subnet with no explicit route-table association uses the VPC MAIN table, and a
+// subnet with no explicit NACL association uses the DEFAULT NACL, which allows everything.
+// Empty output from either lookup is the wrong answer, not a safe one.
+//
+// The VPC's DNS attributes. AWS: "If you want your DB instance in the VPC to be publicly
+// accessible, make sure to turn on the VPC attributes DNS hostnames and DNS resolution."
+// A public instance in a VPC without them is addressable but not resolvable by name.
+//
+// Whether anyone connected. RDS connection attempts are not CloudTrail events at any level -
+// the only RDS data-event type is AWS::RDS::DBCluster for the RDS Data API, which is a
+// different access path. Database engine audit logs published to CloudWatch Logs, and VPC flow
+// logs on the instance's ENI, are the only places a connection from the internet appears.
+//
+// PREVENTION. AWS Config `rds-instance-public-access-check` flags publiclyAccessible directly,
+// and `rds-instance-subnet-igw-check` catches the network-path half it misses. Security Hub
+// control RDS.2 aggregates the first at Critical. GuardDuty does NOT cover this - its RDS
+// coverage is login-behaviour only and there is no Policy:RDS/* finding namespace at all.

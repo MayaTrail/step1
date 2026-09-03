@@ -1,0 +1,134 @@
+# Excessive SQS Queue Creation (T1496)
+#
+# THE WEAKEST SIGNAL IN THE SET, AND WORTH SAYING SO. A queue costs almost nothing and holds
+# nothing until something writes to it, so "many queues appeared" is not on its own a security
+# event — which is why the corrected rules below are built around what a created queue is FOR
+# rather than around the count. Three readings have teeth, in descending order of sharpness:
+# a queue created ALREADY PUBLIC (Rule 2); a queue created by an unfamiliar principal that is
+# then named as another queue's `RedrivePolicy` target, which is message diversion staged
+# across two ordinary events (the correlation ships in
+# ../../sqs.collection.an-sqs-queue-attributes-were-changed/); and unsanctioned consumption of
+# account resources, which is the volume reading the source rule expresses.
+#
+# THE SOURCE RULE matches `eventName:"CreateQueue"` with a success filter and an anomaly
+# threshold of five in five minutes, and looks at nothing else. Every CloudFormation stack
+# that stands up a fan-out topology fires it; so does every ephemeral test environment. It
+# never checks the caller, which in an account where queue lifecycle belongs to a pipeline is
+# the entire signal. The threshold itself is defensible and is retained below — see the
+# correlation's tuning note — but only once the pipeline is excluded from what it counts.
+#
+# Tools); the rule's own prose names T1531 (Account Access Removal). Creating a queue is
+# neither. See the mapping note in ../PLAYBOOK.md §6.
+#
+# FIELD SHAPE. `CreateQueue` carries `requestParameters.queueName`, an optional
+# `requestParameters.attributes` map and `requestParameters.tags`, and returns
+# `responseElements.queueUrl` — FLAT, matching the API's bare {"QueueUrl": "..."} Response
+# Syntax, which has no wrapper object to nest under. Attribute values are always STRINGS.
+title: SQS queue created outside the queue-lifecycle pipeline
+id: b43734f7-77b3-46e0-bfa1-cf1355b09cd5
+name: sqs_queue_created_outside_pipeline
+status: experimental
+description: >-
+  A queue was created by a principal that does not own queue lifecycle. On its own this is a
+  low-value observation; it exists to be counted by the correlation below and to be joined
+  against later redrive and policy changes naming the new queue.
+references:
+  - https://attack.mitre.org/techniques/T1496/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_CreateQueue.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1496
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sqs.amazonaws.com'
+    eventName: 'CreateQueue'
+  # POPULATE BEFORE DEPLOYING. Unpopulated, this counts every pipeline-created queue and the
+  # correlation fires on every stack deployment.
+  queue_lifecycle_pipeline:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'          # replace with this account's deployment role
+      - ':role/BreakGlassAdmin'     # replace with this account's break-glass role
+  success:
+    errorCode: null
+  condition: selection and success and not queue_lifecycle_pipeline
+falsepositives:
+  - >-
+    Engineers creating queues by hand in a development account. Expected there, and the reason
+    this rule is `low` on its own — the signal is the correlation and the joins, not the event.
+level: low
+---
+# A queue that is PUBLIC AT BIRTH. CreateQueue accepts the same `Policy` attribute as
+# SetQueueAttributes, so a queue can be created already open to a wildcard principal in one
+# call — and no `SetQueueAttributes` event ever exists for it, so every rule in the sibling
+# policy playbook stays silent for the whole life of that queue.
+title: SQS queue created with a wildcard-principal access policy
+id: 83303aaf-b595-4386-b89a-6977af9b42ab
+name: sqs_queue_created_public
+status: experimental
+description: >-
+  A queue was created with an access policy that Allows `*` as a principal. Because the policy
+  arrives on the creation call, no attribute-change event is ever recorded for it and the
+  policy-change rules in the sibling directory never fire.
+references:
+  - https://attack.mitre.org/techniques/T1098/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_CreateQueue.html  # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sqs.amazonaws.com'
+    eventName: 'CreateQueue'
+  # Covers "Principal":"*", {"AWS":"*"} and {"AWS":["*"]} across any whitespace. The `\\?`
+  # groups are REQUIRED: a platform that indexes the raw serialised event delivers this nested
+  # JSON string's quotes backslash-escaped, and without the optional backslash the rule fires
+  # on one platform and never on the other.
+  wildcard_principal:
+    requestParameters.attributes.Policy|re: '\\?"Principal\\?"\s*:\s*(\{\s*\\?"AWS\\?"\s*:\s*)?(\[\s*)?\\?"\*\\?"'
+  success:
+    errorCode: null
+  condition: selection and wildcard_principal and success
+falsepositives:
+  - >-
+    A wildcard principal bounded by an `aws:SourceArn` or `aws:PrincipalOrgID` condition is
+    AWS's documented service-fronted or organisation-wide pattern. This rule does not read
+    `Condition`, so it fires on those too — a finding about scope, not a compromise.
+level: high
+---
+# Threshold basis — the source rule's own five-in-five-minutes is retained, and it is
+# defensible once the pipeline is excluded from what it counts. Creating five queues inside
+# five minutes is not something a person does by hand; the processes that legitimately do it
+# are stack deployments, and those run under the pipeline role the base rule already removes.
+# `gte` at the baseline, never `gt`, so a burst of exactly five does not fall through.
+# Re-baseline before deploying: in a development account where engineers stand up their own
+# topologies under their own identity, raise it rather than muting the rule. This correlation
+# is a SEVERITY ESCALATOR, not the detector — a single queue created public (Rule 2) is worse
+# than fifty created empty.
+title: SQS queues created at volume by one principal outside the pipeline
+id: 9b2f3a06-39b1-4335-a6b3-bf7129479e67
+status: experimental
+description: >-
+  One non-pipeline principal created five or more queues inside five minutes. Read it as
+  unsanctioned consumption of account resources, and check each new queue against the
+  redrive-target and policy-grant rules in the sibling directory before dismissing it.
+references:
+  - https://attack.mitre.org/techniques/T1496/  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1496
+correlation:
+  type: event_count
+  rules:
+    - sqs_queue_created_outside_pipeline
+  group-by:
+    - userIdentity.arn
+  timespan: 5m
+  condition:
+    gte: 5
+level: medium

@@ -1,0 +1,126 @@
+// DynamoDB Table Destruction, single and at volume (T1485 / T1490)
+//
+// Signal: DeleteTable succeeding for a principal that does not own table lifecycle — once, or
+// five or more distinct tables inside ten minutes — and the DeleteBackup that may have
+// preceded it.
+//
+// This query does what the Sigma rules structurally cannot: it reads the SIZE OF THE LOSS out
+// of the deletion's own response and reports it alongside the burst rate, and it joins the
+// backup deletions to the table deletions by principal so the "recovery point removed first"
+// sequence is visible in one row rather than two alerts.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE THE TWO PIPELINE-ROLE SUBSTRINGS BELOW BEFORE DEPLOYING. Unpopulated, every
+// teardown reads as an incident - noisy in the direction that surfaces destruction rather than
+// hiding it.
+let Lookback = 30d;
+let Ddb =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "dynamodb.amazonaws.com"
+    | where EventName in ("DeleteTable", "DeleteBackup", "RestoreTableFromBackup",
+                          "RestoreTableToPointInTime")
+    // RequestParameters and ResponseElements are typed `string` in this table, not dynamic -
+    // parse_json is required. UserIdentityArn, SessionIssuerUserName, SourceIpAddress,
+    // EventName and ErrorCode are already FLATTENED columns.
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    // tableName may be a bare name or a full table ARN - the API documents "You can also
+    // provide the Amazon Resource Name (ARN) of the table in this parameter". Normalise, or
+    // every ARN-form deletion is counted as a separate table and the distinct-count inflates.
+    | extend RawName = coalesce(tostring(Req.tableName),
+                                tostring(Req.targetTableName),
+                                tostring(Resp.tableDescription.tableName))
+    | extend TableName = iff(RawName contains "/", tostring(split(RawName, "/")[-1]), RawName)
+    // `contains`, never `has`: an ARN and a role path are punctuated and whole-term matching
+    // never resolves them. Replace both substrings with this account's lifecycle roles.
+    | extend IsPipeline = UserIdentityArn contains ":role/iac-deploy"
+                       or UserIdentityArn contains ":role/BreakGlassAdmin";
+let Deletes = Ddb
+    | where EventName == "DeleteTable" and isempty(ErrorCode) and not(IsPipeline)
+    | project DeletedAt = TimeGenerated, TableName, Actor = UserIdentityArn,
+              ActorRole = SessionIssuerUserName, Ip = SourceIpAddress, Agent = UserAgent,
+              // The only surviving measure of what was destroyed. itemCount is approximate -
+              // DynamoDB refreshes it periodically, it is not a live count.
+              ItemsLost = tolong(Resp.tableDescription.itemCount),
+              BytesLost = tolong(Resp.tableDescription.tableSizeBytes);
+let BackupDeletes = Ddb
+    | where EventName == "DeleteBackup" and isempty(ErrorCode)
+    | summarize BackupsDeleted = count(), FirstBackupDelete = min(TimeGenerated),
+                BackupArns = make_set(tostring(Req.backupArn), 10)
+            by Actor = UserIdentityArn;
+// Restores by the SAME principal are recorded, not because they are destructive, but because a
+// restore into a new name - or a new Region - after a deletion is how a table is copied out
+// rather than recovered. See ../../dynamodb.impact.multiple-tables-created/.
+let Restores = Ddb
+    | where EventName in ("RestoreTableFromBackup", "RestoreTableToPointInTime")
+      and isempty(ErrorCode)
+    | summarize RestoreCount = count(), RestoreTargets = make_set(TableName, 10),
+                RestoreRegions = make_set(AwsRegion, 5)
+            by Actor = UserIdentityArn;
+// Denied attempts are counted separately and never as deletions: a principal probing its
+// boundary across twenty tables produces the same event volume as twenty real destructions.
+let DeniedProbes = Ddb
+    | where EventName == "DeleteTable" and isnotempty(ErrorCode)
+    | summarize DeniedAttempts = count(), DeniedCodes = make_set(ErrorCode, 6)
+            by Actor = UserIdentityArn;
+Deletes
+| summarize
+    Deletions      = count(),
+    TablesDeleted  = dcount(TableName),
+    Tables         = make_set(TableName, 25),
+    FirstDeleted   = min(DeletedAt),
+    LastDeleted    = max(DeletedAt),
+    TotalItemsLost = sum(ItemsLost),
+    TotalBytesLost = sum(BytesLost),
+    SourceIPs      = make_set(Ip, 5),
+    Agents         = make_set(Agent, 3),
+    Roles          = make_set(ActorRole, 5)
+    by Actor
+| join kind=leftouter BackupDeletes on Actor
+| join kind=leftouter Restores on Actor
+| join kind=leftouter DeniedProbes on Actor
+// The source's volume condition expressed as a rate rather than a boolean, so the analyst sees
+// how far past the line it is instead of only that it crossed.
+| extend BurstMinutes = max_of(1.0, datetime_diff('second', LastDeleted, FirstDeleted) / 60.0)
+| extend TablesPerTenMinutes = round(TablesDeleted / BurstMinutes * 10.0, 1)
+| extend RecoveryPointRemovedFirst = isnotempty(FirstBackupDelete)
+                                     and FirstBackupDelete < LastDeleted
+| extend Verdict = case(
+    RecoveryPointRemovedFirst == true,
+        "BACKUPS DESTROYED THEN TABLES DESTROYED - the recovery point was removed before the data. Loss is final unless PITR was independently enabled",
+    RestoreCount > 0,
+        "TABLES DESTROYED AND DATA RESTORED ELSEWHERE - a restore by the same principal is a COPY, not a recovery, until proven otherwise. Check RestoreRegions",
+    TablesPerTenMinutes >= 5.0,
+        "MASS TABLE DESTRUCTION - five or more distinct tables per ten minutes by one non-pipeline principal",
+    isnotempty(DeniedCodes),
+        "TABLE DESTRUCTION WITH DENIED ATTEMPTS - the principal was also refused on other tables; the denials are boundary mapping, not deletions",
+        "UNAUTHORISED TABLE DESTRUCTION - a table was destroyed by a principal outside the lifecycle pipeline. One is enough")
+| project FirstDeleted, LastDeleted, Verdict, Actor, Roles, TablesDeleted, Tables,
+          TablesPerTenMinutes, TotalItemsLost, TotalBytesLost, BackupsDeleted, BackupArns,
+          RestoreCount, RestoreTargets, RestoreRegions, DeniedAttempts, DeniedCodes,
+          SourceIPs, Agents
+| order by LastDeleted desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// Whether any of it is recoverable. Nothing in the DeleteTable event says whether PITR was on
+// or an on-demand backup existed. That is DescribeContinuousBackups and ListBackups, and after
+// the deletion the only thing left to ask about is the SYSTEM backup DynamoDB creates
+// automatically IF PITR was enabled - <table>$DeletedTableBackup, retained 35 days.
+// list-backups defaults to USER backups and hides it, so a check that does not pass backup
+// type ALL reports "no backups" over the one recovery point that exists.
+//
+// Whether the table was protected. Deletion protection is off by default on every table,
+// "including global replicas, and tables restored from backups", so the absence of a
+// protection-disable event before a deletion means nothing - most tables never had it on. The
+// deliberate downgrade case is ../../dynamodb.stealth.deletion-protection-disabled/.
+//
+// What was in the tables. TotalItemsLost is summed from an approximate itemCount that DynamoDB
+// refreshes periodically. Item-level reads and writes are DATA events, off by default, so
+// there is no record of what any of those items contained.
+//
+// PREVENTION. dynamodb:DeleteTable is needed by no workload at runtime - only by whatever owns
+// table lifecycle. An SCP denying it outside that role is reachable because a DynamoDB
+// control-plane call is always made by an in-organisation principal.

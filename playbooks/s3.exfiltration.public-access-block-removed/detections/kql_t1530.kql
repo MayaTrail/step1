@@ -1,0 +1,84 @@
+// S3 Block Public Access weakened by flag (T1530)
+//
+// The four flags are separated here, because two of them change access IMMEDIATELY and two only
+// permit a future write. A query that ORs them tells a responder that "the block was weakened" and
+// not whether data is exposed right now.
+//
+// `contains` throughout, never `has` — bucket names and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "s3.amazonaws.com"
+| where EventName in ("PutBucketPublicAccessBlock", "PutAccountPublicAccessBlock",
+                      "PutBucketPolicy", "PutBucketAcl")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Pab = Req.PublicAccessBlockConfiguration
+| extend Bucket = tostring(Req.bucketName)
+| extend Scope = iff(EventName contains "Account", "ACCOUNT", "bucket")
+// All four flags are Required: No. A missing flag is NOT the same as false — AWS does not document
+// merge-versus-replace for a partial document — so absence is carried through as null rather than
+// being coerced, and the verdicts never read an absent flag as a weakening.
+| extend RestrictOff = tostring(Pab.RestrictPublicBuckets) == "false"
+| extend IgnoreOff   = tostring(Pab.IgnorePublicAcls) == "false"
+| extend PolicyOff   = tostring(Pab.BlockPublicPolicy) == "false"
+| extend AclsOff     = tostring(Pab.BlockPublicAcls) == "false"
+| extend FlagsPresent = array_length(bag_keys(todynamic(Pab)))
+| summarize
+    Immediate  = countif(RestrictOff or IgnoreOff),
+    Prospective= countif(PolicyOff or AclsOff),
+    PolicyWrite= countif(EventName == "PutBucketPolicy"),
+    AclWrite   = countif(EventName == "PutBucketAcl"),
+    Buckets    = make_set(Bucket, 20),
+    Scopes     = make_set(Scope, 2),
+    MinFlags   = minif(FlagsPresent, EventName contains "PublicAccessBlock"),
+    Submitted  = make_set(strcat("restrict=", tostring(Pab.RestrictPublicBuckets),
+                                 " ignore=", tostring(Pab.IgnorePublicAcls),
+                                 " policy=", tostring(Pab.BlockPublicPolicy),
+                                 " acls=", tostring(Pab.BlockPublicAcls)), 6),
+    SourceIps  = make_set(SourceIpAddress, 5),
+    FirstSeen  = min(TimeGenerated),
+    LastSeen   = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where Immediate > 0 or Prospective > 0
+| extend Verdict = case(
+    set_has_element(Scopes, "ACCOUNT"),
+        "ACCOUNT-LEVEL BLOCK WEAKENED — the account setting is the floor for every bucket, so this lets all of them fall to their own configuration in one call, under an event name no bucket rule matches, P0",
+    Immediate > 0 and (PolicyWrite > 0 or AclWrite > 0),
+        "IMMEDIATE-EFFECT FLAG LOWERED AND THE BUCKET WRITTEN — RestrictPublicBuckets or IgnorePublicAcls false makes an existing public configuration effective, and a write followed. Assume exposed, P0",
+    Immediate > 0,
+        "IMMEDIATE-EFFECT FLAG LOWERED — RestrictPublicBuckets or IgnorePublicAcls false. If the bucket already carries a public policy or ACL it is exposed NOW, with no second call required. Check the policy status, P0",
+    Prospective > 0 and (PolicyWrite > 0 or AclWrite > 0),
+        "GATE LOWERED THEN THE BUCKET WRITTEN — BlockPublicPolicy or BlockPublicAcls false removes the refusal, and the write that follows is the one it would have refused, P0",
+    Prospective > 0,
+        "GATE LOWERED — no exposure yet. BlockPublicPolicy and BlockPublicAcls only refuse future writes, so there is still a window, P1",
+    "Block Public Access changed — read the submitted flags")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, Scopes, Immediate, Prospective,
+          PolicyWrite, AclWrite, Buckets, MinFlags, Submitted, SourceIps
+| order by Immediate desc, Prospective desc
+//
+// ============================================================================
+// A FINDING HERE IS CONDITIONAL ON THE ACCOUNT SETTING
+// ============================================================================
+// AWS evaluates bucket and account configuration together and applies "the most restrictive
+// combination of the bucket-level and account-level settings". So a flag set false at the bucket
+// has NO effect while the account block still holds it true. Read the account state before
+// concluding anything from a bucket-level row:
+//
+//   aws s3control get-public-access-block --account-id <acct>
+//
+// A `MinFlags` below 4 means the request carried a partial configuration. AWS does not document
+// whether omitted flags are cleared or preserved, so the resulting state is not derivable from the
+// event — only get-public-access-block gives it.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHETHER THE BUCKET WAS ALREADY PUBLIC. The immediate-effect flags matter only if a public policy
+// or ACL already exists. get-bucket-policy-status is AWS's own verdict and it is the answer;
+// nothing in the event carries it.
+//
+// WHETHER ANYTHING WAS READ. Object operations are data events, off by default and billable.
+// lookup-events returns zero for them whether or not they happened.

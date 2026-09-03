@@ -1,0 +1,147 @@
+# KMS key created (T1486)
+#
+# NEITHER SOURCE RULE CAN FIRE. Both match `eventName:"createkey"`; CloudTrail emits `CreateKey`, and
+# on a case-sensitive field the lowercase form matches nothing. Twelfth instance of that defect class
+# across the source set — see ../../_ground-truth/kms.md §7.
+#
+# CREATING A KEY ENCRYPTS NOTHING. Both rules map to Data Encrypted for Impact, which is what the key
+# is later USED for. A new key on its own is a one-dollar-a-month resource with no data under it, so
+# plain creation is informational here and the severity sits on the request parameters.
+#
+# AND THE REQUEST BODY IS WHERE THIS USE CASE LIVES. `Origin: EXTERNAL` produces a key whose material
+# AWS never holds; DeleteImportedKeyMaterial then makes every ciphertext under it unreadable
+# IMMEDIATELY, with no 7-to-30-day window and no recovery except re-importing material only the
+# importer has. A `Policy` admitting an external account is cross-account staging.
+# `BypassPolicyLockoutSafetyCheck: true` produces a key that is unmanageable from birth. The source
+# rules read none of them. See ../../_ground-truth/kms.md §1 and §2.
+#
+# `CreateKey` IS CONTROL-PLANE AND LOGGED BY DEFAULT, so every document below works without any
+# additional trail configuration.
+title: KMS key created with externally supplied key material
+id: edeb5afb-e3aa-4fd7-9486-17c9a5ca0159
+status: experimental
+description: >-
+  CreateKey with Origin EXTERNAL produces a key holding no AWS-generated material — the creator
+  imports their own, and AWS never has it. DeleteImportedKeyMaterial then renders every ciphertext
+  under the key unreadable immediately, with no waiting period, recoverable only by re-importing
+  material the importer holds.
+references:
+  - https://docs.aws.amazon.com/kms/latest/APIReference/API_CreateKey.html
+  - https://docs.aws.amazon.com/kms/latest/APIReference/API_DeleteImportedKeyMaterial.html
+  - https://attack.mitre.org/techniques/T1486/
+tags:
+  - attack.impact
+  - attack.t1486
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # All three keys are on the SAME event: CloudTrail writes eventSource, eventName and the request
+  # body of one API call into one record. ANDing them is correct.
+  selection:
+    eventSource: kms.amazonaws.com
+    eventName: CreateKey
+    requestParameters.origin: EXTERNAL
+  # justified: no threshold and no allowlist. Imported key material is rare and deliberate; where an
+  # organisation genuinely uses it — a compliance requirement to hold material outside AWS — the
+  # creating role is known and belongs in an explicit allowlist added at deployment, not in a
+  # threshold that would hide the first one.
+  condition: selection
+falsepositives:
+  - Organisations with a regulatory requirement to retain key material outside AWS, which is a small
+    and enumerable set of keys
+level: high
+---
+# A key created with the safety check bypassed is unmanageable from birth. AWS: use this "only when
+# you intend to prevent the principal that is making the request from making a subsequent
+# PutKeyPolicy request".
+title: KMS key created with the policy lockout safety check bypassed
+id: a794bf87-2c99-4a4a-a7e3-e19e548c4c28
+status: experimental
+description: >-
+  CreateKey with BypassPolicyLockoutSafetyCheck true. The check exists to stop a key policy being
+  written that leaves nobody able to manage the key; bypassing it at creation produces exactly that.
+references:
+  - https://docs.aws.amazon.com/kms/latest/APIReference/API_CreateKey.html
+  - https://attack.mitre.org/techniques/T1486/
+tags:
+  - attack.impact
+  - attack.t1486
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # The parameter is OPTIONAL and therefore ABSENT on an ordinary call — not present-and-false. This
+  # matches the value `true` being present, never the absence of `false`.
+  selection:
+    eventSource: kms.amazonaws.com
+    eventName: CreateKey
+    requestParameters.bypassPolicyLockoutSafetyCheck: true
+  # justified: no threshold. One key that nobody can manage is the finding; a second does not make it
+  # worse. There is no legitimate automated use, so an allowlist would only create a bypass.
+  condition: selection
+falsepositives:
+  - A key deliberately scoped to a single service principal during a migration, which should be
+    confirmed against a change record rather than filtered out
+level: high
+---
+name: kms_key_created
+title: KMS key created
+id: e2621dbb-f155-4ce2-a523-1de9f3ddf5a8
+status: experimental
+description: >-
+  CreateKey succeeded outside the provisioning allowlist. Informational on its own — a new key
+  encrypts nothing and costs a dollar a month. Base rule for the correlation below; the allowlist
+  lives here so that the correlation counts only what a person did.
+references:
+  - https://docs.aws.amazon.com/kms/latest/APIReference/API_CreateKey.html
+  - https://attack.mitre.org/techniques/T1486/
+tags:
+  - attack.impact
+  - attack.t1486
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: kms.amazonaws.com
+    eventName: CreateKey
+    errorCode: null
+  filter_provisioning:
+    userIdentity.arn|contains:
+      - 'PlatformAutomation'
+      - 'iac-deploy'
+  condition: selection and not filter_provisioning
+falsepositives:
+  - Infrastructure provisioning that runs under a role not yet in the allowlist, which is the
+    overwhelming majority of key creation and is fixed by adding the role
+level: informational
+---
+# Five in ten minutes, with a provisioning allowlist doing the discrimination. The source threshold is
+# the same but has no principal dimension, so it selects for exactly the deployments it should ignore.
+title: KMS keys created in volume outside the provisioning path
+id: 10364d3e-a02f-4b2b-90ca-c22ed0065606
+status: experimental
+description: >-
+  Five or more keys created within ten minutes by a principal outside the provisioning allowlist. The
+  volume signal is weak on its own — key creation is cheap and legitimate — so the allowlist carries
+  the discrimination rather than the count.
+references:
+  - https://docs.aws.amazon.com/kms/latest/APIReference/API_CreateKey.html
+  - https://attack.mitre.org/techniques/T1486/
+tags:
+  - attack.impact
+  - attack.t1486
+correlation:
+  type: event_count
+  rules:
+    - kms_key_created
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gte: 5
+falsepositives:
+  - An infrastructure apply standing up a new environment — identify the role once and add it to the
+    allowlist rather than raising the count
+level: medium

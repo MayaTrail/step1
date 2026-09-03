@@ -1,0 +1,220 @@
+# User Pool Deletion Protection Disabled, Then the Pool Deleted (T1485 / T1531)
+#
+# WHY THE ORDERING IS THE WHOLE SIGNAL, AND WHY IT IS MANDATORY RATHER THAN INCIDENTAL.
+# AWS documents deletion protection on both CreateUserPool and UpdateUserPool in identical terms:
+# "When you try to delete a protected user pool in a DeleteUserPool API request, Amazon Cognito
+# returns an InvalidParameterException error. To delete a protected user pool, send a new
+# DeleteUserPool request after you deactivate deletion protection in an UpdateUserPool API
+# request." And DeleteUserPool's entire request body is `{"UserPoolId": "..."}` - there is no
+# force flag, no override, nothing. So on a protected pool the destruction is NECESSARILY at
+# least two calls, and the disable exists for no reason other than to permit the delete.
+#
+# THE THIRD CALL THE SOURCE RULE DOES NOT KNOW ABOUT. A configured domain independently blocks
+# deletion. AWS's own DeleteUserPool example response is:
+#     {"__type":"InvalidParameterException",
+#      "message":"User pool cannot be deleted. It has a domain configured that should be deleted
+#      first."}
+# So against a pool with managed login or a custom domain - which is most user-facing pools - the
+# real chain is THREE calls: UpdateUserPool(deletionProtection INACTIVE) -> DeleteUserPoolDomain
+# -> DeleteUserPool. Both blocking conditions surface as the SAME errorCode and are
+# distinguishable only by the message string. The domain half is covered by its own correlation
+# below, because it is an independent early-warning signal: the domain deletion alone takes
+# managed login offline.
+#
+# WHAT STAGE ONE ACTUALLY DOES, WHICH IS FAR MORE THAN REMOVING A GUARDRAIL. UpdateUserPool is a
+# full replacement, not a patch. AWS: "If you don't provide a value for an attribute, Amazon
+# Cognito sets it to its default value." A call carrying only UserPoolId and
+# DeletionProtection=INACTIVE therefore also resets MfaConfiguration, the whole LambdaConfig
+# (PreAuthentication, PostAuthentication, PreTokenGeneration, UserMigration and the custom
+# sender triggers), Policies (password policy and SignInPolicy), UserPoolAddOns - which is where
+# threat protection lives - AccountRecoverySetting, EmailConfiguration, SmsConfiguration,
+# UserAttributeUpdateSettings including AttributesRequireVerificationBeforeUpdate, UserPoolTags
+# and UserPoolTier. An actor gets an MFA teardown, a threat-protection teardown and the removal of
+# verification-on-attribute-change for free, in one call, and none of it is separately visible in
+# CloudTrail. This is also why a tag-based guardrail on user pools is self-defeating: the
+# attacker's first call removes the tag the guardrail reads.
+#
+# FIELD SHAPE - THE ONE UNVERIFIED THING IN THIS FILE, AND IT IS LOAD-BEARING. AWS publishes NO
+# example CloudTrail event for any cognito-idp management operation. `requestParameters.userPoolId`
+# and `requestParameters.deletionProtection` are the lower-camel forms consistent with every
+# published cognito-identity example (identityPoolId, allowUnauthenticatedIdentities) and with the
+# general CloudTrail convention, and they are the spellings the source rule itself uses - but they
+# are INFERRED. Confirm both in your own trail before deploying: a group-by on a field that is
+# absent collapses every pool into one bucket, and a value match on an absent field matches
+# nothing. Map to a case-insensitive comparison on any backend that supports one.
+title: Cognito user pool deletion protection disabled and the pool then deleted
+id: 397bf04e-779c-4408-8089-1335af4db300
+status: experimental
+description: >-
+  The same user pool had deletion protection deactivated and was then deleted within thirty
+  minutes. AWS provides no force flag on DeleteUserPool, so the disable is a mandatory preceding
+  call whose only purpose is to permit the deletion - the pair is intent, not coincidence. Every
+  user account, group, app client, identity provider and Lambda trigger in the pool is gone.
+references:
+  - https://attack.mitre.org/techniques/T1485/  # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1531/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_DeleteUserPool.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-deletion-protection.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+  - attack.t1531
+correlation:
+  type: temporal_ordered
+  rules:
+    - cognito_userpool_deletion_protection_off_bb
+    - cognito_userpool_deleted_bb
+  # Grouped by the POOL, not by the principal. A chain split across two identities - a stolen
+  # pipeline credential disabling protection and a second principal deleting - is the case a
+  # principal group-by would miss, and it is the more sophisticated one.
+  group-by:
+    - requestParameters.userPoolId
+  timespan: 30m
+level: critical
+---
+# Thirty minutes is the source's own second-stage timeframe and it is retained. The disable and
+# the delete are two calls a scripted actor makes back to back, so the real interval is seconds;
+# thirty minutes is generous headroom that still excludes a decommission days later. Where a
+# domain is configured the DeleteUserPoolDomain call sits between them and consumes some of the
+# window - another reason not to shrink it.
+title: Cognito user pool deletion protection deactivated
+id: bde86004-ee40-4f88-b2b6-8b00d160a299
+name: cognito_userpool_deletion_protection_off_bb
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting; deactivation on its own is a
+  separately registered use case. Carries the success filter so a call that was itself refused
+  cannot compose into the critical correlation above (D-f).
+references:
+  - https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_UpdateUserPool.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cognito-idp.amazonaws.com'
+    eventName: 'UpdateUserPool'
+  # Documented Valid Values are the strings ACTIVE and INACTIVE. The AWS developer guide page for
+  # this feature says to "set the DeletionProtection parameter to True" - that is a documentation
+  # error; True is not in the API's value set and matching it would match nothing.
+  protection_off:
+    requestParameters.deletionProtection: 'INACTIVE'
+  success:
+    errorCode: null
+  condition: selection and protection_off and success
+level: low
+---
+title: Cognito user pool deleted
+id: bdf0f36c-32f0-4258-908f-480190c41031
+name: cognito_userpool_deleted_bb
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. DeleteUserPool's only request
+  parameter is UserPoolId, so the request is the entire record and there is nothing else to
+  filter on.
+references:
+  - https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_DeleteUserPool.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+  - attack.t1531
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cognito-idp.amazonaws.com'
+    eventName: 'DeleteUserPool'
+  success:
+    errorCode: null
+  condition: selection and success
+level: low
+---
+title: Cognito user pool domain deleted
+id: c8206422-1d0b-4064-8deb-690368790da7
+name: cognito_userpool_domain_deleted_bb
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. Deleting the domain takes managed
+  login and the authorization server offline on its own, and it is a mandatory step before a pool
+  carrying a domain can be deleted.
+references:
+  - https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_DeleteUserPoolDomain.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cognito-idp.amazonaws.com'
+    eventName: 'DeleteUserPoolDomain'
+  success:
+    errorCode: null
+  condition: selection and success
+level: low
+---
+# The half of the chain the source flow does not model. AWS: "After you delete a user pool domain,
+# your managed login pages and authorization server are no longer available" - so this pair is
+# already an outage before the pool itself is touched, and it is the earlier of the two warnings
+# on any pool that has a domain. Grouped by pool for the same reason as the primary correlation.
+title: Cognito user pool domain deleted and the pool then deleted
+id: add7c356-41ae-4c47-ba2b-5b082d9c50a0
+status: experimental
+description: >-
+  A user pool's domain was deleted and the pool followed within thirty minutes. A configured
+  domain independently blocks DeleteUserPool, so on a pool with managed login this is a mandatory
+  step in the destruction chain rather than routine domain maintenance.
+references:
+  - https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_DeleteUserPoolDomain.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: temporal_ordered
+  rules:
+    - cognito_userpool_domain_deleted_bb
+    - cognito_userpool_deleted_bb
+  group-by:
+    - requestParameters.userPoolId
+  timespan: 30m
+level: high
+---
+# An attempt that the guardrail stopped. DeleteUserPool takes exactly one parameter, UserPoolId,
+# so an InvalidParameterException on it is not a malformed request - it is one of the two
+# documented blocking conditions: deletion protection is ACTIVE, or a domain is still configured.
+# AWS gives them the SAME errorCode and different message strings, so this rule cannot separate
+# them and the analyst reads the message. Either way somebody tried to destroy a user pool and
+# was refused, which is a stronger intent signal than most successful events.
+title: Cognito user pool deletion refused by a guardrail
+id: 63ea2d89-fa33-49a9-aaf7-67b19fee83c5
+status: experimental
+description: >-
+  A DeleteUserPool call was refused with InvalidParameterException. On this API that means either
+  deletion protection is active or a domain is still configured - the two documented blocking
+  conditions - and the next call in the sequence is the one that removes the obstacle.
+references:
+  - https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_DeleteUserPool.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cognito-idp.amazonaws.com'
+    eventName: 'DeleteUserPool'
+  blocked:
+    errorCode: 'InvalidParameterException'
+  condition: selection and blocked
+falsepositives:
+  - >-
+    An operator running a decommission by hand and meeting the domain requirement for the first
+    time. Distinguishable by whether a change record exists and by whether the same principal then
+    deletes the domain; if it is frequent, the finding is that decommissions are not scripted.
+level: high

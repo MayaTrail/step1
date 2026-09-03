@@ -1,0 +1,85 @@
+// Unauthorized Secret Access Attempt (T1552.007)
+//
+// Runs against the KUBERNETES AUDIT LOG delivered to CloudWatch Logs from an EKS cluster's
+// control-plane logging — NOT CloudTrail. Field names below are the Kubernetes audit Event
+// schema. Adjust the table to your ingestion.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL.
+EKSAudit_CL
+| where TimeGenerated > ago(7d)
+| extend E = todynamic(RawData)
+| where tostring(E.objectRef.resource) == "secrets"
+| where tostring(E.verb) in ("get", "list", "watch")
+// Every policy rule except serviceaccounts/token omits RequestReceived, so the normal event
+// is ResponseComplete. Pinning it stops watch requests double-counting via ResponseStarted.
+| where tostring(E.stage) == "ResponseComplete"
+//
+| extend User    = tostring(E.user.username)
+| extend Groups  = todynamic(E.user.groups)
+// sourceIPs is an ARRAY — the field is sourceIPs, not sourceIPAddresses, and through a
+// proxy the CLIENT is the FIRST element while the proxy is last.
+| extend SrcIPs  = todynamic(E.sourceIPs)
+| extend Client  = tostring(SrcIPs[0])
+| extend Ns      = tostring(E.objectRef.namespace)
+// objectRef.name is ABSENT on list and watch — a collection request names no object. So a
+// single `list` event returned EVERY secret in the namespace while naming none of them.
+| extend ObjName = tostring(E.objectRef.name)
+| extend Scope   = iff(tostring(E.verb) == "get", "one-object", "WHOLE-NAMESPACE")
+// responseStatus.code is int32. Do not quote it.
+| extend Code    = toint(E.responseStatus.code)
+// The annotation is the AUTHORITATIVE authorisation outcome, independent of the HTTP code.
+| extend Decision = tostring(E.annotations["authorization.k8s.io/decision"])
+// The system:serviceaccount: prefix is the reliable in-cluster/out-of-cluster discriminator
+// and the only one that does not depend on a baseline. Do NOT exclude on the bare substring
+// "system" — that drops every workload, which is the source rule's defect.
+| extend IsWorkload = User startswith "system:serviceaccount:"
+| extend IsIamUser  = User contains ":assumed-role/" or User startswith "arn:aws:"
+| summarize
+    Requests   = count(),
+    Denied     = countif(Code == 403),
+    Succeeded  = countif(Code in (200, 201)),
+    AuthFailed = countif(Code == 401),
+    WholeNs    = countif(Scope == "WHOLE-NAMESPACE"),
+    Namespaces = make_set(Ns, 10),
+    Objects    = make_set(ObjName, 10),
+    Clients    = make_set(Client, 5),
+    Decisions  = make_set(Decision, 3),
+    FirstSeen  = min(TimeGenerated),
+    LastSeen   = max(TimeGenerated)
+    by User, IsWorkload, IsIamUser
+| extend Verdict = case(
+    Succeeded > 0 and WholeNs > 0,
+        "SECRETS READ SUCCESSFULLY, WHOLE-NAMESPACE SCOPE — a single list returned every secret in the namespace, P0",
+    Succeeded > 0,
+        "SECRETS READ SUCCESSFULLY — confirm this principal is on the baseline of legitimate readers, P1",
+    Denied > 9,
+        "REPEATED RBAC DENIALS ON SECRETS — permission-boundary enumeration, P1",
+    AuthFailed > 0,
+        "AUTHENTICATION FAILED (401) — a different incident from RBAC refusal; check the identity mapping, P2",
+    "Secret read denied — single event, control working, P3")
+| project FirstSeen, LastSeen, User, Verdict, Succeeded, Denied, AuthFailed, WholeNs,
+          Namespaces, Objects, Clients, Decisions, IsWorkload, IsIamUser
+| order by Succeeded desc, Denied desc
+//
+// ============================================================================
+// WHAT THE AUDIT LOG WILL NOT GIVE YOU
+// ============================================================================
+// EKS's managed audit policy records `secrets` at level Metadata. You get WHO, WHICH VERB,
+// WHICH NAMESPACE and — only for a `get` — WHICH OBJECT. You never get the secret VALUE, and
+// there is no configuration that changes it: on a managed control plane the audit policy is
+// a kube-apiserver flag AWS owns, not exposed through any EKS API.
+//
+// THE LIST TRAP. objectRef.name is absent on list and watch. `kubectl get secrets -n prod`
+// is ONE event, Metadata level, naming no object — and it returned every secret in the
+// namespace. Any report answering "which secrets were touched" from objectRef.name returns
+// null on the highest-impact case and a name on the lowest. The Scope column above exists
+// for exactly this reason: treat a null name as WIDER than a named one, never as less.
+//
+// ============================================================================
+// CODE SEMANTICS — the most common rule defect on this service
+// ============================================================================
+//   403  authenticated, RBAC refused        <- what "unauthorized" means here
+//   401  authentication failed              <- a DIFFERENT incident: identity mapping
+//   200  it worked                          <- the worst outcome, invisible to an error rule
+// annotations["authorization.k8s.io/decision"] carries allow/forbid authoritatively and is
+// independent of the HTTP code; prefer it when the two disagree.

@@ -1,0 +1,57 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Egress Rule Was Added
+  priority: building-block
+  type: logs_immediate
+  query: |
+    eventName:"AuthorizeSecurityGroupEgress" AND NOT _exists_:errorCode
+  group_by: []
+
+- name: Ingress Rule Was Added
+  priority: P3
+  type: logs_threshold
+  query: |
+    eventName:"AuthorizeSecurityGroupIngress" AND NOT _exists_:errorCode
+  threshold: 0.0  window: 10m
+  group_by: ['userIdentity.sessionContext.sessionIssuer.userName']
+
+- name: Ingress Rule Was Revoked
+  priority: P4
+  type: logs_threshold
+  query: |
+    eventName:"RevokeSecurityGroupIngress" AND NOT _exists_:errorCode
+  threshold: 0.0  window: 10m
+  group_by: ['userIdentity.arn']
+
+- name: Egress Rule Was Revoked
+  priority: building-block
+  type: logs_immediate
+  query: |
+    eventName:"RevokeSecurityGroupEgress" AND NOT _exists_:errorCode
+  group_by: []
+
+- name: Ingress Rule Open to 0.0.0.0/0
+  priority: P2
+  type: logs_immediate
+  query: |
+    eventName:AuthorizeSecurityGroupIngress AND requestParameters.cidrIp:"0.0.0.0\/0"
+  group_by: []
+
+- name: Security Group Opened to the Internet for Remote Management
+  priority: P1
+  type: logs_threshold
+  query: |
+    eventName:"AuthorizeSecurityGroupIngress" AND requestParameters.ipPermissions.items_str:/.*"fromPort":(22|3389|5985|5986).*/ AND requestParameters.ipPermissions.items_str:/.*"cidrIp":"0\.0\.0\.0\/0".*/
+  threshold: 0.0  window: 10m
+  group_by: ['userIdentity.arn']
+

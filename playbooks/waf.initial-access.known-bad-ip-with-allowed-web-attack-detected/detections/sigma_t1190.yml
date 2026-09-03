@@ -1,0 +1,133 @@
+# Known-Bad IP with Allowed Web Attack (T1190)
+#
+# The source rule requires a reputation label AND an attack label AND action:"ALLOW" on one
+# request. At AWS managed defaults that combination is nearly unreachable, and the reason is
+# evaluation order rather than traffic.
+#
+# Rules run in priority order and a TERMINATING action ends evaluation immediately — nothing
+# after it runs, and nothing after it labels. Labels are visible only to rules running after
+# the rule that added them. So:
+#
+#   * AWSManagedIPReputationList and AWSManagedReconnaissanceList are BLOCK. If the
+#     reputation group runs first, as it usually does, a match blocks and stops evaluation:
+#     the CRS / SQLi / known-bad-inputs groups never run and NO ATTACK LABEL IS EVER ADDED.
+#   * AWSManagedIPDDoSList is COUNT. It labels and evaluation continues. It is the only one
+#     of the three whose label can coexist with an attack label at defaults.
+#   * If the reputation group runs AFTER the attack groups, an attack the attack group blocks
+#     terminates first and the reputation label is never added.
+#
+# So the source rule covers one of its three reputation lists, and only when the attack rule
+# that also matched did not terminate. Its silence means "evaluation order", not "no attacker".
+#
+# Rules 1 and 2 below split what the source rule conflates: the reachable case, and the
+# blocked-at-reputation case that the source rule discards entirely by gating on ALLOW.
+title: Request from a reputation-listed address carried a web attack and reached the application
+id: 7e6d5a41-2b8c-4f37-9e0d-5c1a4b83f206
+name: waf_badip_attack_allowed
+status: experimental
+description: >-
+  One request carried both an AWS IP-reputation label and a web-attack label, and was served
+  to the backend. At defaults this means the reputation match was the Count-action DDoS list,
+  or the reputation group was overridden to Count.
+references:
+  - https://attack.mitre.org/techniques/T1190/                                # retrieved 2026-08-30
+  - https://docs.aws.amazon.com/waf/latest/developerguide/aws-managed-rule-groups-ip-rep.html  # retrieved 2026-08-30
+tags:
+  - attack.initial-access
+  - attack.t1190
+logsource:
+  product: aws
+  service: waf
+detection:
+  reputation_label:
+    labels.name|endswith:
+      - ':AWSManagedIPReputationList'
+      - ':AWSManagedReconnaissanceList'
+      - ':AWSManagedIPDDoSList'
+      - ':AnonymousIPList'
+      - ':HostingProviderIPList'
+  # Stems, not full labels: the component suffix differs per rule and its casing is not
+  # mechanically derivable (SQLi_URIPath vs SQLiExtendedPatterns_UriPath in one group).
+  attack_label:
+    labels.name|contains:
+      - ':SQLi_'
+      - ':SQLiExtendedPatterns_'
+      - ':GenericLFI_'
+      - ':GenericRFI_'
+      - ':CrossSiteScripting_'
+      - ':EC2MetaDataSSRF_'
+      - ':Log4JRCE_'
+      - ':JavaDeserializationRCE_'
+      - ':ReactJSRCE_'
+      - ':PHPHighRiskMethodsVariables_'
+      - ':WindowsShellCommands_'
+      - ':PowerShellCommands_'
+      - ':UNIXShellCommandsVariables_'
+  reached_backend:
+    action: 'ALLOW'
+  condition: reputation_label and attack_label and reached_backend
+falsepositives:
+  - A shared NAT or proxy egress whose address is reputation-listed for someone else's
+    traffic. The reputation group uses the web request ORIGIN address, so behind a proxy or
+    a second load balancer it sees the proxy. Confirm the client before acting on the IP.
+level: high
+---
+# The case the source rule discards. A reputation-listed address that was BLOCKED carries no
+# attack label — evaluation stopped before the attack groups ran — so a rule requiring both
+# labels can never see it. It is still the most common real observation, and at volume from
+# one address it is the targeting signal that precedes everything else.
+title: Reputation-listed address blocked at the edge
+id: 9a1f3c27-4e58-4b06-8d3f-6b2e07a95d18
+name: waf_badip_blocked
+status: experimental
+description: Base rule — volume component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/waf/latest/developerguide/aws-managed-rule-groups-ip-rep.html  # retrieved 2026-08-30
+tags:
+  - attack.initial-access
+  - attack.t1190
+logsource:
+  product: aws
+  service: waf
+detection:
+  reputation_label:
+    labels.name|endswith:
+      - ':AWSManagedIPReputationList'
+      - ':AWSManagedReconnaissanceList'
+      - ':AnonymousIPList'
+      - ':HostingProviderIPList'
+  stopped:
+    action:
+      - 'BLOCK'
+      - 'CAPTCHA'
+      - 'CHALLENGE'
+  condition: reputation_label and stopped
+level: low
+---
+# Threshold basis, stated rather than invented: this counts BLOCKED requests from listed
+# addresses, so it is a targeting signal and the control is working. A public endpoint sees
+# background reputation traffic continuously, so the value is set where one address's
+# sustained attention against one host separates from ambient scanning. Baseline against
+# your own edge before deploying.
+title: Sustained attempts from reputation-listed addresses against one host
+id: c3852be0-71fa-4d29-a6b4-8f0e27d514ab
+status: experimental
+description: >-
+  One reputation-listed address sent fifty or more blocked requests to a single host in ten
+  minutes — sustained targeting rather than background scanning.
+references:
+  - https://attack.mitre.org/techniques/T1190/                                # retrieved 2026-08-30
+tags:
+  - attack.initial-access
+  - attack.t1190
+correlation:
+  type: event_count
+  rules:
+    - waf_badip_blocked
+  group-by:
+    - httpRequest.clientIp
+    - webaclId
+  timespan: 10m
+  condition:
+    gt: 49
+level: medium

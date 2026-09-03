@@ -1,0 +1,179 @@
+// High Number of Secrets Retrievals From a Single Principal — T1555.006
+//
+// Signals covered:
+//   1. Distinct secrets successfully read per principal per 5-minute bucket (the
+//      count that equals the rotation work-list).
+//   2. BatchGetSecretValue by a principal outside the batch-reader baseline.
+//   3. ListSecrets followed by GetSecretValue by the same principal (enumerate then
+//      drain), within 30 minutes.
+//   4. First-seen principal reading a secret value, measured against the principal's
+//      own 7-day history rather than a static allowlist — the form Sigma cannot express.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+// AWSCloudTrail columns are FLATTENED (UserIdentityArn, SessionIssuerUserName,
+// EventName, ErrorCode, SourceIpAddress); RequestParameters and ResponseElements are
+// dynamic JSON and need parse_json.
+//
+// BatchGetSecretValue fans out: AWS documents that Secrets Manager "generates
+// CloudTrail GetSecretValue log entries for each secret you request when you call this
+// action", so a 20-secret batch appears as one BatchGetSecretValue row plus up to 20
+// GetSecretValue rows. Counting GetSecretValue rows therefore does not under-count the
+// batch path. Query 1 deliberately counts GetSecretValue only, so a batch is not
+// double-counted by its own summary event.
+
+// ---------------------------------------------------------------------------
+// 1. Distinct secrets read per principal — the volume signal, success-filtered
+// ---------------------------------------------------------------------------
+// The baseline is written as an explicit chain of `contains` rather than a whole-term
+// set operator over a dynamic list. Whole-term matching breaks on non-alphanumerics and
+// an ARN is punctuated, so it would not match reliably.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "secretsmanager.amazonaws.com"
+| where EventName == "GetSecretValue"
+| where isempty(ErrorCode)                       // successful reads only
+| extend Req = parse_json(RequestParameters)
+| extend SecretId = tostring(Req.secretId)
+| extend Bucket = bin(TimeGenerated, 5m)
+| summarize DistinctSecrets = dcount(SecretId),
+            Secrets         = make_set(SecretId, 20),
+            Calls           = count(),
+            SourceIPs       = make_set(SourceIpAddress, 5),
+            RoleName        = any(SessionIssuerUserName),
+            FirstSeen       = min(TimeGenerated),
+            LastSeen        = max(TimeGenerated)
+    by UserIdentityArn, Bucket
+| where DistinctSecrets >= 10
+| extend IsBaselined = iff(
+        UserIdentityArn contains "app-config-loader"
+     or UserIdentityArn contains "ecs-task-"
+     or UserIdentityArn contains "eks-node-"
+     or UserIdentityArn contains "lambda-"
+     or UserIdentityArn contains "SecretsRotation", true, false)
+| extend Verdict = case(
+        DistinctSecrets >= 50 and not(IsBaselined),
+            "P0 - store-wide drain by a principal with no read baseline",
+        DistinctSecrets >= 10 and not(IsBaselined),
+            "P1 - bulk secret retrieval by a principal with no read baseline",
+        DistinctSecrets >= 50,
+            "P2 - baselined principal read an unusual number of secrets - confirm against its deploy",
+        "P3 - baselined bulk read within expected shape")
+| project Bucket, Verdict, UserIdentityArn, RoleName, DistinctSecrets, Calls,
+          Secrets, SourceIPs, FirstSeen, LastSeen
+| order by DistinctSecrets desc, Bucket desc
+
+// ---------------------------------------------------------------------------
+// 2. BatchGetSecretValue by an unbaselined principal — fires on the first call
+// ---------------------------------------------------------------------------
+// AWSCloudTrail
+// | where TimeGenerated > ago(7d)
+// | where EventSource == "secretsmanager.amazonaws.com"
+// | where EventName == "BatchGetSecretValue"
+// | where isempty(ErrorCode)
+// | extend Req = parse_json(RequestParameters)
+// | extend SecretIdList = Req.secretIdList          // absent when Filters was used
+// | extend Filters      = Req.filters
+// | extend RequestedCount = array_length(todynamic(SecretIdList))
+// | extend Selector = iff(isnull(SecretIdList), "FILTERS", "EXPLICIT_LIST")
+// | extend IsBaselined = iff(UserIdentityArn contains "app-config-loader"
+//                         or UserIdentityArn contains "ecs-task-"
+//                         or UserIdentityArn contains "eks-node-", true, false)
+// | extend Verdict = case(
+//         not(IsBaselined) and Selector == "FILTERS",
+//             "P0 - batch drain by filter: the request names no secrets, reconstruct from the per-secret GetSecretValue entries",
+//         not(IsBaselined),
+//             "P0 - batch drain by a principal with no batch-read baseline",
+//         "P2 - baselined batch read - confirm the secret list matches its configuration")
+// | project TimeGenerated, Verdict, UserIdentityArn, SessionIssuerUserName,
+//           Selector, RequestedCount, SecretIdList, Filters, SourceIpAddress, ErrorCode
+// | order by TimeGenerated desc
+
+// ---------------------------------------------------------------------------
+// 3. Enumerate then drain — ListSecrets followed by GetSecretValue, same principal
+// ---------------------------------------------------------------------------
+// let lists =
+//     AWSCloudTrail
+//     | where TimeGenerated > ago(7d)
+//     | where EventSource == "secretsmanager.amazonaws.com" and EventName == "ListSecrets"
+//     | where isempty(ErrorCode)
+//     | project ListTime = TimeGenerated, UserIdentityArn, ListIp = SourceIpAddress;
+// let reads =
+//     AWSCloudTrail
+//     | where TimeGenerated > ago(7d)
+//     | where EventSource == "secretsmanager.amazonaws.com"
+//     | where EventName in ("GetSecretValue", "BatchGetSecretValue")
+//     | where isempty(ErrorCode)
+//     | extend SecretId = tostring(parse_json(RequestParameters).secretId)
+//     | project ReadTime = TimeGenerated, UserIdentityArn, SecretId, ReadEvent = EventName;
+// lists
+// | join kind=inner reads on UserIdentityArn
+// | where ReadTime between (ListTime .. (ListTime + 30m))
+// | summarize SecretsRead = dcount(SecretId), Secrets = make_set(SecretId, 20),
+//             FirstRead = min(ReadTime), LastRead = max(ReadTime)
+//     by UserIdentityArn, ListTime, ListIp
+// | extend Verdict = strcat("Enumerated the inventory then read ", SecretsRead,
+//                           " distinct secret(s) within 30 minutes")
+// | project ListTime, Verdict, UserIdentityArn, ListIp, SecretsRead, Secrets,
+//           FirstRead, LastRead
+// | order by SecretsRead desc
+
+// ---------------------------------------------------------------------------
+// 4. First-seen principal — the new-value form, against the principal's own history
+// ---------------------------------------------------------------------------
+// This is the signal the source's new-value rule intended and the one Sigma cannot
+// express. It keys on UserIdentityArn, NOT on SessionIssuerUserName: a principal
+// using long-term IAM user access keys carries no session context at all, so a
+// new-value tracker on SessionIssuerUserName cannot track the very principal type the
+// original rule was named for.
+//
+// let baseline =
+//     AWSCloudTrail
+//     | where TimeGenerated between (ago(30d) .. ago(7d))
+//     | where EventSource == "secretsmanager.amazonaws.com"
+//     | where EventName in ("GetSecretValue", "BatchGetSecretValue")
+//     | where isempty(ErrorCode)
+//     | distinct UserIdentityArn;
+// AWSCloudTrail
+// | where TimeGenerated > ago(7d)
+// | where EventSource == "secretsmanager.amazonaws.com"
+// | where EventName in ("GetSecretValue", "BatchGetSecretValue")
+// | where isempty(ErrorCode)
+// | join kind=leftanti baseline on UserIdentityArn
+// | extend SecretId = tostring(parse_json(RequestParameters).secretId)
+// | summarize DistinctSecrets = dcount(SecretId), Secrets = make_set(SecretId, 20),
+//             SourceIPs = make_set(SourceIpAddress, 5),
+//             FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated)
+//     by UserIdentityArn, UserIdentityType, SessionIssuerUserName
+// | extend Verdict = case(
+//         DistinctSecrets >= 10, "P0 - principal with no 30-day read history drained secrets",
+//         DistinctSecrets >  1,  "P1 - principal with no 30-day read history read several secrets",
+//         "P2 - principal with no 30-day read history read one secret")
+// | project Verdict, UserIdentityArn, UserIdentityType, SessionIssuerUserName,
+//           DistinctSecrets, Secrets, SourceIPs, FirstSeen, LastSeen
+// | order by DistinctSecrets desc
+
+// ---------------------------------------------------------------------------
+// What these queries cannot tell you
+// ---------------------------------------------------------------------------
+// The secret VALUE is never in the log. SecretString and SecretBinary are both
+// documented "Sensitive: this field contains sensitive information, so the service
+// does not include it in AWS CloudTrail log entries". You learn which secret was read
+// and by whom, never what the reader now holds — so the blast radius has to come from
+// your own record of what each secret grants, and rotation is the only revocation.
+//
+// FIELD-SHAPE WARNING. requestParameters.secretId is caller-typed: it carries whatever
+// the caller passed, which may be a bare secret name or a full ARN. Two rows naming
+// the same secret in different forms will be counted as two distinct secrets by
+// dcount(SecretId). Normalise before counting if your callers mix the forms — extract
+// the trailing name segment from ARN-shaped values. AWS publishes no example Secrets
+// Manager CloudTrail event, so whether these events also populate the Resources column
+// is unverified here; do not build a query that depends on it alone.
+//
+// A caller using Filters instead of SecretIdList names no secret in the
+// BatchGetSecretValue request. AWS says the per-secret GetSecretValue entries are
+// generated "for each secret you request", but publishes no example of that path — so
+// treat query 1's list as the authority and query 2 as the trigger, not the inventory.
+//
+// PREVENTION, not detection: scope secretsmanager:GetSecretValue and
+// secretsmanager:BatchGetSecretValue to named secret ARNs per workload rather than "*",
+// and deny BatchGetSecretValue outright for principals that have no bulk-read need.

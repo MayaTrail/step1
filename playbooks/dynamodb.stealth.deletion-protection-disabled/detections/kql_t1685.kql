@@ -1,0 +1,98 @@
+// DynamoDB Deletion Protection Disabled, and the deletion that follows (T1685 / T1485)
+//
+// Signal: an UpdateTable call that set DeletionProtectionEnabled to false, and — the part
+// that turns a configuration change into an incident — a DeleteTable on the SAME table
+// afterwards.
+//
+// This query does what the Sigma correlation structurally cannot: it JOINS the two halves ON
+// THE TABLE NAME. AWS's own published UpdateTable CloudTrail example carries no `tableName`
+// in requestParameters at all, so the table is recovered from
+// responseElements.tableDescription.tableName, while DeleteTable names it in
+// requestParameters.tableName. A Sigma correlation can only group by principal; here both
+// sides are normalised to a bare table name and compared directly.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE THE TWO PIPELINE-ROLE SUBSTRINGS BELOW BEFORE DEPLOYING.
+let Lookback = 30d;
+let Ddb =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "dynamodb.amazonaws.com"
+    | where EventName in ("UpdateTable", "DeleteTable")
+    // RequestParameters and ResponseElements are typed `string` in this table, not dynamic -
+    // parse_json is required before any field access. UserIdentityArn, SessionIssuerUserName,
+    // SourceIpAddress, EventName and ErrorCode are already FLATTENED columns.
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    // TableName may be supplied as a bare name OR as a full table ARN - the API documents
+    // "You can also provide the Amazon Resource Name (ARN) of the table in this parameter"
+    // and caps it at 1024 chars for that reason. Normalise to the bare name, or the join
+    // silently drops every ARN-form call.
+    | extend RawName = coalesce(tostring(Req.tableName),
+                                tostring(Resp.tableDescription.tableName))
+    | extend TableName = iff(RawName contains "/", tostring(split(RawName, "/")[-1]), RawName)
+    // `contains`, never `has`: an ARN and a role path are punctuated and `has` is whole-term,
+    // so a whole-term match on the operand `:role/iac-deploy` would never succeed. Replace
+    // both substrings below with this account's real table-lifecycle roles.
+    | extend IsPipeline = UserIdentityArn contains ":role/iac-deploy"
+                       or UserIdentityArn contains ":role/BreakGlassAdmin";
+let Disables = Ddb
+    | where EventName == "UpdateTable" and isempty(ErrorCode)
+    // The parameter is documented Type: Boolean, so it is a JSON boolean in the event.
+    // tobool() accepts the boolean and also the string form, if a shipper stringified it.
+    | where tobool(Req.deletionProtectionEnabled) == false
+    | project DisabledAt = TimeGenerated, TableName, Actor = UserIdentityArn,
+              DisableIp = SourceIpAddress, DisableAgent = UserAgent,
+              DisableRole = SessionIssuerUserName, DisableByPipeline = IsPipeline;
+let Deletes = Ddb
+    | where EventName == "DeleteTable" and isempty(ErrorCode)
+    | project DeletedAt = TimeGenerated, TableName, Deleter = UserIdentityArn,
+              // The event carries the size of the loss. itemCount is an approximate figure
+              // DynamoDB refreshes periodically, not a live count - report it as approximate.
+              ItemsLost = tolong(Resp.tableDescription.itemCount),
+              BytesLost = tolong(Resp.tableDescription.tableSizeBytes);
+// Denied attempts are kept apart and never counted as changes: a principal probing its
+// boundary across twenty tables produces the same event volume as twenty real disables.
+let DeniedProbes = Ddb
+    | where isnotempty(ErrorCode)
+    | summarize DeniedAttempts = count(), DeniedCodes = make_set(ErrorCode, 6)
+            by Actor = UserIdentityArn;
+Disables
+| join kind=leftouter Deletes on TableName
+| extend DeletedAfterDisable = isnotempty(DeletedAt) and DeletedAt > DisabledAt
+| extend DeletedByOther = DeletedAfterDisable and Deleter != Actor
+| join kind=leftouter DeniedProbes on Actor
+| extend Verdict = case(
+    DeletedByOther == true,
+        "PROTECTION REMOVED, TABLE THEN DESTROYED BY A DIFFERENT PRINCIPAL - two identities, one destruction; treat as coordinated, or as a credential handed on",
+    DeletedAfterDisable == true,
+        "PROTECTION REMOVED AND TABLE DESTROYED - the disable was preparation. Data is gone unless PITR or an on-demand backup existed at the moment of deletion",
+    DisableByPipeline == false,
+        "PROTECTION REMOVED BY A NON-PIPELINE PRINCIPAL - the table is now deletable by anyone holding dynamodb:DeleteTable. Treat as pre-destruction staging",
+    isnotempty(DeniedCodes),
+        "PROTECTION REMOVED BY THE PIPELINE, WITH DENIED ATTEMPTS ELSEWHERE - check the denials separately; they are boundary mapping",
+        "PROTECTION REMOVED BY THE PIPELINE - reconcile against a change record before closing")
+| project DisabledAt, Verdict, TableName, Actor, DisableRole, DisableIp, DisableAgent,
+          DeletedAt, Deleter, ItemsLost, BytesLost, DeniedAttempts, DeniedCodes
+| order by DisabledAt desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// Which tables are exposed RIGHT NOW. Deletion protection is off by default for every table,
+// "including global replicas, and tables restored from backups", so the tables at risk are
+// overwhelmingly ones that never appear in this query because their protection was never
+// turned on. The absence of rows is not an all-clear - it is the absence of a deliberate
+// downgrade. Current state is answerable only with DescribeTable across every table, which
+// is a §5 assertion, not a log query.
+//
+// Whether the destroyed data is recoverable. Nothing in the CloudTrail event says whether
+// PITR was enabled or a backup existed. DescribeContinuousBackups and ListBackups answer
+// that, and after a DeleteTable the surviving artefact is a SYSTEM backup named
+// <table>$DeletedTableBackup, created automatically only if PITR was on and retained 35 days.
+// list-backups defaults to USER backups, so a query that does not ask for backup type ALL
+// reports "no backups" over a live recovery point.
+//
+// PREVENTION. dynamodb:UpdateTable cannot be denied outright - autoscaling and every capacity
+// change need it. The reachable control is a Deny on dynamodb:DeleteTable outside the
+// table-lifecycle roles, which is what §6 of the playbook carries.

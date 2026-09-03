@@ -33,7 +33,7 @@ MANIFEST = {'schema_version': 3,
                                   'name': 'Malicious Script Execution via SageMaker Lifecycle '
                                           'Config'}]}],
  'mitre_mappings': [{'id': 'T1059',
-                     'name': 'Malicious Script Execution via SageMaker Lifecycle Config',
+                     'name': 'Command and Scripting Interpreter',
                      'tactic': 'Execution',
                      'platform': 'AWS SageMaker',
                      'description': 'CloudTrail sagemaker:UpdateNotebookInstanceLifecycleConfig '

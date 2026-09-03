@@ -1,0 +1,240 @@
+# IAM Privilege Escalation via Managed Policy (T1098.003)
+#
+# The managed route differs from the inline one in blast radius and in reversibility.
+# A new default version of a customer-managed policy applies at once to EVERY principal
+# that policy is attached to, so one call can escalate dozens of identities; and because
+# managed policies ARE versioned, the prior document stays retrievable, which the inline
+# route cannot offer. Both facts change the response, which is why this ships separately
+# from ../../../iam.privilege-escalation.inline-policy-grant/
+#
+# Defects corrected here:
+#  - `SetDefaultPolicyVersion` alerted P2 on a bare event-name match. That is what every
+#    legitimate policy rollback looks like, so it fires on routine work and gets muted.
+#    Demoted to a base rule; the ORDERED sequence is what alerts.
+#  - `requestParameters.policyArn:AdministratorAccess` was an unanchored term match,
+#    which also matches AdministratorAccess-Amplify and AdministratorAccess-AWSElasticBeanstalk
+#    — narrow service policies routine wherever those services run. Anchored with |endswith.
+#  - The CreatePolicyVersion document regex allowed zero-or-one space on a single line
+#    (`\x22Effect\x22:[ ]?\x22Allow\x22`). `requestParameters.policyDocument` is RAW
+#    JSON in whatever whitespace the client sent, and `--policy-document file://p.json`
+#    is pretty-printed across newlines — so the regex misses those entirely. Percent-
+#    encoding is a RESPONSE property (`responseElements`, the Get*Policy APIs); do not
+#    decode request parameters. See `detection_note_t1098_003.md`.
+title: Administrator-equivalent managed policy attached to a principal
+id: 912af54e-62ea-44de-9742-6d00cfca791f
+name: iam_admin_managed_policy_attached
+status: experimental
+description: >-
+  An AWS managed policy conferring full administrative or full IAM control was attached
+  to a user, role or group. Effective immediately and account-wide.
+references:
+  - https://attack.mitre.org/techniques/T1098/003/                      # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AdministratorAccess.html  # retrieved 2026-08-27
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName:
+      - 'AttachUserPolicy'
+      - 'AttachRolePolicy'
+      - 'AttachGroupPolicy'
+  admin_policy:
+    requestParameters.policyArn|endswith:
+      - ':policy/AdministratorAccess'
+      - ':policy/IAMFullAccess'
+      - ':policy/PowerUserAccess'
+  success:
+    errorCode: null
+  condition: selection and admin_policy and success
+falsepositives:
+  - Initial account bootstrap and break-glass role provisioning. Both should be rare,
+    scheduled, and attributable to a named change.
+  - PowerUserAccess is not administrator-equivalent on its own — it withholds IAM. It is
+    included because it is a common staging point; drop it if it is your standard
+    developer grant.
+level: high
+---
+# Unlike the inline sibling, the wildcard and named-primitive cases share ONE rule at
+# `high` here. An inline `*:*` escalates one principal; a managed `*:*` escalates every
+# principal the policy is attached to, so the weaker textual match still warrants the
+# higher level.
+title: IAM managed policy version created granting escalation or unrestricted action
+id: e987be83-b7d4-4421-b019-1b68ac865365
+name: iam_managed_version_escalation
+status: experimental
+description: >-
+  A new version of a customer-managed policy was created whose document Allows a
+  privilege-escalation primitive or an unrestricted action. If promoted to default it
+  applies to every principal the policy is attached to.
+references:
+  - https://attack.mitre.org/techniques/T1098/003/                      # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_CreatePolicyVersion.html  # retrieved 2026-08-27
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'CreatePolicyVersion'
+  allow_effect:
+    requestParameters.policyDocument|contains: 'Allow'
+  # Bare alphanumerics — identical in raw JSON and percent-encoded form.
+  escalation_action:
+    requestParameters.policyDocument|contains:
+      - 'CreateAccessKey'
+      - 'CreateLoginProfile'
+      - 'UpdateLoginProfile'
+      - 'AttachUserPolicy'
+      - 'AttachRolePolicy'
+      - 'AttachGroupPolicy'
+      - 'PutUserPolicy'
+      - 'PutRolePolicy'
+      - 'PutGroupPolicy'
+      - 'CreatePolicyVersion'
+      - 'SetDefaultPolicyVersion'
+      - 'AddUserToGroup'
+      - 'UpdateAssumeRolePolicy'
+      - 'AdministratorAccess'
+  # \s* spans the newlines and indentation of a pretty-printed document — the real
+  # request-side hazard. The optional [ handles "Action": [ "*" ].
+  wildcard_action:
+    requestParameters.policyDocument|re: '"Action"\s*:\s*(\[\s*)?"\*"'
+  # A service wildcard over IAM or STS confers every named primitive at once while
+  # containing none of their names.
+  wildcard_service:
+    requestParameters.policyDocument|contains:
+      - '"iam:*"'
+      - '"sts:*"'
+  # NotAction Allows everything EXCEPT what it lists — administrator by omission.
+  not_action:
+    requestParameters.policyDocument|contains: 'NotAction'
+  success:
+    errorCode: null
+  condition: selection and success and allow_effect and (escalation_action or wildcard_action or wildcard_service or not_action)
+falsepositives:
+  - A guardrail version that Denies these actions while Allowing something else in the
+    same document — Allow and the action name are matched independently. Decode first.
+  - '`iam:PassRole` is deliberately excluded from the primitive list: it appears in a
+    large fraction of legitimate IaC-managed policies and would dominate alert volume at
+    this level. The decoded path in Query 3 of the playbook catches it.'
+  - CreatePolicyVersion without --set-as-default changes nothing until the version is
+    promoted. Corroborate against the sequence correlation below before escalating.
+level: high
+---
+title: IAM CreatePolicyVersion
+id: 3523562f-94ec-4c98-bad9-c48186f7472e
+name: iam_create_policy_version
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_CreatePolicyVersion.html  # retrieved 2026-08-27
+tags:
+  - attack.privilege-escalation
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'CreatePolicyVersion'
+  success:
+    errorCode: null
+  condition: selection and success
+level: low
+---
+title: IAM SetDefaultPolicyVersion
+id: f58a9365-6c49-4bf6-ae55-759d847b72f7
+name: iam_set_default_policy_version
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_SetDefaultPolicyVersion.html  # retrieved 2026-08-27
+tags:
+  - attack.privilege-escalation
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'SetDefaultPolicyVersion'
+  success:
+    errorCode: null
+  condition: selection and success
+level: low
+---
+# The two-step managed escalation. Neither half is suspicious alone: CreatePolicyVersion
+# without --set-as-default changes nothing, and SetDefaultPolicyVersion is what every
+# legitimate rollback looks like. The original rule alerted P2 on the latter by itself,
+# which is why it fires on rollbacks. The SEQUENCE by one principal against one policy
+# ARN is the technique.
+title: IAM policy version created then promoted to default by the same principal
+id: 848d5f5c-3118-41ab-975c-ac2a13ae5ce0
+status: experimental
+description: >-
+  A new version of a managed policy was created and then made the default version by the
+  same principal on the same policy. The new document applies at once to every principal
+  that policy is already attached to.
+references:
+  - https://attack.mitre.org/techniques/T1098/003/                      # retrieved 2026-08-27
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.003
+correlation:
+  type: temporal_ordered
+  rules:
+    - iam_create_policy_version
+    - iam_set_default_policy_version
+  group-by:
+    - userIdentity.arn
+    - requestParameters.policyArn
+  timespan: 15m
+level: high
+
+---
+# The ONE-CALL form. `aws iam create-policy-version --set-as-default` emits a single
+# CreatePolicyVersion event with requestParameters.setAsDefault true and NO
+# SetDefaultPolicyVersion event at all — so the sequence correlation below never fires on
+# it. It is also the more natural attacker path, being one call instead of two.
+title: IAM policy version created and promoted to default in one call
+id: 6d2a4b18-90ce-4f77-b3a1-5e0c72d98af3
+status: experimental
+description: >-
+  A new managed-policy version was created with set-as-default in a single call, taking
+  effect immediately on every principal the policy is attached to, with no separate
+  promotion event to correlate against.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_CreatePolicyVersion.html  # retrieved 2026-08-27
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'CreatePolicyVersion'
+  set_as_default:
+    requestParameters.setAsDefault: true
+  success:
+    errorCode: null
+  condition: selection and set_as_default and success
+falsepositives:
+  - Your IaC pipeline rolling a managed policy forward. This is the normal deployment
+    shape, so allowlist the pipeline role explicitly rather than lowering the level.
+level: medium

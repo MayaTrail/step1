@@ -1,0 +1,193 @@
+# Excessive Parameter Creation Detected (T1565.001)
+#
+# The original rule counted `putparameter` events, more than 10 in five minutes,
+# grouped by userIdentity.sessionContext.sessionIssuer.userName. It calls the
+# condition "creation", but PutParameter is create-OR-update: AWS documents it as
+# "Create or update a parameter in Parameter Store", and the flag that separates
+# the two is `Overwrite`, default false. Creating ten new parameters is a deploy.
+# Overwriting one existing parameter that a running application reads is config
+# poisoning, and the rule scores it lower, because one is not more than ten.
+#
+# The group-by is empty for IAM users: sessionContext is present only for role
+# sessions, so every IAM user's events carry a null key. The rules below group by
+# userIdentity.arn, which every event carries.
+#
+# Two things worth knowing that the original rule does not use. PutParameter's
+# `Policies` parameter accepts an Expiration policy, which AWS documents as
+# deleting the parameter when the timestamp is reached — a delayed destruction
+# that produces no delete event from the principal that armed it. And a
+# PutParameter without Overwrite against a name that already exists returns
+# `ParameterAlreadyExists`, which makes the write API a name-enumeration oracle
+# for a principal that cannot read.
+#
+# FIELD CASING: the SSM API Reference documents the wire format (`Overwrite`,
+# `Policies`). AWS's published ssm.amazonaws.com CloudTrail examples render
+# request keys with a lower-case initial, so the rules key on `overwrite` /
+# `policies`. Confirm against one real event before deploying.
+title: SSM parameter overwritten by a principal outside the owning pipeline
+id: 7c93bdca-6830-4c98-9da9-6344e61d8c3b
+name: ssm_parameter_overwritten
+status: experimental
+description: >-
+  A successful PutParameter with Overwrite set replaces the value an application
+  reads at boot or on refresh. The value itself is not in CloudTrail, so the
+  parameter name and the writing principal are the whole signal.
+references:
+  - https://attack.mitre.org/techniques/T1565/001/
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_PutParameter.html
+  - https://docs.aws.amazon.com/systems-manager/latest/userguide/parameter-store-policy-conditions.html
+tags:
+  - attack.impact
+  - attack.t1565.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName: 'PutParameter'
+  overwrite:
+    requestParameters.overwrite: true
+  success:
+    errorCode: null
+  parameter_writers:                   # tune: principals that own configuration writes
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'
+      - ':role/ci-cd'
+      - ':role/config-admin'
+  condition: selection and overwrite and success and not parameter_writers
+falsepositives:
+  - A secret rotation function writing a new value — allowlist the rotation role specifically, not the account
+  - A manual configuration fix outside the pipeline; should be rare and traceable to a change record
+level: high
+---
+title: SSM parameter written with an expiration policy attached
+id: 60980f5c-985d-4b13-9fc1-4e0366bfc513
+status: experimental
+description: >-
+  PutParameter carrying an Expiration parameter policy arms a deletion at a
+  future timestamp. Parameter Store performs the delete itself, so the principal
+  that armed it produces no DeleteParameter event at all.
+references:
+  - https://attack.mitre.org/techniques/T1565/001/
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_PutParameter.html
+tags:
+  - attack.impact
+  - attack.t1565.001
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName: 'PutParameter'
+  expiration_policy:
+    requestParameters.policies|contains: 'Expiration'
+  success:
+    errorCode: null
+  condition: selection and expiration_policy and success
+falsepositives:
+  - A team that legitimately uses expiring parameters for short-lived configuration — allowlist by path, and note that expiring parameters are an advanced-tier feature and therefore billed, which makes them rare
+level: medium
+---
+title: Many distinct parameter names probed through PutParameter
+id: 2c88f3b4-9791-4c46-863f-e89d174e4f53
+status: experimental
+description: >-
+  PutParameter without Overwrite returns ParameterAlreadyExists when the name is
+  taken. A principal that cannot read parameters can therefore enumerate which
+  names exist by attempting to write them.
+references:
+  - https://attack.mitre.org/techniques/T1565/001/
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_PutParameter.html
+tags:
+  - attack.discovery
+  - attack.t1526
+correlation:
+  type: value_count
+  rules:
+    - ssm_put_parameter_name_taken
+  group-by:
+    - userIdentity.arn
+  timespan: 5m
+  field: requestParameters.name
+  condition:
+    gte: 10
+falsepositives:
+  - An idempotent deploy script that writes without Overwrite and tolerates the error — allowlist the deployment role
+level: medium
+---
+title: PutParameter rejected because the name already exists
+id: 66f54318-955b-42de-bd23-a6d5d69a8a37
+name: ssm_put_parameter_name_taken
+status: experimental
+description: >-
+  Base rule — count component only, not for direct alerting. A PutParameter that
+  failed with ParameterAlreadyExists.
+references:
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_PutParameter.html
+tags:
+  - attack.discovery
+  - attack.t1526
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName: 'PutParameter'
+  name_taken:
+    errorCode: 'ParameterAlreadyExists'
+  condition: selection and name_taken
+level: low
+---
+title: High volume of parameter writes by one principal
+id: 5139e06a-3a50-4532-a83e-80f1ba364cd3
+status: experimental
+description: >-
+  The corrected form of the original volume rule — successful writes only, and
+  grouped by userIdentity.arn rather than a session-issuer field that is absent
+  for IAM users. Kept as a secondary signal; the overwrite rule above is the one
+  that catches a single deliberate write.
+references:
+  - https://attack.mitre.org/techniques/T1565/001/
+tags:
+  - attack.impact
+  - attack.t1565.001
+correlation:
+  type: event_count
+  rules:
+    - ssm_parameter_written
+  group-by:
+    - userIdentity.arn
+  timespan: 5m
+  condition:
+    gte: 10
+falsepositives:
+  - Infrastructure-as-code seeding a new environment's configuration set — allowlist the deployment role, which is the only principal that should write in bulk
+level: low
+---
+title: SSM parameter written
+id: 2a5a00b0-2b70-40a3-8734-9a11f0f78481
+name: ssm_parameter_written
+status: experimental
+description: >-
+  Base rule — count component only, not for direct alerting. A successful
+  PutParameter, create or update.
+references:
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_PutParameter.html
+tags:
+  - attack.impact
+  - attack.t1565.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName: 'PutParameter'
+  success:
+    errorCode: null
+  condition: selection and success
+level: low

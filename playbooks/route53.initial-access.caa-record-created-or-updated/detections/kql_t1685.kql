@@ -1,0 +1,94 @@
+// CAA policy weakened — certificate-issuance restriction changed (T1685 / T1588.004)
+//
+// This query does what the Sigma structurally cannot: it expands changeBatch.changes[] and
+// evaluates each change ON ITS OWN, so "a CAA record was CREATEd or UPSERTed" is proven per
+// element rather than inferred across the batch. mv-expand is the whole reason this file exists
+// alongside the Sigma rather than restating it.
+//
+// `contains` throughout, never `has` — CAA values are punctuated (`0 issue "ca.example.net"`)
+// and whole-term matching misses them.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+// POPULATE: the certificate authorities this organisation actually uses. Written as an
+// alternation rather than an array on purpose — an array tested by index silently ignores every
+// element past the last index anyone remembered to write, which is a check that quietly stops
+// checking. Leaving the examples in place makes every row look approved and the query useless.
+let ApprovedCAregex = "amazon\\.com|amazontrust\\.com|awstrust\\.com|amazonaws\\.com|letsencrypt\\.org";
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "route53.amazonaws.com"
+| where EventName == "ChangeResourceRecordSets"
+| extend Req = parse_json(RequestParameters)
+| extend ZoneId = tostring(Req.hostedZoneId)
+// AN ABSENT requestParameters IS A SIGNAL, NOT A PARSE FAILURE. CloudTrail omits the whole field
+// above 100 KB rather than truncating it, so an oversized batch shows zero changes. Surface those
+// rows before the expand drops them — mv-expand on an empty array removes the record entirely.
+| extend ChangeCount = array_length(Req.changeBatch.changes)
+| extend Omitted = isempty(RequestParameters) or isnull(Req.changeBatch) or ChangeCount == 0
+| extend Changes = iff(Omitted, dynamic([{}]), todynamic(Req.changeBatch.changes))
+| mv-expand C = Changes
+| extend Action = tostring(C.action)
+| extend RRType = tostring(C.resourceRecordSet.type)
+| extend RRName = tostring(C.resourceRecordSet.name)      // carries a TRAILING DOT
+// `tTL` — lower t, upper TL. CloudTrail lower-cases only the first character of the API's TTL
+// member. `ttl` and `TTL` both resolve to null and silently disable any window reasoning below.
+| extend RRTtl  = toint(C.resourceRecordSet.tTL)
+| extend Values = tostring(C.resourceRecordSet.resourceRecords)
+| where Omitted or (RRType == "CAA" and Action in ("CREATE", "UPSERT"))
+// A CAA change naming none of the approved authorities is the finding. Deny-all is the literal
+// `0 issue ";"` — RFC 8659 §4.2 — and counts as approved because it forbids issuance outright.
+| extend DenyAll = Values contains "issue \";\""
+| extend NamesApprovedCA = Values matches regex ApprovedCAregex or DenyAll
+| extend HasIssueWild = Values contains "issuewild"
+| extend HasIodefOnly = Values contains "iodef" and not(Values contains "issue")
+// The exploit window: CA/Browser Forum BR §4.2.2.1 — a CA issuing after processing a CAA record
+// "MUST do so within the TTL of the CAA record, or 8 hours, whichever is greater". So the record's
+// own TTL sets the floor on how long a weakened policy stays exploitable.
+| extend WindowHours = max_of(8, RRTtl / 3600)
+| project TimeGenerated, ZoneId, Action, RRName, RRTtl, WindowHours, Values,
+          NamesApprovedCA, HasIssueWild, HasIodefOnly, Omitted, ChangeCount,
+          UserIdentityArn, SourceIpAddress, UserAgent, ErrorCode
+| extend Verdict = case(
+    Omitted,
+        "REQUEST PARAMETERS OMITTED — a batch over 100 KB. Every type-matching rule is blind to this event; treat as a bulk zone rewrite and reconstruct from IaC, P1",
+    not(NamesApprovedCA),
+        "CAA NAMES NO APPROVED AUTHORITY — issuance opened to a CA this organisation does not use. Certificates may already exist; check CT logs, P0",
+    HasIodefOnly,
+        "CAA CARRIES ONLY iodef — RFC 8659: an RRset with no restricting property tags does NOT restrict issuance. This is a deny-all removed while leaving a record in place, P0",
+    Action == "UPSERT",
+        "CAA REPLACED — the prior values are in no AWS event and no AWS API. Compare against IaC state, not against CloudTrail, P0",
+    RRTtl >= 86400,
+        "CAA PUBLISHED WITH A LONG TTL — extends the issuance window past the 8-hour floor; a raised TTL shortly before a weakening is deliberate, P2",
+    "CAA record created — confirm against change management")
+| order by TimeGenerated desc
+//
+// ============================================================================
+// THE SHADOWING CHECK — which this query cannot do, and where to do it
+// ============================================================================
+// RFC 8659 §3: "The search for a CAA RRset climbs the DNS name tree from the specified label up
+// to, but not including, the DNS root '.' until a CAA RRset is found." A NEARER RRset shadows a
+// further one. So publishing a permissive CAA at pay.example.com defeats a deny-all at
+// example.com FOR THAT SUBDOMAIN, and the apex record is never touched.
+//
+// A log query cannot resolve this, because it needs the CURRENT state of every ancestor name.
+// Query 2 of ../PLAYBOOK.md walks ListResourceRecordSets per zone and compares each CAA name
+// against the apex. Any RRName above that is not the zone apex deserves that walk.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHETHER A CERTIFICATE WAS ISSUED. AWS has no record of another CA's issuance decisions.
+// Certificate transparency is the only source, and it is external. RFC 8659 §1 is why it matters:
+// "Relying Parties MUST NOT use CAA records as part of certificate validation" — restoring the
+// record does not revoke anything issued while it was weak.
+//
+// WHAT THE POLICY WAS BEFORE AN UPSERT. UPSERT replaces the record set and the event carries only
+// the new values; Route 53 keeps no version history. DELETE is the opposite — the API requires an
+// exact match of every existing value, so a DELETE event's resourceRecords IS the removed record
+// and is genuinely usable for restoration. That asymmetry decides which recoveries are possible.
+//
+// WHETHER THE NAME IS BEING RESOLVED AT ALL. Route 53 query logging is opt-in, public-zone only,
+// one config per zone, and AWS states "query logs might contain information about only one query
+// out of every several thousand queries" because resolvers cache. In a default account there is
+// no DNS query data whatsoever.

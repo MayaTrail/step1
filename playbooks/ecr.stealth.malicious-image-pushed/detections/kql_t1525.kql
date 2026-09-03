@@ -1,0 +1,90 @@
+// Container image pushed to ECR by an unexpected principal (T1525)
+//
+// The source rule matches userIdentity.type "iamuser" — lowercase, against a case-sensitive field,
+// so it cannot fire. Corrected, it would still exclude AssumedRole, which is every CI/CD pipeline
+// and every SSO session. This query reads all identity types and projects the type so the size of
+// that gap is visible in real output.
+//
+// `contains` throughout, never `has` — repository names and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+// POPULATE: the roles that legitimately build and push images. PutImage is what every deployment
+// does, so this list is the discriminator — not the identity type, and not a volume threshold.
+let DeploymentRoles = dynamic(["PlatformAutomation", "ci-build"]);
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource in ("ecr.amazonaws.com", "ecr-public.amazonaws.com")
+| where EventName in ("PutImage", "CreateRepository", "BatchDeleteImage",
+                      "PutImageTagMutability", "InitiateLayerUpload")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Repo = tostring(Req.repositoryName)
+| extend Tag = tostring(Req.imageTag)
+| extend IdentityType = tostring(parse_json(UserIdentity).type)
+| extend IsPublicRegistry = EventSource == "ecr-public.amazonaws.com"
+| extend IsDeploymentRole = UserIdentityArn contains "PlatformAutomation" or UserIdentityArn contains "ci-build"
+| summarize
+    Pushes          = countif(EventName == "PutImage"),
+    PublicPushes    = countif(EventName == "PutImage" and IsPublicRegistry),
+    PushesByOutsider= countif(EventName == "PutImage" and not(IsDeploymentRole)),
+    ReposCreated    = countif(EventName == "CreateRepository"),
+    MutabilityChanges = countif(EventName == "PutImageTagMutability"),
+    Repos           = make_set(Repo, 20),
+    NewRepos        = make_set_if(Repo, EventName == "CreateRepository", 10),
+    Tags            = make_set_if(Tag, isnotempty(Tag), 15),
+    // In most estates this will be dominated by AssumedRole — the type the source rule excluded.
+    IdentityTypes   = make_set(IdentityType, 5),
+    FirstRepoCreate = minif(TimeGenerated, EventName == "CreateRepository"),
+    FirstPush       = minif(TimeGenerated, EventName == "PutImage"),
+    SourceIps       = make_set(SourceIpAddress, 5),
+    LastSeen        = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where Pushes > 0
+// A new repository with an image in it is how a lookalike gets planted — invisible to anything
+// watching only established repositories.
+| extend NewRepoThenPush = ReposCreated > 0 and isnotempty(FirstRepoCreate) and isnotempty(FirstPush)
+                           and FirstRepoCreate < FirstPush
+| extend Verdict = case(
+    PublicPushes > 0,
+        "IMAGE PUSHED TO THE ECR PUBLIC REGISTRY — this distributes the image outside the account and outside the organisation. Deleting it does not un-distribute it, P0",
+    NewRepoThenPush and PushesByOutsider > 0,
+        strcat("NEW REPOSITORY CREATED AND POPULATED by a non-deployment principal (",
+               strcat_array(NewRepos, ","), ") — the shape of a lookalike or typosquatted repository, P0"),
+    PushesByOutsider > 0,
+        "IMAGE PUSHED BY A PRINCIPAL OUTSIDE THE DEPLOYMENT PATH — ONE image is the incident; everything downstream that pulls this tag will run it, P0",
+    MutabilityChanges > 0,
+        "TAG MUTABILITY CHANGED alongside a push — see ../../ecr.stealth.image-tag-overwrite-enabled/, which owns that event, P1",
+    NewRepoThenPush,
+        "New repository created and populated by a deployment role — expected during onboarding. Read the repository NAME: a lookalike is the point of the technique, P2",
+    "image pushed by a deployment role")
+| project FirstPush, LastSeen, UserIdentityArn, IdentityTypes, Verdict, Pushes, PushesByOutsider,
+          PublicPushes, ReposCreated, NewRepos, Repos, Tags, SourceIps
+| order by PublicPushes desc, PushesByOutsider desc
+//
+// ============================================================================
+// READ `IdentityTypes` AS A COVERAGE TEST OF THE ORIGINAL RULE
+// ============================================================================
+// The source rule required userIdentity.type == "IAMUser" — and spelled it "iamuser", which matches
+// nothing on a case-sensitive field. If this column shows only "AssumedRole" across a month of real
+// builds, then even the CASING-CORRECTED rule would still never fire here, because a build role is
+// not an IAM user. One query settles both questions.
+//
+// ============================================================================
+// VOLUME IS THE WRONG SIGNAL AND IS DELIBERATELY NOT USED
+// ============================================================================
+// The source ships this as a building block at five pushes in fifteen minutes. A single malicious
+// image is the incident, and a normal CI run pushes several tags for one build (latest, a semver, a
+// commit SHA) — so that threshold is too high to catch the attack and too low to avoid the pipeline.
+// The allowlist replaces it.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHETHER THE IMAGE IS MALICIOUS. PutImage records that a manifest was registered, not what is in
+// the layers. Scanning findings and the image digest are the evidence — and if scanning was
+// disabled first, see ../../ecr.stealth.image-scanning-disabled/.
+//
+// WHETHER A TAG WAS OVERWRITTEN. That depends on the repository's tag mutability setting, which is
+// owned by ../../ecr.stealth.image-tag-overwrite-enabled/. An IMMUTABLE repository rejects a push to
+// an existing tag, so on those repositories this technique must use a new tag — which is louder.
