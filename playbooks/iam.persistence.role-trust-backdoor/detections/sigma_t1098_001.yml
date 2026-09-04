@@ -1,0 +1,434 @@
+# IAM Role Trust-Policy Backdoor (T1098.001)
+#
+# Two rules were supplied. The first matched `eventName:"UpdateAssumeRolePolicy"` with no
+# content inspection at all, at P2, firing on every legitimate trust edit an IaC pipeline
+# makes. The second inspected the document but only for a literal wildcard principal, at
+# P3 — so the ordinary case, a trust naming a specific foreign 12-digit account, matched
+# nothing, and the case that DID match (anyone on the internet may assume this role) was
+# routed below the bare event-name rule that fires on everything.
+#
+# The discriminator is not the event and not the wildcard. It is whether the decoded trust
+# document names a principal outside the organisation — a foreign account, `"AWS":"*"`, or
+# an unfamiliar federated provider — WITH NO CONFINING `Condition`. A cross-account trust
+# carrying `sts:ExternalId` or `aws:PrincipalOrgID` is the documented third-party-access
+# pattern and is normal; the same trust without one is a backdoor. Every rule below is
+# built on that pair of tests, and the pair is why an org-account allowlist and a known-IdP
+# allowlist are deployment parameters rather than hard-coded values.
+#
+# ENCODING, and the direction matters. `requestParameters.policyDocument` and
+# `.assumeRolePolicyDocument` are RAW JSON. The accepted pattern for both parameters
+# explicitly admits the tab, line-feed and carriage-return escapes — literal whitespace a
+# percent-encoded string could not contain — and both reference sample requests carry
+# bare JSON. Percent-encoding (RFC 3986) is a property of what IAM RETURNS. So the
+# request-side hazard is WHITESPACE, not encoding: a document submitted with
+# `--assume-role-policy-document file://trust.json` is pretty-printed. Every pattern below
+# is either a bare alphanumeric token or a `|re` with explicit `\s*`.
+#
+# FIELD SPLIT. `UpdateAssumeRolePolicy` carries the trust document in `policyDocument`;
+# `CreateRole` carries it in `assumeRolePolicyDocument`. They never co-occur on one event,
+# so they are SIBLING blocks ORed in `condition:` throughout — never two keys in one block,
+# which would AND them and produce a rule that can never fire.
+#
+# SHAPES A ROLE TRUST POLICY REJECTS, and therefore shapes NO rule below matches. Every
+# rule here carries `errorCode: null`, so a shape IAM refuses to store cannot fire one:
+# matching it is dead code, and describing it as a hazard sends a responder hunting for a
+# document that was never written. AWS publishes four such shapes, each as an Access
+# Analyzer ERROR-type policy check:
+#   NotPrincipal   "must be used with "Effect":"Deny"", and "You cannot use the
+#                  NotPrincipal element in an IAM identity-based policy nor in an IAM role
+#                  trust policy"      -> ROLE_TRUST_POLICY_SYNTAX_ERROR_NOTPRINCIPAL
+#   "Principal":"*"  bare             -> ROLE_TRUST_POLICY_UNSUPPORTED_WILDCARD_IN_PRINCIPAL
+#   "Federated":"*"                   -> INVALID_FEDERATED_PRINCIPAL_SYNTAX_IN_ROLE_TRUST_POLICY
+#                  ("Update the federated principal to a domain name or a SAML metadata ARN")
+#   "Service":"*"                     -> "The service principal in an IAM policy can't be
+#                  "Service": "*"" (IAM User Guide, Principal element)
+# All four fail with `MalformedPolicyDocument`. That is not nothing — it is an actor
+# trying a shape and being refused — but it is EVIDENCE ON THE ERROR PATH, which is
+# `iam_trust_write_denied`'s neighbourhood, not a stored-backdoor alert. `{"AWS":"*"}` is
+# the one wildcard form AWS documents as accepted in a role trust policy, so it is the one
+# the wildcard rule matches.
+title: IAM role trust policy grants assume-role to a principal outside the organisation
+id: 0d42d22b-b1a3-4faf-8798-62b4d2736c61
+name: iam_role_trust_external_principal
+status: experimental
+description: >-
+  A role trust policy was written naming an AWS account principal that is not on the
+  organisation allowlist. Whoever controls that account can mint STS credentials for the
+  role at will, and rotating every key and password in this account does not revoke it.
+references:
+  - https://attack.mitre.org/techniques/T1098/001/                                          # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_UpdateAssumeRolePolicy.html     # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_principal.html  # retrieved 2026-08-27
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.001
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName:
+      - 'UpdateAssumeRolePolicy'
+      - 'CreateRole'
+  # An account principal in either accepted form — bare 12-digit ID, or :root/:role/:user
+  # ARN — scalar or array. `\s*` absorbs pretty-printing, the real request-side hazard.
+  # DIALECT: `\s` needs a backend whose regex flavour defines it — RE2, PCRE, .NET, or
+  # Lucene 9.0 and later. Lucene 8's RegExp grammar admits only `\<char>` meaning that
+  # literal character, so there `\s*` reads as "zero or more letter s" and the pattern
+  # silently matches nothing. On such a backend substitute an explicit class of space,
+  # tab, LF and CR — the four characters the parameter's own pattern admits.
+  account_principal_update:
+    requestParameters.policyDocument|re: '"AWS"\s*:\s*\[?\s*"(arn:aws[a-z0-9-]*:(iam|sts)::)?[0-9]{12}'
+  account_principal_create:
+    requestParameters.assumeRolePolicyDocument|re: '"AWS"\s*:\s*\[?\s*"(arn:aws[a-z0-9-]*:(iam|sts)::)?[0-9]{12}'
+  # DEPLOYMENT PARAMETER. Every account ID inside your zone of trust. Account IDs are bare
+  # digits, so they are byte-identical in every submission form.
+  org_accounts_update:
+    requestParameters.policyDocument|contains:
+      - '<this-account-id>'
+      - '<other-org-account-id>'
+  org_accounts_create:
+    requestParameters.assumeRolePolicyDocument|contains:
+      - '<this-account-id>'
+      - '<other-org-account-id>'
+  success:
+    errorCode: null
+  condition: selection and success and (account_principal_update or account_principal_create) and not (org_accounts_update or org_accounts_create)
+falsepositives:
+  - A cross-account trust confined by `sts:ExternalId` or `aws:PrincipalOrgID` — the
+    documented third-party-access pattern, and the most common benign hit. This rule reads
+    no `Condition`, by design — reading one is a parse, not a substring match. Decode
+    before dispositioning; do not retune the rule.
+  - A document naming BOTH an org account and a foreign account is suppressed here, because
+    the allowlist filter is per-document rather than per-principal. The decoded sweep and
+    the KQL evaluate each principal separately and close that gap — keep both deployed.
+  - Account-vending provisioning a new member account before its ID reaches the allowlist.
+    Generate the allowlist rather than maintaining it by hand.
+level: high
+---
+# The wildcard case, reduced to the ONE form a role trust policy accepts. The source rule
+# tried four: `Principal`, `AWS`, `Federated` and `Service`. Three of them are rejected
+# shapes — see the four Access Analyzer ERROR checks in the header — and a rejected shape
+# sets `errorCode`, which this rule filters out, so each was dead twice over. Dropping
+# `Federated` and bare `Principal` alongside `Service` applies one evidentiary standard
+# rather than three: where AWS publishes the rejection, the branch goes.
+#
+# What survives is `{"AWS":"*"}`, which AWS documents as accepted and dangerous: "After
+# you create the role, you can change the account to "*" to allow everyone to assume the
+# role... Do not leave your role accessible to everyone!"
+#
+# The cost of the reduction is one shape: a client that submits bare `"Principal":"*"`
+# against an endpoint that accepts it. That write appears instead as
+# `MalformedPolicyDocument` on the error path, where the rejected shapes belong.
+title: IAM role trust policy grants assume-role to a wildcard principal
+id: cae814ca-e4fc-46f0-b4b5-f1047ab6758e
+name: iam_role_trust_wildcard_principal
+status: experimental
+description: >-
+  A role trust policy was written whose principal is `*`. Absent a confining Condition,
+  any AWS principal anywhere may assume the role and inherit every permission attached
+  to it.
+references:
+  - https://attack.mitre.org/techniques/T1098/001/                                              # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_principal.html  # retrieved 2026-08-27
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.001
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName:
+      - 'UpdateAssumeRolePolicy'
+      - 'CreateRole'
+  wildcard_principal_update:
+    requestParameters.policyDocument|re: '"AWS"\s*:\s*\[?\s*"\*"'
+  wildcard_principal_create:
+    requestParameters.assumeRolePolicyDocument|re: '"AWS"\s*:\s*\[?\s*"\*"'
+  success:
+    errorCode: null
+  condition: selection and success and (wildcard_principal_update or wildcard_principal_create)
+falsepositives:
+  - A Deny statement using `"Principal":{"AWS":"*"}` with `StringNotEquals` on
+    `aws:PrincipalOrgID` — a hardening change, not a backdoor. This rule reads neither
+    `Effect` nor `Condition`, by design, so deploying that guardrail fires it. Decode to
+    read the Effect; do not retune the rule.
+  - An `"AWS":"*"` principal confined by `aws:PrincipalOrgID`, which is a legitimate
+    organisation-wide trust. The Condition is not visible to a substring match.
+level: high
+---
+# The federated route. `Federated` is a bare alphanumeric token, so this rule is immune to
+# both the whitespace and the encoding hazards. An adversary who registers their own OIDC
+# provider and points a role's trust at it holds a credential source that no key rotation
+# in this account touches — which is why MITRE's Trust Modification is carried as a second
+# tag here and nowhere else in this file.
+title: IAM role trust policy grants assume-role to an unrecognised federated provider
+id: dafe5600-32f2-4e35-b8f5-a666f1183a46
+name: iam_role_trust_unknown_federated_provider
+status: experimental
+description: >-
+  A role trust policy was written naming an OIDC or SAML federated principal that is not
+  on the known-provider allowlist. The provider, not this account, decides who receives a
+  token that satisfies the trust.
+references:
+  - https://attack.mitre.org/techniques/T1098/001/                                              # retrieved 2026-08-27
+  - https://attack.mitre.org/techniques/T1484/002/                                              # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_principal.html  # retrieved 2026-08-27
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  # T1484.002's own tactics are Defense Impairment (TA0112) and Privilege Escalation — NOT
+  # Persistence, which arrives here from T1098.001. Both tactic tags are therefore carried.
+  # `attack.defense-evasion` is retired: TA0005 is now Stealth and is not a tactic of either.
+  - attack.defense-impairment
+  - attack.t1098.001
+  - attack.t1484.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName:
+      - 'UpdateAssumeRolePolicy'
+      - 'CreateRole'
+  federated_update:
+    requestParameters.policyDocument|contains: 'Federated'
+  federated_create:
+    requestParameters.assumeRolePolicyDocument|contains: 'Federated'
+  # DEPLOYMENT PARAMETER. Substrings of the provider ARNs and built-in provider names you
+  # deliberately trust, e.g. 'oidc-provider/token.actions.githubusercontent.com',
+  # 'saml-provider/CorporateIdP', 'cognito-identity.amazonaws.com'.
+  known_provider_update:
+    requestParameters.policyDocument|contains:
+      - '<oidc-provider/your-idp-host>'
+      - '<saml-provider/YourIdPName>'
+  known_provider_create:
+    requestParameters.assumeRolePolicyDocument|contains:
+      - '<oidc-provider/your-idp-host>'
+      - '<saml-provider/YourIdPName>'
+  success:
+    errorCode: null
+  condition: selection and success and (federated_update or federated_create) and not (known_provider_update or known_provider_create)
+falsepositives:
+  - A newly onboarded identity provider before its ARN reaches the allowlist. Onboarding a
+    provider is itself a change that should be reviewed, so treat the hit as the review.
+  - A trust pinned to a specific token subject (`token.actions.githubusercontent.com:sub`)
+    for a provider you already trust but have not listed. Pinning is what makes an OIDC
+    trust safe; list the provider rather than loosening the rule.
+level: high
+---
+# The "who", for when the "what" is unreadable. Rewriting the trust policy of an EXISTING
+# role is the narrow, rare act; CreateRole is deliberately excluded here because new roles
+# are created constantly by ordinary automation and would bury this.
+title: IAM role trust policy rewritten by a principal outside the IAM-administration set
+id: 241393e8-0760-40a7-b9ee-272d7dd5dca9
+name: iam_role_trust_written_by_unexpected_principal
+status: experimental
+description: >-
+  UpdateAssumeRolePolicy succeeded for a principal that is not an IAM administrator or a
+  provisioning pipeline. Who may become a role is an identity-perimeter change and has a
+  short, enumerable list of legitimate callers.
+references:
+  - https://attack.mitre.org/techniques/T1098/001/                                          # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_UpdateAssumeRolePolicy.html     # retrieved 2026-08-27
+tags:
+  - attack.persistence
+  - attack.t1098.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'UpdateAssumeRolePolicy'
+  # DEPLOYMENT PARAMETER — the principals that legitimately edit trust policies.
+  iam_admins:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'
+      - ':role/IAMAdministrator'
+      - ':role/BreakGlassAdmin'
+  success:
+    errorCode: null
+  condition: selection and success and not iam_admins
+falsepositives:
+  - A trust edit submitted through CloudFormation. `userIdentity.arn` remains the
+    submitting principal and `userIdentity.invokedBy` is `cloudformation.amazonaws.com`;
+    do not blanket-exclude that, because a stack is also a way to launder the change.
+  - Service-linked-role maintenance performed by an AWS service principal. Those carry
+    `userIdentity.invokedBy` and no user ARN.
+level: medium
+---
+# THE "WAS IT USED" PIVOT, as a rule.
+#
+# Verified against the AWS-published cross-account example: when a principal in another
+# account assumes a role here, the ROLE OWNER's trail carries its own AssumeRole event in
+# which `userIdentity.type` is `AWSAccount` and `userIdentity.accountId` is the CALLING
+# account. There is no `userIdentity.arn` on that shape — a rule keyed on the ARN sees
+# nothing. It is a management event, so lookup-events can retrieve it.
+#
+# Federated use lands with `userIdentity.type` `WebIdentityUser` or `SAMLUser` and a
+# `userIdentity.identityProvider`. Those two values appear in AWS's example events but are
+# not in the enumeration published for the flattened Sentinel column, so match both here
+# and confirm the literal values against your own trail.
+#
+# THE ALLOWLIST IS SPLIT BECAUSE `identityProvider` CARRIES TWO DIFFERENT THINGS. AWS:
+# "For SAMLUser, this is the saml:namequalifier key for the SAML assertion. For
+# WebIdentityUser, this is the issuer name of the web identity federation provider." The
+# OIDC form is the provider ARN and an ARN allowlist matches it. The SAML form is a hash —
+# AWS's own AssumeRoleWithSAML example event carries
+# `"identityProvider": "bdGOnTesti4+ExamplexL/jEvs="` — and no provider-ARN allowlist can
+# ever match that. A single allowlist keyed on `identityProvider` therefore makes
+# `federated_caller and not known_idp` TRUE for every workforce SSO sign-in in the estate:
+# the rule fires on all of them, gets muted inside a day, and takes the real signal with
+# it. The SAML provider ARN is a request parameter, not an identity field —
+# `requestParameters.principalArn`, `arn:aws:iam::444455556666:saml-provider/Shibboleth`
+# in that same example — so the two halves are sibling blocks ORed in the condition.
+# `principalArn` is absent from AssumeRoleWithWebIdentity, which is why neither block can
+# serve both.
+#
+# EVIDENCE LIMIT: CloudTrail does not log DENIED cross-account assume-role requests in the
+# target account. An empty result proves nothing about attempts that failed.
+title: STS AssumeRole into this account by an identity outside the organisation
+id: d41ddff3-519f-46c7-a7d6-0bb10f2b4315
+name: sts_assumerole_by_external_identity
+status: experimental
+description: >-
+  A role in this account was assumed by a principal from an account outside the
+  organisation, or through an unrecognised federated provider. Paired with a recent trust
+  rewrite of the same role, this is the backdoor being exercised.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/UserGuide/cloudtrail-integration.html            # retrieved 2026-08-27
+  - https://attack.mitre.org/techniques/T1098/001/                                          # retrieved 2026-08-27
+tags:
+  - attack.persistence
+  - attack.t1098.001
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sts.amazonaws.com'
+    eventName:
+      - 'AssumeRole'
+      - 'AssumeRoleWithWebIdentity'
+      - 'AssumeRoleWithSAML'
+  external_account_caller:
+    userIdentity.type: 'AWSAccount'
+  federated_caller:
+    userIdentity.type:
+      - 'WebIdentityUser'
+      - 'SAMLUser'
+  # DEPLOYMENT PARAMETER — same org account list as the first rule.
+  org_accounts:
+    userIdentity.accountId:
+      - '<this-account-id>'
+      - '<other-org-account-id>'
+  # DEPLOYMENT PARAMETER — OIDC half. `userIdentity.identityProvider` is the provider ARN
+  # for WebIdentityUser, so an ARN substring matches it.
+  known_idp_oidc:
+    userIdentity.identityProvider|contains:
+      - '<oidc-provider/your-idp-host>'
+      - 'cognito-identity.amazonaws.com'
+  # DEPLOYMENT PARAMETER — SAML half. For SAMLUser `identityProvider` is the
+  # saml:namequalifier HASH, which no ARN can match; the provider ARN is here instead.
+  known_idp_saml:
+    requestParameters.principalArn|contains:
+      - '<saml-provider/YourIdPName>'
+  success:
+    errorCode: null
+  condition: selection and success and ((external_account_caller and not org_accounts) or (federated_caller and not (known_idp_oidc or known_idp_saml)))
+falsepositives:
+  - A third party you deliberately granted cross-account access. Their account ID belongs
+    on a separate partner allowlist, not on the organisation list — keeping the two apart
+    is what lets a partner relationship ending become a detection.
+  - AWS Marketplace or a managed-service vendor assuming a delegated role. Baseline them
+    once; the set is small and changes rarely.
+  - A newly onboarded SAML or OIDC provider before its ARN reaches the matching half of
+    the allowlist. Deploy this rule only once both halves are populated — with either half
+    empty, every federated sign-in through that protocol is a hit.
+level: high
+---
+title: IAM trust-policy write denied
+id: 3107335f-dee0-4cd1-823a-883ec610f61b
+name: iam_trust_write_denied
+status: experimental
+description: Base rule — volume component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html  # retrieved 2026-08-27
+tags:
+  - attack.discovery
+  - attack.t1098.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName:
+      - 'UpdateAssumeRolePolicy'
+      - 'CreateRole'
+      - 'UpdateRole'
+      - 'PutRolePolicy'
+      - 'AttachRolePolicy'
+  denied:
+    errorCode|contains: 'AccessDenied'
+  condition: selection and denied
+level: low
+---
+# Kept strictly separate from the success path. A principal collecting AccessDenied across
+# role-write calls is finding out which role it can reshape, which is reconnaissance and
+# must not share an alert with a completed trust rewrite. Neither source rule covers this
+# at all: both carry a success filter and nothing looks at the denied path.
+#
+# `errorCode|contains: 'AccessDenied'` is prefix-tolerant deliberately. IAM policy denials
+# surface as `AccessDenied` and service-evaluated denials as `AccessDeniedException`;
+# matching the substring catches both. Confirm the exact form against a real denied event
+# in your own trail. The full non-denial error set for these two calls, from their API
+# reference Errors sections — `MalformedPolicyDocument`, `NoSuchEntity`, `LimitExceeded`,
+# `UnmodifiableEntity` (service-linked roles, UpdateAssumeRolePolicy only),
+# `EntityAlreadyExists`, `InvalidInput`, `ConcurrentModification` (CreateRole only) and
+# `ServiceFailure` — is NOT probing and is excluded by construction.
+#
+# ONE OF THEM IS EVIDENCE, THOUGH. `MalformedPolicyDocument` naming `NotPrincipal`,
+# `"Principal":"*"`, `"Federated":"*"` or `"Service":"*"` is an actor trying a shape a
+# role trust policy rejects and being refused. Pull those out of the error stream by hand
+# during an investigation — they are attempts, and they sit beside the AccessDenied
+# probing above rather than beside a stored backdoor.
+#
+# THRESHOLD BASIS: derived from operator behaviour, not from an observed baseline — there
+# is no emulation behind this rule. A human denied on a role write retries once, maybe
+# twice, then stops or asks. Automation with a stale policy retries on a fixed interval,
+# which the per-principal grouping and the ten-minute window separate out. Four or more
+# denials in ten minutes sits above ordinary human retry. Baseline against your own
+# account before deploying: this is a starting point, not a measurement.
+title: IAM role-write calls denied repeatedly for one principal
+id: 8043599c-e8ac-4a0f-91fa-921210eb0722
+status: experimental
+description: >-
+  One principal was denied four or more IAM role-write calls within ten minutes — the
+  signature of an actor searching for a role whose trust policy it is permitted to
+  rewrite.
+references:
+  - https://attack.mitre.org/techniques/T1098/001/                                          # retrieved 2026-08-27
+tags:
+  - attack.discovery
+  - attack.t1098.001
+correlation:
+  type: event_count
+  rules:
+    - iam_trust_write_denied
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gt: 3
+level: medium

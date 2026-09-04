@@ -11,6 +11,9 @@ GET  /api/emulations/<emulation_type>/techniques/        EmulationTechniquesView
 GET  /api/emulations/<emulation_type>/detections/        EmulationDetectionsView
 GET  /api/emulations/<emulation_type>/detections/<rule_id>/  EmulationDetectionDetailView
 GET  /api/emulations/<emulation_type>/playbook/          EmulationPlaybookView
+GET  /api/emulations/library/                            PlaybookLibraryListView
+GET  /api/emulations/library/<playbook_id>/              PlaybookLibraryDetailView
+GET  /api/emulations/library/<playbook_id>/detections/   PlaybookLibraryDetectionsView
 POST /api/emulations/deploy/                             EmulationDeployView
 GET  /api/emulations/runs/?status=<csv>                  EmulationRunListView
 GET  /api/emulations/<run_id>/                           EmulationRunDetailView
@@ -37,6 +40,9 @@ from .views import (
     EmulationRunListView,
     EmulationTechniquesView,
     PlaybookCommandView,
+    PlaybookLibraryDetailView,
+    PlaybookLibraryDetectionsView,
+    PlaybookLibraryListView,
 )
 
 urlpatterns = [
@@ -44,6 +50,11 @@ urlpatterns = [
     path("deploy/", EmulationDeployView.as_view(), name="emulation-deploy"),
     # Literal "runs/" must precede the <uuid:run_id>/ route below.
     path("runs/", EmulationRunListView.as_view(), name="emulation-run-list"),
+    # Standalone playbook library. Literal "library/" must precede the
+    # <str:emulation_type>/ routes below or it is swallowed by them.
+    path("library/", PlaybookLibraryListView.as_view(), name="playbook-library-list"),
+    path("library/<str:playbook_id>/", PlaybookLibraryDetailView.as_view(), name="playbook-library-detail"),
+    path("library/<str:playbook_id>/detections/", PlaybookLibraryDetectionsView.as_view(), name="playbook-library-detections"),
     # String-param read-only routes — must appear before UUID routes.
     path("<str:emulation_type>/estimate/", EmulationEstimateView.as_view(), name="emulation-estimate"),
     path("<str:emulation_type>/techniques/", EmulationTechniquesView.as_view(), name="emulation-techniques"),

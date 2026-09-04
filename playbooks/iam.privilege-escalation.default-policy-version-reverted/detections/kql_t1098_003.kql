@@ -1,0 +1,79 @@
+// IAM managed policy default version changed (T1098.003)
+//
+// Two calls do the same thing and the source rule watches one of them. SetDefaultPolicyVersion
+// activates an existing version; CreatePolicyVersion with setAsDefault true authors and activates
+// in a single call, emitting no SetDefaultPolicyVersion event. Both are here.
+//
+// `contains` throughout, never `has` — policy ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "iam.amazonaws.com"
+| where EventName in ("SetDefaultPolicyVersion", "CreatePolicyVersion", "DeletePolicyVersion",
+                      "AttachUserPolicy", "AttachRolePolicy", "AttachGroupPolicy")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend PolicyArn = tostring(Req.policyArn)
+| extend VersionId = tostring(Req.versionId)
+| extend SetAsDefault = tostring(Req.setAsDefault) == "true"
+// The document is present on CreatePolicyVersion and ABSENT on SetDefaultPolicyVersion — the
+// activation call carries no permissions at all, which is why content rules cannot see it.
+| extend Doc = tostring(Req.policyDocument)
+| extend Activation = (EventName == "SetDefaultPolicyVersion")
+                      or (EventName == "CreatePolicyVersion" and SetAsDefault)
+// VersionId matches v[1-9][0-9]*, so the numeric part is comparable. Moving BACKWARDS to an older
+// version is a revert to text that was previously replaced — the direction worth rating higher,
+// because nothing was authored and no review saw it.
+| extend VersionNum = toint(extract(@"^v([0-9]+)", 1, VersionId))
+| summarize
+    Activations   = countif(Activation),
+    Reverts       = countif(EventName == "SetDefaultPolicyVersion"),
+    CreateAndSet  = countif(EventName == "CreatePolicyVersion" and SetAsDefault),
+    DormantCreates= countif(EventName == "CreatePolicyVersion" and not(SetAsDefault)),
+    VersionDeletes= countif(EventName == "DeletePolicyVersion"),
+    Attachments   = countif(EventName startswith "Attach"),
+    Policies      = make_set(PolicyArn, 10),
+    Versions      = make_set_if(VersionId, isnotempty(VersionId), 10),
+    MinVersion    = minif(VersionNum, isnotnull(VersionNum)),
+    MaxVersion    = maxif(VersionNum, isnotnull(VersionNum)),
+    // Only the create form carries a document, so this is populated for half the rows by design.
+    WildcardAction = countif(Doc contains '"Action":"*"' or Doc contains '"Action": "*"'),
+    SourceIps     = make_set(SourceIpAddress, 5),
+    FirstSeen     = min(TimeGenerated),
+    LastSeen      = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where Activations > 0
+| extend Verdict = case(
+    CreateAndSet > 0 and WildcardAction > 0,
+        "POLICY VERSION AUTHORED WITH Action:* AND ACTIVATED IN ONE CALL — no SetDefaultPolicyVersion event exists for this, so a rule watching that name sees nothing, P0",
+    DormantCreates > 0 and Reverts > 0,
+        "VERSION AUTHORED, THEN ACTIVATED SEPARATELY — the two-step form, which splits a reviewable create from an unreviewed activation, P0",
+    Reverts > 0 and isnotnull(MinVersion) and isnotnull(MaxVersion) and MinVersion < MaxVersion,
+        "DEFAULT VERSION MOVED BACKWARDS to an older version — nothing was authored, so no policy edit exists for a change review to have caught, P0",
+    CreateAndSet > 0,
+        "POLICY VERSION CREATED AND ACTIVATED IN ONE CALL — read the document on this event; it is the one shape here where the grant is directly visible, P1",
+    Reverts > 0,
+        "DEFAULT POLICY VERSION CHANGED — the event carries NO policy document. Resolve with GetPolicyVersion, and enumerate the affected principals with ListEntitiesForPolicy, P1",
+    "managed policy version activity")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, Activations, Reverts, CreateAndSet,
+          DormantCreates, VersionDeletes, Attachments, Policies, Versions, WildcardAction, SourceIps
+| order by Activations desc
+//
+// ============================================================================
+// THE BLAST RADIUS IS NOT IN ANY OF THESE EVENTS
+// ============================================================================
+// AWS: "This operation affects all users, groups, and roles that the policy is attached to." One
+// call re-permissions every attached principal and names none of them. AWS's own answer:
+//   aws iam list-entities-for-policy --policy-arn <arn>
+// Run it before rating the finding — the same event is a non-issue on a policy attached to nothing
+// and an account-wide escalation on one attached to a hundred roles.
+//
+// ============================================================================
+// WHY DeletePolicyVersion APPEARS HERE
+// ============================================================================
+// A managed policy holds at most five versions, so an actor who wants to author a new one on a full
+// policy must delete an existing version first. A DeletePolicyVersion immediately before a
+// CreatePolicyVersion is ordinary maintenance — but it also destroys the evidence of what a
+// previous version contained, and there is no way to recover it afterwards.

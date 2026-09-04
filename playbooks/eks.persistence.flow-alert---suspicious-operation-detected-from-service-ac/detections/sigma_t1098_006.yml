@@ -1,0 +1,362 @@
+# Suspicious operation performed by a Kubernetes ServiceAccount (T1098.006 / T1552.007)
+#
+# TELEMETRY. The plane-1 rules here read the KUBERNETES AUDIT LOG, not CloudTrail. On EKS that
+# log exists only if the `audit` control-plane log type was enabled BEFORE the incident — AWS:
+# "By default, cluster control plane logs aren't sent to CloudWatch Logs. You must enable each
+# log type individually." It lands in CloudWatch Logs group /aws/eks/<cluster>/cluster, stream
+# prefix kube-apiserver-audit-. If it was off, every plane-1 rule returns zero and that zero
+# means "not recorded", never "did not happen".
+#
+# THE DISCRIMINATOR IS THE IDENTITY CLASS, AND IT NEEDS NO BASELINE. Kubernetes renders a
+# ServiceAccount as `system:serviceaccount:<namespace>:<name>`, with groups system:authenticated,
+# system:serviceaccounts and system:serviceaccounts:<namespace>. That prefix is the one field in
+# the audit log that separates a workload from a person without any per-account tuning. A pod
+# does a small, fixed set of things forever; a ServiceAccount writing RBAC objects, minting
+# tokens, entering other pods or reading kube-system Secrets is a compromised workload or a
+# stolen token, whichever way the token got out.
+#
+# WHY THIS IS NOT A PURE COMPOSITION OF ITS BUILDING BLOCKS. Unlike the ordering-based flow in
+# ../../eks.privilege-escalation.flow-alert---cluster-admin-access-granted-after-multiple-u/,
+# the thesis here is a CONJUNCTION rather than a sequence: identity class AND operation class.
+# Either half alone is worthless — every request in the cluster is made by some identity, and
+# privileged operations are performed by humans and controllers constantly. The pair is the
+# signal, and no single building block carries it.
+#
+# FIELD SHAPES — verified against the Kubernetes audit Event API reference, 2026-08-29.
+#   sourceIPs is the schema name and it is an ARRAY ([]string); there is no `sourceIPAddresses`,
+#   and a rule keyed on that name matches nothing unless the pipeline renames it.
+#   responseStatus.code is int32 — matched unquoted below.
+#   objectRef.name is ABSENT on list and watch, because those target a collection.
+#   objectRef.subresource carries `token`, `exec`, `attach`, `portforward`.
+#   requestObject is populated for pods and for the rbac.authorization.k8s.io group because the
+#   EKS default audit policy records those at RequestResponse level for write verbs. It is NOT
+#   populated for secrets, which that policy caps at Metadata — which is why no rule here claims
+#   to know what a Secret contained.
+#
+# THE STAGE FILTER IS NOT DECORATION. Every rule in the EKS default audit policy carries
+# omitStages: ["RequestReceived"] EXCEPT the one covering serviceaccounts/token. So token minting
+# — the single most important operation in this file — is emitted at BOTH RequestReceived and
+# ResponseComplete, and any count-based rule on it double-counts by exactly two. The success
+# filter would exclude the RequestReceived copy implicitly, since no response exists yet, but
+# "implicitly" depends on how a pipeline renders an absent responseStatus. `stage` is matched
+# explicitly instead.
+title: Kubernetes ServiceAccount performed a privileged control-plane operation
+id: 9c2f4d17-6b83-4e05-a7d1-52b0e9c3f841
+name: eks_sa_privileged_operation
+status: experimental
+description: >-
+  A workload identity — user.username beginning system:serviceaccount: — successfully wrote an
+  RBAC object, minted a ServiceAccount token, entered a running pod, or used one of the verbs
+  that exist to bypass authorization. None of these belongs to an application. A pod that has
+  done its job for months and then writes a ClusterRoleBinding is not doing new work; it is
+  running someone else's code, or its projected token is being used from outside the cluster.
+references:
+  - https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+  - https://docs.aws.amazon.com/eks/latest/userguide/control-plane-logs.html
+  - https://attack.mitre.org/techniques/T1098/006/
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.006
+logsource:
+  category: application
+  product: kubernetes
+  service: audit
+detection:
+  workload_identity:
+    user.username|startswith: 'system:serviceaccount:'
+  completed:
+    stage: 'ResponseComplete'
+  succeeded:
+    responseStatus.code:
+      - 200
+      - 201
+  rbac_write:
+    objectRef.resource:
+      - 'clusterrolebindings'
+      - 'rolebindings'
+      - 'clusterroles'
+      - 'roles'
+    verb:
+      - 'create'
+      - 'update'
+      - 'patch'
+      - 'delete'
+  token_mint:
+    objectRef.subresource: 'token'
+    verb: 'create'
+  pod_entry:
+    objectRef.subresource:
+      - 'exec'
+      - 'attach'
+      - 'portforward'
+  bypass_verb:
+    verb:
+      - 'escalate'
+      - 'bind'
+      - 'impersonate'
+  # POPULATE BEFORE DEPLOYING. In-cluster controllers legitimately perform some of these, and
+  # the set is small, closed and stable — it IS the tuning surface for this rule. The names below
+  # are the kube-system controllers the EKS default audit policy itself enumerates; add the
+  # add-on and GitOps controllers this cluster actually runs. Do not widen it to a namespace
+  # prefix: kube-system is exactly where a compromised workload wants to be.
+  known_controllers:
+    user.username:
+      - 'system:serviceaccount:kube-system:endpoint-controller'
+      - 'system:serviceaccount:kube-system:namespace-controller'
+      - 'system:serviceaccount:kube-system:node-problem-detector'
+  condition: workload_identity and completed and succeeded and (rbac_write or token_mint or pod_entry or bypass_verb) and not known_controllers
+falsepositives:
+  - >-
+    A controller missing from known_controllers. Expect a short burst of these on first
+    deployment; enumerate them once, add them, and the rule goes quiet. If it does not go quiet,
+    the finding is that ordinary workloads hold control-plane write permissions.
+  - >-
+    An operator or GitOps agent that reconciles RBAC by design. Allowlist the identity, never the
+    operation — the operation is the entire signal.
+level: high
+---
+title: Kubernetes ServiceAccount denied a privileged control-plane operation
+id: 3e51b8a0-47cc-4f92-b6d3-0a8e17c4d925
+name: eks_sa_privileged_operation_denied
+status: experimental
+description: >-
+  Base rule — sequence component, and a signal in its own right at medium. The same operations as
+  eks_sa_privileged_operation, refused by RBAC. The discriminator is HTTP 403, not 401: 403 means
+  the workload identity was established and the permission was missing, while 401 means the token
+  itself failed to authenticate — an expired projected token, which is an availability problem
+  rather than an intrusion. A well-built application never probes for permissions it does not
+  have, so a workload accumulating 403s is enumerating.
+references:
+  - https://kubernetes.io/docs/reference/config-api/apiserver-audit.v1/
+  - https://attack.mitre.org/techniques/T1613/
+tags:
+  - attack.discovery
+  - attack.t1613
+logsource:
+  category: application
+  product: kubernetes
+  service: audit
+detection:
+  workload_identity:
+    user.username|startswith: 'system:serviceaccount:'
+  denied:
+    responseStatus.code: 403
+  privileged_target:
+    objectRef.resource:
+      - 'clusterrolebindings'
+      - 'rolebindings'
+      - 'clusterroles'
+      - 'roles'
+      - 'secrets'
+      - 'serviceaccounts'
+      - 'pods'
+      - 'nodes'
+  condition: workload_identity and denied and privileged_target
+falsepositives:
+  - >-
+    A controller whose RBAC was tightened and which still retries the old call. Real, and it
+    should be fixed rather than allowlisted — a controller retrying a forbidden call forever is
+    a defect either way.
+level: medium
+---
+title: Kubernetes ServiceAccount read Secrets in the kube-system namespace
+id: 7f0a6c39-1d54-4b8e-9a02-c63f5b7e2410
+name: eks_sa_kube_system_secret_access
+status: experimental
+description: >-
+  A workload identity read Secrets in kube-system. Almost no application has business there, and
+  the namespace holds the credentials of the cluster's own components. Note what this rule can
+  and cannot tell you: the EKS default audit policy caps `secrets` at Metadata level, so the
+  event names WHICH secret only on a `get`. A `list` or `watch` targets a collection and carries
+  NO objectRef.name at all — so the highest-impact case, one request returning every Secret in
+  the namespace, is the case where the event names nothing. Treat an unnamed list as full
+  exposure of the namespace, never as a lesser event than a named get.
+references:
+  - https://kubernetes.io/docs/concepts/configuration/secret/
+  - https://attack.mitre.org/techniques/T1552/007/
+tags:
+  - attack.credential-access
+  - attack.t1552.007
+logsource:
+  category: application
+  product: kubernetes
+  service: audit
+detection:
+  workload_identity:
+    user.username|startswith: 'system:serviceaccount:'
+  target:
+    objectRef.resource: 'secrets'
+    objectRef.namespace: 'kube-system'
+  read_verb:
+    verb:
+      - 'get'
+      - 'list'
+      - 'watch'
+  completed:
+    stage: 'ResponseComplete'
+  # POPULATE BEFORE DEPLOYING — see the note on eks_sa_privileged_operation.
+  known_controllers:
+    user.username|startswith: 'system:serviceaccount:kube-system:'
+  condition: workload_identity and target and read_verb and completed and not known_controllers
+falsepositives:
+  - >-
+    The known_controllers filter here excludes every kube-system ServiceAccount, which is broad
+    on purpose — those accounts read their own namespace constantly and the rule is unusable
+    without it. The cost is real and must be stated: a compromised kube-system ServiceAccount is
+    invisible to this rule. eks_sa_privileged_operation still covers it for writes.
+level: high
+---
+title: Kubernetes ServiceAccount created a pod that escapes container isolation
+id: b84d2e70-95a1-4c36-8f2b-71e0d34a9c68
+name: eks_sa_privileged_pod_created
+status: experimental
+description: >-
+  A workload identity created a pod requesting host namespaces or privileged containers.
+  hostNetwork puts the pod on the node's network stack, which AWS states means it "will always
+  have IMDS access" — so such a pod reaches the NODE IAM role at 169.254.169.254 regardless of
+  whether EKS Pod Identity or IRSA is configured, and regardless of what the pod's own
+  ServiceAccount is allowed. hostPID and privileged reach the node's processes and devices. This
+  is the standard route from "I control a workload" to "I control the node". Bodies are available
+  here because the EKS default audit policy records core-group writes at RequestResponse level.
+references:
+  - https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html
+  - https://attack.mitre.org/techniques/T1611/
+tags:
+  - attack.privilege-escalation
+  - attack.t1611
+logsource:
+  category: application
+  product: kubernetes
+  service: audit
+detection:
+  workload_identity:
+    user.username|startswith: 'system:serviceaccount:'
+  pod_create:
+    objectRef.resource: 'pods'
+    verb: 'create'
+  succeeded:
+    responseStatus.code:
+      - 200
+      - 201
+  host_namespace:
+    requestObject.spec.hostNetwork: true
+  host_pid:
+    requestObject.spec.hostPID: true
+  privileged_container:
+    requestObject.spec.containers|contains: '"privileged":true'
+  condition: workload_identity and pod_create and succeeded and (host_namespace or host_pid or privileged_container)
+falsepositives:
+  - >-
+    CNI, CSI and monitoring DaemonSets legitimately request host namespaces, and they are created
+    by controllers rather than by a person. Filter on the creating identity once you have the
+    list; the pod spec is not the thing to relax.
+level: high
+---
+title: A workload identity probed for permissions and then exercised them
+id: 26bd8f14-c073-4e51-90a7-3f5c1a628db3
+status: experimental
+description: >-
+  One ServiceAccount accumulated authorization denials and then successfully performed a
+  privileged control-plane operation. group-by is user.username because it is the only field
+  carrying the workload identity on both stages, and it binds them to ONE ServiceAccount — an
+  ungrouped version of this correlation is satisfied by unrelated denials anywhere in the cluster.
+  Timespan is 1h: a compromised workload is driven interactively and probes and acts in one
+  session. Note that this correlation is deliberately INTRA-PLANE. The cross-plane version —
+  ServiceAccount acts, then its bound IAM role is assumed — cannot be bound reliably, because the
+  ServiceAccount identity is not a documented field of the corresponding CloudTrail event. See
+  detection_note_t1098_006.md.
+references:
+  - https://attack.mitre.org/techniques/T1098/006/
+  - https://attack.mitre.org/techniques/T1613/
+tags:
+  - attack.privilege-escalation
+  - attack.persistence
+  - attack.t1098.006
+correlation:
+  type: temporal_ordered
+  rules:
+    - eks_sa_privileged_operation_denied
+    - eks_sa_privileged_operation
+  group-by:
+    - user.username
+  timespan: 1h
+level: critical
+---
+title: EKS Pod Identity association created or changed
+id: 4d7c9a52-8e16-4b70-a3f9-6c2b0d51e837
+name: eks_pod_identity_association_changed
+status: experimental
+description: >-
+  CreatePodIdentityAssociation or UpdatePodIdentityAssociation bound an IAM role to a Kubernetes
+  ServiceAccount. This is the AWS half of a workload identity, and it is invisible to the
+  Kubernetes audit log — the association lives in EKS, not in the cluster, so no kubectl command
+  enumerates it and no audit event records it. A new association is a new path from a pod to an
+  IAM role; whether that path is legitimate depends entirely on whether the namespace and service
+  account named in the request are the ones that role was scoped for. Logged as a CloudTrail
+  management event on a default trail, which is why this rule carries a different logsource from
+  the plane-1 rules in this file.
+references:
+  - https://docs.aws.amazon.com/eks/latest/userguide/pod-id-how-it-works.html
+  - https://attack.mitre.org/techniques/T1098/006/
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.006
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'eks.amazonaws.com'
+    eventName:
+      - 'CreatePodIdentityAssociation'
+      - 'UpdatePodIdentityAssociation'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the infrastructure-as-code roles that own these associations.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'
+      - ':role/PlatformAutomation'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    Ordinary provisioning of a new workload. Expect these in clusters under active development;
+    the allowlist is the tuning surface, and an association created by a human outside it is the
+    case worth reading.
+level: medium
+---
+title: Workload IAM role assumed for an EKS pod
+id: a1e6b473-2f80-49dc-8b15-04d97c3ea562
+name: eks_workload_role_assumed
+status: experimental
+description: >-
+  Base rule — inventory and pivot component, not for direct alerting at this level. The two
+  documented ways an EKS pod obtains AWS credentials: AssumeRoleForPodIdentity on the EKS Auth
+  API (EKS Pod Identity, credentials served to the pod at 169.254.170.23) and
+  AssumeRoleWithWebIdentity on STS (IRSA, via the eks.amazonaws.com/role-arn annotation and the
+  cluster OIDC provider). It fires constantly in a healthy cluster and is shipped so a responder
+  can enumerate which roles a workload actually exercised and from where — not so it can page
+  anyone. It is deliberately NOT wired into the correlation above: the ServiceAccount identity
+  is not a documented field of either event, and a correlation keyed on a field that may not
+  exist is a rule that reports clean forever.
+references:
+  - https://docs.aws.amazon.com/eks/latest/userguide/pod-id-how-it-works.html
+  - https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html
+  - https://attack.mitre.org/techniques/T1552/007/
+tags:
+  - attack.credential-access
+  - attack.t1552.007
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  pod_identity:
+    eventSource: 'eks-auth.amazonaws.com'
+    eventName: 'AssumeRoleForPodIdentity'
+  irsa:
+    eventSource: 'sts.amazonaws.com'
+    eventName: 'AssumeRoleWithWebIdentity'
+  condition: pod_identity or irsa
+level: informational

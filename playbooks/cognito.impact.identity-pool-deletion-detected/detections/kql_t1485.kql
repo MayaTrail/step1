@@ -1,0 +1,126 @@
+// Identity Pool Deletion (T1485 / T1531)
+//
+// Signal: DeleteIdentityPool by a principal that does not own identity-pool lifecycle; the same
+// at volume; and the reconfigure-then-destroy pair where the pool's configuration is removed
+// along with the pool.
+//
+// This query does what the source rule does not: it names the POOL. The source groups by
+// userIdentity.arn and never surfaces requestParameters.identityPoolId, so its alert says a pool
+// is gone and cannot say which. It also joins each deletion back to the pool's own configuration
+// history - the CreateIdentityPool and UpdateIdentityPool events that carry
+// allowUnauthenticatedIdentities, and the SetIdentityPoolRoles events that carry the role ARNs -
+// which after the deletion is the ONLY surviving record of what the pool was configured to hand
+// out.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE PipelineRoles BELOW BEFORE DEPLOYING. Unpopulated, every teardown reads as an incident
+// - noisy toward surfacing the deletion rather than hiding it.
+let Lookback = 90d;
+let VolumeWindow = 10m;
+let Ident =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "cognito-identity.amazonaws.com"
+    | where EventName in ("DeleteIdentityPool", "CreateIdentityPool", "UpdateIdentityPool",
+                          "SetIdentityPoolRoles")
+    // RequestParameters and ResponseElements are typed `string` in this table, not dynamic.
+    // Lower-camel casing is VERIFIED for this service: AWS publishes a real CreateIdentityPool
+    // CloudTrail example carrying identityPoolName, allowUnauthenticatedIdentities and
+    // supportedLoginProviders, with identityPoolId in responseElements.
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    | extend PoolId   = coalesce(tostring(Req.identityPoolId), tostring(Resp.identityPoolId), "")
+    | extend PoolName = coalesce(tostring(Req.identityPoolName), tostring(Resp.identityPoolName), "")
+    | extend AllowUnauth = coalesce(tostring(Req.allowUnauthenticatedIdentities),
+                                    tostring(Resp.allowUnauthenticatedIdentities), "")
+    | extend UnauthRole = tostring(Req.roles.unauthenticated)
+    | extend AuthRole   = tostring(Req.roles.authenticated)
+    // `contains`, never a whole-term operator: an ARN and a role path are punctuated (C1).
+    | extend IsPipeline = (UserIdentityArn contains ":role/iac-deploy")
+                       or (UserIdentityArn contains ":role/BreakGlassAdmin");
+// The pool's configuration history. After the deletion this is the only place the role ARNs and
+// the guest-access flag still exist - there is no log export for identity pools and no metric,
+// so nothing else survives.
+let Config = Ident
+    | where EventName in ("CreateIdentityPool", "UpdateIdentityPool", "SetIdentityPoolRoles")
+        and isempty(ErrorCode)
+    | summarize ConfigWrites = count(), ConfigEvents = make_set(EventName, 4),
+                ConfigWriters = make_set(UserIdentityArn, 5),
+                LastConfigAt = max(TimeGenerated),
+                GuestFlagSeen = make_set_if(AllowUnauth, isnotempty(AllowUnauth), 3),
+                UnauthRoles = make_set_if(UnauthRole, isnotempty(UnauthRole), 3),
+                AuthRoles = make_set_if(AuthRole, isnotempty(AuthRole), 3),
+                PoolNames = make_set_if(PoolName, isnotempty(PoolName), 3)
+      by PoolId;
+// Refusals in their own aggregate, never counted as deletions. Cognito Identity returns
+// NotAuthorizedException at HTTP 400 for an authorization failure - not a 403 - so a filter on
+// the status code would miss it entirely.
+let Denied = Ident
+    | where EventName == "DeleteIdentityPool" and isnotempty(ErrorCode)
+    | summarize DeniedAttempts = count(), DeniedCodes = make_set(ErrorCode, 5),
+                DeniedPools = make_set(PoolId, 10)
+      by Actor = UserIdentityArn;
+Ident
+| where EventName == "DeleteIdentityPool" and isempty(ErrorCode) and not(IsPipeline)
+| summarize DeletedAt = min(TimeGenerated), LastDeleted = max(TimeGenerated),
+            Deletions = count(), Regions = make_set(AwsRegion, 3),
+            DeleteIps = make_set(SourceIpAddress, 5), DeleteAgents = make_set(UserAgent, 3),
+            Account = any(RecipientAccountId)
+  by Actor = UserIdentityArn, PoolId
+| join kind=leftouter Config on PoolId
+| join kind=leftouter Denied on Actor
+| extend ConfigThenDelete = isnotempty(LastConfigAt) and LastConfigAt <= DeletedAt
+                            and DeletedAt - LastConfigAt <= 24h
+| extend GuestWasEnabled = array_length(GuestFlagSeen) > 0
+                           and set_has_element(GuestFlagSeen, "true")
+| extend OrphanedRoles = array_length(set_union(UnauthRoles, AuthRoles))
+// The burst rate, computed per actor across the whole result rather than per pool, so a
+// three-pool run shows as one number rather than three rows that each look isolated.
+| extend BurstMinutes = max_of(1.0, datetime_diff('second', LastDeleted, DeletedAt) / 60.0)
+| extend Verdict = case(
+    ConfigThenDelete and GuestWasEnabled,
+        "RECONFIGURE THEN DESTROY, GUEST ACCESS WAS ON - the pool was set to vend credentials to anonymous callers and then deleted. Treat as evidence destruction until a remediation ticket says otherwise",
+    ConfigThenDelete,
+        "RECONFIGURE THEN DESTROY - the pool was changed and deleted within a day. Either a rollback or the cleanup half of an abuse; CloudTrail cannot tell them apart",
+    GuestWasEnabled,
+        "GUEST-ENABLED POOL DESTROYED - the pool allowed unauthenticated identities. Its unauthenticated role still exists with its permissions attached; see the orphan sweep below",
+    OrphanedRoles > 0,
+        "IDENTITY POOL DESTROYED, ROLES ORPHANED - the IAM roles are NOT deleted with the pool and keep their permissions and their trust policies",
+    isnotempty(DeniedCodes),
+        "DESTRUCTION WITH REFUSED ATTEMPTS - the principal was also refused on other pools; treat the refusals as boundary mapping, not as deletions",
+        "UNAUTHORISED IDENTITY POOL DELETION - permanently gone, with no retention window and no restore path")
+| project DeletedAt, Verdict, PoolId, PoolNames, Account, Actor, Deletions, BurstMinutes,
+          ConfigWrites, ConfigEvents, ConfigWriters, LastConfigAt, GuestFlagSeen, UnauthRoles,
+          AuthRoles, OrphanedRoles, DeniedAttempts, DeniedCodes, DeniedPools, DeleteIps,
+          DeleteAgents, Regions
+| order by DeletedAt desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// How many identities the pool held, or who they were. There is no identity-pool metric in
+// AWS/Cognito and, per AWS, "no log export capabilities exist for identity pools". GetId,
+// GetCredentialsForIdentity, GetOpenIdToken, GetOpenIdTokenForDeveloperIdentity and UnlinkIdentity
+// are CloudTrail DATA events, off by default and billable, requiring an advanced event selector
+// on resources.type = AWS::Cognito::IdentityPool. Without one there is no record that the pool was
+// ever used, and after the deletion none can be created. Absence is not evidence of non-use.
+//
+// The developer-provider linkages. DeveloperProviderName is immutable in life - AWS: "Once you
+// have set a developer provider name, you cannot change it" - and every LookupDeveloperIdentity
+// mapping between your backend user IDs and Cognito identity IDs dies with the pool. Nothing
+// enumerates them afterwards.
+//
+// The ORPHANED ROLES, which are the part of the blast radius that outlives the incident. The IAM
+// roles are not deleted with the pool; they keep their attached and inline policies and their
+// trust policies. Two shapes matter and neither is visible in any Cognito event: a role whose
+// trust policy carries no cognito-identity.amazonaws.com:aud condition is assumable through ANY
+// identity pool, including one an attacker creates in another account - AWS: "AWS STS permits web
+// identities to assume roles that are not secured with conditions"; and a role with no
+// ForAnyValue:StringLike condition on ...:amr does not distinguish a guest token from an
+// authenticated one. The playbook's Query 2 sweeps IAM for both.
+//
+// PREVENTION. cognito-identity:DeleteIdentityPool is needed by nothing at runtime. Unlike its
+// user-pool neighbour there is no deletion-protection flag to fall back on - identity pools have
+// no such concept - so an SCP confining the action to the lifecycle role is the only preventative
+// control that exists, and the pool's configuration held in IaC is the only thing that makes a
+// rebuild possible.

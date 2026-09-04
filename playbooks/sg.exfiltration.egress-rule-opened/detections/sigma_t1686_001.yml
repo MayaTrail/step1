@@ -1,0 +1,127 @@
+# Security group egress re-widened to the internet (T1686.001)
+#
+# THE DEFAULT IS ALREADY FULLY OPEN OUTBOUND, WHICH INVERTS THE OBVIOUS READING.
+# AWS: "When you first create a security group, it has an outbound rule that allows all outbound
+# traffic from the resource. You can remove the rule and add outbound rules that allow specific
+# outbound traffic only. If your security group has no outbound rules, no outbound traffic is
+# allowed."
+# So `AuthorizeSecurityGroupEgress` opening 0.0.0.0/0 is usually NOT a weakening — the group was
+# born that way and most groups still are. The event that matters is the RE-WIDENING of a group
+# somebody had deliberately narrowed, and that is only visible as a sequence: a revoke, then an
+# authorize. The source pack ships both halves as unrated building blocks and correlates neither.
+#
+# THE ABSENCE OF A REVOKE IS THE POSTURE FINDING, AND NO EVENT WILL EVER CARRY IT.
+# A group nobody ever hardened has unrestricted egress and generates no CloudTrail event at all,
+# because nothing happened. That is a state question, answered by describe-security-group-rules in
+# §2 of ../PLAYBOOK.md — not by any rule here, and not by any rule that could exist.
+#
+# TWO REQUEST SHAPES, SAME AS INGRESS. `AuthorizeSecurityGroupEgress` accepts flat top-level
+# parameters or the structured `ipPermissions` array, and the flat form cannot express IPv6. Both
+# are matched below. See ../../_ground-truth/sg.md §1.
+#
+# AND A CROSS-ACCOUNT REFERENCED GROUP PRODUCES NO EVENT FOR ITS OWNER.
+# AWS: "When a referenced security group is owned by another account, the owner account does not
+# receive CloudTrail events for these actions." So an egress rule pointing at a security group in
+# another account is invisible to that account entirely. Stated as a gap, not closed.
+title: Security group egress opened to the internet
+id: 8b52f0d4-1e97-46a3-b70c-52e83a1d6f9b
+name: sg_egress_opened_to_internet
+status: experimental
+description: >-
+  AuthorizeSecurityGroupEgress added an outbound rule to 0.0.0.0/0 or ::/0. Rated medium rather than
+  high on its own, because a newly created security group already allows all outbound traffic by
+  default — so this event is frequently restoring a state that was never removed. It becomes a
+  finding when it follows a revoke on the same group, which is the correlation below.
+references:
+  - https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_AuthorizeSecurityGroupEgress.html
+  - https://attack.mitre.org/techniques/T1686/001/
+tags:
+  - attack.defense-evasion
+  - attack.exfiltration
+  - attack.t1686.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'AuthorizeSecurityGroupEgress'
+  success:
+    errorCode: null
+  # Sibling blocks — the flat form cannot carry IPv6, so both shapes must be read.
+  open_world_flat:
+    requestParameters.cidrIp:
+      - '0.0.0.0/0'
+      - '::/0'
+  open_world_structured:
+    requestParameters.ipPermissions|contains:
+      - '0.0.0.0/0'
+      - '::/0'
+  # POPULATE BEFORE DEPLOYING with the roles that own network configuration.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and (open_world_flat or open_world_structured) and not known_provisioners
+falsepositives:
+  - >-
+    An infrastructure apply recreating a group's default egress. Extremely common, which is why this
+    rule is medium and why the correlation below carries the severity.
+level: medium
+---
+title: Security group egress narrowed and then re-widened to the internet
+id: 3c07e6b1-94da-4f28-8165-0b7e29ac54d3
+status: experimental
+description: >-
+  A principal revoked an egress rule and then added an internet-facing one on the same group. This
+  is the sequence that matters, because the default state is already open — a group only has
+  restricted egress if somebody deliberately narrowed it, so re-widening it undoes a decision rather
+  than restoring a default. Either half alone is ordinary; the pair is someone removing an outbound
+  restriction that was put there on purpose.
+references:
+  - https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html
+  - https://attack.mitre.org/techniques/T1686/001/
+tags:
+  - attack.defense-evasion
+  - attack.exfiltration
+  - attack.t1686.001
+correlation:
+  type: temporal_ordered
+  rules:
+    - sg_egress_revoked
+    - sg_egress_opened_to_internet
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+falsepositives:
+  - >-
+    A rule being replaced rather than removed — narrowing a CIDR is a revoke followed by an
+    authorize, and legitimately produces this pair. The distinguishing question is whether the new
+    rule is WIDER than the old one, which §2 Query 1 answers by showing both.
+level: high
+---
+title: Security group egress rule revoked
+id: f1a4703c-58be-4d92-a06f-c37e91b5824a
+name: sg_egress_revoked
+status: experimental
+description: >-
+  Base rule — correlation component and change accounting, never for direct alerting. A successful
+  RevokeSecurityGroupEgress. On its own this is outbound access being restricted, which is a good
+  thing happening and is the only way a group stops allowing all outbound traffic.
+references:
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_RevokeSecurityGroupEgress.html
+tags:
+  - attack.defense-evasion
+  - attack.t1686.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'RevokeSecurityGroupEgress'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational

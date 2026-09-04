@@ -1,0 +1,108 @@
+// Suspicious Operation by a Kubernetes ServiceAccount (T1098.006 / T1552.007)
+//
+// TWO PLANES, and the query has to say which it is reading. The primary view below is the
+// KUBERNETES AUDIT LOG, delivered from EKS control-plane logging to CloudWatch Logs at
+// /aws/eks/<cluster>/cluster. That log exists ONLY if the `audit` type was enabled BEFORE
+// the incident — all five types are off by default. If it was off, this returns zero and
+// that zero means "not recorded", never "did not happen".
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. Adjust the table to your ingestion.
+EKSAudit_CL
+| where TimeGenerated > ago(7d)
+| extend E = todynamic(RawData)
+// THE DISCRIMINATOR THAT NEEDS NO BASELINE. Kubernetes renders a ServiceAccount as
+// system:serviceaccount:<namespace>:<name>. That prefix separates a workload from a person
+// without any per-account tuning. Do NOT filter on the bare substring "system" — it drops
+// every workload, which is the defect in this pack's secrets rule.
+| extend User = tostring(E.user.username)
+| where User startswith "system:serviceaccount:"
+| extend SaNs   = tostring(split(User, ":")[2])
+| extend SaName = tostring(split(User, ":")[3])
+// Every policy rule except serviceaccounts/token omits RequestReceived. That one rule does
+// NOT, so token minting appears at BOTH stages — pin the stage or every count is doubled.
+| where tostring(E.stage) == "ResponseComplete"
+| extend Verb   = tostring(E.verb)
+| extend Group  = tostring(E.objectRef.apiGroup)     // "" for the core group, not absent
+| extend Res    = tostring(E.objectRef.subresource)
+| extend Kind   = tostring(E.objectRef.resource)
+| extend Ns     = tostring(E.objectRef.namespace)
+| extend Name   = tostring(E.objectRef.name)         // ABSENT on list/watch — see below
+| extend Code   = toint(E.responseStatus.code)       // int32. Do not quote.
+| extend Decision = tostring(E.annotations["authorization.k8s.io/decision"])
+| extend Client = tostring(todynamic(E.sourceIPs)[0])  // array; client first, proxy last
+//
+| extend RbacWrite   = Group == "rbac.authorization.k8s.io" and Verb in ("create","update","patch","delete")
+| extend TokenMint   = Kind == "serviceaccounts" and Res == "token" and Verb == "create"
+| extend KubeSysSecret = Kind == "secrets" and Ns == "kube-system"
+| extend PodCreate   = Kind == "pods" and Verb == "create"
+| extend ExecIn      = Kind == "pods" and Res in ("exec","attach")
+| extend Interesting = RbacWrite or TokenMint or KubeSysSecret or PodCreate or ExecIn
+| where Interesting
+| extend Applied = Code in (200, 201)
+| summarize
+    Ops        = count(),
+    Applied    = countif(Applied),
+    Refused    = countif(Code == 403),
+    Rbac       = countif(RbacWrite and Applied),
+    Tokens     = countif(TokenMint and Applied),
+    KubeSecret = countif(KubeSysSecret and Applied),
+    Pods       = countif(PodCreate and Applied),
+    Execs      = countif(ExecIn and Applied),
+    Targets    = make_set(strcat(Ns, "/", coalesce(Name, "<collection>")), 10),
+    Clients    = make_set(Client, 5),
+    Decisions  = make_set(Decision, 3),
+    FirstSeen  = min(TimeGenerated),
+    LastSeen   = max(TimeGenerated)
+    by User, SaNs, SaName
+| extend Verdict = case(
+    Rbac > 0 and Refused > 0,
+        "WORKLOAD PROBED THEN WROTE RBAC — refused first, then granted. A compromised pod taking a path, P0",
+    Rbac > 0,
+        "WORKLOAD WROTE RBAC — applications do not administer RBAC. This is a workload granting permissions, P0",
+    Tokens > 0,
+        "WORKLOAD MINTED A SERVICE-ACCOUNT TOKEN — a bearer credential that outlives the pod, P0",
+    KubeSecret > 0,
+        "WORKLOAD READ kube-system SECRETS — control-plane credential territory, P0",
+    Execs > 0,
+        "WORKLOAD EXEC'D INTO A POD — no normal application does this, P0",
+    Pods > 0,
+        "WORKLOAD CREATED A POD — check the spec for privileged, hostPID, hostNetwork or a hostPath mount, P1",
+    Refused > 9,
+        "WORKLOAD REPEATEDLY REFUSED — permission-boundary enumeration from inside the cluster, P1",
+    "Workload performed a control-plane operation — confirm against its normal behaviour, P2")
+| project FirstSeen, LastSeen, User, Verdict, Applied, Refused,
+          Rbac, Tokens, KubeSecret, Pods, Execs, Targets, Clients, Decisions
+| order by Applied desc, Refused desc
+//
+// ============================================================================
+// PLANE 2 — the AWS side, which the audit log cannot see
+// ============================================================================
+// A ServiceAccount may also hold an AWS identity, and that grant is an AWS API call:
+//
+// AWSCloudTrail
+// | where TimeGenerated > ago(7d)
+// | where (EventSource == "eks.amazonaws.com" and EventName in ("CreatePodIdentityAssociation","UpdatePodIdentityAssociation"))
+//      or (EventSource == "eks-auth.amazonaws.com" and EventName == "AssumeRoleForPodIdentity")
+//      or (EventSource == "sts.amazonaws.com" and EventName == "AssumeRoleWithWebIdentity")
+// | where isempty(ErrorCode)
+// | extend Req = parse_json(RequestParameters)
+// | project TimeGenerated, EventName, UserIdentityArn, SourceIpAddress,
+//           ns = tostring(Req.namespace), sa = tostring(Req.serviceAccount), Req
+// | order by TimeGenerated desc
+//
+// A new Pod Identity association or a changed IRSA trust is persistence that survives the
+// pod, the namespace and the RBAC binding. Neither appears in the Kubernetes audit log.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// THE LIST TRAP. objectRef.name is absent on list and watch, so a single `list` of secrets
+// in a namespace returns EVERY secret while naming none. The Targets column renders that as
+// <collection> deliberately — treat it as WIDER than a named object, never as less.
+//
+// SECRET VALUES ARE NEVER LOGGED. secrets and configmaps are Metadata level in AWS's managed
+// audit policy, and on a managed control plane the policy is a kube-apiserver flag AWS owns
+// and does not expose. You learn who read what, never what they got.
+//
+// CUSTOM RESOURCES ARE METADATA-ONLY. Every CRD group falls to the policy's catch-all, so a
+// policy object implemented as a CRD is modified without its body being recorded.

@@ -1,0 +1,155 @@
+// EC2 Metadata SSRF Observed at the Web ACL (T1552.005 / T1190)
+//
+// Signal: a Core-rule-set EC2MetaDataSSRF_* label on a web request, scored by the TERMINATING
+// ACTION rather than filtered on it.
+//
+// This query does three things the Sigma rules structurally cannot.
+//
+// 1. It SCORES the action instead of choosing one. The four source rules gate on
+//    action == "ALLOW"; all four CRS EC2MetaDataSSRF_* rules are Block by default, so those rules
+//    are silent in the configuration where the control works, and a blocked attempt raises
+//    nothing. Here ALLOW, CAPTCHA/CHALLENGE and BLOCK all arrive and the verdict separates them.
+//
+// 2. It RECOVERS THE COMPONENT from the matched label. The labels are
+//    EC2MetaDataSSRF_Body / _Cookie / _QueryArguments / _URIPath - exact strings, case-sensitive,
+//    and not derivable from the rule names EC2MetaDataSSRF_BODY / _COOKIE / _QUERYARGUMENTS /
+//    _URIPATH by any transform. Matching the stem and reading the tail off the match is the only
+//    shape that survives; the count of DISTINCT components per client is the enumeration signal
+//    that the four source rules destroyed by splitting into four alerts.
+//
+// 3. It SURFACES THE BODY-SIZE EVASION. oversizeFields containing REQUEST_BODY or
+//    REQUEST_JSON_BODY on a request with no _Body label means the body was over the inspection
+//    limit - 8 KB fixed on ALB and AppSync - and the uninspected remainder was forwarded intact.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// TABLE ASSUMPTION. AWS WAF web ACL logs are NOT CloudTrail and do not land in AWSCloudTrail.
+// They arrive through whatever pipeline carries the CloudWatch Logs group / S3 prefix / Firehose
+// stream named aws-waf-logs-*. `AWSWAFLogs` below is a placeholder for that table; rename it to
+// the table your ingestion actually creates. The record shape - the field names and nesting - is
+// AWS's and is what the rest of this query depends on.
+//
+// POPULATE TestSources BEFORE DEPLOYING.
+let Lookback = 7d;
+let TestSources = dynamic([]);   // authorised scanner egress addresses, e.g. "203.0.113.10"
+let Ssrf =
+    AWSWAFLogs
+    | where TimeGenerated > ago(Lookback)
+    // labels is an ARRAY OF OBJECTS - [{"name": "..."}] - not an array of strings. mv-expand to
+    // one row per label, then read the name off the object.
+    | mv-expand LabelObj = todynamic(labels)
+    | extend LabelName = tostring(LabelObj.name)
+    // `contains`, never `has`: a label is a colon- and underscore-punctuated string and `has` is
+    // whole-term, so it would never match one.
+    | where LabelName contains "core-rule-set:EC2MetaDataSSRF_"
+    | extend Component = tostring(split(LabelName, "EC2MetaDataSSRF_")[1])
+    | extend Action = toupper(tostring(action))
+    // CAPTCHA and Challenge are TERMINATING when the request carries no valid token - AWS
+    // documents them alongside Allow and Block - so they belong with BLOCK here. The mirror case,
+    // a valid token making them non-terminating, arrives as action == "ALLOW" and is counted as
+    // reached, which is correct: that request was served.
+    | extend Reached = (Action == "ALLOW")
+    | extend Stopped = (Action in ("BLOCK", "CAPTCHA", "CHALLENGE"))
+    | extend Req = todynamic(httpRequest)
+    | extend ClientIp = tostring(Req.clientIp)
+    | extend Country  = tostring(Req.country)
+    | extend Uri      = tostring(Req.uri)
+    | extend Args     = tostring(Req.args)
+    | extend Method   = tostring(Req.httpMethod)
+    // There is NO httpRequest.host field. The Host value is an element of the headers array -
+    // [{"name":..,"value":..}] - and has to be picked out of it by name. mv-apply with a
+    // summarize is the row-preserving way to do that; header names are not case-normalised by
+    // AWS, so both comparisons lower-case the name first.
+    | mv-apply Hdr = todynamic(Req.headers) on (
+        summarize Host      = anyif(tostring(Hdr.value), tolower(tostring(Hdr.name)) == "host"),
+                  UserAgent = anyif(tostring(Hdr.value), tolower(tostring(Hdr.name)) == "user-agent")
+      )
+    | extend Oversize = tostring(oversizeFields)
+    | extend BodyOversize = Oversize contains "REQUEST_BODY" or Oversize contains "REQUEST_JSON_BODY"
+    | extend Resource = tostring(httpSourceName)          // CF | APIGW | ALB | APPSYNC | COGNITOIDP | APPRUNNER | VERIFIED_ACCESS
+    | extend ResourceId = tostring(httpSourceId)
+    | extend WebAcl = tostring(webaclId)
+    | extend TerminatingRule = tostring(terminatingRuleId);   // "Default_Action" when no rule terminated
+// Everything the same client did at this web ACL in the window, SSRF or not. A client that
+// reaches the metadata rule is usually also tripping other rules, and that context is what
+// separates a scanner from a targeted attempt.
+let OtherActivity =
+    AWSWAFLogs
+    | where TimeGenerated > ago(Lookback)
+    | extend ClientIp = tostring(todynamic(httpRequest).clientIp)
+    | summarize TotalRequests = count(),
+                ActionsSeen   = make_set(toupper(tostring(action)), 6),
+                RulesSeen     = make_set(tostring(terminatingRuleId), 10)
+      by ClientIp;
+Ssrf
+| summarize
+    Hits            = count(),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated),
+    ReachedCount    = countif(Reached),
+    StoppedCount    = countif(Stopped),
+    Components      = make_set(Component, 4),
+    DistinctComponents = dcount(Component),
+    Labels          = make_set(LabelName, 4),
+    Actions         = make_set(Action, 6),
+    TerminatingRules = make_set(TerminatingRule, 6),
+    Uris            = make_set(Uri, 10),
+    QueryStrings    = make_set(Args, 10),
+    Methods         = make_set(Method, 5),
+    Hosts           = make_set(Host, 5),
+    UserAgents      = make_set(UserAgent, 5),
+    Countries       = make_set(Country, 5),
+    Resources       = make_set(Resource, 3),
+    ResourceIds     = make_set(ResourceId, 5),
+    WebAcls         = make_set(WebAcl, 3),
+    BodyOversizeSeen = max(BodyOversize)
+    by ClientIp
+| join kind=leftouter OtherActivity on ClientIp
+| extend IsTestSource = set_has_element(TestSources, ClientIp)
+| extend Verdict = case(
+    IsTestSource,
+        "AUTHORISED TEST SOURCE - on the configured scanner list. Confirm the test window before dismissing",
+    ReachedCount > 0 and DistinctComponents >= 2,
+        "SERVED, AND THE INJECTION POINT WAS ENUMERATED - the metadata payload reached the application on at least one request, across two or more request components. The Core rule set blocks these by default, so this web ACL has the rule group overridden to Count or the rule excluded. Treat the instance profile behind this endpoint as exposed and pivot to credential USE",
+    ReachedCount > 0,
+        "SERVED - a metadata SSRF payload reached the application. The CRS default action for this rule is Block, so the protection is off for it here. Whether a credential was actually returned depends on the target's IMDSv2 enforcement, which is not in this log",
+    DistinctComponents >= 2,
+        "STOPPED, BUT THE INJECTION POINT WAS ENUMERATED - two or more components tried and all stopped. The control is holding; the client is deliberate, not incidental",
+    BodyOversizeSeen == true,
+        "STOPPED, WITH AN OVERSIZE BODY IN THE SAME CLIENT'S TRAFFIC - the body rule inspects only up to the limit (8 KB fixed on ALB and AppSync) and forwards the rest. Check whether a padded body carried an uninspected payload",
+    StoppedCount >= 5,
+        "SUSTAINED PROBING, ALL STOPPED - the control is working. Volume from one address, not a single background scan",
+        "SINGLE ATTEMPT, STOPPED - consistent with internet background scanning. Record and move on unless this endpoint has a known SSRF")
+| project FirstSeen, LastSeen, Verdict, ClientIp, Countries, Hits, ReachedCount, StoppedCount,
+          Components, DistinctComponents, Labels, Actions, TerminatingRules, Methods, Hosts, Uris,
+          QueryStrings, UserAgents, Resources, ResourceIds, WebAcls, BodyOversizeSeen,
+          TotalRequests, ActionsSeen, RulesSeen
+| order by LastSeen desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// WHETHER A CREDENTIAL WAS RETURNED. The web ACL sees the inbound request. Whether the application
+// actually fetched 169.254.169.254 and got an answer is decided by the target instance's
+// HttpTokens setting, which appears in no web ACL log. VPC Flow Logs cannot settle it either -
+// AWS documents "Traffic to and from 169.254.169.254 for instance metadata" as traffic flow logs
+// do not capture. The observable outcome is the credential's USE, in CloudTrail, and it is owned
+// by ../../ec2.credential-access.imds-credential-theft/.
+//
+// THE REQUEST BODY. WAF logs headers and the query string; it does not log the body. For a
+// _Body-labelled match, the payload has to come from the application, and there is no matchedData
+// to fall back on either - AWS populates ruleMatchDetails only for SQL-injection and XSS match
+// statements, and EC2MetaDataSSRF_* is neither.
+//
+// AN SSRF THAT DOES NOT NAME THE METADATA ADDRESS IN THE REQUEST. The CRS rules match a pattern in
+// the inbound request. An attacker who induces the fetch through an open redirect, a DNS name
+// resolving to 169.254.169.254, or a second-order injection stored earlier produces no label at
+// all. Nor does a credential taken by code execution rather than SSRF.
+//
+// WHETHER THE RULE GROUP IS OVERRIDDEN. `ReachedCount > 0` is strong evidence that it is, but the
+// configuration itself comes from `aws wafv2 get-web-acl` - Query 2 of ../PLAYBOOK.md reads it.
+//
+// PREVENTION. IMDSv2 enforcement (HttpTokens=required) on every instance behind this endpoint is
+// the control that makes the SSRF worthless, and it is the only one that does not depend on the
+// WAF pattern being complete. The web ACL rule is a speed bump on a pattern match; the hop-limit
+// and token requirement are structural.

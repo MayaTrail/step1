@@ -1,0 +1,141 @@
+# Unauthorized Secret Access Attempt (T1552.007 — Container API Credentials)
+#
+# Source rule:
+#   objectRef.resource:"secrets" AND verb:("list" OR "watch" OR "get")
+#   AND NOT user.username:system AND responseStatus.code:"403"
+#
+# Three defects, and the third is the one that matters most.
+#
+# 1. responseStatus.code IS int32. The source quotes it. A quoted comparison against an
+#    integer field is backend-dependent and may silently never match. Do not quote it.
+# 2. `NOT user.username:system` is a bare substring exclusion. It drops every
+#    `system:serviceaccount:<ns>:<name>` principal — which is EVERY WORKLOAD IN THE
+#    CLUSTER — so a compromised pod reading secrets is excluded by the rule that exists to
+#    catch it. The intent was to drop control-plane chatter; the effect is to drop the
+#    attacker.
+# 3. IT ONLY MATCHES 403. A principal that SHOULD NOT have had the permission but DID gets
+#    200, and 200 is the worst outcome. The rule sees the failures and is blind to the
+#    successes. `annotations."authorization.k8s.io/decision"` carries the authoritative
+#    allow/forbid independent of the HTTP code and is the better discriminator.
+#
+# One thing the source got right and this file keeps: 403 IS the correct denial code here.
+# 403 = authenticated and RBAC refused. 401 = authentication failed, a different incident.
+# AWS's own published example query for this uses "401" and is wrong on both counts.
+title: Secret read denied by RBAC
+id: 3a7f2e94-51cb-4d08-b6e7-9c0a48f31d52
+name: eks_secret_read_denied
+status: experimental
+description: >-
+  A principal was refused a read of Kubernetes secrets by RBAC. Denials are enumeration:
+  the actor is mapping what its credentials reach.
+references:
+  - https://attack.mitre.org/techniques/T1552/007/                      # retrieved 2026-08-30
+  - https://kubernetes.io/docs/reference/config-api/apiserver-audit.v1/  # retrieved 2026-08-30
+tags:
+  - attack.credential-access
+  - attack.t1552.007
+logsource:
+  category: application
+  product: kubernetes
+  service: audit
+detection:
+  # B4 confirmed: resource, verb and stage all co-occur on a single audit Event.
+  selection:
+    objectRef.resource: 'secrets'
+    verb:
+      - 'get'
+      - 'list'
+      - 'watch'
+  # Every policy rule except serviceaccounts/token omits RequestReceived, so the normal
+  # event is ResponseComplete. Pinning it also stops watch requests double-counting via
+  # ResponseStarted.
+  completed:
+    stage: 'ResponseComplete'
+  # int32, unquoted. 403 = authenticated, RBAC refused.
+  refused:
+    responseStatus.code: 403
+  condition: selection and completed and refused
+falsepositives:
+  - A newly deployed workload whose RoleBinding has not landed yet. It appears as a burst
+    from one ServiceAccount and stops; a persistent pattern does not.
+level: medium
+---
+# The case the source rule cannot see, and the more serious one. A read that SUCCEEDED for
+# a principal that should not have had the permission returns 200, not 403 — and the
+# authoritative record of the authorisation decision is the annotation, not the HTTP code.
+title: Secret read succeeded
+id: c48d1b60-9e35-4f72-a1d3-7b8e50c2af16
+name: eks_secret_read_succeeded
+status: experimental
+description: >-
+  A principal successfully read Kubernetes secrets. Baseline which identities legitimately
+  do this; anything outside that set holds credentials it should not.
+references:
+  - https://attack.mitre.org/techniques/T1552/007/                      # retrieved 2026-08-30
+tags:
+  - attack.credential-access
+  - attack.t1552.007
+logsource:
+  category: application
+  product: kubernetes
+  service: audit
+detection:
+  # B4 confirmed: resource and verb co-occur on every audit Event.
+  selection:
+    objectRef.resource: 'secrets'
+    verb:
+      - 'get'
+      - 'list'
+      - 'watch'
+  completed:
+    stage: 'ResponseComplete'
+  succeeded:
+    responseStatus.code:
+      - 200
+      - 201
+  # DEPLOYMENT PARAMETER — populate before use. Exclude the controllers that legitimately
+  # read secrets in your cluster, by exact ServiceAccount name. Do NOT exclude on the bare
+  # substring "system": that drops every system:serviceaccount principal, i.e. every
+  # workload, which is the source rule's defect.
+  known_readers:
+    user.username:
+      - 'system:kube-controller-manager'
+      - 'system:serviceaccount:kube-system:generic-garbage-collector'
+      - 'system:serviceaccount:kube-system:namespace-controller'
+  condition: selection and completed and succeeded and not known_readers
+falsepositives:
+  - Any operator or controller that reads secrets by design — cert-manager, external-secrets,
+    a CSI driver. Enumerate them in `known_readers` by exact name; the allowlist is the rule.
+level: high
+---
+# Enumeration is a rate, not an event. A principal collecting denials across secrets is
+# mapping its permission boundary, and that is compromise-adjacent even though nothing
+# succeeded.
+#
+# Threshold basis, stated rather than invented: a workload with a missing RoleBinding
+# retries on its client's backoff and converges on one resource. An actor enumerating moves
+# across namespaces and resources. Ten denials in fifteen minutes from one principal is
+# above a single misconfigured client's retry and below a busy cluster's rollout noise.
+# Baseline against your own cluster before deploying.
+title: Repeated secret-read denials for one principal
+id: 7e51c8d3-2a46-4b9f-8035-e6c179ba4d08
+status: experimental
+description: >-
+  One principal was refused ten or more secret reads in fifteen minutes — permission-boundary
+  enumeration rather than a misconfigured client.
+references:
+  - https://attack.mitre.org/techniques/T1552/007/                      # retrieved 2026-08-30
+tags:
+  - attack.credential-access
+  - attack.discovery
+  - attack.t1552.007
+correlation:
+  type: event_count
+  rules:
+    - eks_secret_read_denied
+  group-by:
+    - user.username
+  timespan: 15m
+  condition:
+    gt: 9
+level: high

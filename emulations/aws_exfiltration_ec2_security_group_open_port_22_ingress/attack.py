@@ -1,6 +1,6 @@
 """
 Technique : aws.exfiltration.ec2-security-group-open-port-22-ingress
-Tactic    : Exfiltration / Impact (T1562.007)
+Tactic    : Exfiltration / Impact (T1686.001)
 Source    : https://stratus-red-team.cloud/attack-techniques/AWS/aws.exfiltration.ec2-security-group-open-port-22-ingress/
 
 Pre-requisites:

@@ -1,0 +1,38 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Images Within a Repository Deleted
+  priority: P4
+  type: logs_threshold
+  mitre: T1485/TA0040
+  query: |
+    eventSource:"ecr.amazonaws.com" AND eventName:"BatchDeleteImage" AND userIdentity.type:("<automation-role>" OR "IAMUser") AND NOT userIdentity.arn:"<one-named-operator-principal-REDACTED>" AND NOT _exists_:errorCode
+  threshold: 0.0  window: 30m
+  group_by: ['requestParameters.repositoryName', 'userIdentity.arn']
+
+- name: Forced Repository Deleted
+  priority: P4
+  type: logs_threshold
+  mitre: T1578/TA0005
+  query: |
+    eventSource:"ecr.amazonaws.com" AND eventName:"DeleteRepository" AND requestParameters.force:"true" AND NOT userIdentity.arn:"<one-named-operator-principal-REDACTED>" AND NOT _exists_:errorCode
+  threshold: 0.0  window: 5m
+  group_by: ['userIdentity.principalId']
+
+- name: Life-Cycle Policy Added
+  priority: P4
+  type: logs_threshold
+  mitre: T1484/TA0004
+  query: |
+    eventSource:"ecr.amazonaws.com" AND eventName:"PutLifecyclePolicy" AND NOT userIdentity.arn:"<one-named-operator-principal-REDACTED>" AND NOT _exists_:errorCode
+  threshold: 0.0  window: 5m
+  group_by: ['userIdentity.principalId']

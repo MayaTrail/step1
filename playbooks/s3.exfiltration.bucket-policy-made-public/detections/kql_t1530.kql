@@ -1,0 +1,81 @@
+// S3 bucket policy made public (T1530)
+//
+// The source rule's only predicate is `requestParameters.bucketPolicy.bucket_made_public`, a field
+// AWS does not emit — snake_case where every documented S3 requestParameters field is camelCase.
+// This query works from the policy document itself, which CloudTrail does carry.
+//
+// It deliberately OVER-matches. AWS: "Amazon S3 begins by assuming that the policy is public. It
+// then evaluates the policy to determine whether it qualifies as NON-public", against a fixed list
+// of condition keys. That evaluation is not reproducible in a query, so every hit is triaged with
+// GetBucketPolicyStatus — AWS's own evaluator — and the query's job is to find candidates.
+//
+// `contains` throughout, never `has` — policy documents are punctuation.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "s3.amazonaws.com"
+| where EventName in ("PutBucketPolicy", "DeleteBucketPolicy", "PutBucketPublicAccessBlock",
+                      "PutAccountPublicAccessBlock", "DeleteBucketPublicAccessBlock")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Bucket = tostring(Req.bucketName)
+| extend Policy = tostring(Req.bucketPolicy)
+| extend WildcardPrincipal = Policy contains '"Principal":"*"' or Policy contains '"Principal": "*"'
+                             or Policy contains '"AWS":"*"' or Policy contains '"AWS": "*"'
+| extend HasAllow = Policy contains '"Effect":"Allow"' or Policy contains '"Effect": "Allow"'
+// A condition on one of AWS's enumerated scoping keys makes a wildcard principal non-public ONLY
+// when its value is fixed. A StringLike on the same key re-publicises it — AWS's own example is
+// "aws:SourceVpc": "vpc-*". So a condition present is not reassurance; the operator is what matters.
+| extend ScopedByCondition = Policy contains "aws:SourceVpc" or Policy contains "aws:SourceVpce"
+                             or Policy contains "aws:SourceArn" or Policy contains "aws:SourceAccount"
+                             or Policy contains "aws:SourceOwner" or Policy contains "aws:SourceIp"
+| extend WildcardOperator = Policy contains '"StringLike"' or Policy contains '"ArnLike"'
+| extend GateLowered = EventName contains "PublicAccessBlock"
+                       and (tostring(Req.PublicAccessBlockConfiguration.BlockPublicPolicy) == "false"
+                            or EventName contains "Delete")
+| summarize
+    PublicWrites   = countif(EventName == "PutBucketPolicy" and WildcardPrincipal and HasAllow),
+    ScopedWrites   = countif(EventName == "PutBucketPolicy" and WildcardPrincipal and ScopedByCondition and not(WildcardOperator)),
+    ReopenedByLike = countif(EventName == "PutBucketPolicy" and ScopedByCondition and WildcardOperator),
+    GateEvents     = countif(GateLowered),
+    Deletions      = countif(EventName == "DeleteBucketPolicy"),
+    FirstGate      = minif(TimeGenerated, GateLowered),
+    FirstPublic    = minif(TimeGenerated, EventName == "PutBucketPolicy" and WildcardPrincipal and HasAllow),
+    Buckets        = make_set(Bucket, 20),
+    SourceIps      = make_set(SourceIpAddress, 5),
+    LastSeen       = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where PublicWrites > 0 or ReopenedByLike > 0
+| extend GateThenWrite = GateEvents > 0 and isnotempty(FirstGate) and isnotempty(FirstPublic)
+                         and FirstGate < FirstPublic
+| extend Verdict = case(
+    GateThenWrite,
+        "BLOCK PUBLIC ACCESS LOWERED, THEN A PUBLIC POLICY WRITTEN by the same principal — the sequence BlockPublicPolicy exists to prevent, P0",
+    PublicWrites > 0,
+        "PUBLIC POLICY WRITTEN AND IT SUCCEEDED — which is itself proof BlockPublicPolicy was false at that instant, because S3 rejects this call when it is set. Confirm with GetBucketPolicyStatus, P0",
+    ReopenedByLike > 0,
+        "SCOPING CONDITION CONTAINS A WILDCARD — a StringLike on aws:SourceVpc or similar re-publicises a statement that reads as scoped. This is the shape that survives review, P1",
+    "bucket policy written with a wildcard principal — resolve with GetBucketPolicyStatus")
+| project FirstGate, FirstPublic, LastSeen, UserIdentityArn, Verdict, PublicWrites, ScopedWrites,
+          ReopenedByLike, GateEvents, Deletions, Buckets, SourceIps
+| order by GateThenWrite desc, PublicWrites desc
+//
+// ============================================================================
+// THE SUCCESS IS EVIDENCE, NOT JUST AN OUTCOME
+// ============================================================================
+// AWS: BlockPublicPolicy: true "causes Amazon S3 to reject calls to PutBucketPolicy if the
+// specified bucket policy allows public access." So a public policy write with no ErrorCode proves
+// the gate was false at that moment — recoverable from the write alone, without the Block Public
+// Access event history. If GateEvents is 0 and PublicWrites is not, the gate was ALREADY down
+// before the lookback window, which is a longer-standing problem than the alert suggests.
+//
+// ============================================================================
+// ONE PUBLIC STATEMENT HAS COLLATERAL
+// ============================================================================
+// AWS: one public statement "renders the entire policy public, so RestrictPublicBuckets applies. As
+// a result, Amazon S3 disables cross-account access, even though the policy delegates access to a
+// specific account." So a policy that also delegates to a partner account silently stops working
+// for that partner once RestrictPublicBuckets is on. Expect a partner outage as a side effect of
+// containment, and expect it to be reported as unrelated.

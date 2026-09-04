@@ -1,0 +1,170 @@
+# S3 bucket policy made public (T1530)
+#
+# AWS'S EVALUATION RUNS BACKWARDS FROM THE OBVIOUS ONE. "Amazon S3 begins by assuming that the
+# policy is public. It then evaluates the policy to determine whether it qualifies as NON-public" —
+# which requires access granted only to FIXED values of an enumerated key list. So these rules
+# deliberately OVER-match, and every hit is resolved with GetBucketPolicyStatus rather than by
+# reading the policy.
+#
+# A public write that SUCCEEDS proves BlockPublicPolicy was false at that instant, because S3
+# rejects the call when it is set. Full rationale: detections/detection_note_t1530.md.
+title: S3 bucket policy written granting to a wildcard principal
+id: 5b8c47e1-93da-4b26-a7f0-6c1e28d40b9f
+name: s3_bucket_policy_public_principal
+status: experimental
+description: >-
+  A successful PutBucketPolicy whose document contains an Allow to a wildcard principal. Because
+  BlockPublicPolicy makes S3 reject exactly this call when it is set, a success here is also
+  evidence that the guardrail was false at that moment. Over-matches by design — AWS treats a
+  wildcard principal fixed by one of an enumerated set of condition keys as non-public — so every
+  hit is resolved with GetBucketPolicyStatus rather than by reading the statement.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketPolicy.html
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketPolicy'
+  success:
+    errorCode: null
+  # The policy document is serialised into the event. Both spellings of a wildcard principal are
+  # matched: the bare string form and the {"AWS": "*"} form, with and without whitespace.
+  wildcard_principal:
+    requestParameters.bucketPolicy|contains:
+      - '"Principal":"*"'
+      - '"Principal": "*"'
+      - '"AWS":"*"'
+      - '"AWS": "*"'
+  allow:
+    requestParameters.bucketPolicy|contains:
+      - '"Effect":"Allow"'
+      - '"Effect": "Allow"'
+  # POPULATE BEFORE DEPLOYING with the roles that own bucket lifecycle.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and wildcard_principal and allow and not known_provisioners
+falsepositives:
+  - >-
+    A statement whose wildcard principal is fixed by aws:SourceVpce, aws:SourceArn or another key on
+    AWS's enumerated list, which AWS evaluates as non-public. GetBucketPolicyStatus settles it;
+    narrowing the rule to exclude conditioned statements would also exclude the conditioned ones
+    that are public.
+  - >-
+    A bucket deliberately serving public content. It should be on the recorded public-bucket list.
+level: high
+---
+title: S3 bucket policy condition re-publicised by a wildcard in its value
+id: a3f1690c-24e8-4d73-b58a-71c9e0d6f254
+name: s3_bucket_policy_wildcard_condition
+status: experimental
+description: >-
+  A PutBucketPolicy carrying a condition on one of the keys that can make a policy non-public, but
+  whose value contains a wildcard. AWS's own worked example is exactly this: `"StringLike":
+  {"aws:SourceVpc": "vpc-*"}` is public, while `"StringEquals": {"aws:SourceVpc": "vpc-91237329"}`
+  is not. This is the shape that survives review, because the statement looks scoped — the reviewer
+  sees a condition and stops reading. Shipped separately because it is the one a human is most
+  likely to wave through.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketPolicy'
+  success:
+    errorCode: null
+  conditioned_on_a_scoping_key:
+    requestParameters.bucketPolicy|contains:
+      - 'aws:SourceVpc'
+      - 'aws:SourceVpce'
+      - 'aws:SourceArn'
+      - 'aws:SourceAccount'
+      - 'aws:SourceOwner'
+      - 'aws:SourceIp'
+  # StringLike is the operator that admits a wildcard; StringEquals does not. A StringLike on a
+  # scoping key is the documented public case.
+  wildcard_operator:
+    requestParameters.bucketPolicy|contains:
+      - '"StringLike"'
+      - '"ArnLike"'
+  condition: selection and success and conditioned_on_a_scoping_key and wildcard_operator
+falsepositives:
+  - >-
+    A StringLike whose pattern happens to contain no wildcard character. Rare, because there is no
+    reason to use StringLike without one, and worth reviewing when it appears.
+level: medium
+---
+title: Block Public Access gate lowered and a public policy then written
+id: 2c74d9b6-8e15-4a30-96f7-b0d3e847152a
+status: experimental
+description: >-
+  A Block Public Access flag was set false and a wildcard-principal policy was written afterwards by
+  the same principal. This is the sequence BlockPublicPolicy exists to make impossible: with it set,
+  S3 rejects the write, so the gate has to come down first. Critical because the two halves together
+  describe a completed exposure, where either alone is ambiguous.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+correlation:
+  type: temporal_ordered
+  rules:
+    - s3_pab_gate_lowered
+    - s3_bucket_policy_public_principal
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+level: critical
+---
+title: S3 Block Public Access policy gate lowered
+id: 8d2b53f7-6c09-41ae-b4d8-e5107a9c3b62
+name: s3_pab_gate_lowered
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. BlockPublicPolicy set to false,
+  or the Block Public Access configuration deleted outright, at either scope. The rated detections
+  for this act are in ../../s3.exfiltration.public-access-block-removed/ and
+  ../../s3.exfiltration.public-access-block-deleted/.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutPublicAccessBlock.html
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # Three keys ANDed, and they do co-occur on a single event: a PutBucketPublicAccessBlock record
+  # carries eventSource, eventName and the submitted flags together.
+  put_gate_down:
+    eventSource: 's3.amazonaws.com'
+    eventName:
+      - 'PutBucketPublicAccessBlock'
+      - 'PutAccountPublicAccessBlock'
+    requestParameters.PublicAccessBlockConfiguration.BlockPublicPolicy: false
+  deleted:
+    eventSource: 's3.amazonaws.com'
+    eventName:
+      - 'DeleteBucketPublicAccessBlock'
+      - 'DeleteAccountPublicAccessBlock'
+  success:
+    errorCode: null
+  condition: (put_gate_down or deleted) and success
+level: informational

@@ -1,0 +1,225 @@
+// Security Group Opened to the Internet on a Remote-Management Port (T1686.001 / T1133)
+//
+// One signal: an ingress rule whose source prefix length is /0 AND whose port range
+// SPANS a remote-management or database port — computed as a range-containment test,
+// never as a literal port match.
+//
+// This query does the thing the Sigma rules structurally cannot. Sigma has no numeric
+// comparison, so it approximates the range test by enumerating the range STARTS an
+// operator sends. Here the test is exact: EffFrom <= port <= EffTo, evaluated inside the
+// SAME ipPermissions element that carries the open CIDR. That element-level pairing also
+// closes the cross-element false positive — a call adding 443 to 0.0.0.0/0 and 22 to the
+// corporate CIDR satisfies both Sigma blocks from different elements and is silent here.
+//
+// `ipProtocol` "-1", or any protocol number that is not tcp/udp/icmp/icmpv6, allows
+// traffic on all ports "regardless of any port range you specify" — and those events
+// carry no fromPort/toPort at all, so every port-value rule ever written misses them.
+// They are normalised to 0-65535 below and are the widest case this technique produces.
+//
+// `contains` and `endswith` throughout, never `has`. `has` is whole-term matching and
+// terms break on non-alphanumerics, so it never reliably matches a CIDR — "0.0.0.0/0"
+// and "::/0" are punctuated end to end. This is the single most repeated defect in this
+// rule family and it fails silently.
+//
+// RevokeSecurityGroupIngress is REMEDIATION and is deliberately absent from the alerting
+// path. It appears once below, in the exposure-window companion, where it is used to
+// measure how long the hole was open — a correlation partner, never a signal.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let MgmtPorts = dynamic([22, 23, 135, 445, 1433, 1521, 2375, 2376, 3306, 3389,
+                         5432, 5900, 5984, 5985, 5986, 6379, 9200, 9300, 10250,
+                         11211, 27017, 27018]);
+let Ingress = AWSCloudTrail
+    | where TimeGenerated > ago(7d)
+    | where EventSource == "ec2.amazonaws.com"
+    | where EventName == "AuthorizeSecurityGroupIngress"
+    | where isempty(ErrorCode)
+    | extend Req = parse_json(RequestParameters)
+    | extend GroupId = tostring(coalesce(Req.groupId, Req.groupName));
+//
+// BRANCH A — the IpPermissions array form. This is what the EC2 Console sends, what IaC
+// sends, and what `aws ec2 authorize-security-group-ingress --protocol/--port/--cidr`
+// sends: those three are CLI-side conveniences that are rewritten into IpPermissions
+// before the call leaves the client, so the shorthand does NOT produce the flat form.
+//
+// TWO `items` wrappers, not one: ipPermissions.items[] then ipRanges.items[]. A flat
+// path against this shape yields null and the rule reports clean.
+//
+// BRANCH GUARD — this is the trap. In the FLAT form `ipPermissions` is still present, as
+// an empty object `{}`. Testing `isnotnull(Req.ipPermissions)` therefore routes every
+// flat event into this branch, where mv-expand on a missing `items` drops it entirely.
+// Test for the `items` key, not for the parent.
+let Nested = Ingress
+    | where isnotnull(Req.ipPermissions.items)
+    | mv-expand Perm = Req.ipPermissions.items
+    | extend Proto   = tostring(Perm.ipProtocol)
+    | extend RawFrom = toint(Perm.fromPort)
+    | extend RawTo   = toint(Perm.toPort)
+    // IPv4 and IPv6 ranges are concatenated into ONE array and expanded once. Expanding
+    // two columns in a single mv-expand would zip them positionally and pad the shorter
+    // with nulls, silently pairing an IPv4 CIDR with an IPv6 slot.
+    //
+    // An UNUSED range family is serialized as an empty object `{}` with no `items` key at
+    // all — not as an empty array — so the isnull guard on `.items` is load-bearing on
+    // both lines. The same is true of `groups` and `prefixListIds`.
+    | mv-expand Range = array_concat(
+          iff(isnull(Perm.ipRanges.items),   dynamic([]), todynamic(Perm.ipRanges.items)),
+          iff(isnull(Perm.ipv6Ranges.items), dynamic([]), todynamic(Perm.ipv6Ranges.items)))
+    | extend Cidr = tostring(coalesce(Range.cidrIp, Range.cidrIpv6));
+//
+// BRANCH B — the flattened form (top-level cidrIp/fromPort/toPort/ipProtocol, lowercase
+// first letter). Real request parameters, documented on the API, produced by any SDK
+// caller that sets them directly. They never carry an `ipPermissions.items`, so the two
+// branches partition the events rather than double-counting them. A rule that reads only
+// one of the two shapes has a false-negative rate set by how the caller was written.
+let Flat = Ingress
+    | where isnull(Req.ipPermissions.items)
+    | where isnotempty(tostring(Req.cidrIp))
+    | extend Proto   = tostring(Req.ipProtocol)
+    | extend RawFrom = toint(Req.fromPort)
+    | extend RawTo   = toint(Req.toPort)
+    | extend Cidr    = tostring(Req.cidrIp);
+//
+union Nested, Flat
+| where isnotempty(Cidr)
+//
+// PREFIX LENGTH /0 IS the unrestricted-source test, and it is stronger than the literal
+// string. AWS canonicalizes CIDRs, so 1.2.3.4/0 is accepted and stored as 0.0.0.0/0 —
+// but requestParameters records what the client SENT, so a literal "0.0.0.0/0" equality
+// misses the non-canonical form. This is not hypothetical: real production trail data
+// carries `"cidrIp": "7.240.82.247/0"` and `"cidrIp": "208.236.235.254/0"` — fully open
+// rules that an equality against "0.0.0.0/0" does not match.
+// No other prefix length ends in "/0": /10, /20 and /30 all end in a digit pair.
+// Covers ::/0 and every IPv6 /0 with the same operator.
+| extend OpenToWorld = Cidr endswith "/0"
+| where OpenToWorld
+//
+// PORT-RANGE NORMALISATION. -1, or any protocol number outside tcp/udp/icmp/icmpv6,
+// means all ports regardless of the range given, and those events carry no port fields.
+| extend AllProtocols = isnotempty(Proto) and Proto !in ("tcp", "udp", "icmp", "icmpv6")
+| extend EffFrom = case(AllProtocols, 0,     isnull(RawFrom), 0,     RawFrom)
+| extend EffTo   = case(AllProtocols, 65535, isnull(RawTo),   65535, RawTo)
+//
+// THE RANGE-CONTAINMENT TEST — the whole point of this file.
+// fromPort 0 / toPort 65535 exposes SSH without the number 22 appearing in the event,
+// and fromPort 1 / toPort 1024 does the same. Both are caught here and by no literal
+// port match. mv-apply over a constant non-empty array never drops a source row.
+| mv-apply P = MgmtPorts on (
+      summarize SpannedPorts = make_set_if(toint(P), EffFrom <= toint(P) and toint(P) <= EffTo)
+  )
+| extend SpanCount = array_length(SpannedPorts)
+// strcat_array here is DISPLAY ONLY — the decision was already made by the containment
+// test above. Never use strcat_array plus equality to make a matching decision: it
+// strips quotes and collapses multi-element arrays into one string.
+| extend SpannedPortsStr = strcat_array(SpannedPorts, ",")
+| extend PortRange       = strcat(Proto, " ", tostring(EffFrom), "-", tostring(EffTo))
+| extend FullRangeOpen   = EffFrom <= 0 and EffTo >= 65535
+| where SpanCount > 0 or AllProtocols or FullRangeOpen
+| summarize
+    Rules          = count(),
+    SecurityGroups = make_set(GroupId, 5),
+    OpenCidrs      = make_set(Cidr, 5),
+    PortRanges     = make_set(PortRange, 5),
+    MgmtPortsOpen  = make_set(SpannedPortsStr, 5),
+    AnyAllProtocol = max(AllProtocols),
+    AnyFullRange   = max(FullRangeOpen),
+    SourceIPs      = make_set(SourceIpAddress, 5),
+    UserAgents     = make_set(UserAgent, 3),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 10m)
+// Tuning, once baselined. `contains`, not `has` — an ARN is punctuated end to end.
+// | where not(UserIdentityArn contains ":role/iac-deploy")
+| extend Verdict = case(
+    AnyAllProtocol,
+        "ALL PROTOCOLS AND ALL PORTS OPENED TO THE INTERNET — every listener on every attached resource, P0",
+    AnyFullRange,
+        "FULL 0-65535 PORT RANGE OPENED TO THE INTERNET — P0",
+    "REMOTE-MANAGEMENT OR DATABASE PORT EXPOSED TO THE INTERNET — P0, confirm reachability before dispositioning")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, SecurityGroups, OpenCidrs,
+          PortRanges, MgmtPortsOpen, Rules, SourceIPs, UserAgents
+| order by LastSeen desc
+//
+// ============================================================================
+// THE GAP THIS QUERY CANNOT CLOSE — the grant is not the exposure
+// ============================================================================
+// Everything above proves a rule was WRITTEN. It does not prove anything is reachable.
+// A security group has effect only on the resources it is associated with, so the whole
+// path has to hold before this is a live exposure:
+//
+//   1. the security group is attached to an ENI
+//        aws ec2 describe-network-interfaces --filters Name=group-id,Values=<sg-id>
+//        an empty NetworkInterfaces[] means the group is attached to nothing
+//   2. that ENI's resource has a public IPv4/EIP, or an IPv6 GUA
+//   3. the subnet's route table has 0.0.0.0/0 -> an internet gateway
+//        NOTE: a subnet with no EXPLICIT association is implicitly associated with the
+//        VPC main route table, and the association.subnet-id filter returns NOTHING for
+//        it. Empty output is "check the main table", never "no route".
+//   4. the subnet's network ACL permits the port inbound AND the ephemeral range
+//        outbound — NACLs are stateless. A subnet with no explicit NACL association uses
+//        the DEFAULT NACL, which allows everything: absence of an association is
+//        allow-all, not deny-all.
+//
+// Declaring compromise on the CloudTrail event alone overstates it, and declaring safety
+// because "it's only a security group" understates it. Resolve the path — the playbook's
+// Query 3 runs all four checks and prints one verdict.
+//
+// ============================================================================
+// COMPANION — exposure window, and why Revoke is NOT an alerting signal
+// ============================================================================
+// RevokeSecurityGroupIngress removes an ingress rule. It is remediation. Alerting on it
+// alongside the authorize inverts the signal: the close is indistinguishable from the
+// open in the queue, and the fix buries the incident. Its correct use is as a
+// correlation partner that measures how long the hole was open.
+//
+// AWSCloudTrail
+// | where TimeGenerated > ago(7d)
+// | where EventSource == "ec2.amazonaws.com"
+// | where EventName in ("AuthorizeSecurityGroupIngress", "RevokeSecurityGroupIngress")
+// | where isempty(ErrorCode)
+// | extend Req = parse_json(RequestParameters)
+// | extend GroupId = tostring(coalesce(Req.groupId, Req.groupName))
+// | summarize Opened  = minif(TimeGenerated, EventName == "AuthorizeSecurityGroupIngress"),
+//             Closed  = maxif(TimeGenerated, EventName == "RevokeSecurityGroupIngress"),
+//             Actors  = make_set(UserIdentityArn, 5)
+//             by GroupId
+// | extend ExposureMinutes = iff(isnull(Closed) or Closed < Opened,
+//                                datetime_diff("minute", now(), Opened),
+//                                datetime_diff("minute", Closed, Opened))
+// | extend Status = iff(isnull(Closed) or Closed < Opened, "STILL OPEN", "closed")
+// | order by ExposureMinutes desc
+//
+// ============================================================================
+// COMPANION — the API that emits no authorize event at all
+// ============================================================================
+// ModifySecurityGroupRules edits an EXISTING rule in place, so a rule already permitting
+// 10.0.0.0/8 on port 22 can be widened to 0.0.0.0/0 without AuthorizeSecurityGroupIngress
+// ever firing. Every rule in this family keyed on the authorize event is blind to it.
+//
+// FIELD SHAPE — corroborated from real events and from an AWS-published CloudTrail Lake
+// sample query, but NOT specified in the API reference. This call renders with the XML
+// request wrapper intact and PascalCase keys, doubly nested, and the inner
+// SecurityGroupRule may be an array for a multi-rule call:
+//   requestParameters.ModifySecurityGroupRulesRequest.SecurityGroupRule.SecurityGroupRule.CidrIpv4
+// Confirm against a real event in your own trail before deploying.
+//
+// AWSCloudTrail
+// | where TimeGenerated > ago(7d)
+// | where EventSource == "ec2.amazonaws.com"
+// | where EventName == "ModifySecurityGroupRules"
+// | where isempty(ErrorCode)
+// | extend Req  = parse_json(RequestParameters)
+// | extend Body = Req.ModifySecurityGroupRulesRequest
+// | extend Rule = Body.SecurityGroupRule.SecurityGroupRule
+// | extend Cidr = tostring(coalesce(Rule.CidrIpv4, Rule.CidrIpv6))
+// | where Cidr endswith "/0"
+// | project TimeGenerated, UserIdentityArn, GroupId = tostring(Body.GroupId),
+//           RuleId = tostring(Body.SecurityGroupRule.SecurityGroupRuleId),
+//           Cidr, Proto = tostring(Rule.IpProtocol),
+//           FromPort = tostring(Rule.FromPort), ToPort = tostring(Rule.ToPort), SourceIpAddress
+//
+// ============================================================================
+// FIELD SHAPE, ERROR STRINGS AND EVIDENCE LIMITS
+// ============================================================================
+// requestParameters has a documented 100 KB ceiling; above it CloudTrail OMITS the field
+// content, and every rule here reads a path inside it. The Sigma file ships a companion

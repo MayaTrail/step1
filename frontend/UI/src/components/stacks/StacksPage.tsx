@@ -36,6 +36,7 @@ import {
 import { destroyEmulationStack } from '@/services/emulation.service'
 import { Breadcrumb } from '@/components/ui/Breadcrumb'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { ConnectPrompt, useAWSConnection } from '@/components/common/ConnectGate'
 
 const BUSY_STATUSES = new Set<StackStatus>(['deploying', 'destroying', 'refreshing'])
 
@@ -49,6 +50,7 @@ const LIVE_POLL_STATUSES = new Set<StackStatus>([
 const LIVE_POLL_INTERVAL_MS = 4000
 
 export function StacksPage() {
+    const { connected } = useAWSConnection()
     const [stacks, setStacks] = useState<Stack[]>([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
@@ -220,6 +222,22 @@ export function StacksPage() {
             // Keep the existing record if the refresh fails — non-fatal.
         }
     }, [expandedId])
+
+    // An unconnected user has no stacks and cannot create one, so the grid would
+    // render as an unexplained empty state. Say why instead.
+    if (!connected) {
+        return (
+            <div className="animate-fadeIn">
+                <Breadcrumb items={[{ label: 'Home', to: '/' }, { label: 'Infrastructure Stacks' }]} />
+                <div className="mt-6">
+                    <ConnectPrompt
+                        title="No AWS account connected"
+                        body="Stacks are the infrastructure MayaTrail provisions inside your own AWS account. Connect a verified IAM role to deploy one. Until then you can still browse the emulation catalogue, detection rules and playbooks."
+                    />
+                </div>
+            </div>
+        )
+    }
 
     if (loading) {
         return (

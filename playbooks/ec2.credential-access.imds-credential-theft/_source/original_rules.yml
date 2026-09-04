@@ -1,0 +1,69 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Possible SSRF Attempt (Hit to 169.254.169.254)
+  priority: P2
+  type: logs_threshold
+  mitre: T1190/TA0001
+  query: |
+    destination_ip:"169.254.169.254" AND action:"ACCEPT"
+  threshold: 0.0  window: 15m
+  group_by: ['source_ip_geoip.ip']
+
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: CRS SSRF EC2 Metadata URI Path
+  priority: P2
+  type: logs_threshold
+  mitre: T1552.005/TA0006
+  query: |
+    action:"ALLOW" AND labels_field_extracted.keyword:/.*EC2MetaDataSSRF_URIPath.*/
+  threshold: 0.0  window: 5m
+  group_by: ['httpRequest.clientIp']
+
+- name: CRS SSRF EC2 Metadata Cookie
+  priority: P2
+  type: logs_threshold
+  mitre: T1552.005/TA0006
+  query: |
+    action:"ALLOW" AND labels_field_extracted.keyword:/.*EC2MetaDataSSRF_Cookie.*/
+  threshold: 0.0  window: 5m
+  group_by: ['httpRequest.clientIp']
+
+- name: CRS SSRF EC2 Metadata Body
+  priority: P2
+  type: logs_threshold
+  mitre: T1552/TA0006
+  query: |
+    action:"ALLOW" AND labels_field_extracted.keyword:/.*EC2MetaDataSSRF_Body.*/
+  threshold: 0.0  window: 5m
+  group_by: ['httpRequest.clientIp']
+
+- name: CRS SSRF EC2 Metadata Query Args
+  priority: P2
+  type: logs_threshold
+  mitre: T1552.005/TA0006
+  query: |
+    action:"ALLOW" AND labels_field_extracted.keyword:/.*EC2MetaDataSSRF_QueryArguments.*/
+  threshold: 0.0  window: 5m
+  group_by: ['httpRequest.clientIp']
+

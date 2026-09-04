@@ -1,0 +1,258 @@
+# SQS Queue Attribute Manipulation (T1098 / T1213)
+#
+# ONE EVENT NAME, TWO INCIDENTS. `SetQueueAttributes` carries the queue's resource policy,
+# its KMS key, its redrive policy, its retention period and its visibility timeout in a
+# single `Attributes` map. The event name therefore says that *something* about the queue
+# changed and nothing about what — a resource-policy grant to an outside account and an
+# encryption disable are the same `eventName` from the same `eventSource`. The source rule
+# matches that name with no content test at all, so it fires on every autoscaling redrive
+# tweak and every Terraform apply, and it cannot tell those two incidents apart. Every rule
+# below discriminates on a key of `requestParameters.attributes`, never on the event name.
+# The encryption path is the sibling directory
+# ../../sqs.impact.server-side-encryption-for-aws-sqs-queue-was-disabled/.
+#
+# FIELD SHAPE. The API's request body is {"Attributes": {"<Name>": "<value>"}, "QueueUrl":
+# "..."}. CloudTrail lower-cases the first character of top-level API parameter names — AWS's
+# own SQS CloudTrail example shows `requestParameters.queueUrl` — while the KEYS INSIDE the
+# map are data, not parameter names, and keep the exact casing the API reference documents:
+# `Policy`, `RedrivePolicy`, `MessageRetentionPeriod`, `KmsMasterKeyId`,
+# `SqsManagedSseEnabled`. AWS publishes no management-event example for SetQueueAttributes,
+# so `requestParameters.attributes.<Name>` is corroborated by observed events and by the
+# request syntax rather than documented outright. Confirm it against one real event before
+# deploying.
+#
+# NO SIZE-EVASION RULE SHIPS HERE. An SQS access policy is capped at 8,192 bytes (AWS SQS
+# policy quotas: Bytes 8,192, Statements 20, Principals 50, Conditions 10, Actions per
+# statement 7). CloudTrail omits `requestParameters` only above 100 KB, so the document can
+# never be large enough to be dropped. An oversized policy is rejected outright with
+# InvalidAttributeValue or OverLimit and never produces a success event.
+#
+# DO NOT DECODE THE REQUEST. `requestParameters.attributes.Policy` is raw JSON in whatever
+# whitespace the client sent. Percent-encoding is a property of what IAM-style read APIs
+# RETURN, not of a CloudTrail request parameter, and the percent-encoding visible in AWS's
+# query-protocol sample request is HTTP form encoding of the wire request — not what
+# CloudTrail records. The real hazard on this field is whitespace: `--attributes
+# file://attrs.json` submits the document pretty-printed. Every pattern below is either a
+# bare token or a whitespace-tolerant regex for that reason.
+title: SQS queue policy grants access to a wildcard principal
+id: 58487eaf-3437-4732-98fb-2535fc9df001
+name: sqs_queue_policy_wildcard_principal
+status: experimental
+description: >-
+  A queue's access policy was set to a document naming `*` as a principal. Any AWS identity
+  — and, if the queue is also unencrypted, any anonymous caller — can then send to or
+  receive from the queue, and a receive silently starves the legitimate consumer.
+references:
+  - https://attack.mitre.org/techniques/T1098/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_SetQueueAttributes.html  # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1098
+  - attack.collection
+  - attack.t1213
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # Every content test is its own sibling block, so no block ANDs two keys that cannot
+  # co-occur on one event. The regex covers "Principal":"*", {"AWS":"*"} and {"AWS":["*"]}
+  # across any whitespace; the `\\?` groups are REQUIRED, because a platform that indexes the
+  # raw serialised event delivers this nested JSON string's quotes backslash-escaped.
+  selection:
+    eventSource: 'sqs.amazonaws.com'
+    eventName: 'SetQueueAttributes'
+  wildcard_principal:
+    requestParameters.attributes.Policy|re: '\\?"Principal\\?"\s*:\s*(\{\s*\\?"AWS\\?"\s*:\s*)?(\[\s*)?\\?"\*\\?"'
+  success:
+    errorCode: null
+  condition: selection and wildcard_principal and success
+falsepositives:
+  - >-
+    A `"Principal":"*"` bounded by `aws:PrincipalOrgID` or `aws:SourceArn` is AWS's
+    documented organisation-wide or service-fronted pattern. This rule does not read
+    `Condition`, so it fires on those too — a true finding about scope, not a compromise.
+level: high
+---
+# POPULATE `queue_admin_pipeline` BEFORE DEPLOYING. Unpopulated it fires on every legitimate
+# IaC apply. The point of the rule is that in most accounts exactly one deployment role and
+# one break-glass role have any business rewriting a queue policy, and everything else is an
+# incident — including a human in the console.
+title: SQS queue policy rewritten outside the queue-administration pipeline
+id: dfc9e557-2b38-4a67-b5d8-988bb6daa9be
+name: sqs_queue_policy_changed_outside_pipeline
+status: experimental
+description: >-
+  A queue's access policy was replaced by a principal that is not on the
+  queue-administration allowlist. `SetQueueAttributes` writes the `Policy` attribute
+  wholesale — there is no merge, no version history and no response object — so this event
+  is the only surviving record of what the queue used to permit.
+references:
+  - https://attack.mitre.org/techniques/T1098/                                                        # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_SetQueueAttributes.html # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sqs.amazonaws.com'
+    eventName: 'SetQueueAttributes'
+  # Presence test for the Policy key. `Statement` is a bare token that every valid policy
+  # document contains and that no whitespace style can break apart — unlike
+  # `"Effect": "Allow"`, whose punctuation-with-assumed-spacing is what makes the source
+  # rules in the IAM siblings miss pretty-printed documents.
+  policy_present:
+    requestParameters.attributes.Policy|contains: 'Statement'
+  queue_admin_pipeline:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'          # replace with this account's deployment role
+      - ':role/BreakGlassAdmin'     # replace with this account's break-glass role
+  success:
+    errorCode: null
+  condition: selection and policy_present and success and not queue_admin_pipeline
+falsepositives:
+  - >-
+    A newly introduced deployment role not yet added to the allowlist. Reconcile against the
+    roles that actually run your infrastructure pipeline rather than muting the rule — the
+    allowlist is the whole discriminator.
+level: high
+---
+# The redrive policy names the queue that failed messages are moved to. Repointing it at an
+# attacker-controlled queue diverts every message that exceeds `maxReceiveCount` — and an
+# attacker who also sets `VisibilityTimeout` low, or simply receives and abandons messages,
+# controls how fast that happens. Nothing about the source queue looks wrong afterwards.
+title: SQS dead-letter target repointed
+id: f964994a-8a5c-42c9-87ce-6e5cc3c3607e
+name: sqs_queue_redrive_policy_changed
+status: experimental
+description: >-
+  A queue's `RedrivePolicy` was rewritten, changing which queue receives messages that
+  exceed the maximum receive count. Read `deadLetterTargetArn` out of the event and confirm
+  the account segment of that ARN is yours — the redrive target may legally sit in another
+  account.
+references:
+  - https://attack.mitre.org/techniques/T1213/                                                        # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_SetQueueAttributes.html # retrieved 2026-08-29
+tags:
+  - attack.collection
+  - attack.t1213
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sqs.amazonaws.com'
+    eventName: 'SetQueueAttributes'
+  # `deadLetterTargetArn` is the one token a redrive policy cannot omit, and it is a bare
+  # identifier, so this presence test survives any whitespace style.
+  redrive_present:
+    requestParameters.attributes.RedrivePolicy|contains: 'deadLetterTargetArn'
+  success:
+    errorCode: null
+  condition: selection and redrive_present and success
+falsepositives:
+  - >-
+    Legitimate DLQ wiring at deploy time. This is common, which is why the rule is medium
+    and why the value of the finding is in reading the target ARN's account ID, not in the
+    event itself. Pair it with the `sqs_create_then_redirect` correlation below, which is
+    the shape that is not routine.
+level: medium
+---
+# The third way to destroy a queue's messages, and the only one that is not called
+# DeleteQueue or PurgeQueue. AWS: "Changes made to the MessageRetentionPeriod attribute can
+# take up to 15 minutes and will impact existing messages in the queue potentially causing
+# them to be expired and deleted if the MessageRetentionPeriod is reduced below the age of
+# existing messages." A drop to the 60-second floor destroys a backlog under a name that
+# reads as a tuning change, and neither destruction alert in the sibling directories fires.
+title: SQS message retention period rewritten
+id: 717d15e7-9fb6-4288-9a5e-e91131aabbcb
+name: sqs_queue_retention_period_changed
+status: experimental
+description: >-
+  A queue's `MessageRetentionPeriod` was set. Reducing it below the age of the messages
+  already in the queue expires and deletes them within 15 minutes. Compare the value in the
+  event against the queue's previous retention — a decrease is a destructive change.
+references:
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_SetQueueAttributes.html # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1485/                                                        # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sqs.amazonaws.com'
+    eventName: 'SetQueueAttributes'
+  # Presence test written as "any run of digits" rather than an `|exists` modifier, which
+  # not every backend implements. The attribute is documented as a string of seconds, so
+  # this matches whenever the key is present and never when it is absent.
+  retention_present:
+    requestParameters.attributes.MessageRetentionPeriod|re: '^[0-9]+$'
+  success:
+    errorCode: null
+  condition: selection and retention_present and success
+falsepositives:
+  - >-
+    Raising retention, and setting it at queue creation time, are both routine. Sigma cannot
+    compare the new value against the old one; the analyst must. Treat any value at or near
+    the 60-second floor on a queue that previously held a backlog as destruction.
+level: medium
+---
+# Base rule — sequence component only, not for direct alerting. Carries the success filter
+# so that a DENIED CreateQueue followed by a legitimate redrive change cannot compose into a
+# high-severity correlation.
+title: SQS queue created
+id: c7efde47-cfd0-4029-bd1e-03316eb50f67
+name: sqs_queue_created
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_CreateQueue.html # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sqs.amazonaws.com'
+    eventName: 'CreateQueue'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+# Threshold basis — derived from documented behaviour, not from an observed count. This
+# correlation has no count to tune: it is an ORDERED PAIR, and the technique's own baseline
+# is exactly one of each. A principal that creates a queue and then names a queue as a
+# redrive target within the same quarter-hour has built a destination and pointed traffic at
+# it, which is the whole of the diversion technique. Fifteen minutes is chosen to span a
+# hand-driven two-step without spanning an unrelated deployment an hour later; shorten it if
+# your pipeline does both in one apply, which would otherwise make every stack creation a
+# hit. The event ordering is conveyed by the correlation TYPE — do not add an `ordered:` key.
+title: SQS queue created and immediately named as a dead-letter target
+id: cfe5b966-4a81-458b-bd98-aa040e8994fa
+status: experimental
+description: >-
+  One principal created a queue and then rewrote another queue's `RedrivePolicy` inside
+  fifteen minutes. That is a diversion channel being stood up and wired in, staged across
+  two events neither of which is remarkable on its own.
+references:
+  - https://attack.mitre.org/techniques/T1213/ # retrieved 2026-08-29
+tags:
+  - attack.collection
+  - attack.t1213
+correlation:
+  type: temporal_ordered
+  rules:
+    - sqs_queue_created
+    - sqs_queue_redrive_policy_changed
+  group-by:
+    - userIdentity.arn
+  timespan: 15m
+level: high

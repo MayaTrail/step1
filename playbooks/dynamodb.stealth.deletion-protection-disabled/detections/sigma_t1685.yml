@@ -1,0 +1,131 @@
+# DynamoDB Deletion Protection Disabled (T1685 / T1485)
+#
+# THE EVENT NAME IS NOT THE SIGNAL. `DeletionProtectionEnabled` is an optional Boolean
+# *parameter* of `UpdateTable`, not an API of its own (verified against the DynamoDB API
+# Reference for UpdateTable, 2026-08-29). The same `UpdateTable` event name is emitted for a
+# capacity change, a billing-mode switch, a global secondary index create or delete, a
+# Streams enable, an SSE key swap and a cross-Region replica add. A rule that matches
+# `eventName: UpdateTable` therefore fires on every autoscaling adjustment in the account.
+# The single field `requestParameters.deletionProtectionEnabled` is the entire discriminator,
+# and the source rule does inspect it — which is more than most of its siblings do.
+#
+# TYPE TRAP. The parameter is documented as `Type: Boolean`, so CloudTrail carries a JSON
+# boolean `false`, not the string "false". A reimplementation that compares against a quoted
+# "false" in jq matches nothing while looking correct. The rule below uses a YAML boolean.
+#
+# WHY THIS IS A PRECONDITION, NOT AN OUTCOME. Deletion protection is OFF BY DEFAULT for
+# every table, "including global replicas, and tables restored from backups" (DynamoDB
+# Developer Guide, Using deletion protection). So the population of tables this rule can ever
+# fire for is only those where someone deliberately turned it ON. Its silence is not evidence
+# that no table is exposed. Turning it off changes nothing by itself: the damage is the
+# `DeleteTable` that follows, and "Deleting a table is an unrecoverable operation" unless
+# point-in-time recovery or an on-demand backup exists. The temporal correlation below is the
+# rule that actually names the incident.
+#
+# FIELD SHAPE. AWS's own published `UpdateTable` CloudTrail example carries NO `tableName` in
+# `requestParameters` — the table is named only at
+# `responseElements.tableDescription.tableName` (nested under a wrapper object, matching the
+# API's `TableDescription` response element). `DeleteTable` does carry
+# `requestParameters.tableName`, and also returns `responseElements.tableDescription` with
+# `itemCount` and `tableSizeBytes`. Any join between the two events must tolerate the missing
+# request-side name, which is why the correlation groups by principal and not by table.
+title: DynamoDB deletion protection disabled on a table
+id: 3f1c0f4a-6d2b-4a0e-9a3c-7b5e2d1f8c40
+name: dynamodb_deletion_protection_disabled
+status: experimental
+description: >-
+  An UpdateTable call set DeletionProtectionEnabled to false, removing the only control that
+  prevents a table from being destroyed by anyone holding dynamodb:DeleteTable. Deletion
+  protection is off by default, so a table that had it on was deliberately protected, and
+  turning it off is a deliberate act against that decision.
+references:
+  - https://attack.mitre.org/techniques/T1685/  # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1485/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_UpdateTable.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/WorkingWithTables.Basics.html  # retrieved 2026-08-29
+tags:
+  - attack.stealth
+  - attack.t1685
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'UpdateTable'
+  # Documented Type: Boolean. A quoted 'false' here matches nothing on a JSON-typed backend.
+  protection_off:
+    requestParameters.deletionProtectionEnabled: false
+  success:
+    errorCode: null
+  condition: selection and protection_off and success
+falsepositives:
+  - >-
+    A planned decommission, where the table is intentionally unprotected and then deleted by
+    the pipeline that owns it. Distinguishable by principal and by a change record; if it is
+    frequent, the finding is that decommissions are not going through change control.
+level: high
+---
+# Base rule — sequence component only, not for direct alerting. Carries the success filter so
+# a DeleteTable that was DENIED cannot compose into the critical correlation below (D-f): a
+# refused deletion is boundary mapping, not destruction.
+title: DynamoDB table deleted
+id: 8c73a1de-4b90-42f7-8d1a-0e6c9f2b4a51
+name: dynamodb_table_deleted_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_DeleteTable.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'DeleteTable'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+# THE RULE THAT NAMES THE INCIDENT. Disabling protection is preparation; deleting the table
+# is the act. Ordered, because the reverse sequence is meaningless — a table already deleted
+# cannot have its protection disabled.
+#
+# Timespan basis: 24h, not minutes. There is no documented cooldown between UpdateTable and
+# DeleteTable to anchor a short window on, and the two halves are frequently separated by a
+# deliberate pause — the disable is cheap, reversible and unalarming on its own, so an actor
+# with any patience separates them. A 24-hour span costs nothing in false positives because
+# BOTH halves are already rare: the disable can only fire on tables that were explicitly
+# protected, and the delete half is success-filtered. Shorten it only if your own change
+# windows justify it.
+#
+# Grouped by principal, NOT by table: AWS's published UpdateTable example carries no
+# `tableName` in requestParameters, so the two events cannot be reliably joined on the table.
+# The analyst confirms the table match from the response side; kql_t1685.kql does that join.
+title: DynamoDB deletion protection disabled and a table then deleted by the same principal
+id: b0d5e937-2a48-4c16-bf3e-91a7c4e08d62
+status: experimental
+description: >-
+  One principal removed deletion protection and then deleted a table. If the tables match,
+  the protection was removed in order to destroy that table, and the data is gone unless
+  point-in-time recovery or an on-demand backup existed at the moment of deletion.
+references:
+  - https://attack.mitre.org/techniques/T1485/  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: temporal_ordered
+  rules:
+    - dynamodb_deletion_protection_disabled
+    - dynamodb_table_deleted_bb
+  group-by:
+    - userIdentity.arn
+  timespan: 24h
+level: critical

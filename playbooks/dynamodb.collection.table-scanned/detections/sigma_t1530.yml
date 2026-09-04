@@ -1,0 +1,163 @@
+# DynamoDB table scanned (T1530)
+#
+# `Scan` IS DATA-PLANE, SO THE SOURCE RULE IS INERT IN A DEFAULT ACCOUNT. AWS lists Scan among the
+# operations for which "you must enable logging of data plane API activity in CloudTrail". Data
+# events are off by default and billable. The rule does not say so, and an empty result from it means
+# "not recorded" rather than "did not happen".
+#
+# AND IT MAPS TO A RECONNAISSANCE TECHNIQUE ABOUT PUBLIC SOURCES. `T1596 — Search Open Technical
+# Databases` covers WHOIS, passive DNS, CDN and public scan databases — searching things the
+# adversary does not own. Scanning your own DynamoDB table is reading stored data:
+# `T1530 — Data from Cloud Storage`.
+#
+# `Scan` IS ALSO ORDINARY. Analytics jobs, exports and small-table lookups scan constantly, so a
+# single Scan is not a finding and a flat threshold on scan COUNT reproduces the noise. Two things
+# separate a walk from a workload and both are in the request:
+#   * `select` — a scan with select COUNT returns no item data at all. Only ALL_ATTRIBUTES and
+#     ALL_PROJECTED_ATTRIBUTES actually move the rows.
+#   * BREADTH — an application scans its own table; a principal scanning several tables is not one.
+#
+# AND IT MISSES THE OTHER TWO READ PATHS. `Query` reads a partition and, without a key condition
+# narrowing it, reads a great deal; PartiQL `ExecuteStatement` compiles a SELECT to a Scan or Query
+# under a different event name entirely. Both are included below.
+title: DynamoDB tables read at breadth by one principal
+id: 7a41d6b8-0e93-4c25-b8f7-52d0916ae3fc
+status: experimental
+description: >-
+  One principal read three or more distinct tables within fifteen minutes. Breadth is the signal
+  rather than volume: an application scans its own table repeatedly and a walk touches several. This
+  is the routable output of the directory, and it needs no allowlist to be meaningful.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/logging-using-cloudtrail.html
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+correlation:
+  type: value_count
+  rules:
+    - dynamodb_table_read
+  group-by:
+    - userIdentity.arn
+  timespan: 15m
+  condition:
+    gte: 3
+    field: requestParameters.tableName
+falsepositives:
+  - >-
+    A backup, export or analytics job that legitimately reads across tables. It is behaviourally
+    identical to the technique, so allowlist it by role on the base rule — no threshold separates
+    them.
+level: high
+---
+title: DynamoDB full table scan returning item data
+id: c2807e5a-96b1-4d34-a071-e6f5238b4d90
+name: dynamodb_full_scan_returning_data
+status: experimental
+description: >-
+  A Scan requesting ALL_ATTRIBUTES, by a principal outside the application allowlist. The `select`
+  parameter is the discriminator the source rule ignores: a scan with select COUNT returns no item
+  data at all, so it cannot be exfiltration, while ALL_ATTRIBUTES returns every attribute of every
+  item examined. REQUIRES DYNAMODB DATA EVENTS.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Scan.html
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'Scan'
+  returns_data:
+    requestParameters.select:
+      - 'ALL_ATTRIBUTES'
+      - 'ALL_PROJECTED_ATTRIBUTES'
+  # CloudTrail's canonical failure field is errorCode. The source rule filters on errorMessage, which
+  # is not always present on a failure and therefore admits some failed calls.
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the application roles that legitimately scan.
+  known_readers:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/app-runtime'
+  condition: selection and success and returns_data and not known_readers
+falsepositives:
+  - >-
+    An export or migration job reading a full table, which is exactly this shape. The allowlist is
+    the only thing that separates them, and it has to be current.
+level: medium
+---
+title: DynamoDB table read
+id: 4e6b13da-58c7-49f0-9218-b7ac05e3f682
+name: dynamodb_table_read
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. Any successful read across the
+  three paths: Scan, Query, and the PartiQL statement forms which compile a SELECT to one of them.
+  REQUIRES DYNAMODB DATA EVENTS. Application traffic produces these continuously.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/logging-using-cloudtrail.html
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName:
+      - 'Scan'
+      - 'Query'
+      - 'ExecuteStatement'
+      - 'BatchExecuteStatement'
+      - 'BatchGetItem'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+title: DynamoDB table read by a principal with no read history
+id: 91f0c47e-2b58-4d6a-83e1-70c5d829a4b3
+name: dynamodb_table_read_unfamiliar_principal
+status: experimental
+description: >-
+  A read of a table by a principal outside the recorded application set. One read has ordinary
+  explanations — an engineer investigating — so this ships at low and exists to give the breadth
+  correlation something to build on and to make an unexpected reader visible without paging anyone.
+  REQUIRES DYNAMODB DATA EVENTS.
+references:
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName:
+      - 'Scan'
+      - 'Query'
+      - 'ExecuteStatement'
+      - 'BatchExecuteStatement'
+  success:
+    errorCode: null
+  known_readers:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/app-runtime'
+  service_invoked:
+    userIdentity.invokedBy|exists: true
+  condition: selection and success and not known_readers and not service_invoked
+falsepositives:
+  - >-
+    An application role missing from the list, which in an estate with many task roles is the common
+    case. Low severity for that reason — routed to a log, not to a human.
+level: low

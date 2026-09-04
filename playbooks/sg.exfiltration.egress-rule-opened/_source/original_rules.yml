@@ -1,0 +1,25 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Egress Rule Was Added
+  priority: building-block
+  type: logs_immediate
+  query: |
+    eventName:"AuthorizeSecurityGroupEgress" AND NOT _exists_:errorCode
+  group_by: []
+
+- name: Egress Rule Was Revoked
+  priority: building-block
+  type: logs_immediate
+  query: |
+    eventName:"RevokeSecurityGroupEgress" AND NOT _exists_:errorCode
+  group_by: []

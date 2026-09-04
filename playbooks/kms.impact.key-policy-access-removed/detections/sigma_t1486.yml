@@ -1,0 +1,150 @@
+# KMS key policy access removed (T1486)
+#
+# THE SOURCE RULE'S NEGATION IS INVERTED. It ends `NOT bypassPolicyLockoutSafetyCheck:"false"`. The
+# parameter is OPTIONAL, so on an ordinary PutKeyPolicy it is ABSENT — not present-and-false. `NOT
+# field:"false"` is therefore true for every ordinary call and the rule fires on all of them. It
+# meant `= true`, which is what the first document below matches.
+#
+# AND ITS `policyName:"default"` CLAUSE IS A NO-OP THAT ALSO DROPS EVENTS. AWS: the only valid value
+# is `default`. It can never exclude a policy by name, but it does require the field to be PRESENT,
+# so callers who omit the optional parameter are silently dropped. The two defects push in opposite
+# directions, which is why the alert volume looked plausible. See ../../_ground-truth/kms.md §3, §4.
+#
+# THE LARGER CASE THE RULE NEVER REACHES: a policy that omits the account-root statement.
+# PutKeyPolicy REPLACES the policy rather than merging it, so a principal is removed by being left
+# out — no distinct event, no diff, only the new document. And "without permission from the key
+# policy, IAM policies that allow permissions have no effect", so removing that statement cuts off
+# every IAM-delegated principal at once and no IAM change restores it. See §5.
+#
+# MITRE: the source maps Data Manipulation. Removing key access alters no data — the ciphertext is
+# byte-identical. What changes is whether anyone can read it.
+title: KMS key policy written with the lockout safety check bypassed
+id: 528050e6-51c2-4597-adac-50ede6bdd008
+status: experimental
+description: >-
+  PutKeyPolicy with BypassPolicyLockoutSafetyCheck true. AWS documents this as being for the case
+  where you intend to prevent the calling principal from making a subsequent PutKeyPolicy request —
+  in other words, deliberately making the key unmanageable.
+references:
+  - https://docs.aws.amazon.com/kms/latest/APIReference/API_PutKeyPolicy.html
+  - https://attack.mitre.org/techniques/T1486/
+tags:
+  - attack.impact
+  - attack.t1486
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # All three keys are on the SAME event: CloudTrail writes eventSource, eventName and the request
+  # body of one API call into one record. ANDing them is correct.
+  #
+  # This matches the VALUE `true` being present. It does not test for the absence of `false`, which
+  # is the source rule's defect: the parameter is simply missing on an ordinary call.
+  selection:
+    eventSource: kms.amazonaws.com
+    eventName: PutKeyPolicy
+    requestParameters.bypassPolicyLockoutSafetyCheck: true
+  # justified: no threshold and no allowlist. AWS documents exactly one intent for this parameter and
+  # it is to lock the caller out of the key. There is no volume at which that is more interesting and
+  # no automation that legitimately does it.
+  condition: selection
+falsepositives:
+  - A key being handed to a single service principal during a migration, which should be confirmed
+    against a change record rather than filtered out
+level: critical
+---
+# The case the source rule cannot express. The account-root statement is what allows IAM to delegate
+# access to the key at all; a submitted policy without it removes every IAM-delegated principal.
+title: KMS key policy written without the account-root statement
+id: 745f08e2-5a2e-4eb9-87ad-fb3646cd9295
+status: experimental
+description: >-
+  PutKeyPolicy submitted a policy document that does not contain an account-root principal. Because
+  IAM policies cannot grant access to a KMS key without the key policy allowing it, this removes
+  IAM-delegated access for the whole account in one call and no IAM change restores it.
+references:
+  - https://docs.aws.amazon.com/kms/latest/developerguide/key-policies.html
+  - https://attack.mitre.org/techniques/T1486/
+tags:
+  - attack.impact
+  - attack.t1486
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: kms.amazonaws.com
+    eventName: PutKeyPolicy
+    errorCode: null
+  # The root statement is written as arn:aws:iam::<account-id>:root. Matching on the ':root"' suffix
+  # avoids hard-coding an account id and still catches any account's root principal.
+  filter_has_root:
+    requestParameters.policy|contains: ':root'
+  condition: selection and not filter_has_root
+falsepositives:
+  - A key deliberately scoped to service principals only — a small, enumerable set that should be
+    listed by key id at deployment rather than by removing this document
+level: high
+---
+name: kms_key_policy_changed
+title: KMS key policy replaced
+id: e73f6f38-3d56-4066-a1fa-468bedb26057
+status: experimental
+description: >-
+  PutKeyPolicy succeeded outside the provisioning allowlist. Informational alone. Note that
+  PutKeyPolicy REPLACES the policy rather than merging it, so the event carries the new document and
+  never says what was removed.
+references:
+  - https://docs.aws.amazon.com/kms/latest/APIReference/API_PutKeyPolicy.html
+  - https://attack.mitre.org/techniques/T1486/
+tags:
+  - attack.impact
+  - attack.t1486
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # No policyName clause. AWS permits exactly one value, so filtering on it excludes nothing and
+  # silently drops every caller who omitted the optional parameter.
+  selection:
+    eventSource: kms.amazonaws.com
+    eventName: PutKeyPolicy
+    errorCode: null
+  filter_provisioning:
+    userIdentity.arn|contains:
+      - 'PlatformAutomation'
+      - 'iac-deploy'
+  condition: selection and not filter_provisioning
+falsepositives:
+  - Infrastructure provisioning that runs under a role not yet in the allowlist
+level: informational
+---
+# Three keys re-policied by one principal in thirty minutes is a sweep. The source rule has a
+# threshold of zero and so cannot distinguish one deliberate change from a walk across the account.
+title: KMS key policies replaced across multiple keys by one principal
+id: 371702b0-35ff-4cc3-b099-ca12c187a6c8
+status: experimental
+description: >-
+  One principal replaced the key policy on three or more KMS keys within thirty minutes. A single
+  policy change is routine; a sweep across keys is access being removed at scale, and every key
+  policy is Regional so the sweep may be one of several.
+references:
+  - https://docs.aws.amazon.com/kms/latest/APIReference/API_PutKeyPolicy.html
+  - https://attack.mitre.org/techniques/T1486/
+tags:
+  - attack.impact
+  - attack.t1486
+correlation:
+  type: value_count
+  rules:
+    - kms_key_policy_changed
+  group-by:
+    - userIdentity.arn
+  timespan: 30m
+  condition:
+    gte: 3
+    field: requestParameters.keyId
+falsepositives:
+  - A compliance remediation applying a standard policy across every key, which should be identifiable
+    from a change record naming the same key ids
+level: high

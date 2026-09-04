@@ -1,0 +1,158 @@
+# IAM managed policy default version changed (T1098.003)
+#
+# THIS CALL GRANTS PERMISSIONS AND CARRIES NONE. SetDefaultPolicyVersion takes PolicyArn and
+# VersionId, and nothing else — there is no policyDocument on the request. Every "overly permissive
+# policy" rule in the same source pack inspects policyDocument, so all of them are structurally
+# blind to this technique. The permissive text was authored earlier, possibly legitimately, and
+# activating it writes nothing.
+#
+# THE SOURCE RULE WATCHES ONE OF THE TWO CALLS THAT DO THIS. `CreatePolicyVersion` with
+# `SetAsDefault: true` makes the new version operative in a SINGLE call — AWS: "When this parameter
+# is true, the new policy version becomes the operative version" — and emits no
+# SetDefaultPolicyVersion event at all. A rule scoped to SetDefaultPolicyVersion misses the more
+# direct form entirely. Both are covered below.
+#
+# AND ITS BLAST RADIUS IS UNBOUNDED AND UNKNOWABLE FROM THE EVENT. AWS: "This operation affects all
+# users, groups, and roles that the policy is attached to." One call re-permissions every attached
+# principal. The event names none of them; ListEntitiesForPolicy is AWS's own documented way to find
+# out, and §2 of ../PLAYBOOK.md runs it.
+#
+# WHY OLD VERSIONS ARE THE INTERESTING ONES. A managed policy holds up to five versions, so up to
+# four non-operative ones linger at any time. An over-broad draft that was tightened months ago is
+# still there, and one call makes it live again — with no policy edit for a change-review process to
+# catch. VersionId matches v[1-9][0-9]*, so a LOWER number than the current default is a revert
+# backwards, which is the direction worth rating higher.
+title: IAM managed policy default version changed
+id: 3fa71c08-6b25-4e19-9d4a-08c3e7b512df
+name: iam_default_policy_version_changed
+status: experimental
+description: >-
+  SetDefaultPolicyVersion succeeded. The operative version of a managed policy changed, which
+  re-permissions every user, group and role the policy is attached to at once. The event carries no
+  policy document, so what was granted is not knowable without GetPolicyVersion, and the affected
+  principals are not knowable without ListEntitiesForPolicy.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_SetDefaultPolicyVersion.html
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_CreatePolicyVersion.html
+  - https://attack.mitre.org/techniques/T1098/003/
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'SetDefaultPolicyVersion'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the roles that own IAM policy lifecycle.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    A rollback of a policy change that broke something, which legitimately reverts to an earlier
+    version. It should correlate with an incident or a deployment, and it is indistinguishable from
+    the attack without that context — which is why the response starts by reading the version rather
+    than by judging the caller.
+level: high
+---
+title: IAM managed policy version created and activated in one call
+id: 8c2d40b7-91ae-4f63-b508-27d1a6ef9430
+name: iam_policy_version_created_as_default
+status: experimental
+description: >-
+  CreatePolicyVersion succeeded with setAsDefault true. This is the same escalation as
+  SetDefaultPolicyVersion and it produces no SetDefaultPolicyVersion event, so a rule watching that
+  name alone never sees it. Unlike the revert case the document IS on this request, which makes it
+  the one shape here where the granted permissions can be read directly from the event.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_CreatePolicyVersion.html
+  - https://attack.mitre.org/techniques/T1098/003/
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # Three keys ANDed, and they do co-occur on a single event: a CreatePolicyVersion record carries
+  # eventSource, eventName and the submitted setAsDefault flag together.
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'CreatePolicyVersion'
+    requestParameters.setAsDefault: true
+  success:
+    errorCode: null
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    An infrastructure apply that updates a managed policy, which is exactly this call. Allowlisting
+    the provisioning role is mandatory rather than optional here; without it this rule fires on
+    every policy deployment.
+level: high
+---
+title: IAM policy version authored and then activated by the same principal
+id: b6019f5c-4d38-42a7-8e10-c39d75a4b28e
+status: experimental
+description: >-
+  A principal created a new managed policy version and then made it the default in a separate call.
+  Splitting the two steps is what an actor does when the create is expected to be reviewed and the
+  activation is not — the version sits dormant and harmless until the second call, at which point it
+  applies to every attached principal. The pair is the finding; each half alone has an ordinary
+  reading.
+references:
+  - https://attack.mitre.org/techniques/T1098/003/
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.003
+correlation:
+  type: temporal_ordered
+  rules:
+    - iam_policy_version_created
+    - iam_default_policy_version_changed
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+falsepositives:
+  - >-
+    A deployment that creates a version and promotes it as two steps. Allowlist the pipeline role on
+    the base rules rather than shortening the timespan — a patient actor is exactly who a short
+    timespan lets through.
+level: critical
+---
+title: IAM managed policy version created
+id: 5e83b21d-7c04-4906-a2f5-1db608e73c4a
+name: iam_policy_version_created
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. Any successful
+  CreatePolicyVersion, including one left dormant. AWS caps a managed policy at five versions, so
+  routine policy maintenance produces these continuously.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_CreatePolicyVersion.html
+tags:
+  - attack.persistence
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'CreatePolicyVersion'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational

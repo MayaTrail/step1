@@ -1,0 +1,143 @@
+# Secrets Manager secret deleted (T1485)
+#
+# THE RULE CANNOT FIRE. It matches `eventName:"deletesecret"`; CloudTrail emits `DeleteSecret`, and on
+# a case-sensitive field the lowercase form matches nothing. Tenth instance of that defect class
+# across the source set — see ../../_ground-truth/secretsmanager.md §7.
+#
+# IT HAS NO CONTENT CHECK ON THE ONE PARAMETER THAT DECIDES THE INCIDENT. A default DeleteSecret is
+# reversible with RestoreSecret for 7 to 30 days. `ForceDeleteWithoutRecovery: true` is permanent.
+# Those are different incidents and the source rule reports them identically.
+#
+# BEWARE THE ABSENT PARAMETER. `forceDeleteWithoutRecovery` and `recoveryWindowInDays` are optional,
+# so they are simply MISSING from requestParameters when the caller omits them. A rule written as
+# `NOT forceDeleteWithoutRecovery:"false"` would match every ordinary deletion; the documents below
+# match on the value `true` being present, never on the absence of `false`.
+#
+# AND THE RECOVERY WINDOW IS NOT AN OUTAGE WINDOW. AWS: "When a secret is scheduled for deletion, you
+# cannot retrieve the secret value." Consumers start failing the moment the call succeeds. The thirty
+# days are for recovering the VALUE, not for keeping the service up.
+#
+# Every Secrets Manager call is a management event, so all four documents work without data events.
+title: Secrets Manager secret force-deleted without recovery
+id: 9992193a-caf6-45eb-a1a8-13fd03007dce
+status: experimental
+description: >-
+  DeleteSecret was called with ForceDeleteWithoutRecovery true. There is no recovery window and
+  RestoreSecret will not work — the credential material is gone. The source rule reports this
+  identically to a routine deletion that is reversible for thirty days.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_DeleteSecret.html
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # All three keys are on the SAME event: CloudTrail writes eventSource, eventName and the request
+  # body of one API call into one record. ANDing them is correct.
+  selection:
+    eventSource: secretsmanager.amazonaws.com
+    eventName: DeleteSecret
+    requestParameters.forceDeleteWithoutRecovery: true
+  # justified: no threshold and no allowlist. A single irreversible deletion of credential material is
+  # the finding; there is no second one that makes it worse. Automation does not force-delete —
+  # pipelines that tear down environments use the default window precisely so that a mistake is
+  # recoverable, so an automation-role exclusion here would only hide the case worth seeing.
+  condition: selection
+falsepositives:
+  - Test-environment teardown that deliberately reuses secret names immediately, which is the one
+    legitimate reason to skip the window
+level: critical
+---
+name: secretsmanager_secret_deleted
+title: Secrets Manager secret scheduled for deletion
+id: e69a7f2b-0ef9-48d9-bac5-c32548023045
+status: experimental
+description: >-
+  DeleteSecret succeeded with a recovery window. Reversible with RestoreSecret until the DeletionDate
+  — but the value cannot be retrieved from the moment this call succeeds, so consumers are already
+  failing. Base rule for the correlation below.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_DeleteSecret.html
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: secretsmanager.amazonaws.com
+    eventName: DeleteSecret
+    errorCode: null
+  filter_automation:
+    userIdentity.arn|contains: 'PlatformAutomation'
+  condition: selection and not filter_automation
+falsepositives:
+  - Decommissioning work, which is the common explanation and is confirmed by a change record rather
+    than by the event
+level: low
+---
+# A compressed window is a deliberate choice. Seven days is the minimum Secrets Manager allows, so a
+# caller who sets it has read the documentation and decided to shorten the time you have.
+title: Secrets Manager secret deleted with the minimum recovery window
+id: d609f56b-a210-4212-a289-a996ebc72b11
+status: experimental
+description: >-
+  DeleteSecret was called with a recovery window of seven days, the shortest Secrets Manager permits.
+  Routine decommissioning takes the thirty-day default; setting the floor narrows the window for
+  recovery on purpose.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_DeleteSecret.html
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: secretsmanager.amazonaws.com
+    eventName: DeleteSecret
+    requestParameters.recoveryWindowInDays: 7
+  # justified: the parameter is optional and defaults to thirty. Its presence at the floor value is
+  # the signal, so there is nothing to threshold and no allowlist that would not hide it.
+  condition: selection
+falsepositives:
+  - An environment-teardown pipeline standardised on the minimum window — confirm once, then add the
+    role to the base rule's automation filter rather than removing this document
+level: medium
+---
+# Three or more distinct secrets in thirty minutes. The source rule has a threshold of zero, so it
+# cannot express "this is a sweep rather than a decommission".
+title: Secrets Manager secrets deleted in bulk by one principal
+id: bfc7ec39-a5b7-4b8f-b450-c50fbbf9dfad
+status: experimental
+description: >-
+  One principal scheduled three or more distinct secrets for deletion within thirty minutes. Bulk
+  deletion of credential material is destruction rather than decommissioning, and every consumer of
+  every one of those secrets is already failing.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_DeleteSecret.html
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: value_count
+  rules:
+    - secretsmanager_secret_deleted
+  group-by:
+    - userIdentity.arn
+  timespan: 30m
+  condition:
+    gte: 3
+    field: requestParameters.secretId
+falsepositives:
+  - A planned decommission of an entire environment, which should be identifiable from a change
+    record naming the same secrets
+level: high

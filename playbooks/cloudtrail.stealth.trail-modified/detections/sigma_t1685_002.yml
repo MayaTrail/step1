@@ -1,0 +1,185 @@
+# CloudTrail trail modified (T1685.002)
+#
+# THE STEALTHIEST OF THE THREE TAMPERING TECHNIQUES, RATED LOWEST BY THE SOURCE PACK. A modified
+# trail stays present, keeps logging and reports healthy in every summary view.
+#
+# It also matches `UpdateTrail` only, which is not how coverage is narrowed — selectors are set by
+# PutEventSelectors, replaced wholesale rather than merged. And UpdateTrail has four distinct abuses
+# the rule does not separate: multi-Region off, global service events off, bucket redirected, KMS key
+# changed. Full rationale: detections/detection_note_t1685_002.md.
+title: CloudTrail trail coverage reduced
+id: 5a2f81c6-4bd0-4739-91ea-63c07f2b8d94
+name: cloudtrail_trail_coverage_reduced
+status: experimental
+description: >-
+  UpdateTrail turned off multi-Region coverage, global service events, or log file validation. The
+  trail stays present and keeps reporting as logging, so every check that asks whether logging is
+  enabled passes. Turning off global service events is the sharpest of the three: IAM, STS and
+  CloudFront events are recorded in us-east-1 and delivered only to trails that include them, so
+  this single flag makes identity activity invisible while the trail looks healthy.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_UpdateTrail.html
+  - https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-concepts.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'UpdateTrail'
+  success:
+    errorCode: null
+  multiregion_off:
+    requestParameters.isMultiRegionTrail: false
+  global_events_off:
+    requestParameters.includeGlobalServiceEvents: false
+  validation_off:
+    requestParameters.enableLogFileValidation: false
+  condition: selection and success and (multiregion_off or global_events_off or validation_off)
+falsepositives:
+  - >-
+    A trail being deliberately narrowed for cost, which does happen and should arrive with a change
+    record. It is also exactly what this technique looks like, so the change record is the only
+    thing that separates them.
+level: critical
+---
+title: CloudTrail trail destination or encryption key changed
+id: c93e6b70-18a4-4d52-8f61-2b7d05ea34c9
+name: cloudtrail_trail_destination_changed
+status: experimental
+description: >-
+  UpdateTrail changed the destination bucket or the KMS key. Both leave the trail logging and both
+  end the flow of readable records into the defender's pipeline — a redirected bucket lands the logs
+  somewhere nobody queries, and a changed KMS key delivers them intact and undecryptable to anyone
+  without access to the new key. The second is the worse of the two because the objects are present
+  and correctly sized, so a volume-based health check sees nothing wrong.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_UpdateTrail.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'UpdateTrail'
+  success:
+    errorCode: null
+  destination_present:
+    requestParameters.s3BucketName|exists: true
+  key_present:
+    requestParameters.kmsKeyId|exists: true
+  # POPULATE BEFORE DEPLOYING with the buckets that legitimately receive trail logs. Deployed empty
+  # this fires on every trail update that restates the current destination, which most do.
+  known_destinations:
+    requestParameters.s3BucketName:
+      - 'org-cloudtrail-logs'
+      - 'org-cloudtrail-logs-archive'
+  condition: selection and success and (destination_present or key_present) and not known_destinations
+falsepositives:
+  - >-
+    A trail update that restates the existing bucket unchanged, which the API accepts and which IaC
+    tools do routinely. Populating known_destinations removes these; widening the rule does not.
+level: high
+---
+title: CloudTrail event selectors changed
+id: 71d0af38-9c62-4e15-b804-5ea36c9f1207
+name: cloudtrail_event_selectors_changed
+status: experimental
+description: >-
+  PutEventSelectors or PutInsightSelectors was called. This is how what a trail captures is actually
+  narrowed, and it is a different call from UpdateTrail — a rule scoped to UpdateTrail never sees
+  it. Because selectors are replaced wholesale rather than merged, a single call can remove every
+  data-event and network-activity selector while the trail continues to report as logging.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_PutEventSelectors.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName:
+      - 'PutEventSelectors'
+      - 'PutInsightSelectors'
+  success:
+    errorCode: null
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    An infrastructure apply that restates the selectors on every run. Allowlist the role; the
+    comparison against the previous selector set, which the playbook does, is what distinguishes a
+    restatement from a reduction.
+level: high
+---
+title: CloudTrail configuration changed repeatedly by one principal
+id: 8b47c05e-2d91-4a68-b3f7-e015d2a7648b
+status: experimental
+description: >-
+  One principal made three or more CloudTrail configuration changes within an hour. Any single
+  change has an innocent reading; a sequence of them by one identity in one hour is someone working
+  through the configuration, and it is the shape that a per-event rule at P3 will never surface.
+references:
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+correlation:
+  type: event_count
+  rules:
+    - cloudtrail_config_changed
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+  condition:
+    gte: 3
+falsepositives:
+  - >-
+    A deployment that creates and configures several trails in one run. Allowlist the pipeline role
+    on the base rule rather than raising the threshold, which would only make the attacker case
+    harder to reach as well.
+level: critical
+---
+title: CloudTrail configuration changed
+id: e6014c9d-53b8-42f7-a09e-c8b715f3a2d6
+name: cloudtrail_config_changed
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. Any successful call that
+  changes a trail's configuration or its selectors.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_UpdateTrail.html
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName:
+      - 'UpdateTrail'
+      - 'PutEventSelectors'
+      - 'PutInsightSelectors'
+      - 'StopLogging'
+      - 'DeleteTrail'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational

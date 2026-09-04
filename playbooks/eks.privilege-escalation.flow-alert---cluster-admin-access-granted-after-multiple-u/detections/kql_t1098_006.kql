@@ -1,0 +1,137 @@
+// Cluster-admin granted after repeated denials (T1098.006 / T1613)
+//
+// TABLE NAMES ARE DEPLOYMENT-SPECIFIC AND MUST BE MAPPED BEFORE THIS RUNS.
+// The Kubernetes audit log is not a vendor-standard table the way CloudTrail is: it arrives in
+// CloudWatch Logs group /aws/eks/<cluster>/cluster (stream prefix kube-apiserver-audit-) and is
+// forwarded from there. Substitute your own table for EksAudit below. The COLUMN names used are
+// the upstream Kubernetes audit Event field names, flattened - keep them, because the whole
+// point of this query is that they are not CloudTrail field names:
+//   Username        <- user.username        (string)
+//   UserGroups      <- user.groups          (ARRAY)
+//   Verb            <- verb
+//   Resource        <- objectRef.resource
+//   Namespace       <- objectRef.namespace
+//   ObjectName      <- objectRef.name       (ABSENT on list/watch - see below)
+//   ResponseCode    <- responseStatus.code  (INT32)
+//   SourceIPs       <- sourceIPs            (ARRAY - element 0 is the client behind a proxy)
+//   RequestObject   <- requestObject        (present for RBAC writes only; see below)
+//   UserAgent       <- userAgent
+//
+// WHY requestObject IS AVAILABLE HERE AND NOT ELSEWHERE. The EKS default audit policy records
+// the rbac.authorization.k8s.io group at RequestResponse level for write verbs, so a binding
+// event carries its full roleRef and subjects. The same policy caps secrets and configmaps at
+// Metadata, so no equivalent query can be written for those. The one exception is the aws-auth
+// ConfigMap, whose update/patch/delete is the policy's FIRST rule at RequestResponse - but NOT
+// its create, which falls through to Metadata with no body.
+//
+// `contains`, never `has`: every value matched here is punctuated - "system:masters",
+// "cluster-admin", "arn:aws:sts::...". `has` is whole-term and would silently fail on all of
+// them. No strcat_array + equality either: UserGroups and SourceIPs are arrays, and flattening
+// them to a string drops multi-element cases - set_has_element is used instead.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let Lookback = 30d;
+let Audit = EksAudit | where TimeGenerated > ago(Lookback);
+// STAGE 1 - authorization denials. 403 and nothing else: 401 is an AUTHENTICATION failure, a
+// different incident with a different response, and a rule that conflates them sees neither.
+let Denials = Audit
+    | where ResponseCode == 403
+    | summarize DenialCount = count(), DeniedResources = make_set(Resource, 25),
+                FirstDenial = min(TimeGenerated), LastDenial = max(TimeGenerated),
+                DenialIps = make_set(tostring(SourceIPs[0]), 10)
+             by Username
+    | where DenialCount >= 3;
+// STAGE 2 - the grant, on the Kubernetes plane. Three shapes, ORed, because "cluster admin" is
+// not one string: roleRef naming the built-in role; a subject in the system:masters GROUP, which
+// reaches the same permissions through Kubernetes' own default cluster-admin ClusterRoleBinding
+// and contains the string "cluster-admin" nowhere; and a freshly written role with wildcard verbs.
+let Grants = Audit
+    | where Verb in ("create", "update", "patch") and ResponseCode between (200 .. 201)
+    | where Resource in ("clusterrolebindings", "rolebindings", "clusterroles", "roles")
+          or (Resource == "configmaps" and ObjectName == "aws-auth" and Namespace == "kube-system")
+    | extend Req = tostring(RequestObject)
+    | extend GrantShape = case(
+        Req contains "\"name\":\"cluster-admin\"",              "roleRef -> cluster-admin",
+        Req contains "system:masters",                          "subject -> system:masters group",
+        Req contains "\"verbs\":[\"*\"]",                       "role with wildcard verbs",
+        Resource == "configmaps",                               "aws-auth edited (body may be absent if this was a CREATE)",
+        "")
+    | where isnotempty(GrantShape)
+    | project GrantTime = TimeGenerated, Username, GrantVerb = Verb, GrantResource = Resource,
+              GrantObject = ObjectName, GrantShape, GrantIp = tostring(SourceIPs[0]), UserAgent;
+// STAGE 2b - the grant, on the AWS plane. This is the half no Kubernetes audit query can reach:
+// AssociateAccessPolicy creates NO Kubernetes object, so a cluster search returns clean over a
+// live administrator. Joined on the STS ARN, which is the default username EKS generates for an
+// access entry - AWS's own CreateAccessEntry response returns
+// "arn:aws:sts::012345678910:assumed-role/my-role/{{SessionName}}".
+let AwsPlaneGrants =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "eks.amazonaws.com" and EventName == "AssociateAccessPolicy"
+          and isempty(ErrorCode)
+    | extend Req = parse_json(RequestParameters)
+    | where tostring(Req.policyArn) contains "AmazonEKSClusterAdminPolicy"
+         or tostring(Req.policyArn) contains "AmazonEKSAdminPolicy"
+         or tostring(Req.policyArn) contains "AmazonEKSSecretAdminPolicy"
+         or tostring(Req.policyArn) contains "AmazonEKSAdminViewPolicy"
+    | project GrantTime = TimeGenerated, Grantor = UserIdentityArn,
+              GrantedPrincipal = tostring(Req.principalArn), PolicyArn = tostring(Req.policyArn),
+              Scope = tostring(Req.accessScope.type), GrantIp = SourceIpAddress;
+// What the identity did AFTER the grant. secrets and serviceaccounts/token are the two that
+// convert cluster control into credentials that leave the cluster.
+let PostGrantUse = Audit
+    | where ResponseCode between (200 .. 299)
+    | summarize UseCount = count(),
+                SecretRequests = countif(Resource == "secrets"),
+                TokenMints = countif(Subresource == "token"),
+                ResourcesUsed = make_set(Resource, 25), LastUse = max(TimeGenerated)
+             by Username;
+Grants
+| join kind=leftouter Denials on Username
+| join kind=leftouter PostGrantUse on Username
+| extend DeniedThenGranted = isnotempty(LastDenial) and LastDenial < GrantTime
+                             and GrantTime - LastDenial < 1h
+| extend IsWorkload = Username startswith "system:serviceaccount:"
+| extend Verdict = case(
+    DeniedThenGranted and TokenMints > 0,
+        strcat("SELF-ESCALATION, CREDENTIALS TAKEN - ", DenialCount, " denial(s) then '", GrantShape,
+               "', then ", TokenMints, " ServiceAccount token mint(s). Every bound IAM role is compromised"),
+    DeniedThenGranted and SecretRequests > 0,
+        strcat("SELF-ESCALATION, SECRETS READ - ", DenialCount, " denial(s) then '", GrantShape,
+               "', then ", SecretRequests, " secret request(s). The audit policy caps secrets at Metadata, so WHAT was read is not recoverable"),
+    DeniedThenGranted,
+        strcat("SELF-ESCALATION - ", DenialCount, " denial(s) across ", tostring(array_length(DeniedResources)),
+               " resource type(s), then '", GrantShape, "' within the hour. This is the source flow, corrected"),
+    IsWorkload,
+        strcat("WORKLOAD GRANTED CLUSTER ADMIN - a ServiceAccount, not a person, performed '", GrantShape,
+               "'. Containment is a Kubernetes action, not an IAM one - see the ServiceAccount playbook"),
+    isnotempty(LastDenial),
+        strcat("GRANT BY A PREVIOUSLY-DENIED IDENTITY, OUTSIDE THE HOUR - ", DenialCount,
+               " denial(s), last at ", tostring(LastDenial), ". Widen the window before dismissing"),
+        strcat("CLUSTER-ADMIN GRANT WITH NO PRECEDING DENIALS - '", GrantShape,
+               "'. Not exculpatory: the actor may have known its permissions, or escalated on the AWS plane where denials do not appear"))
+| project GrantTime, Verdict, Username, GrantShape, GrantVerb, GrantResource, GrantObject,
+          DenialCount, DeniedResources, FirstDenial, LastDenial, DenialIps,
+          SecretRequests, TokenMints, ResourcesUsed, LastUse,
+          GrantIp, UserAgent, IsWorkload
+| order by GrantTime desc
+// Run AwsPlaneGrants SEPARATELY and reconcile by hand. It is deliberately not unioned in: its
+// rows have no Kubernetes username to join on until the access entry is resolved, and a join
+// that silently drops them would recreate the exact blind spot this file exists to close.
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// Escalation through a templated aws-auth mapping. AWS: a caller who can assume a role mapped
+// with {{SessionName}} in its GROUPS field "can choose their own Kubernetes group membership by
+// crafting the session name". The privilege is selected inside sts:AssumeRole, which names no
+// cluster; the resulting request looks like an ordinary authenticated call, and no audit event
+// records a configuration change because none happened.
+//
+// The creation of the aws-auth ConfigMap. The EKS default audit policy records that object at
+// RequestResponse for update, patch and delete only. A create falls through to the generic
+// configmaps rule at Metadata level, so RequestObject is empty and GrantShape resolves to the
+// caveated "body may be absent" branch.
+//
+// Anything at all, if the `audit` control-plane log type was off. It is off by default, cannot be
+// enabled retrospectively, and its absence produces exactly the same empty result as a clean
+// cluster. Verify with `aws eks describe-cluster` before reading any zero here as a finding.

@@ -1,0 +1,84 @@
+// Security group egress re-widened to the internet (T1686.001)
+//
+// The default outbound state is ALREADY open: "When you first create a security group, it has an
+// outbound rule that allows all outbound traffic from the resource." So an egress-open event is
+// usually restoring a default nobody removed. What matters is the SEQUENCE — a revoke followed by
+// an authorize on the same group, which undoes a deliberate restriction.
+//
+// `contains` throughout, never `has` — CIDRs and protocol values are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "ec2.amazonaws.com"
+| where EventName in ("AuthorizeSecurityGroupEgress", "RevokeSecurityGroupEgress",
+                      "ModifySecurityGroupRules", "CreateSecurityGroup")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend GroupId = tostring(coalesce(Req.groupId, Req.groupName))
+| extend Perms = tostring(Req.ipPermissions)
+| extend FlatCidr = tostring(Req.cidrIp)
+// The flat form cannot carry IPv6 — "To specify an IPv6 address range, use IP permissions instead."
+| extend OpenV4 = FlatCidr == "0.0.0.0/0" or Perms contains "0.0.0.0/0"
+| extend OpenV6 = FlatCidr == "::/0" or Perms contains "::/0"
+| extend AllProtocols = tostring(Req.ipProtocol) == "-1" or Perms contains '"ipProtocol":"-1"'
+// A destination that is a security group in ANOTHER account generates no CloudTrail event for that
+// account's owner, so this column is only ever populated for groups in this account.
+| extend RefsGroup = Perms contains '"groupId"' or isnotempty(tostring(Req.sourceSecurityGroupName))
+| summarize
+    EgressOpened   = countif(EventName == "AuthorizeSecurityGroupEgress" and (OpenV4 or OpenV6)),
+    EgressAllProto = countif(EventName == "AuthorizeSecurityGroupEgress" and (OpenV4 or OpenV6) and AllProtocols),
+    EgressRevoked  = countif(EventName == "RevokeSecurityGroupEgress"),
+    Modifications  = countif(EventName == "ModifySecurityGroupRules"),
+    GroupsCreated  = countif(EventName == "CreateSecurityGroup"),
+    RefsOtherGroup = countif(RefsGroup),
+    Groups         = make_set(GroupId, 10),
+    FirstRevoke    = minif(TimeGenerated, EventName == "RevokeSecurityGroupEgress"),
+    FirstOpen      = minif(TimeGenerated, EventName == "AuthorizeSecurityGroupEgress" and (OpenV4 or OpenV6)),
+    SourceIps      = make_set(SourceIpAddress, 5),
+    LastSeen       = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where EgressOpened > 0 or Modifications > 0
+// Re-widening: a revoke BEFORE the open, on the same principal. A group only has restricted egress
+// because somebody narrowed it deliberately, so undoing that is a decision being reversed — unlike
+// an open on a group that was never narrowed, which restores the default.
+| extend ReWidened = EgressRevoked > 0 and isnotempty(FirstRevoke) and isnotempty(FirstOpen)
+                     and FirstRevoke < FirstOpen
+| extend Verdict = case(
+    ReWidened and EgressAllProto > 0,
+        "EGRESS NARROWED THEN RE-OPENED TO ALL PROTOCOLS — a deliberate outbound restriction removed entirely, P0",
+    ReWidened,
+        "EGRESS NARROWED THEN RE-WIDENED TO THE INTERNET by the same principal — the group only had restricted egress because somebody chose that, P0",
+    EgressAllProto > 0 and GroupsCreated == 0,
+        "ALL-PROTOCOL EGRESS OPENED to the internet on an existing group — check whether this group had narrowed egress before, P1",
+    Modifications > 0,
+        "EXISTING RULE MODIFIED — ModifySecurityGroupRules changes a rule's destination with no Authorize event, and no rule in the source pack watches it, P1",
+    EgressOpened > 0 and GroupsCreated > 0,
+        "EGRESS OPENED ON A NEWLY CREATED GROUP — almost certainly the default being restated by tooling, P3",
+    EgressOpened > 0,
+        "EGRESS OPENED TO THE INTERNET — note this is the DEFAULT state for a new group, so on its own it is often not a weakening. Check the group's prior egress rules, P2",
+    "egress change")
+| project FirstRevoke, FirstOpen, LastSeen, UserIdentityArn, Verdict, EgressOpened, EgressAllProto,
+          EgressRevoked, Modifications, ReWidened, RefsOtherGroup, Groups, SourceIps
+| order by ReWidened desc, EgressAllProto desc
+//
+// ============================================================================
+// THE POSTURE FINDING IS AN ABSENCE AND NO EVENT CARRIES IT
+// ============================================================================
+// A security group that nobody ever hardened allows all outbound traffic and generates no event,
+// because nothing happened. That is the common case and it is invisible here by construction.
+// Answer it as a state question instead:
+//   aws ec2 describe-security-group-rules --filters Name=group-id,Values=<id>
+//   -> any IsEgress=true rule with CidrIpv4 0.0.0.0/0 and IpProtocol -1 is the default, unremoved.
+//
+// ============================================================================
+// TWO THINGS THIS CANNOT SEE
+// ============================================================================
+// A CROSS-ACCOUNT REFERENCED GROUP. AWS: "When a referenced security group is owned by another
+// account, the owner account does not receive CloudTrail events for these actions." An egress rule
+// pointing at a group in another account is invisible to that account entirely.
+//
+// DNS TO THE VPC RESOLVER. AWS: "Security groups cannot block DNS requests to or from the Route 53
+// Resolver." No egress rule restricts it, so DNS-based exfiltration is outside what any rule in this
+// directory can influence — Route 53 Resolver DNS Firewall is the control, not a security group.

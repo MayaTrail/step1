@@ -1,0 +1,147 @@
+# Server-side encryption disabled on an SNS topic (T1600)
+#
+# The original rule is closer to correct than most in this set, and its one structural flaw
+# is invisible: it matched `NOT _exists_:requestParameters.attributeValue`, i.e. the field
+# being ABSENT. SetTopicAttributes documents `AttributeValue` as `Required: No`, so an
+# omitted value is legal — but a caller that sends an EMPTY STRING sends the parameter, and
+# CloudTrail then records `attributeValue: ""`, which EXISTS. `aws sns set-topic-attributes
+# --attribute-value ""` is exactly that shape. On the absence-only test that call is a
+# silent false negative, and a false negative on the one rule that watches encryption is the
+# worst kind. These rules OR the two shapes as SIBLING blocks — they are mutually exclusive
+# on a single event, so ANDing them in one block would mean the rule never fires at all.
+#
+# Two case errors, both fatal on a case-sensitive keyword field: the original matched
+# `eventName:"settopicattributes"` and `attributeName:"kmsmasterkeyid"`. CloudTrail writes
+# `SetTopicAttributes`, and the attribute name is `KmsMasterKeyId` — SNS validates that
+# value case-sensitively against its documented attribute list.
+#
+# NOT VERIFIED, and it matters: AWS documents that a topic's encryption CAN be disabled
+# ("Any encrypted message remains encrypted even if the encryption of its topic is
+# disabled") but does NOT document the wire form that does it. The only shape the API
+# surface permits is SetTopicAttributes with AttributeName=KmsMasterKeyId and AttributeValue
+# empty or omitted. Whether CloudTrail then records `attributeValue: ""` or omits the key is
+# OBSERVED, not documented — which is precisely why both shapes are matched here rather than
+# one being chosen. Confirm against a real event in your own account before tuning.
+title: SNS topic server-side encryption disabled
+id: 8efa359f-4f1d-4344-8444-8032c494196e
+name: sns_sse_disabled
+status: experimental
+description: >-
+  SetTopicAttributes clearing KmsMasterKeyId — the only API shape that removes server-side
+  encryption from a topic. Matches both the empty-string and the omitted-value form,
+  because which one CloudTrail records is not documented.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_SetTopicAttributes.html
+  - https://docs.aws.amazon.com/sns/latest/dg/sns-server-side-encryption.html
+  - https://attack.mitre.org/techniques/T1600/
+tags:
+  - attack.defense-impairment
+  - attack.impact
+  - attack.t1600
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sns.amazonaws.com'
+    eventName: 'SetTopicAttributes'
+  kms_attribute:
+    requestParameters.attributeName: 'KmsMasterKeyId'
+  value_absent:
+    requestParameters.attributeValue: null
+  value_empty:
+    requestParameters.attributeValue: ''
+  success:
+    errorCode: null
+  condition: selection and kms_attribute and success and (value_absent or value_empty)
+falsepositives:
+  - A deliberate migration away from SSE — should be rare, planned, and performed by the
+    deployment role. Allowlist the role in the base rule below, not this one.
+level: high
+---
+title: SNS topic access policy written by any principal
+id: fd12f99f-d891-4cee-81eb-7067e2540d2d
+name: sns_topic_policy_written
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. Any successful write to a
+  topic's Policy attribute. Carries the success filter so a DENIED policy write followed by
+  a legitimate encryption change cannot raise the correlation below to high.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_SetTopicAttributes.html
+  - https://attack.mitre.org/techniques/T1098/
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sns.amazonaws.com'
+    eventName: 'SetTopicAttributes'
+  policy_attribute:
+    requestParameters.attributeName: 'Policy'
+  success:
+    errorCode: null
+  condition: selection and policy_attribute and success
+level: low
+---
+title: SNS topic encryption disabled and then its access policy rewritten
+id: 95953d89-88ec-480f-815c-1ef21d8c5c3b
+status: experimental
+description: >-
+  A topic's server-side encryption removed and its access policy rewritten within the hour,
+  in that order, on the same topic. This is the two-step that makes the disable worth a P0
+  rather than a compliance ticket: a customer-managed key's policy is a second, independent
+  gate on the topic, so an actor widening access to a CMK-encrypted topic must remove the
+  key first or the new principal still cannot read anything. Timespan basis — the two calls
+  are consecutive steps of one script and normally land seconds apart; an hour is generous
+  and short enough that an unrelated planned policy edit rarely lands inside it. Grouped on
+  requestParameters.topicArn, which both component rules emit.
+references:
+  - https://docs.aws.amazon.com/sns/latest/dg/sns-server-side-encryption.html
+  - https://attack.mitre.org/techniques/T1600/
+tags:
+  - attack.defense-impairment
+  - attack.impact
+  - attack.t1600
+  - attack.t1098
+correlation:
+  type: temporal_ordered
+  rules:
+    - sns_sse_disabled
+    - sns_topic_policy_written
+  group-by:
+    - requestParameters.topicArn
+  timespan: 1h
+level: high
+---
+title: Repeated SNS topic encryption removal across distinct topics
+id: 79c1c968-cf31-45af-99ff-1fa5c90f375e
+status: experimental
+description: >-
+  Two or more DISTINCT topics stripped of server-side encryption by the same principal
+  inside an hour. Threshold basis — disabling encryption is a deliberate, individually
+  justified act, so the legitimate baseline for one principal in one hour is exactly one
+  topic; `gte: 2` therefore fires on the first event that exceeds the legitimate baseline
+  rather than falling through it. Raise the count only if a documented bulk migration
+  exists, and prefer suppressing that migration's role.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_SetTopicAttributes.html
+  - https://attack.mitre.org/techniques/T1600/
+tags:
+  - attack.defense-impairment
+  - attack.impact
+  - attack.t1600
+correlation:
+  type: value_count
+  rules:
+    - sns_sse_disabled
+  group-by:
+    - userIdentity.arn
+  field: requestParameters.topicArn
+  timespan: 1h
+  condition:
+    gte: 2
+level: high

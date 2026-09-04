@@ -1,0 +1,216 @@
+# Server-side request forgery seen from the network side (T1190 / T1046 / T1552.005)
+#
+# THE SOURCE RULE CANNOT FIRE, AND THIS IS NOT A TUNING OPINION. It matches
+# `dstaddr: 169.254.169.254` in VPC Flow Logs. AWS's flow log limitations page lists, among the
+# traffic that is not logged:
+#
+#     "Traffic to and from 169.254.169.254 for instance metadata."
+#
+# There is no configuration, no custom format, no aggregation interval and no field selection
+# that makes that record appear. The rule reports clean forever, in every account, which is worse
+# than absent — it occupies the slot a working detection would fill and it makes an audit look
+# satisfied. Nothing below matches that address.
+#
+# WHAT IS ACTUALLY VISIBLE, AND WHY IT IS WORTH MORE THAN THE ORIGINAL INTENT. Only the link-local
+# metadata address is excluded. Every OTHER destination an SSRF primitive reaches IS logged, and
+# an application server making connections it has no business making is the same primitive
+# producing a signal the platform does record. An SSRF that can reach 169.254.169.254 can reach
+# the database subnet, the Redis node, the internal admin panel and the EKS API server — and
+# those flows are in the log. The rules below detect the primitive by its network behaviour
+# rather than by the one destination AWS declines to record.
+#
+# The IMDS half of this technique is covered by two other playbooks and is NOT restated here:
+# ../../ec2.credential-access.imds-credential-theft/ detects the stolen session being used
+# off-instance in CloudTrail, and ../../waf.credential-access.crs-ssrf-ec2-metadata/ detects the
+# inbound request carrying the metadata signature. This playbook is the third, disjoint view.
+#
+# FIELDS USED HERE ARE NOT ALL IN THE DEFAULT FORMAT. `flow-direction` is version 5 and
+# `pkt-srcaddr`/`pkt-dstaddr` are version 3; the default format is version 2 only. AWS: "After
+# you create a flow log, you can't change its configuration or the flow log record format...
+# Instead, you can delete the flow log and create a new one with the required configuration." So
+# a subscription created with the default format makes every rule below silent, not noisy. The
+# required custom format is stated in §1 of ../PLAYBOOK.md and must be in place BEFORE an
+# incident. Field names are given in the hyphenated log-record form; a pipeline that renames them
+# to snake_case must be adjusted for consistently.
+#
+# `protocol` IS AN IANA NUMBER, NOT A NAME. 6 is TCP, 17 UDP, 1 ICMP. A rule written as
+# protocol: 'TCP' matches nothing.
+title: Application tier initiated connections to internal management ports
+id: 0f4b7a2e-6c39-4d81-95b7-3a08e26cf417
+name: vpc_apptier_internal_probe
+status: experimental
+description: >-
+  An interface in an application subnet opened egress connections to private addresses on ports
+  that belong to databases, caches and management planes. A web server talks to the small fixed
+  set of backends its code names; it does not reach a port it has no client library for. This is
+  the network shape of a server-side request forgery being used to explore the VPC, and it is the
+  half of the technique AWS actually records. Ports are grouped deliberately: a single application
+  reaching several of these classes in one window is not a misconfiguration.
+references:
+  - https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs-limitations.html
+  - https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html
+  - https://attack.mitre.org/techniques/T1046/
+tags:
+  - attack.discovery
+  - attack.t1046
+  - attack.t1190
+logsource:
+  product: aws
+  service: vpcflowlogs
+detection:
+  outbound:
+    flow-direction: 'egress'
+    action: 'ACCEPT'
+    protocol: 6
+  internal_target:
+    pkt-dstaddr|startswith:
+      - '10.'
+      - '192.168.'
+      - '172.16.'
+      - '172.17.'
+      - '172.18.'
+      - '172.19.'
+      - '172.2'
+      - '172.30.'
+      - '172.31.'
+  sensitive_port:
+    dstport:
+      - 3306      # MySQL / MariaDB / Aurora MySQL
+      - 5432      # PostgreSQL / Aurora PostgreSQL
+      - 1433      # SQL Server
+      - 1521      # Oracle
+      - 5439      # Redshift
+      - 27017     # MongoDB / DocumentDB
+      - 6379      # Redis / ElastiCache
+      - 11211     # Memcached
+      - 9200      # OpenSearch / Elasticsearch HTTP
+      - 2379      # etcd
+      - 6443      # Kubernetes API server
+      - 8500      # Consul
+      - 9000      # MinIO and assorted admin panels
+  # POPULATE BEFORE DEPLOYING with the interfaces of the tier that legitimately talks to these
+  # ports — the application's own database clients. This is the entire tuning surface, it is
+  # small, and it is stable. Leaving it empty is a defensible start: the rule then reports every
+  # backend connection in the VPC once, which is how the allowlist gets built.
+  known_backend_clients:
+    interface-id:
+      - 'eni-0000000000000000a'
+      - 'eni-0000000000000000b'
+  condition: outbound and internal_target and sensitive_port and not known_backend_clients
+falsepositives:
+  - >-
+    A new service genuinely adopting a backend it did not previously use. Real, and it should
+    arrive with a deployment — correlate against the change, and add the interface, not the port.
+  - >-
+    The 172.16.0.0/12 range is matched by prefix here because Sigma has no CIDR operator that
+    every backend implements. '172.2' covers 172.20-172.29 and also matches 172.2.x, which is
+    public space. A backend supporting CIDR should use 172.16.0.0/12 instead; the imprecision is
+    stated rather than hidden, and it errs toward matching more.
+level: high
+---
+title: Outbound TCP flow from an interface
+id: 8c15d340-7ba2-49e6-8f03-d21e694b5c78
+name: vpc_egress_tcp_flow
+status: experimental
+description: >-
+  Base rule — correlation component only, not for direct alerting. Every outbound TCP flow. It
+  exists so the fan-out correlation below has something to count, and it fires on essentially all
+  egress traffic, so it must never be routed anywhere on its own.
+references:
+  - https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html
+tags:
+  - attack.discovery
+  - attack.t1046
+logsource:
+  product: aws
+  service: vpcflowlogs
+detection:
+  outbound:
+    flow-direction: 'egress'
+    protocol: 6
+  condition: outbound
+level: informational
+---
+title: One source reached many distinct internal destinations in a short window
+id: d7290b6e-4c31-48fa-9057-1e63bc80a94d
+status: experimental
+description: >-
+  A single interface opened connections to an unusual number of DISTINCT internal addresses. An
+  SSRF primitive is driven by whoever holds it, and the first thing they do with it is enumerate —
+  the same shape as a port scan but originating from a trusted host, which is why perimeter
+  controls do not see it. This counts distinct destinations rather than volume on purpose:
+  exploration is wide and shallow, and a byte-count threshold misses it entirely. Note the field —
+  pkt-dstaddr, not dstaddr. Behind a NAT gateway or an EKS node ENI, AWS states dstaddr shows
+  "the primary private IPv4 address" of the interface rather than the real destination, which
+  would collapse the fan-out to one value and guarantee this never fires. Timespan is 30m against
+  the DEFAULT 10-minute aggregation interval plus AWS's typical delivery latency; on a 1-minute
+  Nitro subscription it can be shortened, on the default it must not be, because a window shorter
+  than the aggregation interval measures nothing.
+references:
+  - https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html
+  - https://attack.mitre.org/techniques/T1046/
+tags:
+  - attack.discovery
+  - attack.t1046
+correlation:
+  type: value_count
+  rules:
+    - vpc_egress_tcp_flow
+  group-by:
+    - interface-id
+  timespan: 30m
+  condition:
+    field: pkt-dstaddr
+    gte: 50
+falsepositives:
+  - >-
+    Service-mesh sidecars, health checkers and monitoring agents legitimately fan out. They are a
+    small, named set of interfaces — exclude them by interface-id, and keep the threshold.
+level: medium
+---
+title: EC2 instance metadata options weakened
+id: 43e9c706-1f58-4a02-b6d3-90c7581ea24b
+name: ec2_imds_weakened
+status: experimental
+description: >-
+  ModifyInstanceMetadataOptions set HttpTokens to optional, re-enabling IMDSv1, or raised
+  HttpPutResponseHopLimit above 1. This is the control-plane precondition for the whole technique
+  and it is the one part of it that CloudTrail does record — which is why it is in this file even
+  though its logsource differs from the rules above. IMDSv1 answers an unauthenticated GET, so a
+  forged request reaches it; IMDSv2 requires a token from a prior PUT carrying a header a
+  server-side forgery cannot set. A hop limit above 1 lets a container on the host reach the
+  metadata service through the host's network namespace, which is the same weakening by a
+  different route.
+references:
+  - https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-options.html
+  - https://attack.mitre.org/techniques/T1552/005/
+tags:
+  - attack.credential-access
+  - attack.t1552.005
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'ModifyInstanceMetadataOptions'
+  success:
+    errorCode: null
+  weakened:
+    requestParameters.httpTokens: 'optional'
+  hop_raised:
+    requestParameters.httpPutResponseHopLimit:
+      - 2
+      - 3
+      - 4
+      - 5
+  condition: selection and success and (weakened or hop_raised)
+falsepositives:
+  - >-
+    A legacy application that cannot be made to perform the IMDSv2 handshake. Real, and it is a
+    finding rather than an exception — the instance is one SSRF away from handing out a role
+    session, and the correct fix is the application.
+  - >-
+    Container platforms that require a hop limit of 2 to serve pods. Also real; allowlist the
+    provisioning role, and note that the raised limit is exactly the exposure being accepted.
+level: medium

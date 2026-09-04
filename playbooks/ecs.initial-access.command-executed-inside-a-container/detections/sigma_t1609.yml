@@ -1,0 +1,273 @@
+# Command Executed Inside an ECS Container — ECS Exec (T1609 / T1552.005)
+#
+# THE SOURCE RULE CANNOT FIRE. Its query is
+# `eventSource:"ecs.amazonaws.com" AND eventName:"ExecuteCommand" AND
+#  userIdentity.accountId:"anonymous" AND NOT _exists_:errorCode`.
+# CloudTrail documents `userIdentity.accountId` as "the account that owns the entity that
+# granted permissions for the request", and enumerates no `anonymous` value for it. ECS has no
+# unauthenticated API surface: ExecuteCommand is a SigV4-signed call authorised by IAM, so
+# `accountId` is a twelve-digit account ID on every event this rule could ever see. The
+# conjunct is never satisfied. This is a P2 rule providing ZERO coverage of interactive shell
+# access to running containers, and it is the most consequential defect in this ECS set.
+#
+# WHAT ECS EXEC ACTUALLY GRANTS. AWS: "ECS Exec makes use of AWS Systems Manager (SSM) Session
+# Manager to establish a connection with the running container... This is made possible by
+# bind-mounting the necessary SSM agent binaries into the container." The commands "are run as
+# the `root` user" regardless of the container definition's `user`. And the container holds an
+# AWS identity: a task with a task role can read that role's temporary credentials from the
+# ECS container credentials endpoint at 169.254.170.2 - NOT the EC2 IMDS address, and NOT the
+# 169.254.170.23 used by EKS Pod Identity - via the AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
+# environment variable the agent injects. So one ExecuteCommand is execution and credential
+# access in the same call. See ../../ec2.credential-access.imds-credential-theft/ for the
+# EC2 analogue of the second half.
+#
+# THE COMMAND IS LOGGED, BUT NOT THE ONE THAT MATTERS. `requestParameters.command` is present
+# and NOT redacted - AWS's own published CloudTrail extract shows `"command": "ls"` in the
+# clear. But AWS is equally explicit about the limit: "if you open an interactive shell section
+# only the `/bin/bash` command is logged in CloudTrail but not all the others inside the
+# shell." So a one-shot command is fully recorded and an interactive session records only the
+# shell binary. Rule 2 below exists because that is the case where CloudTrail stops being
+# evidence, and the transcript exists only if ECS Exec session logging was configured - which
+# it is NOT by default (see the detection note).
+#
+# `interactive` IS NOT A DISCRIMINATOR. It is a REQUIRED request parameter and the AWS CLI's
+# execute-command only supports the interactive form, so `interactive: true` appears on
+# essentially every event. Do not build a rule on it.
+#
+# FIELD SHAPE. requestParameters: cluster, command, container, interactive, task - those five
+# and no others. responseElements is NESTED: clusterArn, containerArn, containerName,
+# interactive, taskArn, and session.{sessionId, streamUrl, tokenValue}. The token is redacted;
+# the redaction STRING differs between AWS's ECS example and its SSM example, so test for the
+# presence of responseElements.session.sessionId rather than matching the placeholder text.
+title: ECS Exec session opened on a running container
+id: 62227799-79a3-4412-9468-45a1802faae7
+name: ecs_exec_session_opened
+status: experimental
+description: >-
+  A principal opened an ECS Exec session into a running container. The command runs as root
+  inside the container and can read the task role's temporary credentials from the container
+  credentials endpoint, so this is interactive execution and credential access in one call.
+references:
+  - https://attack.mitre.org/techniques/T1609/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_ExecuteCommand.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html  # retrieved 2026-08-29
+tags:
+  - attack.execution
+  - attack.t1609
+  - attack.credential-access
+  - attack.t1552.005
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecs.amazonaws.com'
+    eventName: 'ExecuteCommand'
+  # POPULATE BEFORE DEPLOYING. ECS Exec is a debugging tool: in most accounts a small, named
+  # set of engineers uses it and everyone else never does. That set IS the discriminator.
+  break_glass_debug:
+    userIdentity.arn|contains:
+      - ':role/OnCallDebug'         # replace with this account's debugging role
+      - ':role/BreakGlassAdmin'     # replace with this account's break-glass role
+  success:
+    errorCode: null
+  condition: selection and success and not break_glass_debug
+falsepositives:
+  - >-
+    On-call debugging by an engineer outside the named role. Should be rare and traceable to
+    an incident or a ticket; if it is routine, the finding is that production debugging is not
+    going through a controlled role.
+level: high
+---
+# NOT gated on the principal, deliberately. This is the case where CloudTrail stops being
+# evidence: AWS documents that for an interactive shell "only the /bin/bash command is logged
+# in CloudTrail but not all the others inside the shell." Whoever opens a shell, the account
+# needs to know a session exists whose contents are unrecorded unless ECS Exec logging was
+# configured in advance - and `logging: DEFAULT`, which is the default, records nothing unless
+# the task definition independently configures an awslogs driver.
+#
+# `|contains` is substring matching, so this catches "/bin/bash -c ..." and "sh" inside a
+# longer command line. It will also match a legitimate command that merely mentions a shell -
+# that over-match is intended, because the cost of missing an unrecorded shell session is
+# higher than the cost of reading one extra event.
+title: ECS Exec used to open a shell inside a container
+id: c9ac6234-2c40-4f1b-98ce-c01a926cade4
+name: ecs_exec_shell_invoked
+status: experimental
+description: >-
+  An ECS Exec session invoked a shell rather than a single command. CloudTrail records the
+  shell binary and nothing that was typed inside it, so the content of this session exists only
+  in ECS Exec session logging, which is not enabled by default.
+references:
+  - https://aws.amazon.com/blogs/containers/new-using-amazon-ecs-exec-access-your-containers-fargate-ec2/  # retrieved 2026-08-29
+tags:
+  - attack.execution
+  - attack.t1609
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecs.amazonaws.com'
+    eventName: 'ExecuteCommand'
+  shell:
+    requestParameters.command|contains:
+      - '/bin/sh'
+      - '/bin/bash'
+      - '/bin/ash'
+      - '/bin/zsh'
+      - 'powershell'
+      - 'cmd.exe'
+  success:
+    errorCode: null
+  condition: selection and success and shell
+falsepositives:
+  - >-
+    A one-shot command whose arguments mention a shell path. Deliberately tolerated: an
+    unrecorded interactive session is the more expensive miss.
+level: high
+---
+# Base rule — sequence component only, not for direct alerting. ECS Exec has a hard
+# prerequisite that produces its own event: AWS states "You can't turn on ECS Exec for existing
+# tasks. It can only be turned on for new tasks", so an actor facing a task without it must set
+# enableExecuteCommand and get new tasks placed. That makes the enablement a reliable, separate
+# observable — and the source set alerts on it nowhere.
+title: ECS execute-command functionality enabled on a task or service
+id: 8503ef66-f988-4626-804c-92e3d546522f
+name: ecs_exec_enabled_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_UpdateService.html  # retrieved 2026-08-29
+tags:
+  - attack.execution
+  - attack.t1609
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  api:
+    eventSource: 'ecs.amazonaws.com'
+    eventName:
+      - 'UpdateService'
+      - 'CreateService'
+      - 'RunTask'
+      - 'StartTask'
+  enabled:
+    requestParameters.enableExecuteCommand: true
+  success:
+    errorCode: null
+  condition: api and enabled and success
+level: informational
+---
+# Enable-then-use is the full attacker path, and it is far stronger than either half. A
+# legitimate operator debugging a service exec's into a task where the capability was already
+# on; an actor who has to turn it on first leaves two events an hour apart with the same ARN
+# between them.
+#
+# TIMESPAN BASIS. Sixty minutes, and the basis is deployment latency rather than a round
+# number: enabling execute-command "doesn't trigger a new service deployment", so the actor
+# must additionally force one and then wait for tasks to be replaced before Exec works. An hour
+# covers a normal rolling replacement with a health-check grace period; shorten it once you
+# have measured your own deployment time.
+title: ECS Exec enabled and then used by the same principal
+id: 9ec9bbaa-4f5a-4710-8247-cf9e4dc76cce
+status: experimental
+description: >-
+  One principal turned on execute-command functionality and then opened a session into a
+  container within the hour. Enabling it does not trigger a deployment and does not affect
+  existing tasks, so this sequence means the principal also caused new tasks to be placed.
+references:
+  - https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html  # retrieved 2026-08-29
+tags:
+  - attack.execution
+  - attack.t1609
+  - attack.credential-access
+  - attack.t1552.005
+correlation:
+  type: temporal_ordered
+  rules:
+    - ecs_exec_enabled_bb
+    - ecs_exec_session_opened
+  group-by:
+    - userIdentity.arn
+  timespan: 60m
+level: high
+---
+# Fan-out across TASKS, not volume of calls, which is why this counts distinct values: an
+# engineer debugging one container retries against the same task, while the same number of
+# calls spread across three tasks is someone walking the estate. Each task may carry a
+# different task role, so every task in the group is a separate credential exposure and a
+# separate work-list entry.
+#
+# THRESHOLD BASIS. No observed baseline exists, so the reasoning is structural: ECS Exec is a
+# debugging tool used against the container you are debugging, and a legitimate session
+# concerns one task. Three distinct tasks in thirty minutes is not debugging. `gte` at the
+# baseline, never `gt`, so a run that touches exactly three does not fall through. Re-baseline
+# against your own on-call practice before deploying.
+title: ECS Exec used against multiple tasks by one principal
+id: 37d1dfdc-499b-4b37-a0b4-569373adff92
+status: experimental
+description: >-
+  One principal opened ECS Exec sessions into three or more distinct tasks inside thirty
+  minutes. Each task potentially carries a different task role, so the credential exposure is
+  per task and the containment work-list is every task in the group.
+references:
+  - https://attack.mitre.org/techniques/T1609/  # retrieved 2026-08-29
+tags:
+  - attack.execution
+  - attack.t1609
+correlation:
+  type: value_count
+  rules:
+    - ecs_exec_session_opened
+  group-by:
+    - userIdentity.arn
+  field: requestParameters.task
+  timespan: 30m
+  condition:
+    gte: 3
+level: high
+---
+# Failed Exec attempts are a distinct signal and must not be counted as sessions.
+# TargetNotConnectedException is the specific one worth watching: AWS documents its causes as
+# "Incorrect IAM permissions", "The SSM agent is not installed or is not running", or a VPC
+# interface endpoint for ECS without one for Session Manager. A principal sweeping tasks
+# collects this error from every task that is NOT exec-enabled, which makes a burst of them the
+# signature of someone hunting for a task they can get into.
+title: ECS Exec attempts failing across multiple tasks
+id: 37ac2476-2355-4d9c-a74f-9b9455af59f2
+name: ecs_exec_attempts_failing
+status: experimental
+description: >-
+  ExecuteCommand calls are failing for one principal. TargetNotConnectedException means the
+  data path to that container is not established; AccessDeniedException means the principal
+  lacks the permission or a policy condition did not match. Either way no session opened, and
+  a run of them across tasks is a search for one that will work.
+references:
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_ExecuteCommand.html  # retrieved 2026-08-29
+tags:
+  - attack.execution
+  - attack.t1609
+  - attack.discovery
+  - attack.t1613
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecs.amazonaws.com'
+    eventName: 'ExecuteCommand'
+  failed:
+    errorCode:
+      - 'TargetNotConnectedException'
+      - 'AccessDeniedException'
+      - 'ClusterNotFoundException'
+      - 'InvalidParameterException'
+      - 'ClientException'
+  condition: selection and failed
+falsepositives:
+  - >-
+    An operator attempting to exec into a task whose service does not have execute-command
+    enabled. Common and benign as a single event; a run of them across distinct tasks is not.
+level: medium

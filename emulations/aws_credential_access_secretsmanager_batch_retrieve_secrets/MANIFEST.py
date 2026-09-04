@@ -33,7 +33,7 @@ MANIFEST = {'schema_version': 3,
                                   'name': 'Retrieve a High Number of Secrets Manager Secrets via '
                                           'Batch'}]}],
  'mitre_mappings': [{'id': 'T1555',
-                     'name': 'Retrieve a High Number of Secrets Manager Secrets via Batch',
+                     'name': 'Credentials from Password Stores',
                      'tactic': 'Credential Access',
                      'platform': 'AWS Secrets Manager',
                      'description': 'secretsmanager:BatchGetSecretValue from a single principal — '

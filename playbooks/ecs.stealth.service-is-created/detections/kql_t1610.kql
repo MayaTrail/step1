@@ -1,0 +1,116 @@
+// ECS Service Created (T1610 / T1053.007)
+//
+// Signal: CreateService by a principal that does not deploy services; the same at volume; a
+// service created with a public address or with ECS Exec already enabled; and the
+// register-then-create pair that is an actor bringing their own workload.
+//
+// This query does what the Sigma rules structurally cannot: it RESOLVES THE TASK DEFINITION.
+// CreateService names `taskDefinition` and carries no image, no command and no role - those
+// are in a separate RegisterTaskDefinition event. Here the two are joined on the task
+// definition family so the analyst sees the IMAGE the service is running, which is the field
+// the whole triage turns on and the field CreateService does not contain.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE PipelineRoles BELOW BEFORE DEPLOYING. Unpopulated, every deployment reads as an
+// incident - noisy in the direction that surfaces the service rather than hiding it.
+let Lookback = 30d;
+let Ecs =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "ecs.amazonaws.com"
+    // RequestParameters and ResponseElements are typed `string` in this table, not dynamic -
+    // parse_json is required before any field access.
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    // `contains`, never `has`: a role path and an ARN are punctuated, and `has` is whole-term.
+    | extend IsPipeline = (UserIdentityArn contains ":role/iac-deploy")
+                       or (UserIdentityArn contains ":role/BreakGlassAdmin");
+// A task definition is referenced as "family:revision" or as a full ARN, caller's choice, so
+// both sides are reduced to the bare FAMILY before the join. Joining on the raw string drops
+// every service that referenced its definition in the other form.
+let TaskDefs = Ecs
+    | where EventName == "RegisterTaskDefinition" and isempty(ErrorCode)
+    | extend Family = tostring(Req.family)
+    | extend Containers = Req.containerDefinitions
+    | project RegisteredAt = TimeGenerated, Family, Registrar = UserIdentityArn,
+              TaskRoleArn = tostring(Req.taskRoleArn),
+              ExecutionRoleArn = tostring(Req.executionRoleArn),
+              NetworkMode = tostring(Req.networkMode),
+              PidMode = tostring(Req.pidMode),
+              Images = tostring(Containers),
+              // Container-level flags that change what the workload can do to its host.
+              Privileged = tostring(Containers)
+    | extend Privileged = iff(Privileged contains "\"privileged\":true", "yes", "no")
+    | extend HostPid = iff(PidMode == "host", "yes", "no");
+let Creates = Ecs
+    | where EventName == "CreateService" and isempty(ErrorCode)
+    | extend RawTd = tostring(Req.taskDefinition)
+    // Strip an ARN prefix, then the :revision suffix, leaving the family.
+    | extend TdTail = tostring(split(RawTd, "/")[-1])
+    | extend Family = tostring(split(TdTail, ":")[0])
+    | extend AssignPublicIp = tostring(Req.networkConfiguration.awsvpcConfiguration.assignPublicIp)
+    | project CreatedAt = TimeGenerated, ServiceName = tostring(Req.serviceName),
+              ClusterName = tostring(split(tostring(Req.cluster), "/")[-1]),
+              Actor = UserIdentityArn, ActorKey = UserIdentityAccessKeyId,
+              Family, RawTd, AssignPublicIp,
+              DesiredCount = toint(Req.desiredCount),
+              LaunchType = tostring(Req.launchType),
+              ExecEnabled = tostring(Req.enableExecuteCommand),
+              SchedulingStrategy = tostring(Req.schedulingStrategy),
+              SecurityGroups = tostring(Req.networkConfiguration.awsvpcConfiguration.securityGroups),
+              Subnets = tostring(Req.networkConfiguration.awsvpcConfiguration.subnets),
+              CreateIp = SourceIpAddress, CreateAgent = UserAgent, IsPipeline;
+// Denied attempts are kept separate and never counted as creations: a principal probing its
+// boundary produces the same event volume as a real deployment if the two are conflated.
+let DeniedProbes = Ecs
+    | where EventName == "CreateService" and isnotempty(ErrorCode)
+    | summarize DeniedAttempts = count(), DeniedCodes = make_set(ErrorCode, 6)
+             by Actor = UserIdentityArn;
+Creates
+| join kind=leftouter TaskDefs on Family
+// The registration has to come BEFORE the service creation for the pair to be the
+// bring-your-own-workload shape; a definition registered afterwards is an unrelated revision.
+| extend SelfRegistered = isnotempty(RegisteredAt) and RegisteredAt <= CreatedAt
+                          and Registrar == Actor
+| join kind=leftouter DeniedProbes on Actor
+| extend Verdict = case(
+    SelfRegistered and not(IsPipeline),
+        strcat("BRING-YOUR-OWN-WORKLOAD - this principal registered the task definition and then created the service from it. Image field: ", Images),
+    AssignPublicIp == "ENABLED" and not(IsPipeline),
+        "PUBLICLY ADDRESSED SERVICE BY A NON-PIPELINE PRINCIPAL - the tasks receive a public IP; AWS documents DISABLED as the create-service default, so this was chosen",
+    ExecEnabled == "true",
+        "SERVICE CREATED WITH ECS EXEC ENABLED - interactive shell access was built in at creation; see ecs.initial-access.command-executed-inside-a-container",
+    Privileged == "yes" or HostPid == "yes",
+        "SERVICE RUNNING A PRIVILEGED OR HOST-PID TASK DEFINITION - the container can reach the host's process namespace",
+    not(IsPipeline),
+        "SERVICE CREATED OUTSIDE THE DEPLOYMENT PIPELINE - a maintained invariant, not a one-off task; stopping its containers achieves nothing until desiredCount is changed",
+    isnotempty(DeniedCodes),
+        "PIPELINE CREATION WITH DENIED ATTEMPTS ELSEWHERE - treat the denials as boundary mapping",
+        "PIPELINE SERVICE CREATION - baseline")
+| project CreatedAt, Verdict, Actor, ClusterName, ServiceName, Family, RawTd, Images,
+          TaskRoleArn, ExecutionRoleArn, DesiredCount, LaunchType, AssignPublicIp, ExecEnabled,
+          Privileged, HostPid, NetworkMode, SecurityGroups, Subnets, SchedulingStrategy,
+          SelfRegistered, RegisteredAt, DeniedAttempts, DeniedCodes, CreateIp, CreateAgent, ActorKey
+| order by CreatedAt desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// Whether the image is malicious. RegisterTaskDefinition records the image REFERENCE, not a
+// digest of what actually ran, and a mutable tag can point somewhere different by the time
+// the task starts. Resolving that is a registry question, not a CloudTrail one.
+//
+// What the containers did. ECS logs control-plane calls as management events. The only ECS
+// data events AWS documents are ecs:Poll, ecs:StartTelemetrySession and
+// ecs:PutSystemLogEvents under resources.type AWS::ECS::ContainerInstance - there is no
+// AWS::ECS::Task data event type. Container output lives wherever the task definition's log
+// driver sent it.
+//
+// What the task role can reach. taskRoleArn is captured above, but its ATTACHED POLICIES are
+// an IAM lookup. That resolution is the blast radius of the service and it is not in any
+// CloudTrail event on this path.
+//
+// PREVENTION. ecs:CreateService and ecs:RegisterTaskDefinition belong to the deployment
+// pipeline and to nothing at runtime. Deny both outside it, and deny
+// iam:PassRole on the task roles to everyone but the pipeline - without PassRole an actor
+// cannot attach a privileged task role to a definition they register.

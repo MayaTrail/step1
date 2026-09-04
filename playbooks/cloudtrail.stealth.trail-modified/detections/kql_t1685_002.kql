@@ -1,0 +1,84 @@
+// CloudTrail trail modified (T1685.002)
+//
+// A stopped trail sets IsLogging false. A deleted trail vanishes from describe-trails. A MODIFIED
+// trail stays present, keeps logging, and reports healthy — while capturing less, delivering
+// somewhere else, or delivering under a key nobody can read. This query separates those outcomes,
+// because the source rule reports them all as one occurrence at P3.
+//
+// `contains` throughout, never `has` — bucket names, ARNs and key IDs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+// POPULATE: the buckets that legitimately receive trail logs in this organisation.
+let KnownDestinations = dynamic(["org-cloudtrail-logs", "org-cloudtrail-logs-archive"]);
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "cloudtrail.amazonaws.com"
+| where EventName in ("UpdateTrail", "PutEventSelectors", "PutInsightSelectors",
+                      "StopLogging", "DeleteTrail", "CreateTrail")
+| extend Req = parse_json(RequestParameters)
+| extend TrailName = tostring(Req.name)
+| extend Failed = isnotempty(ErrorCode)
+// Absent is not false. UpdateTrail accepts a partial document, so a flag that is not present was
+// not changed — reading absence as "turned off" invents findings.
+| extend MultiRegionOff = tostring(Req.isMultiRegionTrail) == "false"
+| extend GlobalEventsOff = tostring(Req.includeGlobalServiceEvents) == "false"
+| extend ValidationOff = tostring(Req.enableLogFileValidation) == "false"
+| extend NewBucket = tostring(Req.s3BucketName)
+| extend NewKey = tostring(Req.kmsKeyId)
+| extend BucketRedirected = isnotempty(NewBucket) and NewBucket !in (KnownDestinations)
+| extend SelectorsChanged = EventName in ("PutEventSelectors", "PutInsightSelectors")
+| summarize
+    CoverageReduced   = countif(not(Failed) and (MultiRegionOff or GlobalEventsOff or ValidationOff)),
+    GlobalEventsKilled= countif(not(Failed) and GlobalEventsOff),
+    Redirected        = countif(not(Failed) and BucketRedirected),
+    KeyChanged        = countif(not(Failed) and isnotempty(NewKey)),
+    SelectorEdits     = countif(not(Failed) and SelectorsChanged),
+    Stops             = countif(not(Failed) and EventName == "StopLogging"),
+    Deletes           = countif(not(Failed) and EventName == "DeleteTrail"),
+    TotalChanges      = countif(not(Failed)),
+    Refused           = countif(Failed),
+    Trails            = make_set(TrailName, 10),
+    NewDestinations   = make_set_if(NewBucket, BucketRedirected, 5),
+    SourceIps         = make_set(SourceIpAddress, 5),
+    FirstSeen         = min(TimeGenerated),
+    LastSeen          = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where CoverageReduced > 0 or Redirected > 0 or KeyChanged > 0 or SelectorEdits > 0
+| extend Verdict = case(
+    TotalChanges >= 3,
+        strcat("CLOUDTRAIL CONFIGURATION WORKED THROUGH — ", tostring(TotalChanges),
+               " changes by one principal in an hour. Any one has an innocent reading; the sequence does not, P0"),
+    GlobalEventsKilled > 0,
+        "GLOBAL SERVICE EVENTS TURNED OFF — IAM, STS and CloudFront are recorded in us-east-1 and delivered only to trails that include them. Identity activity is now invisible and the trail still reports healthy, P0",
+    KeyChanged > 0,
+        "TRAIL KMS KEY CHANGED — logs keep arriving, correctly sized, and are undecryptable without the new key. A volume-based health check sees nothing wrong, P0",
+    Redirected > 0,
+        "TRAIL DESTINATION REDIRECTED to a bucket not on the known list — still logging, to somewhere nobody queries, P0",
+    CoverageReduced > 0,
+        "TRAIL COVERAGE REDUCED — multi-Region or log file validation turned off. The trail is present and logging, so every 'is logging enabled' check passes, P1",
+    SelectorEdits > 0,
+        "EVENT SELECTORS CHANGED — this is how what a trail captures is narrowed, and it is a different call from UpdateTrail. Compare against the previous selector set, P1",
+    "CloudTrail configuration change")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, TotalChanges, CoverageReduced,
+          GlobalEventsKilled, Redirected, KeyChanged, SelectorEdits, Stops, Deletes, Refused,
+          Trails, NewDestinations, SourceIps
+| order by TotalChanges desc
+//
+// ============================================================================
+// EVERY HEALTH CHECK STILL PASSES, WHICH IS THE POINT
+// ============================================================================
+// IsLogging stays true. describe-trails still returns the trail. LatestDeliveryTime keeps moving.
+// A dashboard built on any of those shows green throughout. The only way to see this is to compare
+// the trail's CURRENT configuration and selectors against what they were:
+//   aws cloudtrail get-trail-status  --name <trail>
+//   aws cloudtrail get-event-selectors --trail-name <trail>
+// against the last UpdateTrail / PutEventSelectors event in the history.
+//
+// ============================================================================
+// SELECTORS ARE REPLACED, NOT MERGED
+// ============================================================================
+// PutEventSelectors sets the complete selector list for a trail. One call can remove every
+// data-event and network-activity selector, and there is no partial-update semantics to fall back
+// on. Absence of a selector in the request means it is gone, not unchanged — which is the opposite
+// of how UpdateTrail's flags behave, and the two calls appear side by side in this output.

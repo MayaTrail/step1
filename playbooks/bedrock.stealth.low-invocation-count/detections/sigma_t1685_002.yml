@@ -1,0 +1,149 @@
+# Model invocation logging removed, or invocations stopped (T1685.002)
+#
+# THE SOURCE ENTRY IS A BUILDING BLOCK WITH NO LOGIC — no query, no threshold, no grouping. It is a
+# CloudWatch metric alarm for availability: invocation volume dropped. There is nothing to correct,
+# and ../PLAYBOOK.md §2 says so rather than manufacturing defects in an empty rule.
+#
+# THE SECURITY READING OF "VOLUME DROPPED" IS THAT THE LOG STOPPED, NOT THE TRAFFIC — AND THIS
+# SERVICE CAN TELL THE DIFFERENCE, WHICH ALMOST NONE OF THE OTHERS IN THIS CORPUS CAN.
+#
+# Bedrock invocations are recorded in two independent places:
+#   the model invocation log       -> who, which model, how many tokens, AND the prompt and response
+#   CloudTrail bedrock-runtime     -> who and which model, never the content
+#
+# DeleteModelInvocationLoggingConfiguration stops the first and leaves the second untouched. So:
+#   invocation log quiet AND CloudTrail quiet  -> the workload stopped. Availability.
+#   invocation log quiet AND CloudTrail busy   -> LOGGING WAS REMOVED WHILE INVOCATIONS CONTINUE.
+#
+# That second state is the finding, and it is unambiguous in a way an absence rule over a single
+# source never is. Every other *.stealth.no-logs-* playbook in this corpus has to argue about what
+# silence means; this one has a second witness. The correlation cannot be expressed in Sigma — it
+# spans two log sources — so the rules below detect the control-plane act and kql_t1685_002.kql
+# carries the divergence query.
+#
+# LOGGING IS OFF BY DEFAULT, WHICH CHANGES WHAT DELETION MEANS. AWS: "Model invocation logging is
+# disabled by default." So an account that never enabled it is indistinguishable from one where it
+# was removed — by the log stream alone. The control-plane events below distinguish them, and the
+# state read in §2 of the playbook covers accounts where the deletion predates the trail.
+title: Bedrock model invocation logging deleted
+id: 6a2f81d3-49c7-4b05-92e1-7d3608ca5f41
+name: bedrock_invocation_logging_deleted
+status: experimental
+description: >-
+  DeleteModelInvocationLoggingConfiguration removed the configuration. Prompts, responses and token
+  counts stop being recorded from that moment, while CloudTrail continues to show that invocations
+  are happening — so the divergence between the two sources is immediate and detectable. There is
+  one configuration per account per Region, so this single call blinds the whole Region. It cannot
+  be applied retroactively either, which means the gap it opens is permanent regardless of how
+  quickly it is restored.
+references:
+  - https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'bedrock.amazonaws.com'
+    eventName: 'DeleteModelInvocationLoggingConfiguration'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the roles that own Bedrock configuration.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    A logging destination being changed, which is done by deleting and re-creating the
+    configuration. Expect a PutModelInvocationLoggingConfiguration within minutes; a deletion with
+    no re-creation is the finding.
+level: high
+---
+title: Bedrock model invocation logging reconfigured with reduced coverage
+id: b95d072e-3c86-4a17-8f40-25e6109bd3ca
+name: bedrock_invocation_logging_narrowed
+status: experimental
+description: >-
+  PutModelInvocationLoggingConfiguration submitted with a modality disabled. Logging is enabled per
+  modality — text, image, embedding, video — and AWS records bodies only for the modalities
+  selected. So turning one off is a partial blinding that leaves the configuration present, the
+  console showing logging enabled, and one class of invocation with no body recorded. This is the
+  quiet version of the deletion above and it produces no divergence between the two sources at all,
+  because CloudTrail and the invocation log both continue: only the CONTENT for that modality stops.
+references:
+  - https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'bedrock.amazonaws.com'
+    eventName: 'PutModelInvocationLoggingConfiguration'
+  success:
+    errorCode: null
+  text_disabled:
+    requestParameters.loggingConfig.textDataDeliveryEnabled: false
+  image_disabled:
+    requestParameters.loggingConfig.imageDataDeliveryEnabled: false
+  embedding_disabled:
+    requestParameters.loggingConfig.embeddingDataDeliveryEnabled: false
+  condition: selection and success and (text_disabled or image_disabled or embedding_disabled)
+falsepositives:
+  - >-
+    A deliberate reduction for cost or for privacy — image logging in particular is expensive and
+    is sometimes disabled on purpose. Legitimate as a recorded exception; the cost of the exception
+    is that invocations of that modality have no body in the record.
+level: high
+---
+title: Bedrock invocation log destination removed or blocked
+id: 3e6c14b8-70fa-42d9-a851-c9b0472e35d7
+name: bedrock_log_destination_tampered
+status: experimental
+description: >-
+  The logging configuration still exists and its destination does not accept writes. Deleting the
+  S3 bucket or the CloudWatch log group, or replacing the bucket policy so the bedrock.amazonaws.com
+  service principal can no longer PutObject, stops delivery while
+  GetModelInvocationLoggingConfiguration still returns a healthy configuration. There is no
+  Bedrock-side error event when delivery starts failing — nothing is called — so this is the path a
+  configuration check alone will not find.
+references:
+  - https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName:
+      - 'DeleteBucket'
+      - 'DeleteBucketPolicy'
+      - 'PutBucketPolicy'
+      - 'PutLifecycleConfiguration'
+  success:
+    errorCode: null
+  # ADJUST to the bucket naming used for Bedrock invocation log destinations in this estate.
+  log_bucket:
+    requestParameters.bucketName|contains:
+      - 'bedrock-logs'
+      - 'bedrock-invocation'
+      - 'modelinvocation'
+  condition: selection and success and log_bucket
+falsepositives:
+  - >-
+    Lifecycle or policy maintenance on the log bucket. Worth reading every time: an expiry rule on
+    the data prefix destroys the bodies over 100 KB, which are stored as separate objects there and
+    are exactly the large prompts most worth keeping.
+level: medium

@@ -1,0 +1,175 @@
+# Administrative managed policy attached to a principal (T1098.003)
+#
+# MERGE TEST — WHY FIVE SOURCE RULES BECOME ONE USE CASE. AttachUserPolicy, AttachRolePolicy and
+# AttachGroupPolicy are the same operation against the three principal types IAM has. The pack ships
+# them as three building blocks plus an "Admin Policy Attached" block plus a flow that combines them
+# by opaque numeric ID. Splitting them further would produce three playbooks with one identical
+# response; the blast-radius difference between them is a severity dimension, not a use case.
+#
+# "ADMINISTRATIVE" IS NOT ONE POLICY NAME, AND THE SOURCE RULE TREATS IT AS ONE.
+# It matches `requestParameters.policyArn:AdministratorAccess` — a SUBSTRING on the ARN. That fails
+# in both directions:
+#   * It MISSES PowerUserAccess, IAMFullAccess, and every customer-managed policy granting
+#     Action:"*" under a name like `AppRuntimePolicy`. Attaching any of those is the same escalation.
+#   * It MATCHES a customer-managed policy merely NAMED something containing AdministratorAccess.
+# The list below must be populated from the account, not assumed — §4 of ../PLAYBOOK.md derives it.
+#
+# THE THREE RULES FILTER SERVICE PRINCIPALS THREE DIFFERENT WAYS, FOR NO STATED REASON.
+# AttachRolePolicy excludes userIdentity.invokedBy cloudformation.amazonaws.com and
+# sso.amazonaws.com. AttachUserPolicy and AttachGroupPolicy exclude nothing. Same operation, three
+# filters. The SSO exclusion matters most: an escalation performed through SSO's role provisioning
+# is invisible on roles and visible on users, which is an arbitrary blind spot rather than a
+# decision. One consistent exclusion is applied below, and it is stated.
+#
+# ATTACHING TO A GROUP ESCALATES EVERY MEMBER, AND THE EVENT NAMES NONE OF THEM.
+# AttachGroupPolicy has the largest blast radius of the three and the pack rates it identically to
+# the other two. Like SetDefaultPolicyVersion, the affected principals require a second API call —
+# GetGroup — to enumerate. It ships one level higher here for that reason alone.
+title: Administrative managed policy attached to a principal
+id: 4e7c1a95-0d38-4b62-97fa-c1e5806b23df
+name: iam_admin_policy_attached
+status: experimental
+description: >-
+  A successful AttachUserPolicy, AttachRolePolicy or AttachGroupPolicy of a policy on the recorded
+  administrative list. This is a direct grant of administrative permissions to a principal. The
+  policy list is deliberately explicit rather than a substring on "AdministratorAccess", because
+  that name is neither necessary nor sufficient — PowerUserAccess and IAMFullAccess do not contain
+  it, and a customer-managed policy can contain it without being administrative.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_AttachRolePolicy.html
+  - https://attack.mitre.org/techniques/T1098/003/
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName:
+      - 'AttachUserPolicy'
+      - 'AttachRolePolicy'
+      - 'AttachGroupPolicy'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING. The AWS-managed entries below are a starting point, not the list —
+  # §4 of ../PLAYBOOK.md derives the customer-managed policies that also grant Action:"*", and those
+  # are usually the ones that matter in a mature account.
+  administrative_policies:
+    requestParameters.policyArn:
+      - 'arn:aws:iam::aws:policy/AdministratorAccess'
+      - 'arn:aws:iam::aws:policy/PowerUserAccess'
+      - 'arn:aws:iam::aws:policy/IAMFullAccess'
+  # One consistent service-principal exclusion across all three event names, rather than the
+  # source pack's three different ones. Stated so it can be argued with.
+  service_invoked:
+    userIdentity.invokedBy|exists: true
+  condition: selection and success and administrative_policies and not service_invoked
+falsepositives:
+  - >-
+    A break-glass role being provisioned, or an administrator onboarding. Both should be rare and
+    both should leave a change record; if neither is true, the account's administrative grants are
+    not being controlled and that is the finding rather than the event.
+level: critical
+---
+title: Managed policy attached to an IAM group
+id: 2a90f5e7-63b4-41cd-8e02-7db419fa5c86
+name: iam_policy_attached_to_group
+status: experimental
+description: >-
+  A successful AttachGroupPolicy of any policy. This has the largest blast radius of the three
+  attach operations — every current and future member of the group receives the permissions — and
+  the event names no members at all, so resolving it requires GetGroup. The source pack rates it
+  identically to attaching to a single user. Shipped above the informational base rule and below
+  the administrative-policy rule, which supersedes it when both match.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_AttachGroupPolicy.html
+  - https://attack.mitre.org/techniques/T1098/003/
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'AttachGroupPolicy'
+  success:
+    errorCode: null
+  service_invoked:
+    userIdentity.invokedBy|exists: true
+  # POPULATE BEFORE DEPLOYING with the roles that own IAM lifecycle.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not service_invoked and not known_provisioners
+falsepositives:
+  - >-
+    Group-based permission management, which is a recommended practice and produces this event
+    routinely. The provisioner allowlist is what makes this rule usable; without it, an estate that
+    manages permissions by group will see it constantly.
+level: high
+---
+title: Policies attached to many principals by one identity
+id: 8f21d604-b97e-4a53-b0c6-3e58472ad91b
+status: experimental
+description: >-
+  One principal attached policies to three or more distinct principals within an hour. Any single
+  attachment has an ordinary reading; a fan-out does not, and it is the shape that matters when an
+  actor is establishing access across several identities rather than escalating one. The source
+  pack has no volume dimension at all.
+references:
+  - https://attack.mitre.org/techniques/T1098/003/
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.003
+correlation:
+  type: value_count
+  rules:
+    - iam_policy_attached
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+  condition:
+    gte: 3
+    field: requestParameters.policyArn
+falsepositives:
+  - >-
+    An environment build that attaches policies across many roles in one run. Allowlist the pipeline
+    role on the base rule rather than raising the threshold — three is already permissive for a
+    human operator.
+level: critical
+---
+title: IAM managed policy attached to a principal
+id: d5b382c0-4f16-49a7-a83e-06c7195be24f
+name: iam_policy_attached
+status: experimental
+description: >-
+  Base rule — correlation component and change accounting, never for direct alerting. Any successful
+  attachment of a managed policy to a user, role or group. In an estate that manages permissions
+  through IaC this fires continuously, which is why it is informational.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_AttachRolePolicy.html
+tags:
+  - attack.persistence
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName:
+      - 'AttachUserPolicy'
+      - 'AttachRolePolicy'
+      - 'AttachGroupPolicy'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational

@@ -1,0 +1,93 @@
+// DNS tunnelling and exfiltration through encoded subdomains (T1048.003 / T1071.004)
+//
+// The measure is SUBDOMAIN CARDINALITY under a registered domain, not a lexical pattern. Payload
+// is encoded in the name, so every tunnelling query is a new name regardless of the alphabet —
+// base64, base32, hex or custom all produce the same shape, and none of them contain the `=`
+// padding the source rule searches for (which DNS labels cannot carry anyway).
+//
+// `contains` throughout, never `has` — domain names are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. Table name depends on ingestion.
+let LOOKBACK = 24h;
+let WINDOW = 1h;
+Route53ResolverQueryLogs
+| where TimeGenerated > ago(LOOKBACK)
+| extend Name  = tolower(tostring(query_name))
+| extend QType = toupper(tostring(query_type))
+| extend Rcode = toupper(tostring(rcode))
+| extend SrcIp = tostring(srcaddr)
+| extend Transport = toupper(tostring(transport))
+| extend Instance = tostring(todynamic(srcids).instance)
+| extend Vpc = tostring(vpc_id)
+// Registered domain as the last two labels. This is an approximation — it is wrong for multi-part
+// public suffixes such as co.uk, where it yields "co.uk" and groups unrelated domains together.
+// A public-suffix list is the correct tool; where one is unavailable the error direction is
+// MERGING domains, which inflates cardinality and produces false positives rather than misses.
+| extend Labels = split(trim_end(@"\.", Name), ".")
+| extend RegDomain = iff(array_length(Labels) >= 2,
+                         strcat(Labels[array_length(Labels)-2], ".", Labels[array_length(Labels)-1]),
+                         Name)
+| extend NameLen = strlen(Name)
+// The longest label is computed by expanding the labels and taking the max per name, then folding
+// back up. Doing it inline would need a UDF; this is two summarize steps and is exact.
+| mv-expand Label = Labels to typeof(string)
+| summarize LongestLabel = max(strlen(Label)) by Name, RegDomain, SrcIp, QType, Rcode, Transport, Instance, Vpc, NameLen, TimeGenerated
+| summarize
+    Queries       = count(),
+    DistinctNames = dcount(Name),
+    MaxLabel      = max(LongestLabel),
+    MaxNameLen    = max(NameLen),
+    TxtOrNull     = countif(QType in ("TXT", "NULL")),
+    Nxdomain      = countif(Rcode == "NXDOMAIN"),
+    OverTcp       = countif(Transport == "TCP"),
+    Sources       = make_set(SrcIp, 10),
+    Instances     = make_set(Instance, 10),
+    Vpcs          = make_set(Vpc, 5),
+    SampleNames   = make_set(Name, 8),
+    FirstSeen     = min(TimeGenerated),
+    LastSeen      = max(TimeGenerated)
+    by RegDomain, bin(TimeGenerated, WINDOW)
+| where DistinctNames >= 50
+| extend NxRatio = todouble(Nxdomain) / todouble(Queries)
+| extend Verdict = case(
+    DistinctNames >= 500 and MaxLabel >= 45,
+        "DNS TUNNELLING — very high subdomain cardinality with labels at the protocol maximum. Payload is being encoded in the name; the registered domain is what to block, P0",
+    DistinctNames >= 500,
+        "VERY HIGH SUBDOMAIN CARDINALITY — a new name almost every query. Confirm the domain is not a CDN or telemetry endpoint before blocking, P1",
+    DistinctNames >= 100 and TxtOrNull > 0 and NxRatio > 0.5,
+        "TUNNELLING SHAPE — many distinct names, TXT or NULL query types, and mostly NXDOMAIN. A nameserver answering only for encoded names looks exactly like this, P1",
+    DistinctNames >= 100 and MaxLabel >= 45,
+        "HIGH CARDINALITY WITH LONG LABELS — worth reading the sample names; an encoder maximising payload sits at the label limit, P2",
+    OverTcp > 0 and DistinctNames >= 100,
+        "HIGH CARDINALITY OVER TCP — unusual transport for ordinary lookups and used for larger exchanges, P2",
+    "Elevated subdomain cardinality — compare against last week for this domain")
+| project FirstSeen, LastSeen, RegDomain, Verdict, DistinctNames, Queries, MaxLabel, MaxNameLen,
+          TxtOrNull, Nxdomain, NxRatio, OverTcp, Sources, Instances, Vpcs, SampleNames
+| order by DistinctNames desc
+//
+// ============================================================================
+// WHY THE CACHE LIMITATION DOES NOT WEAKEN THIS QUERY
+// ============================================================================
+// AWS: "VPC Resolver query logging logs only unique queries, not queries that VPC Resolver is able
+// to respond to from the cache." Across this log source that makes volume reasoning about ordinary
+// domains meaningless — a busy host resolving one popular name looks identical to a quiet one.
+//
+// Tunnelling is the exception and by construction: the payload IS the subdomain, so every query is
+// a distinct name, so every query is a cache miss, so every query is logged. This is one of the
+// few counts over Resolver logs that is close to complete, and the cardinality measure is exactly
+// the one the cache cannot suppress.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHAT WAS EXFILTRATED. The query name carries the payload in encoded form and this query records
+// the names, so in principle the data is present — but decoding it requires knowing the encoding
+// and the framing, which the log does not carry. Treat the volume of distinct names as a lower
+// bound on the bytes moved and do not attempt to state a figure.
+//
+// WHICH PROCESS. srcids.instance names a host at best, and AWS notes it may name something not
+// visible in the account — "AWS CloudShell, AWS Lambda, Amazon EKS, or Fargate". Host telemetry is
+// the only route to a process.
+//
+// WHETHER IT WAS BLOCKED. firewall_rule_action is populated only when DNS Firewall MATCHED a rule
+// with an alert or block action. Its absence means no match, never "allowed by policy".

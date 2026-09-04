@@ -1,0 +1,183 @@
+# DynamoDB Backup Enumeration (T1580)
+#
+# THE HONEST VERDICT ON THE SOURCE RULE: as a per-event alert it is noise, and it should be
+# demoted rather than tuned. `ListBackups` is `readOnly: true` and is emitted by the DynamoDB
+# console's Backups tab on every page load, by AWS Backup and third-party backup tooling
+# polling for recovery points, by configuration and compliance scanners, by infrastructure-code
+# plan runs, and by the responder running `aws dynamodb list-backups` while working an
+# incident. The source rule matches the event name with no principal filter, no error filter
+# and no threshold. Deployed as written it fires continuously, gets muted inside a week, and
+# then contributes nothing - which is the single most common way a detection rule fails.
+#
+# The source rates it P4. That priority is CORRECT and is the rule's best feature; the defect
+# is that it is an alert at all rather than a building block.
+#
+# THERE IS NO "EXCESSIVE" VERSION OF THIS, AND THAT IS WHY NO VOLUME RULE IS SHIPPED.
+# ListBackups' TableName parameter is optional. Called without it, one request enumerates every
+# backup in the account and Region, up to the documented Limit of 100 per page with
+# LastEvaluatedBackupArn for the rest. A single call is therefore the complete enumeration, so
+# a threshold on call count measures pagination, not intent. Compare
+# ../../dynamodb.impact.multiple-tables-created/ where a fan-out threshold does mean something.
+#
+# WHY IT IS STILL WORTH SHIPPING AS A COMPONENT. ListBackups is one of the very few DynamoDB
+# reconnaissance APIs that is a CloudTrail management event at all. Enumerating the DATA -
+# Scan, Query, GetItem, BatchGetItem - is a DATA event, off by default, so in a default account
+# it produces nothing forever. Enumerating the RECOVERY POINTS is visible by default. That
+# asymmetry means the only reconnaissance you can reliably see is the reconnaissance of the
+# things that would let you recover, which is exactly the reconnaissance that precedes
+# destruction. It earns its place in a sequence, not on its own.
+#
+# CASING. The source rule matches `listbackups` in lower case while its siblings in the same
+# set use the API's PascalCase. CloudTrail's eventName is `ListBackups`. Whether the lower-case
+# form matches is a property of the search platform's index mapping, not of the technique, so a
+# port to another engine must normalise casing first.
+title: DynamoDB backups enumerated
+id: 5a1e73b8-c204-4f96-8e7d-b3906c1af528
+name: dynamodb_backups_listed_bb
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. ListBackups is readOnly and is
+  emitted by console page loads, backup tooling, compliance scanners and responders; alerting on
+  it per event produces noise that gets the rule muted. It carries signal only as the first half
+  of the sequences below.
+references:
+  - https://attack.mitre.org/techniques/T1580/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_ListBackups.html  # retrieved 2026-08-29
+tags:
+  - attack.discovery
+  - attack.t1580
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'ListBackups'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+# Base rule — sequence component only, not for direct alerting. Success-filtered so a DENIED
+# DeleteBackup cannot compose into a high-severity correlation (D-f). Its own use case, with
+# the full response procedure, is ../../dynamodb.impact.backup-was-deleted/; it is duplicated
+# here because a Sigma correlation can only resolve base rules defined in the same file.
+title: DynamoDB backup deleted
+id: e7c48b20-95d3-4a17-bf62-08a1c5e73d94
+name: dynamodb_backup_deleted_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_DeleteBackup.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1490
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'DeleteBackup'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+# Base rule — sequence component only, not for direct alerting. Both restore APIs are matched:
+# RestoreTableFromBackup takes a BackupArn, RestoreTableToPointInTime takes a source table and
+# a timestamp, and both produce a NEW table containing a copy of the data. That is the point.
+title: DynamoDB table restored from a backup or to a point in time
+id: 90b2f4c7-1d85-4e63-a09f-6c47e28b5d13
+name: dynamodb_table_restored_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_RestoreTableFromBackup.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_RestoreTableToPointInTime.html  # retrieved 2026-08-29
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName:
+      - 'RestoreTableFromBackup'
+      - 'RestoreTableToPointInTime'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+# ENUMERATE, THEN DESTROY. This is the sequence the source rule's own description gestures at -
+# "A threat actor can list the DynamoDB table backups to understand which tables have backups.
+# They can then delete them" - and does not implement. Ordered, because the reverse is
+# housekeeping: listing backups AFTER deleting one is verifying the deletion.
+#
+# One hour, not minutes: a single ListBackups returns the whole account inventory, so there is
+# no pagination burst to wait out and no reason for an actor to hurry, while an hour is short
+# enough that ordinary console browsing followed by unrelated scheduled pruning does not
+# collide. The base rules are success-filtered, so a refused deletion cannot compose into this.
+title: DynamoDB backups enumerated and then deleted by the same principal
+id: 3d6a09e5-7b41-42fc-95a8-e0d17c4b6829
+status: experimental
+description: >-
+  One principal listed the account's backups and then deleted one. Enumeration followed by
+  destruction of recovery points is the preparation stage of an unrecoverable table deletion,
+  and it is the last point at which the incident is still fully recoverable.
+references:
+  - https://attack.mitre.org/techniques/T1490/  # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1580/  # retrieved 2026-08-29
+tags:
+  - attack.discovery
+  - attack.t1580
+  - attack.impact
+  - attack.t1490
+correlation:
+  type: temporal_ordered
+  rules:
+    - dynamodb_backups_listed_bb
+    - dynamodb_backup_deleted_bb
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+level: high
+---
+# ENUMERATE, THEN COPY. The quieter half of this use case, and the one nothing in the source
+# set covers. A restore ALWAYS creates a NEW table - AWS: "The point-in-time recovery process
+# always restores to a new table" - and the restore APIs let the caller choose the target name
+# and, for RestoreTableFromBackup, a different Region. So a principal who cannot read a
+# production table in place, but can restore its backup into a table name their own IAM policy
+# permits, obtains a complete copy of the data without a single item-level read.
+#
+# That path is entirely management-plane and therefore visible by default, which is unusual:
+# the equivalent read of the live table is a DATA event and is invisible in a default account.
+# Restoring is also legitimate and common, which is why this is a sequence rather than an alert
+# on the restore alone - and why the analyst must check the TARGET name and Region.
+title: DynamoDB backups enumerated and then restored into a new table by the same principal
+id: c1847fa3-2e69-4d05-b7c1-9358e0a2df64
+status: experimental
+description: >-
+  One principal listed the account's backups and then restored one into a new table. A restore
+  always creates a new table, so this is a full copy of the source data under a name - and
+  possibly in a Region - of the caller's choosing, obtained without any item-level read.
+references:
+  - https://attack.mitre.org/techniques/T1580/  # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1530/  # retrieved 2026-08-29
+tags:
+  - attack.discovery
+  - attack.t1580
+  - attack.collection
+  - attack.t1530
+correlation:
+  type: temporal_ordered
+  rules:
+    - dynamodb_backups_listed_bb
+    - dynamodb_table_restored_bb
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+level: high

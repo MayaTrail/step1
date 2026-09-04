@@ -1,0 +1,165 @@
+# Command Execution in a Running Pod (T1609 — Container Administration Command)
+#
+# Source rule:
+#   userAgent: /kubectl-access_matrix/ OR requestURI:/%2Fbin%2Fbash/
+#   OR requestURI:/%2Fbin%2Fsh/ OR requestURI:/%2Fbin%2Fash/
+#
+# It matches two attacker-controllable strings and an enumerable list, and misses the
+# structural field that actually identifies the act.
+#
+# 1. userAgent IS SET BY THE CLIENT. `kubectl-access_matrix` names one specific RBAC
+#    enumeration plugin. Renaming the binary, or setting --user-agent, defeats it. A rule
+#    keyed on a tool's self-declared name detects only an actor who did not think about it.
+# 2. THE SHELL LIST IS ENUMERABLE AND INCOMPLETE. /bin/zsh, /bin/dash, /busybox, an absolute
+#    path to any binary, or `exec` into a distroless image with no shell at all — none match.
+#    The list also cannot see a command that is not a shell, which is most of what an actor
+#    would run.
+# 3. THE STRUCTURAL SIGNAL IS objectRef.subresource. An exec request carries
+#    subresource `exec` regardless of what command it runs, what the client calls itself, or
+#    whether the target image has a shell. It is not attacker-controllable because the API
+#    server sets it from the request path.
+#
+# The rules below key on the subresource and treat the command as ENRICHMENT rather than as
+# the match condition — so an unusual command raises the priority but its absence never
+# suppresses the alert.
+title: Command executed in a running pod
+id: 6f2a90e5-84d1-4c37-b95e-0a73c8641bde
+name: eks_pod_exec
+status: experimental
+description: >-
+  A principal opened an exec, attach or port-forward session against a running pod. The
+  session runs with the pod's ServiceAccount and reaches anything that identity reaches.
+references:
+  - https://attack.mitre.org/techniques/T1609/                          # retrieved 2026-08-30
+  - https://kubernetes.io/docs/reference/config-api/apiserver-audit.v1/  # retrieved 2026-08-30
+tags:
+  - attack.execution
+  - attack.t1609
+logsource:
+  category: application
+  product: kubernetes
+  service: audit
+detection:
+  # B4 confirmed: resource and subresource co-occur on every audit Event for these calls.
+  selection:
+    objectRef.resource: 'pods'
+    objectRef.subresource:
+      - 'exec'
+      - 'attach'
+      - 'portforward'
+  completed:
+    stage: 'ResponseComplete'
+  # 101 is the WebSocket upgrade an exec session actually returns; 200 covers the other
+  # shapes. responseStatus.code is int32 — do not quote it.
+  established:
+    responseStatus.code:
+      - 101
+      - 200
+  # DEPLOYMENT PARAMETER — populate before use. Operators and debug tooling that legitimately
+  # exec. Allowlist by exact principal, never by a substring like "system", which would drop
+  # every system:serviceaccount principal in the cluster.
+  known_operators:
+    user.username:
+      - 'system:serviceaccount:kube-system:cluster-autoscaler'
+  condition: selection and completed and established and not known_operators
+falsepositives:
+  - Break-glass human debugging. It should be rare, attributable and time-boxed; if it is
+    routine, the finding is that production debugging happens by exec.
+level: high
+---
+# The command, kept as ENRICHMENT rather than as a match condition. An exec URI carries the
+# command in its query string, so these tokens raise the priority of an already-matched
+# event. They must never gate the match — the source rule's mistake — because an actor
+# running anything not on this list would then be invisible.
+title: Pod exec running an interactive shell or a known offensive tool
+id: 1d84c60f-3b57-4e92-a70c-9f5182ae37b1
+status: experimental
+description: >-
+  An exec session into a running pod whose request URI names an interactive shell or a
+  recognised enumeration tool. Priority enrichment on top of the exec signal itself.
+references:
+  - https://attack.mitre.org/techniques/T1609/                          # retrieved 2026-08-30
+tags:
+  - attack.execution
+  - attack.t1609
+logsource:
+  category: application
+  product: kubernetes
+  service: audit
+detection:
+  # B4 confirmed: resource and subresource co-occur on every exec audit Event.
+  selection:
+    objectRef.resource: 'pods'
+    objectRef.subresource: 'exec'
+  completed:
+    stage: 'ResponseComplete'
+  # Both encodings: the audit log may carry the URI percent-encoded or decoded depending on
+  # the ingestion path, and the corpus has been burned by assuming one form (rule A4).
+  interactive:
+    requestURI|contains:
+      - '%2Fbin%2Fbash'
+      - '%2Fbin%2Fsh'
+      - '%2Fbin%2Fash'
+      - '%2Fbin%2Fzsh'
+      - '/bin/bash'
+      - '/bin/sh'
+      - '/bin/ash'
+      - '/bin/zsh'
+      - 'busybox'
+      - 'nsenter'
+  condition: selection and completed and interactive
+falsepositives:
+  - A debugging session by an allowlisted operator. This rule deliberately does not carry
+    the operator allowlist — it is enrichment, and correlating it with the base rule is the
+    triage step.
+level: medium
+---
+# Enumeration by an identity that then execs. The source rule's userAgent match was aimed at
+# this, but userAgent is client-set. RBAC self-enumeration is visible structurally instead:
+# the audit policy records rbac.authorization.k8s.io get/list/watch at Request level, and
+# SelfSubjectAccessReview / SelfSubjectRulesReview are the API for "what may I do?".
+title: Principal enumerated its own permissions then executed in a pod
+id: 9c0e7b34-5f18-4a26-83d7-4e6b21ca058f
+status: experimental
+description: >-
+  One principal reviewed its own permissions and opened a pod exec session within the hour —
+  the shape of an actor orienting inside a cluster it has just reached.
+references:
+  - https://attack.mitre.org/techniques/T1609/                          # retrieved 2026-08-30
+tags:
+  - attack.execution
+  - attack.discovery
+  - attack.t1609
+correlation:
+  type: temporal
+  rules:
+    - eks_self_permission_review
+    - eks_pod_exec
+  group-by:
+    - user.username
+  timespan: 60m
+level: high
+---
+title: Principal reviewed its own permissions
+id: 2b47f8a1-6c93-4d05-91be-3a08e7f24c69
+name: eks_self_permission_review
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://kubernetes.io/docs/reference/access-authn-authz/authorization/  # retrieved 2026-08-30
+tags:
+  - attack.discovery
+  - attack.t1609
+logsource:
+  category: application
+  product: kubernetes
+  service: audit
+detection:
+  selection:
+    objectRef.resource:
+      - 'selfsubjectaccessreviews'
+      - 'selfsubjectrulesreviews'
+  completed:
+    stage: 'ResponseComplete'
+  condition: selection and completed
+level: low

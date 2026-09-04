@@ -1,0 +1,68 @@
+// Secrets Manager secret value replaced (T1556)
+//
+// The source rule matches `updatesecret` — lowercase, against a case-sensitive field, so it cannot
+// fire. It also names one of THREE write paths, and not the one the SDKs use: PutSecretValue writes
+// a new version and moves AWSCURRENT, and UpdateSecretVersionStage moves AWSCURRENT to a version
+// that already exists without writing anything and without needing permission to write the secret.
+//
+// It excludes errors, so a denied write is invisible to it. Included here.
+//
+// Rotation being turned off is a different use case:
+// ../../secretsmanager.persistence.rotation-disabled/
+//
+// `contains` throughout, never `has` — secret names and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+let WINDOW = 30m;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "secretsmanager.amazonaws.com"
+| where EventName in ("UpdateSecret", "PutSecretValue", "UpdateSecretVersionStage",
+                      "GetSecretValue", "ListSecretVersionIds")
+| extend Req = parse_json(RequestParameters)
+| extend SecretId = tostring(Req.secretId)
+| extend IsAutomation = UserIdentityArn contains "PlatformAutomation"
+                     or UserIdentityArn contains "SecretsRotationFunction"
+| extend Wrote      = EventName in ("UpdateSecret", "PutSecretValue") and isempty(ErrorCode)
+// The quiet path: AWSCURRENT moves to an EXISTING version, so no value is written and no write
+// permission is required.
+| extend StageMoved = EventName == "UpdateSecretVersionStage" and isempty(ErrorCode)
+                      and tostring(Req.versionStage) == "AWSCURRENT"
+| extend Refused    = EventName in ("UpdateSecret", "PutSecretValue", "UpdateSecretVersionStage")
+                      and isnotempty(ErrorCode)
+// Reading the value before replacing it is the shape of an actor preserving what was there.
+| extend ReadFirst  = EventName == "GetSecretValue" and isempty(ErrorCode)
+// A KMS key change on UpdateSecret changes who can decrypt the secret at rest.
+| extend KmsChanged = EventName == "UpdateSecret" and isnotempty(tostring(Req.kmsKeyId))
+| summarize
+    Writes         = countif(Wrote),
+    StageMoves     = countif(StageMoved),
+    Refusals       = countif(Refused),
+    Reads          = countif(ReadFirst),
+    KmsChanges     = countif(KmsChanged),
+    SecretsTouched = dcountif(SecretId, Wrote or StageMoved),
+    Secrets        = make_set(iff(Wrote or StageMoved, SecretId, ""), 20),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated)
+    by bin(TimeGenerated, WINDOW), UserIdentityArn, SourceIpAddress, IsAutomation
+| where not(IsAutomation)
+| where Writes > 0 or StageMoves > 0 or Refusals > 0
+| extend Verdict = case(
+    SecretsTouched >= 3,
+        "HIGH - values replaced across several secrets outside automation; every consumer picks up the new value",
+    StageMoves > 0,
+        "HIGH - AWSCURRENT moved to an existing version; no value written, so no write path fired",
+    KmsChanges > 0,
+        "HIGH - UpdateSecret also changed kmsKeyId; who can decrypt the secret at rest has changed",
+    Writes > 0 and Reads > 0,
+        "MEDIUM - value read then replaced by the same principal",
+    Writes > 0,
+        "MEDIUM - operative value replaced outside automation",
+    "MEDIUM - write refused")
+// A workload missing a grant retries against ONE secret; enumeration-style abuse walks several.
+| extend LikelyMissingGrant = Refusals >= 3 and SecretsTouched <= 1
+| project TimeGenerated, Verdict, LikelyMissingGrant, UserIdentityArn, SourceIpAddress,
+          Writes, StageMoves, Refusals, Reads, KmsChanges, SecretsTouched, Secrets,
+          FirstSeen, LastSeen
+| order by StageMoves desc, SecretsTouched desc, TimeGenerated desc

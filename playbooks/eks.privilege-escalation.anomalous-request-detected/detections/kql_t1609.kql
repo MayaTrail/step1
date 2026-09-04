@@ -1,0 +1,79 @@
+// Command Execution in a Running Pod (T1609)
+//
+// Keys on objectRef.subresource, which the API server sets from the request path and the
+// client cannot influence — not on userAgent (client-declared) or on an enumerable list of
+// shell paths (incomplete by construction, and blind to distroless images with no shell).
+//
+// Dialect: Sentinel / Azure Log Analytics KQL over the Kubernetes audit log delivered from
+// EKS control-plane logging. NOT CloudTrail. Adjust the table to your ingestion.
+EKSAudit_CL
+| where TimeGenerated > ago(7d)
+| extend E = todynamic(RawData)
+| where tostring(E.objectRef.resource) == "pods"
+| where tostring(E.objectRef.subresource) in ("exec", "attach", "portforward")
+| where tostring(E.stage) == "ResponseComplete"
+| extend User    = tostring(E.user.username)
+| extend Ns      = tostring(E.objectRef.namespace)
+| extend Pod     = tostring(E.objectRef.name)
+| extend Sub     = tostring(E.objectRef.subresource)
+| extend Uri     = tostring(E.requestURI)
+| extend Agent   = tostring(E.userAgent)
+// sourceIPs is an ARRAY; the CLIENT is the FIRST element, the proxy is last.
+| extend Client  = tostring(todynamic(E.sourceIPs)[0])
+// int32, unquoted. 101 is the WebSocket upgrade an exec session returns.
+| extend Code    = toint(E.responseStatus.code)
+| extend Established = Code in (101, 200)
+| extend IsWorkload  = User startswith "system:serviceaccount:"
+// The command is ENRICHMENT. Both encodings, because the URI may arrive percent-encoded or
+// decoded depending on the ingestion path.
+| extend Interactive = Uri contains "%2Fbin%2F" or Uri contains "/bin/"
+                    or Uri contains "busybox" or Uri contains "nsenter"
+| summarize
+    Sessions    = count(),
+    Established = countif(Established),
+    Refused     = countif(Code == 403),
+    AnyShell    = max(Interactive),
+    Subs        = make_set(Sub, 3),
+    Pods        = make_set(strcat(Ns, "/", Pod), 10),
+    Agents      = make_set(Agent, 5),
+    Clients     = make_set(Client, 5),
+    FirstSeen   = min(TimeGenerated),
+    LastSeen    = max(TimeGenerated)
+    by User, IsWorkload
+| extend Verdict = case(
+    Established > 0 and IsWorkload,
+        "EXEC BY A WORKLOAD IDENTITY — a pod opened a session into another pod. No normal application does this, P0",
+    Established > 0 and AnyShell,
+        "INTERACTIVE SHELL IN A RUNNING POD — the session runs as the pod's ServiceAccount, P1",
+    Established > 0,
+        "COMMAND EXECUTED IN A RUNNING POD — confirm the principal is an allowlisted operator, P1",
+    Refused > 0,
+        "EXEC REFUSED BY RBAC — the actor tried and lacked the permission, P2",
+    "Pod exec attempt, outcome unclear — read the response code, P3")
+| project FirstSeen, LastSeen, User, Verdict, Established, Refused, AnyShell,
+          Subs, Pods, Agents, Clients, IsWorkload
+| order by Established desc
+//
+// ============================================================================
+// WHY NOT userAgent, AND WHY NOT THE SHELL LIST
+// ============================================================================
+// userAgent is set by the client. The source rule matches `kubectl-access_matrix`, which
+// names one RBAC-enumeration plugin; renaming the binary or passing --user-agent defeats it.
+// The Agents column above is kept for context, never as a match condition.
+//
+// The shell list is enumerable and incomplete: /bin/zsh, /bin/dash, an absolute path to any
+// binary, or an exec into a distroless image with no shell at all — none of them match, and
+// most of what an actor would actually run is not a shell. subresource is set by the API
+// server from the request path and is not attacker-influenced, which is why it is the match.
+//
+// ============================================================================
+// WHAT THE AUDIT LOG DOES NOT CARRY
+// ============================================================================
+// THE SESSION CONTENT IS NOT LOGGED. requestURI holds the command line the client asked for
+// at session open; everything typed inside an interactive shell afterwards is invisible. An
+// exec of /bin/bash therefore records one event and hides an entire session — which is why
+// an interactive shell ranks above a one-shot command rather than below it.
+//
+// THE POD'S IDENTITY IS NOT IN THIS EVENT. The session runs as the pod's ServiceAccount, and
+// resolving pod -> ServiceAccount -> IAM role requires the pod spec, which ages out after the
+// pod stops. Capture it before containment, not after.

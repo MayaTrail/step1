@@ -1,0 +1,76 @@
+// IAM policy authored with administrative permissions (T1098.003)
+//
+// The source rule is a substring match requiring "Effect":"Allow" AND ("Action":"*" OR
+// "Resource":"*") anywhere in the document. Two things follow that this query corrects:
+//   * Resource "*" is NORMAL — s3:ListAllMyBuckets, ec2:DescribeInstances and iam:ListRoles accept
+//     no other value — so OR-ing it with Action "*" at one severity is the largest false-positive
+//     source in that pack. They are separated here.
+//   * A version that is not default grants NOTHING. Reading setAsDefault is what separates a live
+//     escalation from a pre-loaded one, and the source rule does not read it.
+//
+// `contains` throughout, never `has` — policy documents are punctuation.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "iam.amazonaws.com"
+| where EventName in ("CreatePolicy", "CreatePolicyVersion", "SetDefaultPolicyVersion",
+                      "AttachUserPolicy", "AttachRolePolicy", "AttachGroupPolicy")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend PolicyArn = tostring(coalesce(Req.policyArn, Req.policyName))
+// requestParameters.policyDocument is RAW JSON, not percent-encoded. Only what IAM RETURNS is
+// encoded (GetPolicyVersion, GetRolePolicy). Decoding this would corrupt a literal %2F.
+| extend Doc = tostring(Req.policyDocument)
+| extend SetAsDefault = tostring(Req.setAsDefault) == "true"
+| extend ActionStar = Doc contains '"Action":"*"' or Doc contains '"Action": "*"'
+                      or Doc contains '"Action":["*"]' or Doc contains '"Action": ["*"]'
+| extend ResourceStar = Doc contains '"Resource":"*"' or Doc contains '"Resource": "*"'
+// A substring match cannot scope to a statement, so a Deny-only wildcard matches too. Counting
+// Deny occurrences lets the verdict flag that possibility instead of asserting a grant.
+| extend HasDeny = Doc contains '"Deny"'
+| extend HasAllow = Doc contains '"Allow"'
+| summarize
+    AdminAndLive    = countif(ActionStar and (EventName == "CreatePolicy" or SetAsDefault)),
+    AdminDormant    = countif(ActionStar and EventName == "CreatePolicyVersion" and not(SetAsDefault)),
+    ResourceOnly    = countif(ResourceStar and not(ActionStar)),
+    PossibleDenyOnly= countif(ActionStar and HasDeny and not(HasAllow)),
+    Activations     = countif(EventName == "SetDefaultPolicyVersion"),
+    Attachments     = countif(EventName startswith "Attach"),
+    Policies        = make_set(PolicyArn, 10),
+    SourceIps       = make_set(SourceIpAddress, 5),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where AdminAndLive > 0 or AdminDormant > 0
+| extend Verdict = case(
+    PossibleDenyOnly > 0 and AdminAndLive == 0,
+        "WILDCARD PRESENT BUT NO Allow IN THE DOCUMENT — almost certainly a Deny-only policy, which is the safest shape. Parse before rating, P3",
+    AdminAndLive > 0 and Attachments > 0,
+        "ADMINISTRATIVE POLICY AUTHORED AND ATTACHED by the same principal — the document grants Action:* and a principal was given it, P0",
+    AdminAndLive > 0,
+        "ADMINISTRATIVE POLICY IS LIVE — Action:* in an operative version or a newly created policy. Every attached principal has it now, P0",
+    AdminDormant > 0,
+        "ADMINISTRATIVE VERSION AUTHORED BUT DORMANT — grants nothing yet, and one SetDefaultPolicyVersion call activates it with no document write to review. Remove it rather than watch it, P1",
+    "policy authored — read the document")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, AdminAndLive, AdminDormant, ResourceOnly,
+          PossibleDenyOnly, Activations, Attachments, Policies, SourceIps
+| order by AdminAndLive desc, AdminDormant desc
+//
+// ============================================================================
+// WHAT NO QUERY OF THIS SHAPE CAN DECIDE
+// ============================================================================
+// Whether the Allow and the wildcard are in the SAME statement. A document with a narrow Allow and
+// a separate Deny on Action:"*" satisfies every clause above and grants nothing dangerous. Neither
+// KQL nor Sigma can scope a substring to a JSON statement, so both over-match by design and the
+// playbook resolves each hit by PARSING the document. `PossibleDenyOnly` is the cheap approximation
+// — it catches the common case where the document has no Allow at all.
+//
+// ============================================================================
+// Resource "*" IS NOT A FINDING
+// ============================================================================
+// The `ResourceOnly` column is projected to be looked at, not alerted on. s3:ListAllMyBuckets,
+// ec2:DescribeInstances and iam:ListRoles accept no other Resource value, so a correct
+// least-privilege policy for them contains Resource "*". Alerting on it teaches responders that
+// this whole rule family is noise.

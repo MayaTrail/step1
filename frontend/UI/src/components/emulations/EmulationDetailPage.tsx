@@ -12,6 +12,7 @@ import { AttackPathTab } from './AttackPathTab'
 import { MitreMappingTab } from './MitreMappingTab'
 import { ExplainPanel } from './ExplainPanel'
 import { PastFindingsTab } from './PastFindingsTab'
+import { ConnectGate } from '@/components/common/ConnectGate'
 
 type DetailTab = 'overview' | 'live' | 'path' | 'mitre' | 'explain' | 'findings'
 
@@ -79,12 +80,14 @@ export function EmulationDetailPage() {
           </div>
         </div>
         <div className="flex gap-3 shrink-0">
-          <button
-            onClick={() => setShowRunModal(true)}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn font-body text-[0.9rem] font-semibold cursor-pointer border-none
-            bg-danger text-white transition-all hover:-translate-y-px hover:shadow-[0_8px_40px_rgba(255,34,68,0.4)]">
-            &#9654; Run Emulation
-          </button>
+          <ConnectGate>
+            <button
+              onClick={() => setShowRunModal(true)}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn font-body text-[0.9rem] font-semibold cursor-pointer border-none
+              bg-danger text-white transition-all hover:-translate-y-px hover:shadow-[0_8px_40px_rgba(255,34,68,0.4)]">
+              &#9654; Run Emulation
+            </button>
+          </ConnectGate>
         </div>
       </div>
 

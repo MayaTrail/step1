@@ -1,0 +1,145 @@
+# SYN flood against a VPC endpoint (T1498)
+#
+# `tcp-flags` IS A VERSION 3 FIELD. The default flow-log format is version 2 and does not contain
+# it, and AWS states the format is fixed for the life of the subscription: "After you create a
+# flow log, you can't change its configuration or the flow log record format... Instead, you can
+# delete the flow log and create a new one with the required configuration." Against a
+# default-format subscription every rule in this file that reads tcp-flags matches nothing — not
+# noisily, silently. The required custom format is in §1 of ../PLAYBOOK.md.
+#
+# THE BITMASK IS OR-ED ACROSS THE AGGREGATION INTERVAL, AND THIS BREAKS AN EXACT MATCH.
+# AWS: "TCP flags can be OR-ed during the aggregation interval. For short connections, the flags
+# might be set on the same line in the flow log record, for example, 19 for SYN-ACK and FIN, and
+# 3 for SYN and FIN." A SYN flood is nothing but short connections, so its records carry SYN
+# OR-ed with whatever else the flow saw. The source rule matches tcp-flags exactly 2 and therefore
+# misses the majority of a real flood while matching the tidy minority. The correct test is THE
+# SYN BIT IS SET, and with bit values FIN=1, SYN=2, RST=4, SYN-ACK=18 the reachable set is
+# enumerated below rather than expressed as an arithmetic AND, because not every Sigma backend
+# implements a bitwise operator.
+#
+# ACK IS NOT RECORDED AT ALL. AWS: "since tcp-flags does not support logging ACK or PSH flags,
+# records for traffic with these unsupported flags will result in tcp-flags value 0." So
+# "SYN without ACK" — the textbook half-open definition — describes a field that does not exist,
+# and any rule phrased that way is matching on an absence that means nothing. The half-open
+# character of a flood has to be inferred from packet counts and source fan-out instead, which is
+# what the correlations below do.
+#
+# COUNTING RECORDS UNDER-MEASURES A FLOOD BY ORDERS OF MAGNITUDE. A flow log record is an
+# AGGREGATE over an interval, carrying `packets` and `bytes`. One record can represent a hundred
+# thousand packets. The source rule thresholds on 999 records in five minutes, which is a
+# threshold on how many distinct 5-tuples appeared — a spoofed-source flood clears it trivially
+# and a single-source flood may never reach it while saturating the target. Sum `packets`, and
+# count distinct sources; do not count rows.
+#
+# THE WINDOW IS SHORTER THAN THE AGGREGATION INTERVAL. The default maximum aggregation interval is
+# 10 minutes and delivery is "about 5 minutes" to CloudWatch Logs, best effort. A five-minute
+# window sees zero buckets or one, so a count tuned against it is measuring bucket alignment
+# rather than traffic. 15m is used below, with the note that it may be shortened only on a
+# 1-minute (Nitro) subscription.
+#
+# `protocol` IS AN IANA NUMBER — 6 is TCP. `action` is uppercase ACCEPT or REJECT.
+title: High-volume TCP SYN traffic to one destination
+id: 5a2e91c7-6b40-4d18-93f5-8c07a1e2fb64
+name: vpc_syn_volume
+status: experimental
+description: >-
+  Base rule — correlation component. A TCP flow whose OR-ed flags carry the SYN bit. It fires on
+  every connection attempt in the VPC, so it must never be routed anywhere on its own; it exists
+  so the correlations below can sum packets and count sources over it. The enumerated flag set is
+  every value in which bit 2 is set, given AWS's documented bit assignments and OR-ing behaviour.
+references:
+  - https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html
+  - https://attack.mitre.org/techniques/T1498/
+tags:
+  - attack.impact
+  - attack.t1498
+logsource:
+  product: aws
+  service: vpcflowlogs
+detection:
+  tcp_ingress:
+    flow-direction: 'ingress'
+    protocol: 6
+  syn_bit_set:
+    tcp-flags:
+      - 2       # SYN
+      - 3       # SYN + FIN
+      - 6       # SYN + RST
+      - 7       # SYN + FIN + RST
+      - 18      # SYN-ACK
+      - 19      # SYN-ACK + FIN
+      - 22      # SYN-ACK + RST
+      - 23      # SYN-ACK + FIN + RST
+  condition: tcp_ingress and syn_bit_set
+level: informational
+---
+title: SYN flood — sustained connection attempts from many sources to one target
+id: e93b0f47-52ad-4c61-b8d0-71fa6e35c298
+status: experimental
+description: >-
+  Many distinct sources sent SYN traffic to one destination inside the aggregation window. Source
+  fan-out is the discriminator that separates a flood from a busy service: a popular endpoint has
+  many clients but a stable set of them, while a flood's sources are drawn from a spoofed or
+  botnet range and are mostly seen once. group-by is pkt-dstaddr rather than dstaddr because AWS
+  states that for traffic to an interface whose destination is not one of that interface's
+  addresses, the log shows "the primary private IPv4 address" — behind a Network Load Balancer
+  every target collapses to the balancer's interface and the alert names the wrong host.
+references:
+  - https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html
+  - https://attack.mitre.org/techniques/T1498/
+tags:
+  - attack.impact
+  - attack.t1498
+correlation:
+  type: value_count
+  rules:
+    - vpc_syn_volume
+  group-by:
+    - pkt-dstaddr
+  timespan: 15m
+  condition:
+    field: pkt-srcaddr
+    gte: 500
+falsepositives:
+  - >-
+    A genuine traffic surge on a public endpoint — a launch, a campaign, a cache expiring across a
+    large client base. Distinguished by whether the sources are ones you have seen before, which
+    is a question for the investigation queries rather than for the rule.
+level: high
+---
+title: SYN flood — a single source saturating one target
+id: 1c74d8e0-3f92-40ab-95c6-2e08b47da531
+status: experimental
+description: >-
+  The other shape of the same attack, and the one a source-fan-out rule cannot see. A single
+  address, or a small set, sending enormous packet volume to one destination. This counts PACKETS
+  rather than records, because a flow log record is an aggregate — one record can represent a
+  hundred thousand packets, so a threshold on record count measures how many distinct 5-tuples
+  appeared and not how much traffic arrived. The two correlations together cover both the
+  distributed and the concentrated form; either alone leaves half the technique undetected.
+references:
+  - https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html
+  - https://attack.mitre.org/techniques/T1498/
+tags:
+  - attack.impact
+  - attack.t1498
+correlation:
+  type: event_count
+  rules:
+    - vpc_syn_volume
+  group-by:
+    - pkt-dstaddr
+    - pkt-srcaddr
+  timespan: 15m
+  condition:
+    gte: 2000
+falsepositives:
+  - >-
+    A load generator or a synthetic monitoring service running against your own endpoint. Named,
+    scheduled and allowlistable by source address; the schedule is the giveaway.
+  - >-
+    This counts flow RECORDS per source-destination pair, which is a proxy for volume rather than
+    volume itself. The packet-level view is in kql_t1498.kql, which sums `packets` directly —
+    Sigma correlations have no summation operator, and the difference is stated rather than
+    papered over.
+level: high

@@ -34,7 +34,7 @@ MANIFEST = {'schema_version': 3,
                                   'name': 'Backdoor IAM User Console Login via '
                                           'UpdateLoginProfile'}]}],
  'mitre_mappings': [{'id': 'T1098.001',
-                     'name': 'Backdoor IAM User Console Login via UpdateLoginProfile',
+                     'name': 'Account Manipulation: Additional Cloud Credentials',
                      'tactic': 'Privilege Escalation',
                      'platform': 'AWS IAM',
                      'description': 'iam:UpdateLoginProfile in CloudTrail where the caller is not '

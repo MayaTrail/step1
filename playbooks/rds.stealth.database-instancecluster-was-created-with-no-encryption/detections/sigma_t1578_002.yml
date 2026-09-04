@@ -1,0 +1,200 @@
+# RDS Database Created Without Storage Encryption (T1578.002 / T1537)
+#
+# WHY THIS IS A SECURITY USE CASE AND NOT A COMPLIANCE ONE. An unencrypted database is the
+# PRECONDITION for the worst exfiltration path RDS offers. AWS: "If the manual DB snapshot is
+# encrypted, it can be shared, but only by specifying a list of authorized AWS account IDs for
+# the ValuesToAdd parameter. You can't use `all` as a value for that parameter in this case."
+# And separately: "Snapshots that have been encrypted with the default AWS KMS key can't be
+# shared." So the three states are not on a spectrum - they are a hard ladder:
+#
+#   unencrypted                -> a snapshot can be made PUBLIC to every AWS account
+#   customer-managed key       -> a snapshot can be shared with NAMED accounts only
+#   default aws/rds key        -> a snapshot cannot be shared AT ALL
+#
+# Encryption at rest is therefore the control that makes ../../rds.exfiltration.snapshot-made-public/
+# impossible rather than merely detectable. That is the reason this rule exists, and it is the
+# reason its severity is not a compliance severity.
+#
+# WHAT THE SOURCE RULE DOES, AND WHY FIVE OF ITS SEVEN EVENT NAMES CANNOT MATCH ON THE REQUEST.
+# It lists CreateDBInstance, CreateDBInstanceReadReplica, RestoreDBInstanceFromDBSnapshot,
+# RestoreDBInstanceToPointInTime, CreateDBCluster, RestoreDBClusterFromSnapshot and
+# RestoreDBClusterToPointInTime, and tests requestParameters.storageEncrypted OR
+# responseElements.storageEncrypted for "false".
+#
+# `StorageEncrypted` is a request parameter of only FIVE RDS operations: CreateDBInstance,
+# CreateDBCluster, CreateGlobalCluster, RestoreDBInstanceFromS3 and RestoreDBClusterFromS3.
+# It is absent from every restore-from-snapshot and point-in-time API and from
+# CreateDBInstanceReadReplica, because those INHERIT encryption from their source and there is
+# nothing to set. So the request arm of the source rule is dead for five of its seven names, and
+# the rule survives only on its response arm - which is correct, and which is the arm to build on.
+#
+# TWO NAMES ARE ALSO MISSING: RestoreDBInstanceFromS3 and RestoreDBClusterFromS3 both accept
+# StorageEncrypted and neither is covered. CreateGlobalCluster likewise.
+#
+# ABSENCE IS NOT FALSE, EXCEPT WHEN IT IS. AWS documents the CreateDBInstance default as "By
+# default, it isn't encrypted", so a create that never mentions StorageEncrypted produces an
+# unencrypted database - and an event whose requestParameters contain no such key. A rule testing
+# only for the literal "false" misses the ordinary case. The response settles it either way, which
+# is why the response block below is the primary one and the request block is corroboration.
+#
+# THE AURORA AMPLIFIER. AWS: "This setting doesn't apply to Amazon Aurora DB instances. The
+# encryption for DB instances is managed by the DB cluster." An unencrypted three-node Aurora
+# cluster therefore produces FOUR matching events - one CreateDBCluster and three
+# CreateDBInstance - for a single control failure. Group by database identifier before you count,
+# and treat the cluster event as the finding.
+#
+# FIELD SHAPE. eventSource `rds.amazonaws.com`, management plane, regional. `responseElements` is
+# FLAT: AWS's own published CloudTrail sample for CreateDBInstance carries `"storageEncrypted":
+# false` at the top level, with no DBInstance wrapper. Note also that the SNAPSHOT data types name
+# the same idea differently - DBSnapshot uses `Encrypted`, DBClusterSnapshot uses
+# `StorageEncrypted` - so a sweep written against one shape returns null against the other.
+title: RDS database created without storage encryption
+id: 239904d2-175f-4830-93cb-b18f81c9fe00
+name: rds_created_without_encryption
+status: experimental
+description: >-
+  A DB instance, cluster or global cluster was created or restored into an unencrypted state -
+  by an explicit storageEncrypted of false, or by omitting it and taking AWS's documented
+  unencrypted default. Snapshots of this database can be shared with every AWS account.
+references:
+  - https://attack.mitre.org/techniques/T1578/002/                                          # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_CreateDBInstance.html      # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.Encryption.html          # retrieved 2026-08-29
+tags:
+  - attack.defense-impairment
+  - attack.exfiltration
+  - attack.t1578.002
+  - attack.t1537
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # The restore and read-replica APIs cannot carry storageEncrypted in the REQUEST - they inherit
+  # from their source - so they are matched on the response only. RestoreDBInstanceFromS3,
+  # RestoreDBClusterFromS3 and CreateGlobalCluster do accept it and the source rule omits them.
+  selection:
+    eventSource: 'rds.amazonaws.com'
+    eventName:
+      - 'CreateDBInstance'
+      - 'CreateDBCluster'
+      - 'CreateGlobalCluster'
+      - 'CreateDBInstanceReadReplica'
+      - 'RestoreDBInstanceFromDBSnapshot'
+      - 'RestoreDBInstanceToPointInTime'
+      - 'RestoreDBInstanceFromS3'
+      - 'RestoreDBClusterFromSnapshot'
+      - 'RestoreDBClusterToPointInTime'
+      - 'RestoreDBClusterFromS3'
+  # PRIMARY. The service states the outcome, whether or not the caller expressed an opinion.
+  # Pipelines that index CloudTrail booleans as the STRING "false" need 'false' added here.
+  unencrypted_result:
+    responseElements.storageEncrypted: false
+  # CORROBORATION, and the only arm that works when the response is not captured.
+  unencrypted_requested:
+    requestParameters.storageEncrypted: false
+  success:
+    errorCode: null
+  condition: selection and success and (unencrypted_result or unencrypted_requested)
+falsepositives:
+  - >-
+    An Aurora member instance in an unencrypted cluster. Real, but not a separate finding - the
+    cluster is the finding and its members repeat it. Deduplicate by cluster identifier.
+  - >-
+    A short-lived test database on an instance class that does not support encryption at all
+    (db.m1.*, db.m2.*, db.t2.micro). The finding there is the instance class, not the flag.
+level: medium
+---
+# Base rule — sequence component only, not for direct alerting. Fires on any snapshot leaving the
+# account, which is the event that turns an unencrypted database from a posture finding into an
+# exfiltration. Deliberately narrower than the equivalent rule in
+# ../../rds.exfiltration.snapshot-made-public/: this one does not care WHO the recipient is,
+# because in this playbook the question is only whether the unencrypted data left.
+title: RDS snapshot restore attribute granted to another account
+id: c0201851-a70f-4dc0-b800-2250e9ac5748
+name: rds_snapshot_shared_out_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_ModifyDBSnapshotAttribute.html  # retrieved 2026-08-29
+tags:
+  - attack.exfiltration
+  - attack.t1537
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'rds.amazonaws.com'
+    eventName:
+      - 'ModifyDBSnapshotAttribute'
+      - 'ModifyDBClusterSnapshotAttribute'
+  share_attribute:
+    requestParameters.attributeName: 'restore'
+  values_absent:
+    requestParameters.valuesToAdd: null
+  success:
+    errorCode: null
+  condition: selection and share_attribute and success and not values_absent
+level: informational
+---
+# THE LADDER, REALISED. A principal that creates an unencrypted database and then shares a
+# snapshot out of the account has walked the exact path AWS's encryption rules exist to block: an
+# encrypted database could not have produced a snapshot shareable with `all`, and a default-key
+# one could not have produced a shareable snapshot at all.
+#
+# SEVEN DAYS is deliberately long and is a trade. The causal link is real but slow - provision,
+# populate, snapshot, share - and no shorter window captures it. The cost is that correlation
+# engines hold state for a week and that an unrelated pairing inside seven days will occasionally
+# compose. Treat a hit as a question about one principal's week, not as a proven sequence, and use
+# the join in kql_t1578_002.kql, which matches the SNAPSHOT back to the unencrypted database
+# rather than relying on the principal alone.
+title: Unencrypted RDS database created and a snapshot then shared out of the account
+id: dd55737a-710a-4393-b826-71fb5bfe6402
+status: experimental
+description: >-
+  One principal created an unencrypted database and later granted another account restore rights
+  on a snapshot. Encryption at rest would have made the second step impossible or account-limited;
+  its absence is what allowed it.
+references:
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ShareSnapshot.html   # retrieved 2026-08-29
+tags:
+  - attack.exfiltration
+  - attack.t1537
+correlation:
+  type: temporal_ordered
+  rules:
+    - rds_created_without_encryption
+    - rds_snapshot_shared_out_bb
+  group-by:
+    - userIdentity.arn
+  timespan: 7d
+level: critical
+---
+# THRESHOLD BASIS, with no observed baseline to derive one from. One unencrypted database is a
+# mistake; three by one principal inside a day is a module or a template, and the response is to
+# fix the code once rather than to migrate three databases three times. Counted on the DATABASE
+# IDENTIFIER rather than on events, so an unencrypted Aurora cluster and its member instances do
+# not reach the threshold on their own - that amplification is documented above and is exactly the
+# false signal a per-event count would produce. `gte` at the baseline, never `gt`.
+title: Multiple unencrypted RDS databases created by one principal
+id: 35c8e712-63a9-4e80-9cea-b6ec6ecb75a9
+status: experimental
+description: >-
+  One principal created three or more distinct unencrypted databases within a day. This is a
+  systemic defect in whatever produced them, not three separate incidents.
+references:
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.Encryption.html   # retrieved 2026-08-29
+tags:
+  - attack.defense-impairment
+  - attack.t1578.002
+correlation:
+  type: value_count
+  rules:
+    - rds_created_without_encryption
+  group-by:
+    - userIdentity.arn
+  field: responseElements.dBInstanceIdentifier
+  timespan: 24h
+  condition:
+    gte: 3
+level: high

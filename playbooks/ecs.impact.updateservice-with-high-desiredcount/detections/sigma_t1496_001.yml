@@ -1,0 +1,203 @@
+# ECS Service Scaled to a High Desired Count (T1496.001 / T1496)
+#
+# THE DISCRIMINATOR IS THE MAGNITUDE, NOT THE CALL. `UpdateService` is the most routine write
+# in ECS: every deployment, every autoscaling action and every rollback is one. What separates
+# resource hijacking from operations is how far the number moved, so the rule has to be a
+# comparison and the source rule's attempt at one is where it breaks.
+#
+# WHAT THE SOURCE RULE DOES NOT DO. Its query is
+# `requestParameters.desiredCount.keyword:/\d{4}/`, and there are three separate defects.
+#
+#   1. A `.keyword` subfield exists only where the ingest pipeline maps a field as a string.
+#      AWS documents `desiredCount` as Type: Integer, and CloudTrail serialises it as a JSON
+#      NUMBER. If the pipeline maps it numerically there is no `.keyword` subfield and the
+#      clause matches nothing at all. Whether this rule can fire therefore depends on an
+#      ingest-mapping detail rather than on the event - which is a defect regardless of which
+#      way the mapping happens to fall.
+#   2. A Lucene `regexp` term is ANCHORED - it must match the whole term, not a substring - so
+#      `/\d{4}/` means EXACTLY four digits. The rule fires on 1000-9999 and is silent on
+#      everything below 1000. A service moved from 2 tasks to 500 is a 250x escalation and
+#      does not fire. And because AWS caps "Tasks per service" at 5,000 (not adjustable), the
+#      band above 5,000 is unreachable anyway: the rule's real coverage is [1000, 5000], and
+#      its blind spot is [baseline+1, 999].
+#   3. It has NO SUCCESS FILTER. Alone among the five ECS rules in this set, it omits
+#      `NOT _exists_:errorCode`, so a DENIED UpdateService with a high count fires the same
+#      alert as a successful one. A principal probing its permissions and an actor who
+#      actually scaled a mining fleet arrive in the same queue at the same priority.
+#
+# It is also blind in the other direction. `desiredCount: 0` is the destructive setting and the
+# mandatory precursor to DeleteService and DeleteCluster, and a rule that requires four digits
+# cannot see a zero. That gap is covered by ../../ecs.stealth.service-is-deleted/ and
+# ../../ecs.stealth.cluster-is-deleted/, both of which ship a scale-to-zero base rule.
+#
+# THRESHOLD BASIS FOR THE 50 BELOW - stated because a number without a basis is an invented
+# number. Three documented figures bound it. AWS caps "Tasks per service" at 5,000 and the
+# quota is NOT adjustable, so 5,000 is the hard ceiling and any threshold near it is a ceiling
+# test rather than a detection. The Fargate "On-Demand vCPU resource count" quota defaults to
+# 6 per Region (adjustable, and AWS raises it automatically with usage), and the smallest
+# Fargate task is 0.25 vCPU - so a default-quota account can actually run about 24 tasks, and
+# a desiredCount of 1,000 on such an account never materialises. That last point matters more
+# than it looks: the CloudTrail event is the detection surface, NOT the resulting task count,
+# because the intent is fully expressed by the API call even when the capacity refuses it.
+# Fifty sits above what a default-quota Fargate account can materialise and two orders of
+# magnitude below the service quota, which puts it inside the band the source rule cannot see.
+# It is a STARTING POINT for an account that has never measured. The correct deployed value is
+# the highest legitimate desiredCount observed in this account plus headroom, and where the
+# baseline is high the ratio test in kql_t1496_001.kql is the better instrument - Sigma cannot
+# compare an event against the service's own previous value.
+title: ECS service scaled to a high desired task count
+id: 781eabd9-3e58-44bd-8326-26c0673e524d
+name: ecs_service_scaled_high
+status: experimental
+description: >-
+  A service's desired task count was raised to 50 or more. ECS then keeps that many tasks
+  running and replaces any that stop, so the compute is durable and stopping individual tasks
+  does not reduce it. The usual motive is cryptomining, billed to the account that owns the
+  cluster.
+references:
+  - https://attack.mitre.org/techniques/T1496/001/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_UpdateService.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/general/latest/gr/ecs-service.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1496
+  - attack.t1496.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecs.amazonaws.com'
+    eventName: 'UpdateService'
+  # RE-BASELINE BEFORE DEPLOYING. 50 is a starting point derived from AWS quotas, not from an
+  # observed count - see the threshold basis in the header. desiredCount is an INTEGER in the
+  # event, so this is a numeric comparison, not a string or regex match.
+  magnitude:
+    requestParameters.desiredCount|gte: 50
+  success:
+    errorCode: null
+  condition: selection and magnitude and success
+falsepositives:
+  - >-
+    A genuine scale-out event on a large service — a load test, a traffic surge, a regional
+    failover. All are traceable to a change record; if they are not, that is the finding.
+level: high
+---
+# The source rule has no success filter, which conflates a denied attempt with a completed one.
+# Splitting them keeps the denial VISIBLE rather than discarding it, at a level that says
+# corroboration is needed: a burst of these across services is permission probing and belongs
+# in triage, but it is not compute that is running and being billed.
+title: ECS service scale-out to a high desired count denied
+id: 3a1358b2-ab8a-42d5-a451-5c49df6aec75
+name: ecs_service_scaled_high_denied
+status: experimental
+description: >-
+  An attempt to raise a service's desired task count to 50 or more was refused. No compute was
+  created; the value is as an intent signal and as a map of where the principal's permissions
+  end.
+references:
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/CommonErrors.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1496.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecs.amazonaws.com'
+    eventName: 'UpdateService'
+  magnitude:
+    requestParameters.desiredCount|gte: 50
+  # `errorCode: null` matches when the field is ABSENT, so "denied" is `not success` - never
+  # `and not` against a value that is only present on failures.
+  success:
+    errorCode: null
+  condition: selection and magnitude and not success
+level: medium
+---
+# Base rule — sequence component only, not for direct alerting. Scaling a service runs whatever
+# its CURRENT task definition says, so an actor who wants their own image scales a service they
+# have first re-pointed. This is where the image is.
+title: ECS task definition registered
+id: 7eda96d8-70f6-429d-84ee-e535418b751e
+name: ecs_task_definition_registered_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_RegisterTaskDefinition.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1496.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecs.amazonaws.com'
+    eventName: 'RegisterTaskDefinition'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+# Register-then-scale is the complete hijack: bring your own image, then multiply it. Scaling
+# alone runs more of whatever the service was ALREADY running, which is a different and often
+# less alarming event - a load test rather than a mining fleet. The pair is the one that says
+# the compute being multiplied is the actor's.
+#
+# TIMESPAN BASIS. Sixty minutes. UpdateService with a new taskDefinition triggers a deployment
+# and the scale-out can be issued in the same breath or after the deployment settles; an hour
+# spans a slow rollout without spanning unrelated work.
+title: ECS task definition registered and a service then scaled high by the same principal
+id: 2bd89bd1-151c-4199-9d40-d75e35ed3865
+status: experimental
+description: >-
+  One principal registered a task definition and then raised a service's desired count to 50 or
+  more within the hour. The compute being multiplied is running an image that principal
+  supplied, which is resource hijacking rather than a scale-out of existing work.
+references:
+  - https://attack.mitre.org/techniques/T1496/001/  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1496.001
+correlation:
+  type: temporal_ordered
+  rules:
+    - ecs_task_definition_registered_bb
+    - ecs_service_scaled_high
+  group-by:
+    - userIdentity.arn
+  timespan: 60m
+level: high
+---
+# Fan-out across SERVICES rather than volume of calls, which is why this counts distinct values
+# rather than events: one principal issuing five UpdateService calls against a single service
+# is a deployment retrying, while the same five spread across three services is someone
+# consuming the account. `gte: 3` at the baseline, never `gt`, so a run that touches exactly
+# three does not fall through. AWS permits 5,000 services per cluster, so the quota supplies no
+# constraint and the threshold has to come from the shape of the work - re-baseline it against
+# how many services your own change windows legitimately scale at once.
+title: Multiple ECS services scaled high by one principal
+id: 06e0e5ff-34a0-4f21-b0ca-e44c0e2b1285
+status: experimental
+description: >-
+  One principal raised the desired task count of three or more distinct services to 50 or more
+  inside thirty minutes. Each service maintains its own count independently, so every service
+  in the group has to be scaled back separately and stopping tasks achieves nothing.
+references:
+  - https://docs.aws.amazon.com/general/latest/gr/ecs-service.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1496.001
+correlation:
+  type: value_count
+  rules:
+    - ecs_service_scaled_high
+  group-by:
+    - userIdentity.arn
+  field: requestParameters.service
+  timespan: 30m
+  condition:
+    gte: 3
+level: high

@@ -1,0 +1,301 @@
+# ECR Image Tag Overwrite Enabled (T1525 / T1685)
+#
+# THE TAG IS A POINTER; THE DIGEST IS THE CONTENT. An ECR image is identified by its
+# `imageDigest` — the sha256 of its manifest. An image *tag* is a mutable label pointing at
+# a digest, and when a repository permits overwriting, a `PutImage` carrying an existing tag
+# repoints that label at a new digest. Nothing else changes: the repository name, its ARN,
+# its URI, its policy, its encryption and its scan configuration are all untouched, and the
+# reference every consumer holds - `<acct>.dkr.ecr.<region>.amazonaws.com/app:latest` -
+# still resolves. This is the registry equivalent of the Lambda code-overwrite technique,
+# and the digest plays the part `CodeSha256` plays there: it is the only field that moves.
+#
+# THE CONSUMER SIDE EMITS NOTHING ATTRIBUTABLE. Every task, pod or function that pulls
+# `:latest` after the overwrite runs the attacker's image. That pull IS logged - ECR has no
+# CloudTrail data-event category at all, so `BatchGetImage` and `GetDownloadUrlForLayer` are
+# management events, present by default (see the note file, and the `A1/A2` rule this
+# corrects). But AWS's own published pull event carries `"responseElements": null` and
+# `requestParameters.imageIds[].imageTag` - the TAG the client asked for, never the DIGEST
+# the registry served. So the log answers "something pulled :latest at 14:02"; it does not
+# answer "it received the malicious digest". The link is the overwrite timestamp and nothing
+# else. That is the blind spot this rule set is honest about rather than papering over.
+#
+# FOUR SETTINGS, NOT TWO. `imageTagMutability` is documented with the valid values
+# `MUTABLE | IMMUTABLE | IMMUTABLE_WITH_EXCLUSION | MUTABLE_WITH_EXCLUSION`. Overwriting is
+# possible under three of them: MUTABLE (every tag), MUTABLE_WITH_EXCLUSION (every tag but
+# the filtered ones) and IMMUTABLE_WITH_EXCLUSION (ONLY the filtered ones). The last is the
+# targeted form and the quietest: the repository still reports itself immutable, and AWS's
+# own CLI example for it is `--image-tag-mutability IMMUTABLE_WITH_EXCLUSION
+# --image-tag-mutability-exclusion-filters filterType=WILDCARD,filter=latest` - which is
+# precisely "make everything immutable except the one tag production follows".
+#
+# TWO PATHS SET IT. `PutImageTagMutability` changes it on an existing repository;
+# `CreateRepository` sets it at birth, and AWS documents that "If this parameter is omitted,
+# the default setting of MUTABLE will be used". So on the ordinary creation path
+# `requestParameters.imageTagMutability` is ABSENT and the repository is still overwritable -
+# a rule keyed on the request parameter reads `null` and stays silent. The authoritative
+# field for the creation path is the RESPONSE, nested:
+# `responseElements.repository.imageTagMutability`.
+#
+# THE SOURCE RULE matches `eventName:"PutImageTagMutability" AND
+# requestParameters.imageTagMutability:"mutable"` with a success filter. It therefore misses
+# both exclusion-filter values, misses the CreateRepository path entirely, misses the default,
+# and discards `ImageTagAlreadyExistsException` - the error an immutable repository returns
+# when somebody tries exactly this attack and is refused, which is the single highest-value
+# event in the whole set.
+title: ECR repository tag mutability weakened to permit overwrite
+id: 8c51cb49-4489-402c-956a-8e483ff9a710
+name: ecr_tag_mutability_weakened
+status: experimental
+description: >-
+  A repository's `imageTagMutability` was set to a value that permits an existing image tag
+  to be repointed at a new digest. Every consumer that pulls by that tag afterwards runs
+  whatever was pushed last, and the consumer side records the tag it asked for, not the
+  digest it received.
+references:
+  - https://attack.mitre.org/techniques/T1525/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_PutImageTagMutability.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-tag-mutability.html  # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1525
+  - attack.defense-impairment
+  - attack.t1685
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecr.amazonaws.com'
+    eventName: 'PutImageTagMutability'
+  # All three overwrite-permitting values. The two _WITH_EXCLUSION forms are what the source
+  # rule's single `mutable` match misses, and IMMUTABLE_WITH_EXCLUSION is the dangerous one:
+  # the repository continues to report itself immutable while the named tags stay writable.
+  overwritable:
+    requestParameters.imageTagMutability:
+      - 'MUTABLE'
+      - 'MUTABLE_WITH_EXCLUSION'
+      - 'IMMUTABLE_WITH_EXCLUSION'
+  success:
+    errorCode: null
+  # POPULATE with the roles that own repository configuration - normally the IaC pipeline and
+  # nothing else. Left as-is the rule fires on every weakening, which is the correct default:
+  # moving a repository from IMMUTABLE toward MUTABLE is not a routine deployment step.
+  config_pipeline:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'          # replace, or delete this block entirely
+  condition: selection and overwritable and success and not config_pipeline
+falsepositives:
+  - >-
+    A repository fronting a pull-through cache rule. AWS recommends MUTABLE for those,
+    because ECR must be able to update the cached copy of an upstream tag. Enumerate them
+    with `aws ecr describe-pull-through-cache-rules` and exclude by repository name, not by
+    principal.
+  - >-
+    A deliberate, ticketed relaxation during a migration. Traceable and rare; the alert is
+    the record that it happened.
+level: high
+---
+# The targeted carve-out. This fires when an exclusion filter names a FLOATING PRODUCTION
+# TAG - the class of tag whose whole purpose is that consumers follow it without pinning.
+# Carving `latest` out of immutability is not a weaker version of setting MUTABLE; it is a
+# stronger, narrower attack, because the repository's headline setting still reads IMMUTABLE
+# and any control or dashboard that checks only that field reports the repository as
+# protected. Covers both paths - the setting can be established at CreateRepository as well
+# as changed later.
+#
+# FIELD-SHAPE WARNING. `imageTagMutabilityExclusionFilters` is an ARRAY OF OBJECTS
+# (`{filter, filterType}`, 1-5 members, filterType `WILDCARD`). How your pipeline flattens
+# that array decides whether `|contains` reaches the `filter` values; on a backend that
+# serialises the array to a string it matches, on one that explodes it into
+# `...ExclusionFilters.0.filter` it does not. Confirm against a real event before relying on
+# this rule alone, and treat the rule above as the load-bearing one.
+title: ECR tag immutability carved out for a floating production tag
+id: 3e039b42-5bfe-4a77-9557-f526fce68b03
+name: ecr_tag_mutability_carveout
+status: experimental
+description: >-
+  An image-tag mutability exclusion filter names a floating tag such as `latest` or `prod`.
+  Under IMMUTABLE_WITH_EXCLUSION this makes exactly those tags overwritable while the
+  repository still reports itself immutable.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-tag-mutability.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_PutImageTagMutability.html  # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1525
+  - attack.defense-impairment
+  - attack.t1685
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecr.amazonaws.com'
+    eventName:
+      - 'PutImageTagMutability'
+      - 'CreateRepository'
+  carveout:
+    requestParameters.imageTagMutability:
+      - 'IMMUTABLE_WITH_EXCLUSION'
+      - 'MUTABLE_WITH_EXCLUSION'
+  # Substring match, so `prod` also catches `production` and `*prod*`. Extend with your own
+  # release-channel tag names.
+  floating_tag:
+    requestParameters.imageTagMutabilityExclusionFilters|contains:
+      - 'latest'
+      - 'prod'
+      - 'stable'
+      - 'release'
+      - 'main'
+  success:
+    errorCode: null
+  condition: selection and carveout and floating_tag and success
+falsepositives:
+  - >-
+    A team deliberately keeping `latest` writable in a development registry while pinning
+    release tags. Legitimate, and worth knowing about; scope the rule to production accounts.
+level: high
+---
+# BASE RULE - sequence component only, not for direct alerting. It fires on every repository
+# created with default settings, because MUTABLE is the documented default when the parameter
+# is omitted. It is here for two reasons: it feeds the inventory sweep in ../PLAYBOOK.md
+# Query 2, and it keys on `responseElements.repository.imageTagMutability` - the NESTED
+# response field - rather than the request parameter, which is absent on exactly that
+# default path. Keying the check on the request parameter is the defect this rule exists to
+# not repeat.
+title: ECR repository created in an overwrite-permitting state
+id: f0d5cc45-be1c-44f8-9507-70089773bc6b
+name: ecr_repo_created_overwritable
+status: experimental
+description: >-
+  Base rule - sequence component only, not for direct alerting. A repository was created in
+  a state that permits tag overwrite, including the default state reached by omitting the
+  parameter entirely.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_CreateRepository.html  # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1525
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecr.amazonaws.com'
+    eventName: 'CreateRepository'
+  overwritable:
+    responseElements.repository.imageTagMutability:
+      - 'MUTABLE'
+      - 'MUTABLE_WITH_EXCLUSION'
+      - 'IMMUTABLE_WITH_EXCLUSION'
+  success:
+    errorCode: null
+  condition: selection and overwritable and success
+falsepositives:
+  - >-
+    Every repository created without an explicit `--image-tag-mutability IMMUTABLE`. That is
+    the majority of them, which is why this is informational and why the account-wide sweep,
+    not this rule, is the operational control.
+level: informational
+---
+# BASE RULE - sequence component only, not for direct alerting. Carries the success filter
+# because it feeds a `high` correlation: without it a denied push followed by a legitimate
+# one would fire high.
+title: ECR image pushed
+id: 76d9ccbf-c958-42fe-ab08-968085f27d15
+name: ecr_put_image
+status: experimental
+description: >-
+  Base rule - sequence component only, not for direct alerting. A `PutImage` completed,
+  which is the final call of every image push.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_PutImage.html  # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1525
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecr.amazonaws.com'
+    eventName: 'PutImage'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+# THE ATTACK FINGERPRINT. Mutability weakened, then an image pushed to the same repository.
+# This is the registry analogue of the reference corpus's `GetFunction -> UpdateFunctionCode`
+# sequence, and it is the sequence that turns a configuration change into a supply-chain
+# compromise. Grouped by `requestParameters.repositoryName`, which both events carry under
+# the identical path - the two do NOT share a principal in the interesting case, because the
+# actor may weaken the setting under one identity and push under the CI role's credentials.
+#
+# TIMESPAN BASIS - derived from documented behaviour, not an observed count. There is no
+# emulation behind this number. Thirty minutes is chosen because the weakening has no purpose
+# other than the push that follows it, and an operator relaxing mutability for a legitimate
+# migration does not then push within the half hour without a change record. Widen it if your
+# deploy pipelines are slow; narrowing it below the p99 push duration for a large image will
+# drop real sequences, since `PutImage` is the LAST call of a push that began with the layer
+# uploads.
+title: ECR tag mutability weakened and immediately used to push
+id: 220643a3-23b1-452b-84d0-4180d75a0855
+status: experimental
+description: >-
+  A repository's tag mutability was relaxed and an image was pushed to that same repository
+  within thirty minutes. The configuration change and the push together are the overwrite.
+references:
+  - https://attack.mitre.org/techniques/T1525/  # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1525
+correlation:
+  type: temporal_ordered
+  rules:
+    - ecr_tag_mutability_weakened
+    - ecr_put_image
+  group-by:
+    - requestParameters.repositoryName
+  timespan: 30m
+level: high
+---
+# THE ERROR IS THE EVIDENCE. AWS: "After tag immutability is turned on, the
+# `ImageTagAlreadyExistsException` error is returned if you push an image with a tag that is
+# already in the repository." That error has exactly one cause - somebody tried to repoint an
+# existing tag at new content and the repository refused. It is not a deployment misfire and
+# it is not a race: a pipeline that publishes immutable release tags never re-uses one. A
+# success-only rule, which is what the source ships, throws this away - and it is the only
+# signal in the set that fires on the ATTEMPT rather than on the preparation.
+title: ECR image tag overwrite refused by tag immutability
+id: d175ab8d-d4a7-408f-a4bd-97b09e9782d4
+name: ecr_tag_overwrite_blocked
+status: experimental
+description: >-
+  A `PutImage` was rejected with `ImageTagAlreadyExistsException`, which ECR returns only
+  when a repository configured for tag immutability is asked to repoint an existing tag.
+  Treat as an attempted image replacement until the pusher accounts for it.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_PutImage.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-tag-mutability.html  # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1525
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecr.amazonaws.com'
+    eventName: 'PutImage'
+  # `|contains` rather than equality: confirm against a real event whether your trail records
+  # the bare exception name or a prefixed form. Prefix-tolerant matching costs nothing here.
+  blocked:
+    errorCode|contains: 'ImageTagAlreadyExistsException'
+  condition: selection and blocked
+falsepositives:
+  - >-
+    A retried push after a network failure, where the first attempt actually succeeded. The
+    give-away is a preceding successful `PutImage` for the same repository and tag within
+    seconds; a genuine overwrite attempt has no such predecessor.
+level: medium

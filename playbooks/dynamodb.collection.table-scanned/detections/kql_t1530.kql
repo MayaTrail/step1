@@ -1,0 +1,93 @@
+// DynamoDB table scanned (T1530)
+//
+// Scan is data-plane, so the source rule is inert unless DynamoDB data events were purchased. Where
+// they are enabled, Scan is also ordinary — analytics and export jobs scan constantly. This query
+// separates a walk from a workload on two things the source rule ignores: the `select` parameter,
+// and breadth across tables.
+//
+// `contains` throughout, never `has` — table names and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+// POPULATE: the application roles that legitimately read these tables.
+let KnownReaders = dynamic(["PlatformAutomation", "app-runtime"]);
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "dynamodb.amazonaws.com"
+| where EventName in ("Scan", "Query", "ExecuteStatement", "BatchExecuteStatement",
+                      "BatchGetItem", "GetItem", "ListTables", "DescribeTable")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Table = tostring(Req.tableName)
+| extend Select = tostring(Req.select)
+| extend Limit = toint(Req.limit)
+| extend IsKnownReader = UserIdentityArn contains "PlatformAutomation" or UserIdentityArn contains "app-runtime"
+// select COUNT returns no item data at all — it cannot be exfiltration. Only ALL_ATTRIBUTES and
+// ALL_PROJECTED_ATTRIBUTES actually move the rows.
+| extend ReturnsData = Select in ("ALL_ATTRIBUTES", "ALL_PROJECTED_ATTRIBUTES") or isempty(Select)
+| extend CountOnly = Select == "COUNT"
+| extend IsScan = EventName == "Scan"
+| extend IsRead = EventName in ("Scan", "Query", "ExecuteStatement", "BatchExecuteStatement", "BatchGetItem")
+// Enumeration precedes a walk: ListTables is how an actor learns what exists.
+| extend IsEnumeration = EventName in ("ListTables", "DescribeTable")
+| summarize
+    Reads          = countif(IsRead),
+    Scans          = countif(IsScan),
+    ScansReturningData = countif(IsScan and ReturnsData),
+    CountOnlyScans = countif(IsScan and CountOnly),
+    UnboundedScans = countif(IsScan and ReturnsData and isnull(Limit)),
+    Enumeration    = countif(IsEnumeration),
+    DistinctTables = dcountif(Table, IsRead),
+    Tables         = make_set_if(Table, IsRead, 25),
+    ByKnownReader  = countif(IsRead and IsKnownReader),
+    FirstEnum      = minif(TimeGenerated, IsEnumeration),
+    FirstRead      = minif(TimeGenerated, IsRead),
+    SourceIps      = make_set(SourceIpAddress, 5),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 15m)
+| where Reads > 0
+| extend EnumeratedFirst = Enumeration > 0 and isnotempty(FirstEnum) and isnotempty(FirstRead)
+                           and FirstEnum < FirstRead
+| extend Verdict = case(
+    EnumeratedFirst and DistinctTables >= 3,
+        strcat("TABLES ENUMERATED THEN READ — ListTables followed by reads across ",
+               tostring(DistinctTables), " tables. An application reads its own table and does not look around first, P0"),
+    DistinctTables >= 3 and ByKnownReader == 0,
+        strcat("READS ACROSS ", tostring(DistinctTables),
+               " DISTINCT TABLES by a principal outside the application set, P0"),
+    DistinctTables >= 3,
+        strcat("READS ACROSS ", tostring(DistinctTables),
+               " DISTINCT TABLES — confirm this is an export or analytics job, which looks identical, P1"),
+    UnboundedScans > 0 and ByKnownReader == 0,
+        "FULL TABLE SCAN RETURNING ALL ATTRIBUTES, NO LIMIT, by an unexpected principal — every attribute of every item examined, P1",
+    ScansReturningData > 0 and ByKnownReader == 0,
+        "SCAN RETURNING ITEM DATA by a principal outside the application set, P2",
+    CountOnlyScans > 0 and ScansReturningData == 0,
+        "COUNT-ONLY SCANS — select COUNT returns no item data, so this moved nothing. Sizing, not reading, P3",
+    "table reads by a known application role")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, Reads, Scans, ScansReturningData,
+          CountOnlyScans, UnboundedScans, Enumeration, DistinctTables, Tables, SourceIps
+| order by DistinctTables desc, UnboundedScans desc
+//
+// ============================================================================
+// `select` IS THE DISCRIMINATOR THE SOURCE RULE IGNORES
+// ============================================================================
+// Scan accepts select = ALL_ATTRIBUTES | ALL_PROJECTED_ATTRIBUTES | SPECIFIC_ATTRIBUTES | COUNT.
+// A COUNT scan reads the table and returns only a number — it cannot be exfiltration, and it is what
+// a sizing or monitoring job does. Rating it identically to an ALL_ATTRIBUTES scan is what makes a
+// Scan rule unusable in an estate that scans normally.
+//
+// ============================================================================
+// THREE READ PATHS, AND THE SOURCE RULE WATCHES ONE
+// ============================================================================
+// Scan reads the whole table. Query reads a partition — and without a narrowing key condition it
+// reads a great deal. PartiQL ExecuteStatement compiles a SELECT to a Scan or a Query under a
+// different event name entirely. All three are included in the base rule so the breadth correlation
+// sees them.
+//
+// ============================================================================
+// IF THIS QUERY RETURNS NOTHING, CHECK DATA EVENTS BEFORE CONCLUDING ANYTHING
+// ============================================================================
+//   aws cloudtrail get-event-selectors --trail-name <trail> | grep -i dynamodb
+// Scan is data-plane. With data events off, this query is empty in an account being actively read.
