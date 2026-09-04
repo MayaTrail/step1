@@ -25,7 +25,12 @@ export function ProtectedRoute() {
   }
 
   if (!user) return <Navigate to="/login" replace />
-  if (!user.isVerified && !user.isDemo) return <Navigate to="/connector" replace />
+
+  // An unconnected user ("Explorer") is deliberately NOT bounced to /connector.
+  // They browse the whole product read-only to decide whether connecting is
+  // worth it; the backend refuses every mutating request regardless, so the gate
+  // lives on the action rather than on the page. See
+  // product-design-requirements/connector-access-design/.
 
   // Demo users whose session has expired — redirect to connector to reconnect.
   // This fires in real-time via useDemoCountdown (no navigation needed).

@@ -8,6 +8,7 @@ import { platformShortLabel } from '@/data'
 import { listStacks } from '@/services/stack.service'
 import { RunEmulationModal } from '@/components/modals/RunEmulationModal'
 import { IconLaunch } from '@/components/ui/Icons'
+import { useAWSConnection } from '@/components/common/ConnectGate'
 
 /**
  * Emulations content hub — a cross-platform card library of every emulation
@@ -18,6 +19,7 @@ import { IconLaunch } from '@/components/ui/Icons'
  * AWS and an empty result for the others.
  */
 export function EmulationsHub() {
+  const { connected } = useAWSConnection()
   const { data: emulations, loading } = useEmulations('aws')
   const { filtered, toolbar } = useLibraryFilter(emulations ?? [])
   const [runTarget, setRunTarget] = useState<Emulation | null>(null)
@@ -93,7 +95,14 @@ export function EmulationsHub() {
               tactics={emulationTactics(em)}
               actions={[
                 { label: 'View Emulation', to: `/aws/emulations/${em.id}`, variant: 'secondary' },
-                { label: 'Run', icon: <IconLaunch size={14} />, onClick: () => setRunTarget(em), variant: 'primary' },
+                {
+                  label: 'Run',
+                  icon: <IconLaunch size={14} />,
+                  onClick: () => setRunTarget(em),
+                  variant: 'primary',
+                  disabled: !connected,
+                  disabledReason: 'Connect your AWS account to run this',
+                },
               ]}
             />
           ))}

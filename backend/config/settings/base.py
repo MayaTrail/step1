@@ -218,6 +218,11 @@ CELERY_BEAT_SCHEDULE = {
 
 EMULATIONS_BASE_DIR = config("EMULATIONS_BASE_DIR", default="")
 
+# Standalone IR playbook library (playbooks/), served read-only as documentation.
+# Empty disables the library endpoints; they then return an empty list rather
+# than failing, so a deployment without the content mounted still works.
+PLAYBOOKS_BASE_DIR = config("PLAYBOOKS_BASE_DIR", default="")
+
 # Artificial pause held between attack phases, in seconds.
 # Attack modules that complete in under a second give the live view nothing to
 # show, so this slows phase transitions down to a watchable pace for walkthroughs

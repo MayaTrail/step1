@@ -20,6 +20,7 @@ import { GuardrailsPage } from './components/guardrails/GuardrailsPage'
 import { EmulationsHub } from './components/emulations/EmulationsHub'
 import { DetectionsHub } from './components/detections/DetectionsHub'
 import { PlaybooksHub } from './components/playbooks/PlaybooksHub'
+import { LibraryPlaybookPage } from './components/playbooks/LibraryPlaybookPage'
 import { GuardrailsHub } from './components/guardrails/GuardrailsHub'
 import { ComingSoon } from './components/common/ComingSoon'
 import { ActiveRunsPage } from './components/operations/ActiveRunsPage'
@@ -53,6 +54,7 @@ export default function App() {
                 <Route path="emulations" element={<EmulationsHub />} />
                 <Route path="detections" element={<DetectionsHub />} />
                 <Route path="playbooks" element={<PlaybooksHub />} />
+                <Route path="playbooks/library/:playbookId" element={<LibraryPlaybookPage />} />
                 <Route path="guardrails" element={<GuardrailsHub />} />
 
                 {/* Administration */}
