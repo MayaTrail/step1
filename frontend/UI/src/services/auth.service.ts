@@ -1,6 +1,6 @@
 /**
  * Auth Service — handles JWT login, signup with OTP verification,
- * token management, connector verification, and demo activation.
+ * token management, and connector verification.
  *
  * Backend endpoints:
  *   POST /api/auth/login                → { access, refresh }
@@ -11,7 +11,6 @@
  *   GET  /api/auth/me/                  → user profile
  *   POST /api/auth/google/              → { access, refresh, user } (Google SSO)
  *   POST /api/connectors/aws/verify/    → STS role verification
- *   POST /api/connectors/demo/          → switch to demo mode
  *
  * Falls back to mock auth when the backend is unreachable.
  */
@@ -44,11 +43,7 @@ export interface UserProfile {
   last_name: string
   date_joined: string
   is_verified: boolean
-  is_demo: boolean
   aws_role_arn: string
-  demo_activated_at: string | null
-  demo_used: boolean
-  demo_expires_at: string | null
   auth_method: string
 }
 
@@ -69,9 +64,6 @@ function createMockToken(user: User): string {
     initials: user.initials,
     method: user.method,
     isVerified: user.isVerified,
-    isDemo: user.isDemo,
-    demoUsed: user.demoUsed,
-    demoExpiresAt: user.demoExpiresAt,
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + 86400,
   }
@@ -150,9 +142,6 @@ async function fetchMe(accessToken?: string): Promise<User> {
     first_name: string
     last_name: string
     is_verified: boolean
-    is_demo: boolean
-    demo_used: boolean
-    demo_expires_at: string | null
     auth_method: string
   }>('/auth/me/', { headers })
 
@@ -164,9 +153,6 @@ async function fetchMe(accessToken?: string): Promise<User> {
     initials: initials(name),
     method,
     isVerified: data.is_verified ?? false,
-    isDemo: data.is_demo ?? false,
-    demoUsed: data.demo_used ?? false,
-    demoExpiresAt: data.demo_expires_at ?? null,
   }
 }
 
@@ -182,9 +168,6 @@ function mockLogin(req: LoginRequest): AuthResponse {
     initials: initials(entry.name),
     method: 'credentials',
     isVerified: false,
-    isDemo: false,
-    demoUsed: false,
-    demoExpiresAt: null,
   }
   const token = createMockToken(user)
   localStorage.setItem(TOKEN_KEY, token)
@@ -354,9 +337,6 @@ export function getStoredUser(): User | null {
       initials: initials(username),
       method: 'credentials',
       isVerified: (jwtPayload.is_verified as boolean) ?? false,
-      isDemo: (jwtPayload.is_demo as boolean) ?? false,
-      demoUsed: (jwtPayload.demo_used as boolean) ?? false,
-      demoExpiresAt: (jwtPayload.demo_expires_at as string) ?? null,
     }
   }
 
@@ -371,9 +351,6 @@ export function getStoredUser(): User | null {
     initials: payload.initials,
     method: payload.method as User['method'],
     isVerified: payload.isVerified ?? false,
-    isDemo: payload.isDemo ?? false,
-    demoUsed: payload.demoUsed ?? false,
-    demoExpiresAt: payload.demoExpiresAt ?? null,
   }
 }
 
@@ -386,7 +363,7 @@ export async function fetchProfile(): Promise<UserProfile> {
   return data
 }
 
-// Connector / Demo API
+// Connector API
 
 /**
  * Disconnect the AWS account, clearing the stored role ARN.
@@ -417,19 +394,6 @@ export async function verifyConnector(req: ConnectorRequest): Promise<ConnectorR
     throw new Error('Unable to reach the server. Please check your connection.')
   }
 }
-
-export async function activateDemo(): Promise<{ is_demo: boolean }> {
-  try {
-    const { data } = await api.post<{ status: string; is_demo: boolean }>('/connectors/demo/')
-    return { is_demo: data.is_demo }
-  } catch (err: any) {
-    if (err.response) {
-      throw new Error(extractApiError(err))
-    }
-    return { is_demo: true }
-  }
-}
-
 export async function refreshUser(): Promise<User> {
   return fetchMe()
 }

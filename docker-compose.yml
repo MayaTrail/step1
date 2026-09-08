@@ -56,6 +56,7 @@ services:
       EMULATIONS_BASE_DIR: /opt/emulations
       PLAYBOOKS_BASE_DIR: /opt/playbooks
       GUARDRAILS_BASE_DIR: /opt/guardrails
+      THREATINTEL_DIR: /var/lib/mayatrail/threatintel
     ports:
       - "8000:8000"
     volumes:
@@ -64,6 +65,8 @@ services:
       - ./playbooks:/opt/playbooks:ro
       # Mount guardrails package so the API registry can discover policies.
       - ./guardrails:/opt/guardrails:ro
+      # Threat feed document, written by the worker and only read here.
+      - threatintel_data:/var/lib/mayatrail/threatintel:ro
     depends_on: # waits for db and redis to be healthy before starting backend.
       db:
         condition: service_healthy
@@ -108,10 +111,15 @@ services:
       # Infra programs are resolved as {EMULATIONS_BASE_DIR}/{type}/infra/
       EMULATIONS_BASE_DIR: /opt/emulations
       PLAYBOOKS_BASE_DIR: /opt/playbooks
+      THREATINTEL_DIR: /var/lib/mayatrail/threatintel
     volumes:
       # Emulation packages: attack scripts and per-emulation infra/ programs.
+      # Also read by the threat feed ingest, which matches feed items against
+      # the MANIFEST catalogue the registry discovers here.
       - ./emulations:/opt/emulations:ro
       - ./playbooks:/opt/playbooks:ro
+      # Threat feed document. Writable here: this is the only writer.
+      - threatintel_data:/var/lib/mayatrail/threatintel
     depends_on:
       db:
         condition: service_healthy
@@ -185,3 +193,4 @@ services:
 
 volumes:
   postgres_data:
+  threatintel_data:

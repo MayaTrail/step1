@@ -102,12 +102,9 @@ function AccountSection() {
 
     const rows: [string, string][] = [
         ['Sign-in method', user.method === 'google_sso' ? 'Google SSO' : 'Email & password'],
-        ['Account status', user.isDemo ? 'Demo' : user.isVerified ? 'Verified' : 'Unverified'],
+        ['Account status', user.isVerified ? 'Verified' : 'Unverified'],
         ['AWS connection', user.isVerified ? 'Connected' : 'Not connected'],
     ]
-    if (user.isDemo && user.demoExpiresAt) {
-        rows.push(['Demo expires', new Date(user.demoExpiresAt).toLocaleString()])
-    }
 
     return (
         <>

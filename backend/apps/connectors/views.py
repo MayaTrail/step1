@@ -2,14 +2,12 @@
 Views for the connectors app.
 
 AWSConnectorView  — verifies an AWS IAM role via STS AssumeRole.
-DemoActivateView  — switches the user to demo mode.
 """
 
 import logging
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
-from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
@@ -160,48 +158,3 @@ class AWSConnectorView(APIView):
         logger.info("AWS connector disconnected for user %s", user.id)
 
         return Response({"status": "disconnected"})
-
-
-class DemoActivateView(APIView):
-    """
-    Switch the authenticated user to demo mode.
-
-    POST /api/connectors/demo/
-    Accepts: {} (empty body)
-    Returns: { status: "ok", is_demo: true }
-
-    Demo can only be activated **once** per user.  The server records
-    the activation timestamp so the DemoExpiryMiddleware can enforce
-    the time limit.
-    """
-
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request: Request) -> Response:
-        """
-        Set the user's is_demo=True and is_verified=False.
-
-        Rejects with 409 if the user has already used their demo.
-        """
-        user = request.user
-
-        if user.demo_used:
-            return Response(
-                {
-                    "code": "DEMO_ALREADY_USED",
-                    "detail": "Demo mode can only be activated once.",
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-
-        user.is_demo = True
-        user.is_verified = False
-        user.aws_role_arn = ""
-        user.demo_activated_at = timezone.now()
-        user.demo_used = True
-        user.save(update_fields=[
-            "is_demo", "is_verified", "aws_role_arn",
-            "demo_activated_at", "demo_used",
-        ])
-
-        return Response({"status": "ok", "is_demo": True})

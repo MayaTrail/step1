@@ -160,3 +160,26 @@ export const IconBarChart = (p: IconProps) => (
         <path d="M6 21V11M12 21V5M18 21v-8" />
     </Icon>
 )
+
+export const IconBroadcast = (p: IconProps) => (
+    <Icon {...p}>
+        <circle cx="12" cy="12" r="2" />
+        <path d="M8.5 15.5a5 5 0 0 1 0-7M15.5 8.5a5 5 0 0 1 0 7" />
+        <path d="M5.5 18.5a9 9 0 0 1 0-13M18.5 5.5a9 9 0 0 1 0 13" />
+    </Icon>
+)
+
+export const IconExternalLink = (p: IconProps) => (
+    <Icon {...p}>
+        <path d="M14 4h6v6" />
+        <path d="M20 4 11 13" />
+        <path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+    </Icon>
+)
+
+export const IconBell = (p: IconProps) => (
+    <Icon {...p}>
+        <path d="M18 8a6 6 0 1 0-12 0c0 6-2 7-2 7h16s-2-1-2-7" />
+        <path d="M13.7 20a2 2 0 0 1-3.4 0" />
+    </Icon>
+)

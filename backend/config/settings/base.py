@@ -55,6 +55,7 @@ LOCAL_APPS = [
     "apps.logs",
     "apps.metrics",
     "apps.ai",
+    "apps.threatintel",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -197,13 +198,21 @@ CELERY_TIMEZONE = "UTC"
 # of the worker services consume.
 CELERY_TASK_DEFAULT_QUEUE = "default"
 
-# Celery Beat schedule — runs every 15 minutes to destroy expired stacks.
+# Celery Beat schedule. Both tasks are pinned to the enterprise queue in their
+# own modules, since that is the only queue any worker consumes.
 from celery.schedules import crontab  # noqa: E402
 
 CELERY_BEAT_SCHEDULE = {
     "auto-destroy-expired-stacks": {
         "task": "emulations.auto_destroy_expired_stacks",
         "schedule": crontab(minute="*/15"),
+    },
+    # Publishers in the subscription list post a few times a week at most, so
+    # polling more often than daily would spend 40 outbound requests to find
+    # nothing. 06:00 UTC puts fresh items in place before the European morning.
+    "refresh-threat-feed": {
+        "task": "threatintel.refresh_threat_feeds",
+        "schedule": crontab(hour="6", minute="0"),
     },
 }
 
@@ -265,6 +274,14 @@ DETECTION_CHECK_DELAY_SECONDS = config(
 # In docker-compose, ./guardrails is mounted at /opt/guardrails.
 
 GUARDRAILS_BASE_DIR = config("GUARDRAILS_BASE_DIR", default="")
+
+# Threat feed storage.
+# Directory holding latest.json, the single document the daily ingest writes
+# and the API reads back. The worker needs it writable; the backend only reads.
+# Empty disables ingestion and makes the endpoints serve an empty feed, so a
+# deployment without the volume still works.
+
+THREATINTEL_DIR = config("THREATINTEL_DIR", default="")
 
 # ---------------------------------------------------------------------------
 # Email
