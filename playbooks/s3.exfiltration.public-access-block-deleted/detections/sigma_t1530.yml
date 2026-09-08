@@ -1,0 +1,141 @@
+# S3 Block Public Access removed from a bucket (T1530)
+#
+# THE SOURCE RULE NAMES THE SDK OPERATION, NOT THE CLOUDTRAIL EVENT, AND SO CANNOT FIRE. It matches
+# `DeletePublicAccessBlock`; AWS emits `DeleteBucketPublicAccessBlock`. The value is never present,
+# so the rule reports clean in every account forever.
+#
+# Removing the block does not itself expose anything — it gates what a policy or ACL is ALLOWED to
+# say, so the exposure needs a second act. The deletion is the precondition and the ordered pair is
+# the incident. Account scope is a separate event with a larger blast radius.
+# Full rationale: detections/detection_note_t1530.md.
+title: S3 Block Public Access deleted from a bucket
+id: 5a3f19c8-2704-4b6e-9d81-e60c473a2b15
+name: s3_bucket_pab_deleted
+status: experimental
+description: >-
+  DeleteBucketPublicAccessBlock removed the bucket's Block Public Access configuration. The bucket
+  is not public yet — the block is a gate on what a policy or ACL may do, not an access control in
+  itself — but every guardrail that would have refused a public policy or a public ACL is now gone.
+  Note the event name: this is the CloudTrail form, which differs from the API operation
+  DeletePublicAccessBlock that the source rule matches.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutPublicAccessBlock.html
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'DeleteBucketPublicAccessBlock'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the roles that own bucket lifecycle. An empty list reports every
+  # deletion once, which is the correct starting position for a guardrail being removed.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    A bucket being decommissioned, or one deliberately serving public content where the block was
+    never appropriate. Both are nameable exceptions; neither is frequent enough to tune away.
+level: high
+---
+title: S3 Block Public Access deleted at the ACCOUNT level
+id: c8140b62-9e35-4a07-b2f6-70d3859ec4a1
+name: s3_account_pab_deleted
+status: experimental
+description: >-
+  DeleteAccountPublicAccessBlock removed the account-wide Block Public Access configuration. AWS
+  evaluates bucket and account settings together and applies "the most restrictive combination", so
+  the account block is what holds the line for every bucket whose own configuration is weaker or
+  absent. Removing it weakens all of them simultaneously and emits an event no bucket-scoped rule
+  matches. There is no benign routine reason to remove it; a bucket that must serve public content
+  is handled at the bucket, not by lowering the account floor.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'DeleteAccountPublicAccessBlock'
+  success:
+    errorCode: null
+  condition: selection and success
+falsepositives:
+  - >-
+    An account genuinely repurposed for public static hosting. Rare, deliberate, and it should be a
+    recorded decision rather than a tuning exception.
+level: critical
+---
+title: S3 bucket policy or ACL written
+id: 20e7c9b4-518d-46fa-83c0-9147e6205daf
+name: s3_bucket_exposure_write
+status: experimental
+description: >-
+  Base rule — correlation component only, not for direct alerting. Any write to a bucket's policy or
+  ACL. It fires on ordinary infrastructure applies and must never be routed anywhere on its own; it
+  exists so the correlation below can pair an exposure with the guardrail removal that preceded it.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketPolicy.html
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName:
+      - 'PutBucketPolicy'
+      - 'PutBucketAcl'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+title: Block Public Access removed and then the bucket opened
+id: 7b06e2d1-43c9-4085-a7e2-1d9508fb3c47
+status: experimental
+description: >-
+  The guardrail was removed and a policy or ACL was written afterwards by the same principal. This
+  is the sequence that turns a configuration change into an exposure: Block Public Access refuses a
+  public policy while it is in force, so an actor who wants one has to remove it first. Ordering is
+  the whole signal — the reverse order is ordinary maintenance. Timespan is 1h because this is a
+  single deliberate session rather than a campaign; group-by is the principal because the bucket
+  name is not carried identically across both events.
+references:
+  - https://attack.mitre.org/techniques/T1530/
+  - https://attack.mitre.org/techniques/T1098/
+tags:
+  - attack.collection
+  - attack.persistence
+  - attack.t1530
+  - attack.t1098
+correlation:
+  type: temporal_ordered
+  rules:
+    - s3_bucket_pab_deleted
+    - s3_bucket_exposure_write
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+falsepositives:
+  - >-
+    An infrastructure apply that recreates a bucket's configuration from scratch, which legitimately
+    removes and rewrites in one run. Allowlist the provisioning role on the base rule rather than
+    widening the timespan.
+level: critical

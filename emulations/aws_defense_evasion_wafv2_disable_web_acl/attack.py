@@ -1,6 +1,6 @@
 """
 ATOMIC-WAFV2-DISABLE-WEB-ACL -- Automated Attack Script
-T1562.007: Impair Defenses: Disable or Modify Cloud Firewall
+T1686.001: Disable or Modify System Firewall: Cloud Firewall
 
 4-step attack chain:
   1. AssumeRole  -> attacker_role_session
@@ -105,7 +105,7 @@ def _bootstrap_session(outputs: dict, region: str):
 
 def run(outputs: dict, region: str = "us-east-1") -> None:
     """
-    Execute the 4-step T1562.007 WAFv2 magic-header injection chain.
+    Execute the 4-step T1686.001 WAFv2 magic-header injection chain.
 
     All dynamic resource values (IDs, ARNs, names set at deploy time) come from
     `outputs` via _p(). Static AWS resource names (determined at authoring time,
@@ -130,7 +130,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     attacker_role_name = _r("attacker_role", "atomic-wafv2-disable-web-acl-attacker-role")
 
     print("\n" + "=" * 60)
-    print(" ATOMIC-WAFV2-DISABLE-WEB-ACL  |  T1562.007")
+    print(" ATOMIC-WAFV2-DISABLE-WEB-ACL  |  T1686.001")
     print("=" * 60)
     print_info(f"Region         : {region}")
     print_info(f"Attacker role  : {attacker_role_arn}")
@@ -149,7 +149,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     # -------------------------------------------------------------------------
     # Step 1: AssumeRole -> attacker_role_session
     # -------------------------------------------------------------------------
-    print_step("Step 1: AssumeRole -> attacker_role_session (T1562.007)")
+    print_step("Step 1: AssumeRole -> attacker_role_session (T1686.001)")
     print_info("Modelling compromised over-permissioned WAF operator credential.")
     print_info(f"Role ARN : {attacker_role_arn}")
 
@@ -157,7 +157,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     try:
         assume_resp = default_sts.assume_role(
             RoleArn=attacker_role_arn,
-            RoleSessionName="atomic-t1562007-session",
+            RoleSessionName="atomic-t1686001-session",
             DurationSeconds=3600,
         )
     except ClientError as e:
@@ -172,7 +172,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     )
     print_ok(f"AssumeRole succeeded -- session key: {creds['AccessKeyId']}")
     events_generated.append(
-        "AssumeRole (sts.amazonaws.com) -- roleSessionName=atomic-t1562007-session"
+        "AssumeRole (sts.amazonaws.com) -- roleSessionName=atomic-t1686001-session"
     )
     op_delay(2, 4)
 
@@ -181,7 +181,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     # -------------------------------------------------------------------------
     # Step 2: ListWebACLs -- initial enumeration
     # -------------------------------------------------------------------------
-    print_step("Step 2: ListWebACLs -- enumerate regional Web ACLs (T1562.007)")
+    print_step("Step 2: ListWebACLs -- enumerate regional Web ACLs (T1686.001)")
     print_info("Realistic attacker enumeration with over-scoped WAF credentials.")
 
     found_acl = None
@@ -223,7 +223,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     # -------------------------------------------------------------------------
     # Step 3: GetWebACL -- read full config + LockToken
     # -------------------------------------------------------------------------
-    print_step("Step 3: GetWebACL -- read config + LockToken (T1562.007)")
+    print_step("Step 3: GetWebACL -- read config + LockToken (T1686.001)")
     print_info("LockToken mandatory for UpdateWebACL (WAFOptimisticLockException if stale).")
     print_info("Saving pre_attack_rules for teardown restore.")
 
@@ -258,7 +258,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     # CloudTrail requestParameters.rules[0].statement.byteMatchStatement exposes
     # the header name, positional constraint, and SearchString in plaintext.
     # -------------------------------------------------------------------------
-    print_step("Step 4: UpdateWebACL -- inject magic-header ByteMatch Allow rule (T1562.007)")
+    print_step("Step 4: UpdateWebACL -- inject magic-header ByteMatch Allow rule (T1686.001)")
     print_info("Priority-0 ByteMatch Allow on SingleHeader x-bypass prepended ahead of")
     print_info("AWSManagedRulesCommonRuleSet (priority 10). Full config round-tripped.")
 
@@ -388,7 +388,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     print("\n" + "=" * 60)
     print(" ATTACK SUMMARY")
     print("=" * 60)
-    print_info("Technique  : T1562.007 -- Impair Defenses: Disable or Modify Cloud Firewall")
+    print_info("Technique  : T1686.001 -- Disable or Modify System Firewall: Cloud Firewall")
     print_info("Tactic     : Defense Evasion")
     print_info(f"Target ACL : {web_acl_name} ({web_acl_id})")
     print_info(f"Scope      : {scope}")
@@ -400,7 +400,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
         print_info(f"  {i}. {ev}")
     print_info("")
     print_info("Detection signals:")
-    print_info("  - AssumeRole from :root to attacker role session atomic-t1562007-session")
+    print_info("  - AssumeRole from :root to attacker role session atomic-t1686001-session")
     print_info("  - ListWebACLs enumeration from assumed-role session")
     print_info("  - GetWebACL -- signals attacker interest in ACL config and LockToken")
     print_info("  - UpdateWebACL with ByteMatch Allow on SingleHeader x-bypass at priority 0")

@@ -1,0 +1,88 @@
+// CloudTrail delivery silently failing (T1685.002)
+//
+// The source rule waits for two hours of silence. This one looks for the CAUSES of that silence
+// that no CloudTrail-scoped rule covers: the destination bucket and the KMS key. Every one of them
+// leaves the trail reporting IsLogging true.
+//
+// The heartbeat itself is NOT in this file. Absence cannot be detected by an event-driven engine —
+// nothing evaluates when nothing arrives — so it belongs in a scheduled check, specified in
+// ../PLAYBOOK.md §1.
+//
+// `contains` throughout, never `has` — bucket names, key ARNs and aliases are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+// POPULATE both: without them this query is a general S3 and KMS monitor rather than a CloudTrail one.
+let TrailBuckets = dynamic(["org-cloudtrail-logs", "org-cloudtrail-logs-archive"]);
+let TrailKeyAliases = dynamic(["alias/cloudtrail", "alias/audit-logs"]);
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Bucket = tostring(Req.bucketName)
+| extend KeyId = tostring(Req.keyId)
+| extend TouchesTrailBucket = EventSource == "s3.amazonaws.com"
+    and (Bucket in (TrailBuckets)
+         or Bucket contains "cloudtrail" or Bucket contains "audit-log")
+| extend TouchesTrailKey = EventSource == "kms.amazonaws.com"
+    and (KeyId in (TrailKeyAliases) or KeyId contains "cloudtrail" or KeyId contains "audit")
+| where (TouchesTrailBucket and EventName in ("PutBucketPolicy", "DeleteBucketPolicy", "DeleteBucket",
+                                              "PutLifecycleConfiguration", "PutBucketVersioning"))
+     or (TouchesTrailKey and EventName in ("DisableKey", "ScheduleKeyDeletion", "PutKeyPolicy"))
+     or (EventSource == "cloudtrail.amazonaws.com"
+         and EventName in ("StopLogging", "DeleteTrail", "UpdateTrail"))
+| extend Cause = case(
+    EventName == "DeleteBucket",
+        "DESTINATION BUCKET DELETED — delivery fails AND the historical log files are gone. This is the one way the past record is actually destroyed; deleting a trail explicitly leaves the bucket intact",
+    EventName == "ScheduleKeyDeletion",
+        "TRAIL KMS KEY SCHEDULED FOR DELETION — delivered objects become permanently unreadable when the waiting period expires, and nothing warns again at that point",
+    EventName == "DisableKey",
+        "TRAIL KMS KEY DISABLED — delivery fails or objects arrive unreadable, while IsLogging stays true",
+    EventName in ("PutBucketPolicy", "DeleteBucketPolicy"),
+        "DESTINATION BUCKET POLICY CHANGED — if the cloudtrail.amazonaws.com write statement is gone, delivery fails silently and only LatestDeliveryError shows it",
+    EventName == "PutLifecycleConfiguration",
+        "DESTINATION BUCKET LIFECYCLE CHANGED — a short expiry deletes logs after they arrive, which is evidence destruction on a delay",
+    EventName == "PutBucketVersioning",
+        "DESTINATION BUCKET VERSIONING CHANGED — suspending versioning removes the ability to recover an overwritten or deleted log object",
+    EventName == "StopLogging", "trail stopped — see ../../cloudtrail.stealth.trail-logging-stopped/",
+    EventName == "DeleteTrail", "trail deleted — see ../../cloudtrail.impact.trail-deleted/",
+    "trail configuration changed — see ../../cloudtrail.stealth.trail-modified/")
+| summarize
+    Events    = count(),
+    Causes    = make_set(Cause, 8),
+    EventNames= make_set(EventName, 10),
+    Buckets   = make_set_if(Bucket, isnotempty(Bucket), 5),
+    Keys      = make_set_if(KeyId, isnotempty(KeyId), 5),
+    SourceIps = make_set(SourceIpAddress, 5),
+    FirstSeen = min(TimeGenerated),
+    LastSeen  = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| extend Verdict = case(
+    Events >= 2,
+        strcat("MULTIPLE DELIVERY-PATH CHANGES BY ONE PRINCIPAL — ", tostring(Events),
+               " in an hour, across the trail and its destination. That is someone working the whole path, P0"),
+    set_has_element(EventNames, "DeleteBucket") or set_has_element(EventNames, "ScheduleKeyDeletion"),
+        "IRREVERSIBLE DELIVERY-PATH CHANGE — the destination or its key is being removed, P0",
+    "DELIVERY PATH TOUCHED — the trail will still report IsLogging true whatever the outcome, P1")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, Events, Causes, EventNames,
+          Buckets, Keys, SourceIps
+| order by Events desc
+//
+// ============================================================================
+// THE HEARTBEAT IS A SCHEDULED CHECK, NOT A RULE
+// ============================================================================
+// No query in a rule engine fires on the absence of data, because nothing evaluates when nothing
+// arrives. The delivery check has to run on a schedule and read state:
+//   aws cloudtrail get-trail-status --name <trail> --query '{IsLogging:IsLogging,
+//       LatestDeliveryTime:LatestDeliveryTime,LatestDeliveryError:LatestDeliveryError}'
+// LatestDeliveryError is the field that shows a bucket-policy or KMS failure, and it is not emitted
+// as an event by anything. A rule set alone cannot see it.
+//
+// ============================================================================
+// SILENCE HAS MORE BENIGN CAUSES THAN MALICIOUS ONES
+// ============================================================================
+// A collector credential expiring, an ingestion pipeline fault, a network path failing, or a
+// genuinely dormant account all produce the same two hours of quiet as a stopped trail. Grouping
+// the heartbeat by the INGESTION stream — which the source rule does — cannot tell them apart.
+// Group by trail, and pair the alarm with get-trail-status so the first question is answered
+// automatically: is AWS still delivering, or did we stop receiving?

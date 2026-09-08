@@ -1,0 +1,135 @@
+// KMS Key Scheduled for Deletion (T1485 / T1486)
+//
+// Signal: ScheduleKeyDeletion succeeding on a customer managed key; the waiting period the
+// caller chose; whether a CancelKeyDeletion has already reversed it; and whether the same
+// principal disabled a key first or rewrote a key policy afterwards.
+//
+// This query does what the Sigma rules structurally cannot. It computes the REMAINING WINDOW
+// per key so the analyst can work a deadline board rather than an alert queue, it reports
+// cancellations so a key already saved is never worked as live, and it surfaces the
+// PutKeyPolicy that would explain why a cancel is failing — PutKeyPolicy is permitted on a
+// key that is pending deletion, so an actor can schedule the deletion and then remove your
+// ability to cancel it.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let Lookback = 45d;   // longer than the 30-day maximum waiting period, deliberately
+let Kms =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "kms.amazonaws.com"
+    // RequestParameters and ResponseElements are dynamic JSON in this table and need
+    // parse_json. UserIdentityArn, SessionIssuerUserName, SourceIpAddress and ErrorCode are
+    // FLATTENED top-level columns and must not be parsed (C2).
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    // responseElements.keyId is the normalised key ARN on ScheduleKeyDeletion and
+    // CancelKeyDeletion; requestParameters.keyId is caller-typed and is all that survives on
+    // a failed call. `contains`, never term matching — key ARNs are punctuated (C1).
+    | extend KeyRef = coalesce(tostring(Resp.keyId), tostring(Req.keyId))
+    | extend KeyId  = tostring(split(KeyRef, "/")[-1])
+    | extend Denied = isnotempty(ErrorCode);
+let Scheduled =
+    Kms
+    | where EventName == "ScheduleKeyDeletion" and not(Denied)
+    // The waiting period is OPTIONAL in the request. Absent means the caller took the
+    // documented default of 30 — record that explicitly rather than leaving a null that a
+    // later comparison silently treats as zero.
+    | extend WindowDays = toint(coalesce(toint(Req.pendingWindowInDays),
+                                         toint(Resp.pendingWindowInDays), 30))
+    | extend WindowWasExplicit = isnotempty(Req.pendingWindowInDays)
+    // responseElements.keyState is PendingDeletion for a single-Region key and
+    // PendingReplicaDeletion for a multi-Region primary that still has replicas — the latter
+    // has NO deletionDate at all and can sit in that state indefinitely.
+    | extend SchedState = tostring(Resp.keyState)
+    // responseElements.deletionDate is a HUMAN-FORMATTED STRING in AWS's own examples
+    // ("Apr 12, 2021 18:58:30 PM") and is absent for PendingReplicaDeletion. It is recorded
+    // here for the record and NOT parsed: the authoritative deadline is
+    // KeyMetadata.DeletionDate from a live DescribeKey, which AWS documents as being up to
+    // 24 hours later than the scheduled time. See Query 2 of ../PLAYBOOK.md.
+    | extend DeletionDateAsLogged = tostring(Resp.deletionDate)
+    | extend EstimatedDeadline = TimeGenerated + totimespan(WindowDays * 1d);
+let Cancelled =
+    Kms
+    | where EventName == "CancelKeyDeletion" and not(Denied)
+    | summarize CancelledAt = max(TimeGenerated), CancelledBy = make_set(UserIdentityArn, 3) by KeyId;
+let ReEnabled =
+    Kms
+    | where EventName == "EnableKey" and not(Denied)
+    | summarize ReEnabledAt = max(TimeGenerated) by KeyId;
+let PolicyWrites =
+    Kms
+    | where EventName == "PutKeyPolicy"
+    | summarize PolicyWrites = count(), PolicyWrittenBy = make_set(UserIdentityArn, 3),
+                LastPolicyWrite = max(TimeGenerated) by KeyId;
+Scheduled
+| summarize
+    Schedules       = count(),
+    MinWindowDays   = min(WindowDays),
+    ExplicitWindow  = max(WindowWasExplicit),
+    SchedStates     = make_set(SchedState, 3),
+    LoggedDates     = make_set(DeletionDateAsLogged, 3),
+    Deadline        = min(EstimatedDeadline),
+    Callers         = make_set(UserIdentityArn, 5),
+    SourceIPs       = make_set(SourceIpAddress, 5),
+    Agents          = make_set(UserAgent, 3),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated)
+  by KeyId, AwsRegion, RecipientAccountId, SessionIssuerUserName, UserIdentityType
+| join kind=leftouter Cancelled on KeyId
+| join kind=leftouter ReEnabled on KeyId
+| join kind=leftouter PolicyWrites on KeyId
+| extend StillPending = isempty(CancelledAt) or CancelledAt < LastSeen
+| extend HoursRemaining = iff(StillPending, datetime_diff('hour', Deadline, now()), toint(0))
+| extend Verdict = case(
+    StillPending and PolicyWrites > 0 and LastPolicyWrite >= FirstSeen,
+        "DELETION PENDING AND KEY POLICY REWRITTEN AFTER IT — check you can still call CancelKeyDeletion BEFORE anything else; PutKeyPolicy is permitted on a key that is pending deletion",
+    StillPending and HoursRemaining <= 24,
+        "DELETION IMMINENT — under 24 hours of estimated window remain and the deadline may be up to 24h later than logged; cancel now, verify with DescribeKey",
+    StillPending and MinWindowDays <= 10,
+        "SHORT WINDOW CHOSEN — the caller passed a waiting period at or near the 7-day minimum against a default of 30",
+    StillPending and array_index_of(SchedStates, "PendingReplicaDeletion") >= 0,
+        "MULTI-REGION PRIMARY PENDING REPLICA DELETION — no deletion date exists yet and the state can persist indefinitely; the clock starts when the LAST replica is deleted",
+    StillPending,
+        "DELETION PENDING — the key is already unusable and is destroyed when the window expires",
+    isnotempty(CancelledAt) and isempty(ReEnabledAt),
+        "CANCELLED BUT NOT RE-ENABLED — CancelKeyDeletion returns the key to Disabled, NOT Enabled. The key is saved and still unusable; EnableKey has not been called",
+    isnotempty(CancelledAt) and ReEnabledAt >= CancelledAt,
+        "CANCELLED AND RE-ENABLED — key recovered; confirm who cancelled it and whether the schedule was authorised",
+        "KEY DELETION ACTIVITY — review")
+| project FirstSeen, LastSeen, Verdict, KeyId, AwsRegion, RecipientAccountId, Callers,
+          UserIdentityType, SessionIssuerUserName, MinWindowDays, ExplicitWindow, SchedStates,
+          LoggedDates, Deadline, HoursRemaining, StillPending, CancelledAt, CancelledBy,
+          ReEnabledAt, PolicyWrites, PolicyWrittenBy, LastPolicyWrite, SourceIPs, Agents
+| order by StillPending desc, HoursRemaining asc
+
+//
+// THE CANCELLED-BUT-NOT-RE-ENABLED VERDICT IS THE ONE THIS QUERY EXISTS FOR
+//
+// AWS: "Cancels the deletion of a KMS key. When this operation succeeds, the key state of the
+// KMS key is Disabled. To enable the KMS key, use EnableKey." A responder who cancels the
+// deletion and checks that the key is no longer pending deletion will find a Disabled key and
+// report it as recovered. It is not: it is saved from destruction and still refusing every
+// cryptographic operation. The ordering is also one-way — EnableKey FAILS on a key in
+// PendingDeletion with KMSInvalidStateException, so the cancel must come first and cannot be
+// skipped.
+//
+// WHY THE DEADLINE HERE IS AN ESTIMATE
+//
+// EstimatedDeadline is the event time plus the waiting period. AWS documents that "the actual
+// waiting period might be up to 24 hours longer than the one you scheduled" and directs you to
+// DescribeKey for the real date. Treat any HoursRemaining under 48 as "cancel now, ask later",
+// and never treat a positive number as headroom you can plan against.
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// What was encrypted under the key. KMS does not store ciphertexts and does not count them —
+// AWS states this directly. The only evidence that a key was in use is its own cryptographic
+// operations, which ARE CloudTrail management events (Decrypt, GenerateDataKey and the rest
+// carry managementEvent true and eventCategory Management), plus GetKeyLastUsage. Neither
+// enumerates the objects. For SSE-KMS on S3 the GenerateDataKey entry carries
+// requestParameters.encryptionContext with an aws:s3:arn key naming the object, which is the
+// closest thing to an inventory that exists — see Query 3 of ../PLAYBOOK.md.
+//
+// PREVENTION. kms:ScheduleKeyDeletionPendingWindowInDays constrains the waiting period a
+// principal may request; kms:TrailingDaysWithoutKeyUsage refuses ScheduleKeyDeletion and
+// DisableKey on recently used keys. Both are numeric condition keys valid in key policies and
+// IAM policies. Failure directions are stated in ../PLAYBOOK.md section 6.

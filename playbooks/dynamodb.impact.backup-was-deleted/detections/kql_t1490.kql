@@ -1,0 +1,124 @@
+// DynamoDB Recovery-Point Destruction: backups, and the PITR paths the source rule misses (T1490)
+//
+// Signal: DeleteBackup by a principal that does not own backup lifecycle and is not AWS Backup
+// expiring a recovery point on schedule; the destruction of a SYSTEM $DeletedTableBackup, which
+// is the last copy of an already-deleted table; and UpdateContinuousBackups turning PITR off
+// or shortening its window.
+//
+// This query does what the Sigma rules structurally cannot: it puts all THREE ways of removing
+// recovery capability in one result set, per principal, so "one backup pruned" and "PITR turned
+// off on the same table an hour later" are one row instead of two unrelated alerts. It also
+// carries the DeleteTable that follows, which is what turns a recovery-point deletion from a
+// housekeeping question into an incident.
+//
+// UpdateContinuousBackups is NOT on AWS's enumerated list of DynamoDB control-plane operations
+// logged by default, although DescribeContinuousBackups is. Confirm the event actually appears
+// in your trail before treating an empty PitrDisables set as evidence that PITR was untouched.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE THE TWO PIPELINE-ROLE SUBSTRINGS BELOW BEFORE DEPLOYING.
+let Lookback = 30d;
+let Ddb =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "dynamodb.amazonaws.com"
+    | where EventName in ("DeleteBackup", "UpdateContinuousBackups", "DeleteTable",
+                          "CreateBackup", "ListBackups")
+    // RequestParameters and ResponseElements are typed `string` in this table, not dynamic -
+    // parse_json is required. UserIdentityArn, UserIdentityInvokedBy, SessionIssuerUserName,
+    // SourceIpAddress, EventName and ErrorCode are already FLATTENED columns.
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    // `contains`, never `has`: a role path and an ARN are punctuated and whole-term matching
+    // never resolves them. Replace both substrings with this account's real roles.
+    | extend IsPipeline = UserIdentityArn contains ":role/iac-deploy"
+                       or UserIdentityArn contains ":role/BackupOperator"
+    // AWS Backup expiring a recovery point on its own lifecycle. invokedBy is the field AWS
+    // populates for service-initiated calls; a user agent can look like anything.
+    | extend IsServiceInitiated = tostring(UserIdentityInvokedBy) == "backup.amazonaws.com";
+let BackupDeletes = Ddb
+    | where EventName == "DeleteBackup" and isempty(ErrorCode)
+      and not(IsServiceInitiated) and not(IsPipeline)
+    // Derived from the documented DeleteBackup response shape (BackupDescription wrapper ->
+    // BackupDetails) plus CloudTrail's leading-character lowercasing. AWS publishes no
+    // DeleteBackup event example, so verify these paths against a real event.
+    | extend BackupName = tostring(Resp.backupDescription.backupDetails.backupName),
+             BackupType = tostring(Resp.backupDescription.backupDetails.backupType),
+             BackupBytes = tolong(Resp.backupDescription.backupDetails.backupSizeBytes),
+             SourceTable = tostring(Resp.backupDescription.sourceTableDetails.tableName)
+    // The $DeletedTableBackup suffix is punctuated, so `contains` is mandatory here too.
+    | extend IsLastCopy = BackupType == "SYSTEM" or BackupName contains "$DeletedTableBackup"
+    | summarize BackupsDeleted = count(), FirstBackupDelete = min(TimeGenerated),
+                LastBackupDelete = max(TimeGenerated),
+                BackupNames = make_set(BackupName, 15),
+                BackupTypes = make_set(BackupType, 5),
+                BytesDeleted = sum(BackupBytes),
+                TablesAffected = make_set(SourceTable, 15),
+                AnyLastCopy = max(IsLastCopy)
+            by Actor = UserIdentityArn;
+let PitrDisables = Ddb
+    | where EventName == "UpdateContinuousBackups" and isempty(ErrorCode)
+    | extend PitrEnabled = tobool(Req.pointInTimeRecoverySpecification.pointInTimeRecoveryEnabled),
+             WindowDays  = toint(Req.pointInTimeRecoverySpecification.recoveryPeriodInDays),
+             PitrTable   = tostring(Req.tableName)
+    // The parameter is optional and defaults to 35, so an absent value is NOT a reduction.
+    | where PitrEnabled == false or (isnotnull(WindowDays) and WindowDays < 35)
+    | summarize PitrChanges = count(), PitrTables = make_set(PitrTable, 15),
+                MinWindowSet = min(WindowDays), AnyPitrOff = max(PitrEnabled == false)
+            by Actor = UserIdentityArn;
+let TableDeletes = Ddb
+    | where EventName == "DeleteTable" and isempty(ErrorCode)
+    | summarize TablesDeleted = dcount(tostring(Req.tableName)),
+                LastTableDelete = max(TimeGenerated),
+                ItemsLost = sum(tolong(Resp.tableDescription.itemCount))
+            by Actor = UserIdentityArn;
+// Denials are kept apart and never counted as destructions. The source rule has no success
+// filter at all, so a principal refused on twenty backups produces the same twenty alerts as a
+// real destruction of twenty - which is the defect this separation exists to fix.
+let DeniedProbes = Ddb
+    | where EventName in ("DeleteBackup", "UpdateContinuousBackups") and isnotempty(ErrorCode)
+    | summarize DeniedAttempts = count(), DeniedCodes = make_set(ErrorCode, 6)
+            by Actor = UserIdentityArn;
+BackupDeletes
+| join kind=fullouter PitrDisables on Actor
+| join kind=leftouter TableDeletes on Actor
+| join kind=leftouter DeniedProbes on Actor
+| extend RecoveryThenDestruction = isnotnull(LastTableDelete)
+         and LastTableDelete > coalesce(FirstBackupDelete, datetime(1970-01-01))
+| extend Verdict = case(
+    AnyLastCopy == true,
+        "LAST COPY DESTROYED - a SYSTEM $DeletedTableBackup was deleted. That was the only remaining copy of a table that no longer exists; the earlier destruction is now permanent",
+    RecoveryThenDestruction == true,
+        "RECOVERY REMOVED THEN DATA DESTROYED - recovery points were deleted and a table was then deleted by the same principal. Treat as a completed destruction sequence",
+    AnyPitrOff == true,
+        "POINT-IN-TIME RECOVERY TURNED OFF - the entire continuous recovery window for the named tables is gone in one call, and no backup was deleted to show for it",
+    MinWindowSet < 35,
+        "PITR WINDOW SHORTENED - AWS: continuous backups outside the new value are immediately not recoverable. PITR still reports ENABLED, so every dashboard reads as healthy",
+    isnotnull(DeniedCodes),
+        "RECOVERY-POINT DELETION WITH DENIED ATTEMPTS - the principal was also refused elsewhere; the denials are boundary mapping, not destructions",
+        "RECOVERY POINTS DELETED BY A NON-PIPELINE PRINCIPAL - no table destroyed yet. This is the preparation stage, and it is the point at which the incident is still recoverable")
+| project FirstBackupDelete, LastBackupDelete, Verdict, Actor, BackupsDeleted, BackupNames,
+          BackupTypes, BytesDeleted, TablesAffected, PitrChanges, PitrTables, MinWindowSet,
+          TablesDeleted, ItemsLost, DeniedAttempts, DeniedCodes
+| order by LastBackupDelete desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// Whether any recovery point survives. The log says what was removed, never what remains. That
+// is ListBackups with backup type ALL - the default is USER and hides the SYSTEM snapshots -
+// plus DescribeContinuousBackups per table, which is the §5 assertion in the playbook.
+//
+// A shortened PITR window on a table whose previous window was already below 35 days. The
+// MinWindowSet comparison above uses the documented default as its reference because the
+// event carries only the NEW value. The previous value is in DescribeContinuousBackups, and
+// only until it is overwritten.
+//
+// Whether PITR was ever on. A table that never had PITR enabled and no on-demand backup was
+// never recoverable in the first place, and produces no event in this query at any point. The
+// absence of rows is not evidence of a healthy recovery posture.
+//
+// PREVENTION. dynamodb:DeleteBackup and dynamodb:UpdateContinuousBackups are needed by no
+// workload at runtime. An SCP denying both outside the backup-lifecycle role is reachable
+// because a DynamoDB control-plane call is always made by an in-organisation principal - but
+// it must exempt the AWS Backup service role, or scheduled lifecycle expiry breaks.

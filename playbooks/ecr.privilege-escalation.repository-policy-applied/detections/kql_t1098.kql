@@ -1,0 +1,117 @@
+// ECR Repository Policy Applied (T1098)
+//
+// Signals: a repository policy whose document names an image-WRITE action (push rights, not
+// sharing rights); a policy applied with `force`, which AWS requires only when the document
+// would lock the caller out of changing it again; one principal opening several repositories
+// in a sitting; the policy's removal, which destroys the only record of what was granted; and
+// the denials, counted separately so boundary mapping is never read as a grant.
+//
+// This query does what the Sigma documents structurally cannot: it extracts the policy
+// document, pulls out the account numbers named as principals, and flags the ones outside your
+// own account - and it reports the cross-account pushes and pulls that ACTUALLY HAPPENED under
+// the grant, which is the difference between an exposure and an incident.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let Lookback = 30d;
+// Populate with your own organisation's account IDs. Anything outside this set that appears as
+// a principal in a repository policy is an external grant.
+let OrgAccounts = dynamic(["111122223333", "444455556666"]);
+let PolicyEvents =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "ecr.amazonaws.com"
+    | where EventName in ("SetRepositoryPolicy", "DeleteRepositoryPolicy")
+    // RequestParameters is dynamic JSON here and does need parse_json. UserIdentityArn,
+    // EventName, ErrorCode and SourceIpAddress are flattened columns and must not be.
+    | extend Req = parse_json(RequestParameters)
+    | extend Repo = tostring(Req.repositoryName)
+    | extend PolicyText = tostring(Req.policyText)
+    | extend Forced = tostring(Req.force) == "true"
+    // `contains` throughout, never `has`: action tokens are colon-punctuated (`ecr:PutImage`),
+    // ARNs are punctuated, and whole-term matching breaks on both. This is the trap this
+    // corpus has been caught by twice.
+    | extend GrantsPush =
+        PolicyText contains "ecr:PutImage" or PolicyText contains "ecr:InitiateLayerUpload"
+        or PolicyText contains "ecr:UploadLayerPart" or PolicyText contains "ecr:CompleteLayerUpload"
+        or PolicyText contains "ecr:BatchCheckLayerAvailability" or PolicyText contains "ecr:*"
+    | extend GrantsPull =
+        PolicyText contains "ecr:BatchGetImage" or PolicyText contains "ecr:GetDownloadUrlForLayer"
+    | extend WildcardPrincipal = PolicyText contains "\"Principal\"" and PolicyText contains "\"*\""
+    | extend HasCondition = PolicyText contains "\"Condition\""
+    // Account numbers named anywhere in the document. Twelve digits is the documented pattern,
+    // and extract_all avoids any assumption about how the Principal element is shaped -
+    // "AWS": "arn:...", an array of ARNs, or a bare account id all yield the same numbers.
+    | extend NamedAccounts = extract_all(@"(\d{12})", PolicyText)
+    | extend ExternalAccounts = set_difference(todynamic(NamedAccounts), OrgAccounts)
+    | extend ExternalAccounts = array_length(ExternalAccounts) > 0 ? ExternalAccounts : dynamic([]);
+let CrossAccountUse =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "ecr.amazonaws.com"
+    | where EventName in ("PutImage", "BatchGetImage", "GetDownloadUrlForLayer")
+    | extend Req = parse_json(RequestParameters)
+    | extend Repo = tostring(Req.repositoryName)
+    // The cross-account proof: the calling account is not the account the event landed in.
+    // ECR calls are MANAGEMENT events (ECR has no data-event category), and a cross-account
+    // one lands in the REGISTRY OWNER's trail with UserIdentityAccountId set to the caller and
+    // RecipientAccountId to the owner. Confirm `UserIdentityAccountId` exists in your own
+    // AWSCloudTrail schema before relying on it; if your connector does not surface it, read
+    // the account out of UserIdentityArn with extract(@"arn:aws[^:]*:[^:]*::?(\d{12}):", 1, UserIdentityArn).
+    | where isnotempty(UserIdentityAccountId) and UserIdentityAccountId != RecipientAccountId
+    | summarize CrossAcctCalls = count(),
+                CrossAcctCallers = make_set(UserIdentityArn, 10),
+                CrossAcctAccounts = make_set(UserIdentityAccountId, 10),
+                CrossAcctEvents = make_set(EventName, 5),
+                FirstCrossAcct = min(TimeGenerated), LastCrossAcct = max(TimeGenerated)
+      by Repo;
+PolicyEvents
+| join kind=leftouter CrossAccountUse on Repo
+| extend Verdict = case(
+    EventName == "DeleteRepositoryPolicy" and isempty(ErrorCode),
+        "POLICY REMOVED - ECR keeps no policy history, so what was granted now exists only in the SetRepositoryPolicy event that applied it; recover that event before retention closes",
+    isnotempty(ErrorCode),
+        strcat("POLICY WRITE REFUSED (", ErrorCode, ") - an attempt, not a grant; count these separately"),
+    GrantsPush and array_length(ExternalAccounts) > 0 and not(HasCondition),
+        "EXTERNAL PUSH GRANT, UNCONDITIONED - an account outside the organisation may write images into this repository; paired with a mutable tag this is a supply-chain compromise",
+    GrantsPush and WildcardPrincipal,
+        "WILDCARD PUSH GRANT - every AWS account may write images here. Not anonymous: ecr:GetAuthorizationToken is IAM-only and cannot be granted by a repository policy, so the reach is every AWS customer who knows the URI",
+    Forced,
+        "POLICY FORCED - AWS requires force only when the document would prevent the caller from setting another policy; this is a lock-out",
+    GrantsPush,
+        "PUSH GRANT - image-write rights were granted on this repository; confirm the principal and any confining Condition by parsing the document",
+    array_length(ExternalAccounts) > 0,
+        "EXTERNAL PULL GRANT - an outside account may read images from this repository; exposure of image contents, not of the deployment path",
+    GrantsPull, "PULL GRANT - read access shared",
+        "POLICY APPLIED - parse the document; no write action token matched")
+| project TimeGenerated, Verdict, Repo, EventName, ErrorCode, GrantsPush, GrantsPull,
+          WildcardPrincipal, HasCondition, Forced, NamedAccounts, ExternalAccounts,
+          UserIdentityArn, UserIdentityType, SessionIssuerUserName, SourceIpAddress, UserAgent,
+          CrossAcctCalls, CrossAcctAccounts, CrossAcctCallers, CrossAcctEvents,
+          FirstCrossAcct, LastCrossAcct, AwsRegion, RecipientAccountId
+| order by TimeGenerated desc
+
+//
+// WHAT THIS QUERY CANNOT DO, AND WHAT DOES IT INSTEAD
+//
+// It pattern-matches; it does not parse. It cannot tell an Allow from a Deny, cannot tell
+// whether the account it found sits in a Principal or in a Resource ARN, cannot see a
+// `NotAction` (an Allow with NotAction grants everything EXCEPT what it lists, and a reader
+// that inspects only Action is silent on it), and cannot judge whether a Condition genuinely
+// confines the grant or merely exists. Those are structural questions and they need a parser:
+// pipe the documents through ../../../tools/decode_policy_documents.py, as Query 2 of
+// ../PLAYBOOK.md does. Every match above is on an ACTION TOKEN precisely because tokens carry
+// no interior punctuation - the request-side document is RAW JSON in whatever whitespace the
+// client sent, and AWS's own reference shows the request compact and the response
+// pretty-printed, so a pattern keyed on `"Effect":"Allow"` misses a file-fed document.
+//
+// THE POLICY IS ITS OWN ONLY RECORD. ECR retains no version history. Once a policy is
+// overwritten or deleted, requestParameters.policyText in the applying event is the only copy
+// that exists, bounded by your retention. Capture before you remediate.
+//
+// PREVENTION. An SCP cannot help against the grantee here - AWS states SCPs "affect only IAM
+// users and roles that are managed by accounts that are part of the organization" and do not
+// affect resource-based policies directly, so the external principal is out of scope in one
+// direction and your own principals always match your org id in the other. The control that
+// reaches this is a Resource control policy (RCP) on ECR, and an RCP needs a
+// "Bool": {"aws:PrincipalIsAWSService": "false"} guard or it denies service-initiated access
+// and causes an outage.

@@ -1,0 +1,113 @@
+// RDS DB Security Group APIs — Legacy and Modern (T1686.001 / T1578.005)
+//
+// Signal, in two halves that have almost nothing to do with each other:
+//   * the retired EC2-Classic DB security group APIs being called at all, in an account where
+//     nothing legitimate calls them;
+//   * ModifyDBInstance / ModifyDBCluster replacing the set of VPC security groups on a live
+//     database, which is what the retired APIs used to do and what the source rule was reaching for.
+//
+// This query does the thing neither Sigma rule can: it shows the security-group set BEFORE and
+// AFTER each modify, by carrying the previous call's set forward per database with `prev()`.
+// `vpcSecurityGroupIds` is the COMPLETE new set rather than a delta, so a call that quietly drops
+// the restrictive group looks identical in the raw event to one that adds a group. Only the
+// comparison with the prior set makes the removal visible, and removal is the direction that
+// matters.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE PipelineRoles BELOW BEFORE DEPLOYING.
+let Lookback = 30d;
+let Legacy =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "rds.amazonaws.com"
+    | where EventName in ("CreateDBSecurityGroup", "DeleteDBSecurityGroup",
+                          "AuthorizeDBSecurityGroupIngress", "RevokeDBSecurityGroupIngress",
+                          "DescribeDBSecurityGroups")
+    | extend Req = parse_json(RequestParameters)
+    // Leading-acronym lowercasing: cIDRIP, eC2SecurityGroupId - the same convention that produces
+    // cACertificateIdentifier elsewhere in RDS. Do not guess these; they are irregular.
+    | extend GroupName = tostring(Req.dBSecurityGroupName)
+    | extend Cidr      = tostring(Req.cIDRIP)
+    | extend Ec2Group  = coalesce(tostring(Req.eC2SecurityGroupId), tostring(Req.eC2SecurityGroupName))
+    | summarize Calls = count(), FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated),
+                Apis = make_set(EventName, 5), Groups = make_set(GroupName, 5),
+                Cidrs = make_set(Cidr, 5), Ec2Groups = make_set(Ec2Group, 5),
+                Codes = make_set(ErrorCode, 5), Failures = countif(isnotempty(ErrorCode)),
+                SourceIPs = make_set(SourceIpAddress, 5), Agents = make_set(UserAgent, 3)
+                by Actor = UserIdentityArn
+    // `contains`, never `has`: the retired-API verdicts below key on error strings that are pure
+    // alphanumeric, but the ARN comparisons elsewhere in this file are not, and mixing operators
+    // across one file is how a rule drifts.
+    | extend Verdict = case(
+        set_has_element(Codes, "DBSecurityGroupNotSupported"),
+            "RETIRED API REFUSED - DBSecurityGroupNotSupported is what AWS returns for a DB security group in a VPC-only account. The call is the signal; the refusal confirms there is no EC2-Classic estate here",
+        Failures == Calls,
+            "RETIRED API, ALL CALLS FAILED - stale tooling or API-surface enumeration. Nothing changed and nothing could",
+        set_has_element(Apis, "CreateDBSecurityGroup") or set_has_element(Apis, "DeleteDBSecurityGroup"),
+            "RETIRED API SUCCEEDED - this account has a surviving EC2-Classic estate, which is a finding in its own right: EC2-Classic was retired on 15 August 2022",
+            "RETIRED API READ ONLY - DescribeDBSecurityGroups with no mutation. Enumeration")
+    | project FirstSeen, LastSeen, Verdict, Actor, Calls, Failures, Apis, Codes, Groups, Cidrs,
+              Ec2Groups, SourceIPs, Agents
+    | order by LastSeen desc;
+let Modern =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "rds.amazonaws.com"
+    | where EventName in ("ModifyDBInstance", "ModifyDBCluster")
+    | where isempty(ErrorCode)
+    | extend Req = parse_json(RequestParameters)
+    | extend NewGroups = Req.vpcSecurityGroupIds
+    | where isnotnull(NewGroups)
+    | extend DbId = coalesce(tostring(Req.dBInstanceIdentifier), tostring(Req.dBClusterIdentifier))
+    | extend GroupSet = tostring(NewGroups)
+    | extend IsPipeline = UserIdentityArn contains ":role/iac-deploy"
+                       or UserIdentityArn contains ":role/BreakGlassAdmin"
+    | order by DbId asc, TimeGenerated asc
+    // The previous set for the SAME database. prev() crosses database boundaries, so the guard on
+    // DbId is required - without it the first change to each database is compared against an
+    // unrelated one and reported as a removal that never happened.
+    | extend PrevDb  = prev(DbId, 1), PrevSet = prev(GroupSet, 1)
+    | extend PriorSet = iff(PrevDb == DbId, PrevSet, "")
+    | extend Removed = iff(isempty(PriorSet), "unknown - no earlier change in this window",
+                           tostring(set_difference(todynamic(PriorSet), todynamic(GroupSet))))
+    | extend Added   = iff(isempty(PriorSet), "unknown - no earlier change in this window",
+                           tostring(set_difference(todynamic(GroupSet), todynamic(PriorSet))))
+    | extend Verdict = case(
+        IsPipeline == false and Removed != "[]" and isnotempty(PriorSet),
+            "SECURITY GROUP REMOVED FROM A DATABASE BY A NON-PIPELINE PRINCIPAL - vpcSecurityGroupIds is the complete new set, so the groups it omits are the groups being detached. Verify what the removed group was restricting",
+        IsPipeline == false,
+            "SECURITY GROUPS REPLACED BY A NON-PIPELINE PRINCIPAL - compare the new set against the intended architecture",
+            "PIPELINE CHANGE - expected; confirm against the infrastructure code")
+    | project TimeGenerated, Verdict, DbId, Actor = UserIdentityArn, EventName,
+              PriorSet, GroupSet, Added, Removed, SourceIpAddress, UserAgent
+    | order by TimeGenerated desc;
+union
+  (Legacy | extend Half = "legacy-ec2-classic-api"),
+  (Modern | extend Half = "modern-vpc-security-groups")
+| order by Half asc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// WHAT THE REMOVED GROUP PERMITTED. The event names group IDs and nothing else. Whether detaching
+// a group opened the database or closed it depends on that group's rules, which live in EC2 and
+// which may themselves have been deleted since. Read them live with
+// `aws ec2 describe-security-group-rules --filters Name=group-id,Values=<id>` and treat a group
+// that no longer exists as an unanswerable question rather than an empty rule set.
+//
+// THE FIRST CHANGE TO ANY DATABASE. `PriorSet` is empty when no earlier ModifyDBInstance for that
+// database falls inside the lookback, so `Added` and `Removed` read "unknown" rather than
+// pretending the set was previously empty. Widen Lookback, or read the current set from
+// `describe-db-instances`, before concluding a group was added.
+//
+// THE OTHER HALF OF THE FIREWALL. Changing which groups are attached is one lever; changing the
+// RULES INSIDE an attached group is the other, and it happens on ec2.amazonaws.com where this
+// query does not look. ../../_superseded/aws.initial-access.sg-remote-management-open/ owns that, including
+// port-RANGE containment and the nested ipPermissions.items[] request form.
+//
+// PREVENTION. There is nothing to prevent on the legacy APIs - the resource type cannot exist in a
+// VPC-only account, and CreateDBSecurityGroup returns DBSecurityGroupNotSupported. For the modern
+// half, confine rds:ModifyDBInstance to the database-lifecycle pipeline; AWS Config
+// `rds-instance-public-access-check` and `rds-instance-subnet-igw-check` cover the exposure that a
+// group change can produce, though neither evaluates the group set directly.

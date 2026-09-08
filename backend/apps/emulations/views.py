@@ -1,7 +1,8 @@
 """
 Views for the emulations app.
 
-All endpoints require IsEnterpriseUser.
+All endpoints use HasAWSConnection: reads are open to any authenticated user,
+mutations require a verified AWS connection.
 
 GET  /api/emulations/                              EmulationListView
 GET  /api/emulations/<emulation_type>/estimate/    EmulationEstimateView
@@ -26,8 +27,9 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.emulations import library
 from apps.infrastructure.models import Stack
-from apps.infrastructure.permissions import IsEnterpriseUser
+from apps.infrastructure.permissions import HasAWSConnection
 from apps.logs.models import LogEntry
 
 from . import command_runner
@@ -140,7 +142,7 @@ class EmulationListView(APIView):
     client-side mapping.  Non-enterprise users receive 403.
     """
 
-    permission_classes = [IsEnterpriseUser]
+    permission_classes = [HasAWSConnection]
 
     def get(self, request: Request) -> Response:
         """
@@ -216,7 +218,7 @@ class EmulationEstimateView(APIView):
     calling POST /api/emulations/deploy/.
     """
 
-    permission_classes = [IsEnterpriseUser]
+    permission_classes = [HasAWSConnection]
 
     # Max seconds to wait for the worker's pulumi preview before falling back.
     _ESTIMATE_TIMEOUT_SECONDS = 60
@@ -317,7 +319,7 @@ class EmulationTechniquesView(APIView):
     registry catalogue.
     """
 
-    permission_classes = [IsEnterpriseUser]
+    permission_classes = [HasAWSConnection]
 
     def get(self, request: Request, emulation_type: str) -> Response:
         """
@@ -356,7 +358,7 @@ class EmulationDetectionsView(APIView):
     the rail, the code bodies feed the preview pane.
     """
 
-    permission_classes = [IsEnterpriseUser]
+    permission_classes = [HasAWSConnection]
 
     def get(self, request: Request, emulation_type: str) -> Response:
         """
@@ -399,7 +401,7 @@ class EmulationDetectionDetailView(APIView):
     techniques) the detail page renders.
     """
 
-    permission_classes = [IsEnterpriseUser]
+    permission_classes = [HasAWSConnection]
 
     def get(self, request: Request, emulation_type: str, rule_id: str) -> Response:
         """
@@ -436,7 +438,7 @@ class EmulationPlaybookView(APIView):
     raw markdown content.  The frontend renders it as structured steps.
     """
 
-    permission_classes = [IsEnterpriseUser]
+    permission_classes = [HasAWSConnection]
 
     def get(self, request: Request, emulation_type: str) -> Response:
         """
@@ -505,7 +507,7 @@ class EmulationDeployView(APIView):
     user already has a non-terminal stack for this emulation.
     """
 
-    permission_classes = [IsEnterpriseUser]
+    permission_classes = [HasAWSConnection]
 
     _ACTIVE_STATUSES = [
         Stack.Status.DEPLOYING,
@@ -596,7 +598,7 @@ class EmulationRunListView(ListAPIView):
     scoped to request.user so one user cannot see another user's runs.
     """
 
-    permission_classes = [IsEnterpriseUser]
+    permission_classes = [HasAWSConnection]
     serializer_class = EmulationRunListSerializer
 
     def get_queryset(self):
@@ -637,7 +639,7 @@ class EmulationRunDetailView(APIView):
     stdout/stderr output.
     """
 
-    permission_classes = [IsEnterpriseUser]
+    permission_classes = [HasAWSConnection]
 
     def get(self, request: Request, run_id: str) -> Response:
         """
@@ -673,7 +675,7 @@ class EmulationAttackView(APIView):
     record and enqueues run_emulation_attack in the enterprise queue.
     """
 
-    permission_classes = [IsEnterpriseUser]
+    permission_classes = [HasAWSConnection]
 
     def post(self, request: Request, stack_id: str) -> Response:
         """
@@ -736,7 +738,7 @@ class EmulationDestroyView(APIView):
     POST /api/emulations/<stack_id>/destroy/
     """
 
-    permission_classes = [IsEnterpriseUser]
+    permission_classes = [HasAWSConnection]
 
     # Only block if already destroying — all other statuses are forcibly destroyable
     # so that users can recover from stuck deploying / attacking stacks.
@@ -794,7 +796,7 @@ class PlaybookCommandView(APIView):
     copy-only. Every executed command is written to the audit log.
     """
 
-    permission_classes = [IsEnterpriseUser]
+    permission_classes = [HasAWSConnection]
 
     def post(self, request: Request, emulation_type: str) -> Response:
         """Validate, resolve, and (if safe) execute the command; audit the run."""
@@ -850,4 +852,100 @@ class PlaybookCommandView(APIView):
             "returncode": return_code,
             "stdout": stdout,
             "stderr": stderr,
+        })
+
+
+class PlaybookLibraryListView(APIView):
+    """
+    List the standalone IR playbook library.
+
+    GET /api/emulations/library/
+
+    These playbooks are documentation for SOC analysts and engineers. They are
+    indexed by detection use case, not by technique, and most have no emulation
+    behind them, so they are served separately from the emulation catalogue
+    rather than mixed into it.
+    """
+
+    permission_classes = [HasAWSConnection]
+
+    def get(self, request: Request) -> Response:
+        """
+        Return one summary per playbook.
+
+        Args:
+            request: DRF request.
+
+        Returns:
+            200 with {"count", "playbooks"}. An empty list when no library is
+            mounted, which is a valid deployment rather than an error.
+        """
+        entries = library.discover()
+        return Response({"count": len(entries), "playbooks": entries})
+
+
+class PlaybookLibraryDetailView(APIView):
+    """
+    Return one standalone playbook, with its markdown body.
+
+    GET /api/emulations/library/<playbook_id>/
+    """
+
+    permission_classes = [HasAWSConnection]
+
+    def get(self, request: Request, playbook_id: str) -> Response:
+        """
+        Args:
+            request:     DRF request.
+            playbook_id: Directory name, e.g. "s3.impact.bucket-policy-deleted".
+
+        Returns:
+            200 with the summary plus "markdown", or 404 if unknown.
+        """
+        entry = library.get(playbook_id)
+        if entry is None:
+            return Response(
+                {"detail": f"No playbook found for '{playbook_id}'."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(entry)
+
+
+class PlaybookLibraryDetectionsView(APIView):
+    """
+    Return the reference detection rules shipped with a standalone playbook.
+
+    GET /api/emulations/library/<playbook_id>/detections/
+
+    These are UNVALIDATED. A rule becomes a MayaTrail detection only once an
+    emulation fires it and a run proves it fired; nothing here has met that bar,
+    so the response marks them explicitly and the UI must show that.
+    """
+
+    permission_classes = [HasAWSConnection]
+
+    def get(self, request: Request, playbook_id: str) -> Response:
+        """
+        Args:
+            request:     DRF request.
+            playbook_id: Directory name.
+
+        Returns:
+            200 with {"validated": False, "rules": [...]}, or 404 if unknown.
+        """
+        files = library.detection_bodies(playbook_id)
+        if files is None:
+            return Response(
+                {"detail": f"No playbook found for '{playbook_id}'."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response({
+            "playbookId": playbook_id,
+            "validated": False,
+            "note": (
+                "Reference rules from the IR playbook library. No emulation "
+                "has been proven to fire these, so they are not MayaTrail "
+                "detections."
+            ),
+            "rules": files,
         })

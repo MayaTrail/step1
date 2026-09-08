@@ -1,3 +1,3 @@
 name: mayatrail-atomic-wafv2-disable-web-acl
 runtime: python
-description: ATOMIC-WAFV2-DISABLE-WEB-ACL adversary emulation - WAFv2 magic-header ByteMatch rule injection (T1562.007)
+description: ATOMIC-WAFV2-DISABLE-WEB-ACL adversary emulation - WAFv2 magic-header ByteMatch rule injection (T1686.001)

@@ -1,0 +1,203 @@
+# IAM Privilege Escalation via Inline Policy Grant (T1098.003)
+#
+# `requestParameters.policyDocument` is RAW JSON, in whatever whitespace the client sent.
+# Percent-encoding is a property of what IAM RETURNS — `responseElements`, and the
+# Get*Policy APIs, which state "Policies returned by this operation are URL-encoded
+# compliant with RFC 3986". Do not decode request parameters.
+#
+# The original rules' real defect is therefore whitespace, not encoding: the regex
+# `\x22Effect\x22:[ ]?\x22Allow\x22` allows zero-or-one space on a single line, and a
+# document submitted with `--policy-document file://policy.json` is pretty-printed across
+# newlines with indentation. It misses those entirely. They also carried no `errorCode`
+# filter, so a principal probing PutUserPolicy and collecting AccessDenied fired the same
+# P2 as a completed account takeover.
+#
+# Structural questions — Allow vs Deny, is `Action` exactly `*`, does the Allow share a
+# statement with the escalation action, is there a `NotAction` — are not substring
+# questions in any encoding. They need a parse. See `detection_note_t1098_003.md`.
+#
+# INLINE route only. The managed-policy route ships in
+# ../../_superseded/aws.privilege-escalation.iam-managed-policy-escalation/
+title: IAM inline policy granting a privilege-escalation primitive
+id: 51344231-8c2d-4b39-9f12-a5cf033cefdb
+name: iam_inline_escalation_primitive_granted
+status: experimental
+description: >-
+  An inline IAM policy was written onto a user, role or group whose document names an
+  action that is itself a privilege-escalation primitive, a service-wide IAM/STS
+  wildcard, or a NotAction grant. The grantee can reach account administrator from
+  these permissions alone, without any further vulnerability.
+references:
+  - https://attack.mitre.org/techniques/T1098/003/                      # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_PutRolePolicy.html  # retrieved 2026-08-27
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName:
+      - 'PutUserPolicy'
+      - 'PutRolePolicy'
+      - 'PutGroupPolicy'
+  # Cuts pure-Deny guardrails that merely NAME these actions. It does NOT prove the Allow
+  # and the action share a statement — only a parse does that.
+  allow_effect:
+    requestParameters.policyDocument|contains: 'Allow'
+  escalation_action:
+    requestParameters.policyDocument|contains:
+      - 'CreateAccessKey'
+      - 'CreateLoginProfile'
+      - 'UpdateLoginProfile'
+      - 'AttachUserPolicy'
+      - 'AttachRolePolicy'
+      - 'AttachGroupPolicy'
+      - 'PutUserPolicy'
+      - 'PutRolePolicy'
+      - 'PutGroupPolicy'
+      - 'CreatePolicyVersion'
+      - 'SetDefaultPolicyVersion'
+      - 'AddUserToGroup'
+      - 'UpdateAssumeRolePolicy'
+      - 'AdministratorAccess'
+  # A service wildcard over the IAM or STS namespace confers every primitive above at
+  # once and contains none of their names, so it needs its own block. Quoted to avoid
+  # matching a Resource ARN that merely contains the substring.
+  wildcard_service:
+    requestParameters.policyDocument|contains:
+      - '"iam:*"'
+      - '"sts:*"'
+  # NotAction Allows everything EXCEPT what it lists — administrator by omission. The
+  # word is bare alphanumeric and appears in no other IAM policy element.
+  not_action:
+    requestParameters.policyDocument|contains: 'NotAction'
+  success:
+    errorCode: null
+  condition: selection and success and allow_effect and (escalation_action or wildcard_service or not_action)
+falsepositives:
+  - A guardrail that Denies these actions while Allowing something else in the same
+    document — Allow and the action name are matched independently. Decode to confirm.
+  - '`iam:PassRole` is deliberately NOT in the list above: it appears in a large fraction
+    of legitimate IaC-managed policies and would dominate the alert volume at this level.
+    It is caught by the decoded path instead — see Query 2 of the playbook.'
+  - Your IAM-administration pipeline provisioning a delegated-admin role. Add its ARN to
+    a `userIdentity.arn|contains` filter block once baselined.
+level: high
+---
+# Whitespace-tolerant by regex, because the real request-side hazard is pretty-printing,
+# not encoding. `--policy-document file://policy.json` submits the document across
+# newlines with indentation, which any fixed-space literal match misses.
+title: IAM inline policy granting unrestricted action on all resources
+id: cd05c7f6-b116-46b6-83c7-d8bf812eec6c
+name: iam_inline_wildcard_admin_granted
+status: experimental
+description: >-
+  An inline IAM policy was written whose document grants Action `*` —
+  administrator-equivalent access in a single statement.
+references:
+  - https://attack.mitre.org/techniques/T1098/003/                      # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_action.html  # retrieved 2026-08-27
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName:
+      - 'PutUserPolicy'
+      - 'PutRolePolicy'
+      - 'PutGroupPolicy'
+  # \s* spans the newlines and indentation a pretty-printed document carries; the
+  # optional [ handles the single-element-array form "Action": [ "*" ].
+  wildcard_action:
+    requestParameters.policyDocument|re: '"Action"\s*:\s*(\[\s*)?"\*"'
+  success:
+    errorCode: null
+  condition: selection and wildcard_action and success
+falsepositives:
+  - A service-linked or bootstrap role legitimately provisioned with Action `*` scoped by
+    a Condition block. The condition is invisible to a pattern match — decode first.
+  - Multi-element arrays where `*` is not the first element, e.g. ["s3:GetObject","*"],
+    are missed by this rule. The decoded path in Query 2 catches them; this rule
+    under-matches rather than over-matches.
+level: medium
+---
+title: IAM write call denied
+id: 099e4832-9c7c-491d-aee7-f4bd90ae4f67
+name: iam_write_denied
+status: experimental
+description: Base rule — volume component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html  # retrieved 2026-08-27
+tags:
+  - attack.discovery
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName:
+      - 'PutUserPolicy'
+      - 'PutRolePolicy'
+      - 'PutGroupPolicy'
+      - 'CreatePolicyVersion'
+      - 'SetDefaultPolicyVersion'
+      - 'AttachUserPolicy'
+      - 'AttachRolePolicy'
+      - 'AttachGroupPolicy'
+      - 'AddUserToGroup'
+      - 'CreateAccessKey'
+      - 'CreateLoginProfile'
+      - 'UpdateAssumeRolePolicy'
+  denied:
+    errorCode|contains: 'AccessDenied'
+  condition: selection and denied
+level: low
+---
+# Kept strictly separate from the success-path rules. A principal collecting AccessDenied
+# across IAM write calls is mapping its own permission boundary to find an escalation
+# path it CAN reach — reconnaissance, not compromise, and it must not share an alert with
+# a completed takeover. The original rules had no errorCode filter at all, so denied
+# probing and successful escalation fired the identical P2.
+#
+# This correlation deliberately spans BOTH the inline and managed routes: an actor
+# probing does not know in advance which will work, so scoping it to one route would
+# split the very signal that makes it meaningful.
+#
+# Threshold basis: derived from operator behaviour, not an observed baseline. A human who
+# hits an IAM permissions error retries once or twice then stops or asks a colleague;
+# automation with a stale policy retries on a fixed interval, which the per-principal
+# grouping and short window separate out. Six or more denials in ten minutes sits above
+# ordinary human retry. Baseline against your own account before deploying — a starting
+# point, not a measurement.
+title: IAM write calls denied repeatedly for one principal
+id: f42eb8f9-0e32-4bbe-8ce0-846241d27043
+status: experimental
+description: >-
+  One principal was denied six or more IAM write calls within ten minutes — the signature
+  of an actor enumerating which escalation primitives its credentials can reach.
+references:
+  - https://attack.mitre.org/techniques/T1098/003/                      # retrieved 2026-08-27
+tags:
+  - attack.discovery
+  - attack.t1098.003
+correlation:
+  type: event_count
+  rules:
+    - iam_write_denied
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gt: 5
+level: medium

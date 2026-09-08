@@ -1,0 +1,164 @@
+// Identity Pool Configured to Allow Unauthenticated Access (T1098 / T1078.004)
+//
+// Signal: an identity pool set to accept anonymous identities, joined to the SetIdentityPoolRoles
+// call that gives those identities a role to assume, joined to whatever evidence of actual
+// credential issuance exists in this account.
+//
+// This query does three things the Sigma rules structurally cannot. It JOINS the guest flag to
+// the role attachment ACROSS TWO API CALLS on two different event names, so the output says
+// "pool P hands role R to anonymous callers" rather than reporting two unrelated configuration
+// changes. It reports whether AllowClassicFlow is also on, which decides whether AWS's automatic
+// scope-down session policy applies and therefore whether the role's full permissions are
+// reachable. And it counts the two independent evidence-of-use paths side by side so their
+// ABSENCE is reported as an absence rather than as a clean result.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// Field casing is VERIFIED for this service: AWS publishes a real CreateIdentityPool CloudTrail
+// example carrying requestParameters.identityPoolName, requestParameters.allowUnauthenticatedIdentities
+// and responseElements.identityPoolId, all lower-camel. allowClassicFlow and roles.unauthenticated
+// follow the same convention but appear in no published example - confirm them in your own trail.
+let Lookback = 90d;
+let Cfg =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "cognito-identity.amazonaws.com"
+    | where EventName in ("CreateIdentityPool", "UpdateIdentityPool", "SetIdentityPoolRoles",
+                          "DeleteIdentityPool")
+    // RequestParameters and ResponseElements are typed `string` in this table, not dynamic.
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    | extend PoolId   = coalesce(tostring(Req.identityPoolId), tostring(Resp.identityPoolId), "")
+    | extend PoolName = coalesce(tostring(Req.identityPoolName), tostring(Resp.identityPoolName), "")
+    | extend GuestFlag   = coalesce(tostring(Req.allowUnauthenticatedIdentities),
+                                    tostring(Resp.allowUnauthenticatedIdentities), "")
+    | extend ClassicFlag = coalesce(tostring(Req.allowClassicFlow),
+                                    tostring(Resp.allowClassicFlow), "")
+    | extend UnauthRole  = tostring(Req.roles.unauthenticated)
+    | extend AuthRole    = tostring(Req.roles.authenticated)
+    | where isempty(ErrorCode) and isnotempty(PoolId);
+let GuestEnabled = Cfg
+    | where EventName in ("CreateIdentityPool", "UpdateIdentityPool") and GuestFlag == "true"
+    | summarize GuestEnabledAt = max(TimeGenerated), GuestEnabledBy = make_set(UserIdentityArn, 5),
+                GuestIps = make_set(SourceIpAddress, 5), GuestAgents = make_set(UserAgent, 3),
+                PoolNames = make_set_if(PoolName, isnotempty(PoolName), 3),
+                ClassicSeen = make_set_if(ClassicFlag, isnotempty(ClassicFlag), 3),
+                Region = any(AwsRegion), Account = any(RecipientAccountId)
+      by PoolId;
+// The weaponisation. A guest-enabled pool with no unauthenticated role vends nothing - AWS
+// returns InvalidIdentityPoolConfigurationException - so this half is what turns the flag into
+// credentials, and it lands on a different event the source rule does not watch.
+let RolesSet = Cfg
+    | where EventName == "SetIdentityPoolRoles" and isnotempty(UnauthRole)
+    | summarize RoleSetAt = max(TimeGenerated), UnauthRoles = make_set(UnauthRole, 3),
+                AuthRoles = make_set_if(AuthRole, isnotempty(AuthRole), 3),
+                RoleSetBy = make_set(UserIdentityArn, 5)
+      by PoolId;
+// EVIDENCE PATH ONE - data events. Off by default and billable; requires an advanced event
+// selector on resources.type = AWS::Cognito::IdentityPool. AWS's own published examples for GetId
+// and GetCredentialsForIdentity show userIdentity as {"type": "Unknown"}, which is the cleanest
+// anonymous-caller primitive available anywhere in CloudTrail.
+let Issuance = AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "cognito-identity.amazonaws.com"
+    | where EventName in ("GetId", "GetCredentialsForIdentity", "GetOpenIdToken")
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    | extend PoolId = tostring(Req.identityPoolId)
+    | where isnotempty(PoolId)
+    | extend AnonCaller = (UserIdentityType == "Unknown") or isempty(UserIdentityArn)
+    // The single best pivot key in the whole investigation: the ASIA access key handed to the
+    // guest. It appears as userIdentity.accessKeyId on every subsequent call that session makes,
+    // in every other service's CloudTrail. The secret is NOT in the event; the key id is.
+    | extend IssuedKey = tostring(Resp.credentials.accessKeyId)
+    | summarize IssuanceEvents = count(),
+                AnonIssuance = countif(AnonCaller),
+                IssuedKeys = make_set_if(IssuedKey, isnotempty(IssuedKey), 25),
+                IssuanceIps = make_set(SourceIpAddress, 25),
+                DistinctIssuanceIps = dcount(SourceIpAddress),
+                FirstIssuance = min(TimeGenerated), LastIssuance = max(TimeGenerated)
+      by PoolId;
+// EVIDENCE PATH TWO - STS management events, on by default. Present only in the BASIC (classic)
+// flow, where the client makes its own call. IAM documents that CloudTrail "also logs
+// non-authenticated requests to the AWS STS actions, AssumeRoleWithSAML and
+// AssumeRoleWithWebIdentity", so the unsigned guest exchange is captured with
+// userIdentity.type WebIdentityUser. In the enhanced flow Cognito calls STS on your behalf and
+// nothing equivalent lands in your trail.
+let ClassicAssumes = AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "sts.amazonaws.com" and EventName == "AssumeRoleWithWebIdentity"
+    | extend Req = parse_json(RequestParameters)
+    | extend AssumedRole = tostring(Req.roleArn)
+    | where isnotempty(AssumedRole)
+    | summarize StsAssumes = count(), StsIps = make_set(SourceIpAddress, 25),
+                DistinctStsIps = dcount(SourceIpAddress), LastStsAssume = max(TimeGenerated)
+      by AssumedRole;
+GuestEnabled
+| join kind=leftouter RolesSet on PoolId
+| extend UnauthRoleArn = tostring(UnauthRoles[0])
+| join kind=leftouter Issuance on PoolId
+| join kind=leftouter (ClassicAssumes | project UnauthRoleArn = AssumedRole, StsAssumes, StsIps,
+                                                DistinctStsIps, LastStsAssume) on UnauthRoleArn
+| extend ClassicFlowOn = array_length(ClassicSeen) > 0 and set_has_element(ClassicSeen, "true")
+| extend Weaponised = isnotempty(RoleSetAt)
+// The absence guard. Zero issuance events with no data-event selector configured is an UNKNOWN,
+// not a clean result, and it must never be projected as "no abuse". The two paths are counted
+// separately so the analyst can see which one was even capable of recording something.
+| extend EvidenceAvailable = iff(isnotempty(IssuanceEvents) or isnotempty(StsAssumes), true, false)
+| extend Verdict = case(
+    Weaponised and ClassicFlowOn and AnonIssuance > 0,
+        "LIVE ANONYMOUS CREDENTIAL VENDING, CLASSIC FLOW - anonymous callers are receiving credentials for this role AND the classic flow bypasses AWS's automatic scope-down session policy, so the role's full permissions are reachable",
+    Weaponised and AnonIssuance > 0,
+        "LIVE ANONYMOUS CREDENTIAL VENDING - anonymous callers are receiving AWS credentials for this role. Fetch the role's policies; the event does not contain them",
+    Weaponised and StsAssumes > 0,
+        "GUEST ROLE ASSUMED THROUGH STS - the classic-flow path was used. This is the only issuance evidence a default-configured trail can carry",
+    Weaponised and ClassicFlowOn,
+        "WEAPONISED, CLASSIC FLOW, NO EVIDENCE OF USE - the pool hands out credentials with no scope-down ceiling. Absence of issuance events means data events are OFF, not that nobody called",
+    Weaponised,
+        "WEAPONISED, NO EVIDENCE OF USE - guest access is on and a role is attached. Absence of issuance events means data events are OFF, not that nobody called",
+    isnotempty(GuestEnabledAt),
+        "GUEST FLAG ON, NO ROLE ATTACHED - the pool accepts anonymous identities but vends nothing yet; a guest request fails with InvalidIdentityPoolConfigurationException. One SetIdentityPoolRoles call away from live",
+        "GUEST ACCESS CONFIGURATION CHANGE - review")
+| project GuestEnabledAt, Verdict, PoolId, PoolNames, Account, Region, GuestEnabledBy, RoleSetAt,
+          RoleSetBy, UnauthRoleArn, AuthRoles, ClassicFlowOn, EvidenceAvailable, IssuanceEvents,
+          AnonIssuance, DistinctIssuanceIps, IssuedKeys, StsAssumes, DistinctStsIps,
+          FirstIssuance, LastIssuance, LastStsAssume, GuestIps, GuestAgents
+| order by GuestEnabledAt desc
+
+//
+// FOLLOW THE ISSUED KEY. Every value in IssuedKeys is an ASIA access key handed to an anonymous
+// caller, and it appears as userIdentity.accessKeyId on every subsequent call that session makes
+// against every other service. That join is the whole "what did they actually do" investigation:
+//
+//   let GuestKeys = dynamic(["ASIA...","ASIA..."]);   // from IssuedKeys above
+//   AWSCloudTrail
+//   | where TimeGenerated > ago(30d)
+//   | where set_has_element(GuestKeys, UserIdentityAccessKeyId)
+//   | summarize Calls = count(), Services = make_set(EventSource, 20),
+//               Events = make_set(EventName, 40), Ips = make_set(SourceIpAddress, 10),
+//               Errors = make_set(ErrorCode, 10) by UserIdentityAccessKeyId, SessionIssuerUserName
+//   | order by Calls desc
+//
+// SessionIssuerUserName, not UserIdentityArn, is how you group those calls by ROLE: the flattened
+// column carries the role name for an assumed-role session, and the session name is generated per
+// identity so it is useless as a grouping key (A5).
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// What the unauthenticated role permits. SetIdentityPoolRoles records role ARNs only - the Roles
+// map is documented as a string-to-string map with values 20 to 2048 characters, which is an ARN
+// and not a policy document - and NO identity-pool API returns a policy document at all. The
+// severity of every row above is undetermined until someone fetches the role from IAM. The
+// playbook's Query 2 does that and grades it.
+//
+// Whether the role's trust policy is pinned. A role whose trust carries no
+// cognito-identity.amazonaws.com:aud condition is assumable through ANY identity pool, including
+// one in an attacker's own account - AWS: "AWS STS permits web identities to assume roles that
+// are not secured with conditions". And an AUTHENTICATED role with an aud condition but no
+// ForAnyValue:StringLike on ...:amr can be assumed with a GUEST token in the basic flow, which is
+// a straight privilege escalation from anonymous to authenticated. Neither is in any Cognito
+// event. The playbook's Query 3 sweeps IAM for both.
+//
+// Anything at all, in the common default case. GetId and GetCredentialsForIdentity are DATA
+// events, off by default; and in the ENHANCED flow Cognito calls AssumeRoleWithWebIdentity on
+// your behalf, so no STS event is attributable to your caller either. In a default-configured
+// account, exploitation of this misconfiguration leaves NO CloudTrail record. EvidenceAvailable
+// is projected precisely so that "nothing found" is read as "nothing could have been found".

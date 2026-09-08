@@ -5,6 +5,7 @@ import { platformRegistry, platformShortLabel } from '@/data'
 import type { PlatformId, EmulationRunStatus } from '@/types'
 import { PlatformIcon } from '@/components/ui/PlatformIcons'
 import { FilterDropdown, type DropdownOption } from '@/components/ui/FilterDropdown'
+import { ConnectPrompt, useAWSConnection } from '@/components/common/ConnectGate'
 import {
   RunStatusBadge,
   RunsTable,
@@ -42,6 +43,7 @@ const PLATFORM_OPTIONS: DropdownOption<'all' | PlatformId>[] = [
  * Emulation view so an operator can re-open the phase-by-phase output.
  */
 export function ResultsPage() {
+  const { connected } = useAWSConnection()
   const { data: runs, loading } = useEmulationRuns(['completed', 'failed'])
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | EmulationRunStatus>('all')
@@ -55,6 +57,23 @@ export function ResultsPage() {
     if (q) list = list.filter((r) => r.emulation_name.toLowerCase().includes(q))
     return list
   }, [runs, statusFilter, platformFilter, search])
+
+  // Placed after every hook: an early return above useMemo would change the
+  // hook order between renders and violate the rules of hooks.
+  //
+  // Runs belong to stacks deployed in the user's own AWS account, so an
+  // unconnected user has none and cannot create any. An empty table would read
+  // as a bug; say what is missing instead.
+  if (!connected) {
+    return (
+      <div className="animate-fadeIn">
+        <ConnectPrompt
+          title="No AWS account connected"
+          body="Results are the record of emulations you have run against your own AWS account. Connect a verified IAM role to run one. You can still browse the catalogue, detection rules and playbooks."
+        />
+      </div>
+    )
+  }
 
   return (
     <div>

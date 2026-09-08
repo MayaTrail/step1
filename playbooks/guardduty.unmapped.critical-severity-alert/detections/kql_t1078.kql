@@ -1,0 +1,87 @@
+// GuardDuty critical-severity findings (T1078 / T1526)
+//
+// A finding is an INDEX ENTRY. AWS aggregates repeat activity into one finding and replaces the
+// older details: "the finding details will be updated to reflect the remote IP of the most recent
+// source and older information will be replaced. Complete information about individual activity
+// attempts will still be available in your CloudTrail logs or VPC Flow Logs."
+//
+// So this query surfaces and ranks findings; it does not reconstruct anything. The reconstruction
+// is in CloudTrail and flow logs, which is AWS's own instruction, and Query 3 of ../PLAYBOOK.md.
+//
+// `contains` throughout, never `has` — finding types and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. Table name depends on ingestion.
+let LOOKBACK = 7d;
+AWSGuardDuty
+| where TimeGenerated > ago(LOOKBACK)
+| extend D = todynamic(detail)
+| extend FindingId = tostring(D.id)
+| extend Type      = tostring(D.type)
+| extend Severity  = todouble(D.severity)
+| extend Count     = toint(D.service.count)
+| extend Archived  = tostring(D.service.archived) == "true"
+| extend Role      = tostring(D.service.resourceRole)
+| extend ActionType= tostring(D.service.action.actionType)
+| extend Feedback  = tostring(D.service.userFeedback)
+| extend ResourceType = tostring(D.resource.resourceType)
+| extend CreatedAt = todatetime(D.createdAt)
+| extend UpdatedAt = todatetime(D.updatedAt)
+| extend Acct      = tostring(D.accountId)
+| extend Rgn       = tostring(D.region)
+// Sample findings carry a [SAMPLE] prefix and fictitious detail. Excluding them is not optional —
+// a console demonstration otherwise produces a critical alert.
+| where not(Type startswith "[SAMPLE]")
+// Archived is the real suppression signal. userFeedback is NOT used to exclude: it records whether
+// someone marked the finding useful or not useful, so filtering on it silences a finding the moment
+// anybody confirms it is a true positive. It is projected instead.
+| where not(Archived)
+| extend Band = case(Severity >= 9.0, "Critical", Severity >= 7.0, "High",
+                     Severity >= 4.0, "Medium", "Low")
+| extend Duration = UpdatedAt - CreatedAt
+| summarize
+    Notifications = count(),
+    MaxCount      = max(Count),
+    Types         = make_set(Type, 5),
+    Roles         = make_set(Role, 3),
+    Actions       = make_set(ActionType, 5),
+    Resources     = make_set(ResourceType, 5),
+    Feedbacks     = make_set(Feedback, 3),
+    FirstCreated  = min(CreatedAt),
+    LastUpdated   = max(UpdatedAt),
+    OpenFor       = max(Duration)
+    by FindingId, Band, Acct, Rgn
+| extend Verdict = case(
+    Band == "Critical" and set_has_element(Roles, "ACTOR"),
+        "CRITICAL, AND YOUR RESOURCE IS THE ACTOR — something in this account is attacking. That is a compromised host by definition, P0",
+    Band == "Critical",
+        "CRITICAL — AWS: an attack sequence may be in progress or recently happened, and resources may already be compromised. The finding is the pointer; CloudTrail is the record, P0",
+    set_has_element(Roles, "ACTOR") and Band != "Low",
+        "YOUR RESOURCE IS THE ACTOR — outranks its severity band. TARGET means somebody attacked you; ACTOR means something of yours attacked somebody, P0",
+    MaxCount >= 500,
+        strcat("SUSTAINED — ", tostring(MaxCount), " occurrences aggregated into ONE finding. Any rule counting findings undercounts this by that factor, and the finding names only the MOST RECENT source, P1"),
+    OpenFor > 7d,
+        "LONG-LIVED FINDING — created over a week ago and still being updated, which means the activity has not stopped, P1",
+    strcat(Band, " severity finding — triage by type"))
+| project FirstCreated, LastUpdated, OpenFor, FindingId, Band, Verdict, MaxCount,
+          Notifications, Types, Roles, Actions, Resources, Acct, Rgn, Feedbacks
+| order by Band asc, MaxCount desc
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU — and AWS names the alternative
+// ============================================================================
+// WHO ALL THE ATTACKERS WERE. Aggregation replaces older details, so the finding names the MOST
+// RECENT remote address only. A campaign from fifty sources yields one address. A blocklist built
+// from findings is one-fiftieth complete and looks finished. AWS: "Complete information about
+// individual activity attempts will still be available in your CloudTrail logs or VPC Flow Logs."
+//
+// HOW MUCH ACTIVITY THERE WAS. service.count is the occurrence count folded into the finding, and
+// it is the only field carrying it. Counting findings measures distinct security issues per
+// resource, which is a much smaller and different number.
+//
+// WHETHER SOMETHING WAS SUPPRESSED AT SOURCE. A trusted IP list (CreateIPSet) stops findings being
+// generated at all — not archived afterwards, never created. Nothing in this table shows it, and
+// Query 2 of ../PLAYBOOK.md is where that is checked.
+//
+// WHETHER GUARDDUTY COULD SEE. Its DNS findings need Route 53 Resolver query logs for the VPC and
+// its EKS findings need audit log monitoring enabled. Where those were disabled, GuardDuty's
+// silence over the period carries no information.

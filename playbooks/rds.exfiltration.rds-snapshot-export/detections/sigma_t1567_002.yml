@@ -1,0 +1,163 @@
+# RDS Snapshot Exported to S3 (T1567.002 / T1530)
+#
+# WHAT THE SOURCE RULE DOES. `eventName:"StartExportTask"` plus a success filter, grouped by
+# caller. It fires on every scheduled analytics export, and it never looks at the one thing that
+# separates a data pipeline from an exfiltration: THE DESTINATION.
+#
+# THE DESTINATION IS THE WHOLE SIGNAL, and it is three fields, not one:
+#   * `s3BucketName` - and AWS supports exporting to a CROSS-ACCOUNT bucket. The console cannot
+#     do it ("To export a DB snapshot to a cross-account Amazon S3 bucket, you must use the AWS
+#     CLI or the RDS API"), which means a cross-account export is always scripted and never an
+#     accident of the UI.
+#   * `iamRoleArn` - the role RDS assumes to write the objects. A role created minutes before the
+#     export is a role created FOR the export.
+#   * `kmsKeyId` - REQUIRED on this API, and it must be a symmetric key whose policy grants
+#     `kms:CreateGrant` and `kms:DescribeKey` to the service principal `export.rds.amazonaws.com`.
+#     An AWS-managed key's policy cannot be edited, so this is a customer-managed key in
+#     practice, and a key in another account is as strong a destination signal as the bucket.
+#
+# THE DATA LEAVES RDS ENTIRELY. The export writes Apache Parquet into S3, where a different
+# service's access controls and a different service's logging govern it. Reading those objects is
+# an S3 DATA event, off by default - so unless the destination bucket has data events configured,
+# the export is the LAST thing you can see. The bucket's own exposure therefore becomes part of
+# this incident's blast radius, and `../../_superseded/aws.exfiltration.s3-bucket-public-exposure/` is the
+# playbook the response hands off to.
+#
+# TWO ASYMMETRIES WORTH KNOWING BEFORE YOU WRITE A QUERY. First, EXPORT WORKS ON AUTOMATED
+# SNAPSHOTS: "You can export all types of DB snapshots - including manual snapshots, automated
+# system snapshots, and snapshots created by the AWS Backup service." Sharing does not. So an
+# actor who cannot share a system snapshot can still export it, and the create-then-act chain
+# that gives away a deliberate share is often absent here. Second, `SourceArn` may be a live DB
+# CLUSTER, not only a snapshot - `SourceType` is SNAPSHOT or CLUSTER - so an export can bypass
+# the snapshot layer altogether.
+#
+# FIELD SHAPE, AND THE TRAP IN IT. The request names the destination `s3BucketName`; the
+# RESPONSE names it `s3Bucket`. Those are different field names for the same value on the same
+# event, and a rule that reads only one of them silently misses half the shape it is looking at.
+# The response is otherwise FLAT - the API's output shape is the ExportTask object itself, with
+# no wrapper - so `responseElements.status`, `.sourceType`, `.percentProgress` and
+# `.totalExtractedDataInGB` sit at the top level.
+title: RDS snapshot or cluster exported to S3 by a principal outside the export pipeline
+id: c08b12b9-61ee-45f3-beee-34e88d868530
+name: rds_export_task_started
+status: experimental
+description: >-
+  An RDS snapshot or live cluster was exported to S3 as Parquet by a principal that does not own
+  the analytics export pipeline. The data has left RDS; from here it is governed by the bucket's
+  policy and visible only in S3 data events, which are off by default.
+references:
+  - https://attack.mitre.org/techniques/T1567/002/                                                # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1530/                                                    # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_StartExportTask.html             # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ExportSnapshot.html                # retrieved 2026-08-29
+tags:
+  - attack.exfiltration
+  - attack.collection
+  - attack.t1567.002
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'rds.amazonaws.com'
+    eventName: 'StartExportTask'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING - this allowlist IS the rule. Unpopulated it fires on every
+  # scheduled analytics export, which is what the source rule does. Allowlist the PRINCIPAL that
+  # owns the pipeline; the bucket and the role are attacker-choosable, the principal is not.
+  export_pipeline:
+    userIdentity.arn|contains:
+      - ':role/analytics-export'    # replace with this account's export role
+      - ':role/iac-deploy'          # replace with this account's deployment role
+  condition: selection and success and not export_pipeline
+falsepositives:
+  - >-
+    An analyst running a one-off export for a genuine reporting need. Common in data-heavy
+    accounts; if it is common here, the finding is that exports are not owned by a pipeline.
+level: high
+---
+# Base rule — sequence component only, not for direct alerting. Carries the success filter so a
+# failed create cannot compose into the correlation below.
+title: RDS manual snapshot created or copied
+id: cb6d28e9-67e5-463c-8030-3f85613d6b66
+name: rds_snapshot_created_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_CreateDBSnapshot.html   # retrieved 2026-08-29
+tags:
+  - attack.defense-impairment
+  - attack.t1578.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'rds.amazonaws.com'
+    eventName:
+      - 'CreateDBSnapshot'
+      - 'CreateDBClusterSnapshot'
+      - 'CopyDBSnapshot'
+      - 'CopyDBClusterSnapshot'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+# A snapshot taken and immediately exported is a snapshot taken IN ORDER TO export. A backup
+# process creates snapshots and never exports them; an analytics pipeline exports on a schedule
+# from snapshots it did not just create. Two hours covers snapshot completion on a large database.
+#
+# Weaker here than in the sharing case, and deliberately so: export works on AUTOMATED system
+# snapshots, so an actor has no need to create one first. Absence of this correlation is not
+# absence of exfiltration - it is the reason the single-event rule above is `high` on its own.
+title: RDS snapshot created and exported to S3 by one principal
+id: 9fd0efbd-7b20-4f5a-9554-5cba2795efdd
+status: experimental
+description: >-
+  One principal created or copied a snapshot and then exported it to S3 within two hours. No
+  backup process does this and no scheduled pipeline needs to.
+references:
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ExportSnapshot.html   # retrieved 2026-08-29
+tags:
+  - attack.exfiltration
+  - attack.t1567.002
+correlation:
+  type: temporal_ordered
+  rules:
+    - rds_snapshot_created_bb
+    - rds_export_task_started
+  group-by:
+    - userIdentity.arn
+  timespan: 2h
+level: critical
+---
+# THRESHOLD BASIS, with no observed baseline to derive one from. AWS caps an account at five
+# CONCURRENT export tasks, so an actor working through a fleet queues them in batches at that
+# ceiling. Three distinct export tasks from one non-pipeline principal inside six hours is a
+# sweep across databases rather than a reporting need. `gte` at the baseline, never `gt`, so a
+# run that starts exactly three does not fall through. Re-baseline before deploying.
+title: Multiple RDS export tasks started by one principal
+id: a078c8c9-54db-4698-a17f-155b4ac37bba
+status: experimental
+description: >-
+  One non-pipeline principal started three or more export tasks within six hours. The recovery
+  work-list is every destination prefix in the group, not just the one that alerted.
+references:
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ExportSnapshot.html   # retrieved 2026-08-29
+tags:
+  - attack.exfiltration
+  - attack.t1567.002
+correlation:
+  type: value_count
+  rules:
+    - rds_export_task_started
+  group-by:
+    - userIdentity.arn
+  field: requestParameters.exportTaskIdentifier
+  timespan: 6h
+  condition:
+    gte: 3
+level: high

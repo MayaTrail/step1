@@ -1,0 +1,90 @@
+// Model invocation logging removed, or invocations stopped (T1685.002)
+//
+// THE DIVERGENCE QUERY IS THE POINT OF THIS FILE. Bedrock invocations are recorded in two
+// independent places, and DeleteModelInvocationLoggingConfiguration stops one and not the other:
+//   invocation log quiet AND CloudTrail quiet -> the workload stopped. Availability.
+//   invocation log quiet AND CloudTrail BUSY  -> logging was removed while invocations continue.
+//
+// Almost no other service in this corpus has a second witness for the same activity, which is why
+// the absence argument that runs through the other *.stealth.no-logs-* playbooks does not apply
+// here — this one can actually tell the two cases apart.
+//
+// `contains` throughout, never `has` — ARNs and bucket names are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. Table names depend on ingestion.
+let LOOKBACK = 7d;
+let BUCKET = 1h;
+// Invocations as CloudTrail sees them — present whether or not invocation logging is configured.
+let TrailView =
+    AWSCloudTrail
+    | where TimeGenerated > ago(LOOKBACK)
+    | where EventSource == "bedrock-runtime.amazonaws.com"
+    | where EventName in ("InvokeModel", "InvokeModelWithResponseStream", "Converse", "ConverseStream")
+    | where isempty(ErrorCode)
+    | summarize TrailCalls = count() by AwsRegion, bin(TimeGenerated, BUCKET);
+// Invocations as the model invocation log sees them — only where logging is configured and working.
+let LogView =
+    BedrockModelInvocationLogs
+    | where TimeGenerated > ago(LOOKBACK)
+    | summarize LoggedCalls = count() by AwsRegion = tostring(region), bin(TimeGenerated, BUCKET);
+TrailView
+| join kind=fullouter LogView on AwsRegion, TimeGenerated
+| extend Rgn = coalesce(AwsRegion, AwsRegion1)
+| extend Bucket = coalesce(TimeGenerated, TimeGenerated1)
+| extend TrailCalls = coalesce(TrailCalls, 0), LoggedCalls = coalesce(LoggedCalls, 0)
+| extend Ratio = iff(TrailCalls > 0, todouble(LoggedCalls) / todouble(TrailCalls), todouble(-1))
+| extend Verdict = case(
+    TrailCalls >= 20 and LoggedCalls == 0,
+        "LOGGING REMOVED WHILE INVOCATIONS CONTINUE — CloudTrail shows the calls and the invocation log has none. This is the unambiguous case, and it is only visible because two independent sources record the same activity, P0",
+    TrailCalls >= 20 and Ratio < 0.5,
+        "PARTIAL LOGGING LOSS — a substantial fraction of invocations have no invocation-log record. Check whether a modality was disabled, or whether the destination stopped accepting writes, P0",
+    TrailCalls == 0 and LoggedCalls == 0,
+        "NO INVOCATIONS AT ALL — availability, or simply a quiet period. Not a security finding on its own, P4",
+    TrailCalls == 0 and LoggedCalls > 0,
+        "LOGGED WITHOUT A TRAIL RECORD — check whether bedrock-runtime data events are enabled on the trail; this is a CloudTrail coverage gap rather than a Bedrock one, P2",
+    "Both sources agree")
+| project Bucket, Rgn, Verdict, TrailCalls, LoggedCalls, Ratio
+| order by Bucket desc
+//
+// ============================================================================
+// THE CONTROL PLANE — who removed it
+// ============================================================================
+// AWSCloudTrail
+// | where TimeGenerated > ago(30d)
+// | where (EventSource == "bedrock.amazonaws.com"
+//          and EventName in ("DeleteModelInvocationLoggingConfiguration",
+//                            "PutModelInvocationLoggingConfiguration"))
+//      or (EventSource == "s3.amazonaws.com"
+//          and EventName in ("DeleteBucket", "DeleteBucketPolicy", "PutBucketPolicy",
+//                            "PutLifecycleConfiguration"))
+// | where isempty(ErrorCode)
+// | extend Req = parse_json(RequestParameters)
+// | project TimeGenerated, EventName, UserIdentityArn, SourceIpAddress, AwsRegion,
+//           text = tostring(Req.loggingConfig.textDataDeliveryEnabled),
+//           image = tostring(Req.loggingConfig.imageDataDeliveryEnabled),
+//           embedding = tostring(Req.loggingConfig.embeddingDataDeliveryEnabled),
+//           bucket = tostring(Req.loggingConfig.s3Config.bucketName),
+//           logGroup = tostring(Req.loggingConfig.cloudWatchConfig.logGroupName),
+//           s3bucket = tostring(Req.bucketName)
+// | order by TimeGenerated desc
+//
+// A Put with a modality set to false is the quiet version: the configuration is present, the
+// console shows logging enabled, and one class of invocation has no body recorded — and it produces
+// NO divergence in the query above, because both sources continue. Only the control-plane event
+// shows it.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHETHER THE ACCOUNT EVER HAD LOGGING. It is off by default, so an account that never enabled it
+// looks exactly like one where it was removed — by the log streams alone. The control-plane view
+// and the state read in ../PLAYBOOK.md Query 2 distinguish them.
+//
+// WHETHER LARGE BODIES WERE DELIVERED. Bodies over 100 KB and all binary data go to S3 as separate
+// objects under the data prefix, not inline. The invocation log entry exists either way, so a
+// healthy LoggedCalls count says nothing about whether the large content actually landed.
+//
+// WHETHER THE TRAIL ITSELF COVERS BEDROCK. If bedrock-runtime data events are not enabled,
+// TrailCalls is zero and the divergence check silently loses its second witness — which is the
+// "LOGGED WITHOUT A TRAIL RECORD" verdict above, and it is a CloudTrail finding rather than a
+// Bedrock one.

@@ -1,0 +1,79 @@
+// S3 Block Public Access removed (T1530)
+//
+// The event name is DeleteBucketPublicAccessBlock, not DeletePublicAccessBlock. AWS documents that
+// the CloudTrail event name differs from the API operation name for this call, and the source rule
+// matches the operation — a string CloudTrail never emits for a bucket.
+//
+// `contains` throughout, never `has` — ARNs and bucket names are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "s3.amazonaws.com"
+| where EventName in ("DeleteBucketPublicAccessBlock", "DeleteAccountPublicAccessBlock",
+                      "PutBucketPublicAccessBlock", "PutAccountPublicAccessBlock",
+                      "PutBucketPolicy", "PutBucketAcl", "DeleteBucketPolicy")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Bucket = tostring(Req.bucketName)
+| extend Pab = Req.PublicAccessBlockConfiguration
+// All four flags are Required: No, so a request may carry any subset. Read what is present and do
+// not infer the rest — AWS does not document merge-versus-replace for a partial document.
+| extend BlockAcls   = tostring(Pab.BlockPublicAcls)
+| extend IgnoreAcls  = tostring(Pab.IgnorePublicAcls)
+| extend BlockPolicy = tostring(Pab.BlockPublicPolicy)
+| extend Restrict    = tostring(Pab.RestrictPublicBuckets)
+| extend Scope = iff(EventName contains "Account", "ACCOUNT", "bucket")
+| summarize
+    PabDeleted   = countif(EventName startswith "Delete" and EventName contains "PublicAccessBlock"),
+    PabWritten   = countif(EventName startswith "Put" and EventName contains "PublicAccessBlock"),
+    PolicyWrites = countif(EventName == "PutBucketPolicy"),
+    AclWrites    = countif(EventName == "PutBucketAcl"),
+    PolicyDeletes= countif(EventName == "DeleteBucketPolicy"),
+    Scopes       = make_set(Scope, 2),
+    Buckets      = make_set(Bucket, 20),
+    Events       = make_set(EventName, 8),
+    FlagsSeen    = make_set(strcat("acls=", BlockAcls, " ignore=", IgnoreAcls,
+                                   " policy=", BlockPolicy, " restrict=", Restrict), 5),
+    SourceIps    = make_set(SourceIpAddress, 5),
+    Agents       = make_set(UserAgent, 3),
+    FirstSeen    = min(TimeGenerated),
+    LastSeen     = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where PabDeleted > 0
+| extend Verdict = case(
+    set_has_element(Scopes, "ACCOUNT"),
+        "ACCOUNT-LEVEL BLOCK PUBLIC ACCESS REMOVED — AWS applies the most restrictive combination of bucket and account settings, so this weakens every bucket whose own configuration is absent or weaker. No bucket-scoped rule sees it, P0",
+    PabDeleted > 0 and (PolicyWrites > 0 or AclWrites > 0),
+        "GUARDRAIL REMOVED THEN THE BUCKET OPENED — the block refuses a public policy while it is in force, so removing it first is the only way to write one. Ordering is the signal, P0",
+    PabDeleted > 1,
+        strcat("BLOCK PUBLIC ACCESS REMOVED FROM ", tostring(PabDeleted), " BUCKETS by one principal — scripted removal of the guardrail, P0"),
+    PabDeleted > 0,
+        "BLOCK PUBLIC ACCESS REMOVED — the bucket is not public yet. What follows decides whether this is an exposure or a decommission, P1",
+    "S3 access configuration changed")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, Scopes, PabDeleted, PabWritten,
+          PolicyWrites, AclWrites, PolicyDeletes, Buckets, Events, FlagsSeen, SourceIps, Agents
+| order by PabDeleted desc
+//
+// ============================================================================
+// RE-ENABLING THE BLOCK IS NOT REMEDIATION, AND THE DOCUMENTATION IS EXPLICIT
+// ============================================================================
+// Three of the four flags are prospective only:
+//   BlockPublicAcls   — "Enabling this setting doesn't affect existing policies or ACLs."
+//   BlockPublicPolicy — "Enabling this setting doesn't affect existing bucket policies."
+//   IgnorePublicAcls  — "doesn't affect the persistence of any existing ACLs and doesn't prevent
+//                        new public ACLs from being set."
+// Only IgnorePublicAcls and RestrictPublicBuckets change how an EXISTING configuration is
+// evaluated. A responder who re-enables the block and stops may have left a public policy in force.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHETHER ANYTHING WAS READ. Object-level operations are DATA events, off by default and billable;
+// lookup-events returns zero for them whether or not they happened. Without a data-event trail
+// configured beforehand, "was the exposed data actually accessed" is unanswerable.
+//
+// WHAT AN ACL GRANTED, WHEN SET CROSS-ACCOUNT. AWS: the bucket owner "doesn't get the ACL
+// configuration information, specifically the grantee email address and the grant" — so the owner's
+// trail records that the call happened and not what it did.

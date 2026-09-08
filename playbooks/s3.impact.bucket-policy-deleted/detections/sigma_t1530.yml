@@ -1,0 +1,144 @@
+# S3 bucket policy deleted (T1530)
+#
+# THE EVENT IS DIRECTIONALLY AMBIGUOUS AND CARRIES NO POLICY CONTENT. A bucket policy can contain
+# Allow statements, Deny statements or both, so removal can widen access, narrow it, or do both.
+# Only the LAST PutBucketPolicy for that bucket resolves it, and CloudTrail's copy of that event is
+# frequently the only surviving record of the policy.
+#
+# It does NOT make the bucket public — that needs a wildcard Allow, and deletion adds none. So the
+# severity split is on SCALE, not content. Full rationale: detections/detection_note_t1530.md.
+title: S3 bucket policy deleted
+id: 8e3f512a-64c7-4d09-bb85-207a1cf3e496
+name: s3_bucket_policy_deleted
+status: experimental
+description: >-
+  A successful DeleteBucketPolicy. The direction of the change is not recoverable from this event —
+  the removed policy may have been granting access or denying it — so this is shipped as a medium
+  that requires the previous PutBucketPolicy to interpret, rather than as a finding in its own
+  right. Read it as "an access control whose contents are now only in the event history was
+  removed".
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucketPolicy.html
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'DeleteBucketPolicy'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the roles that own bucket lifecycle. An infrastructure apply
+  # that rebuilds a bucket legitimately deletes and rewrites its policy in one run.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    A bucket being decommissioned. The bucket deletion that follows shortly after is the
+    corroborating evidence, and its absence is what makes a lone deletion worth reading.
+level: medium
+---
+title: S3 bucket policies deleted across multiple buckets by one principal
+id: 1a67d0b4-9382-4e15-a7c6-4f80b21de537
+status: experimental
+description: >-
+  One principal successfully deleted the bucket policy on several buckets within an hour. A single
+  deletion is ambiguous; this is not. Whatever those policies contained, removing them across a set
+  of buckets at once is either a destructive action or an automation fault, and both need a human
+  now. This is the shape that justifies the source use case's "impact" framing, which the
+  single-event rule it shipped does not.
+references:
+  - https://attack.mitre.org/techniques/T1530/
+  - https://attack.mitre.org/techniques/T1531/
+tags:
+  - attack.collection
+  - attack.impact
+  - attack.t1530
+  - attack.t1531
+correlation:
+  type: value_count
+  rules:
+    - s3_bucket_policy_deleted
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+  condition:
+    gte: 3
+    field: requestParameters.bucketName
+falsepositives:
+  - >-
+    A teardown of an environment, which legitimately removes many policies at once. It should
+    correlate with bucket deletions in the same window; allowlist the teardown role on the base
+    rule rather than raising the threshold.
+level: critical
+---
+title: S3 bucket policy deleted and the bucket then opened
+id: 5c92b7e0-38f1-4a64-9d27-e60b3a815cf2
+status: experimental
+description: >-
+  A policy was deleted and a public grant was then written to the same bucket by the same
+  principal. The deletion on its own does not expose anything — public access requires a wildcard
+  Allow, and removing a policy adds none — so this pair is what turns an ambiguous removal into a
+  clear sequence: clear the ground, then open the bucket.
+references:
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+correlation:
+  type: temporal_ordered
+  rules:
+    - s3_bucket_policy_deleted
+    - s3_bucket_public_write
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+level: high
+---
+title: S3 bucket opened by policy or ACL
+id: d419a8c6-052b-4f37-8e91-73c60ad5f218
+name: s3_bucket_public_write
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. A PutBucketPolicy carrying a
+  wildcard principal, or a PutBucketAcl granting to a predefined public group. The rated detections
+  for these acts are in ../../s3.exfiltration.bucket-policy-made-public/ and
+  ../../s3.exfiltration.bucket-acl-configured/.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # Sibling blocks: two complete alternative shapes of "the bucket was opened". Within each block
+  # the keys are ANDed and they do co-occur on a single event — the record carries eventSource,
+  # eventName and the request body together.
+  public_policy:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketPolicy'
+    requestParameters.bucketPolicy|contains:
+      - '"Principal":"*"'
+      - '"Principal": "*"'
+      - '"AWS":"*"'
+      - '"AWS": "*"'
+  public_acl:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketAcl'
+    requestParameters|contains:
+      - 'acs.amazonaws.com/groups/global/AllUsers'
+      - 'acs.amazonaws.com/groups/global/AuthenticatedUsers'
+  success:
+    errorCode: null
+  condition: (public_policy or public_acl) and success
+level: informational

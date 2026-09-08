@@ -1,0 +1,199 @@
+# Container images destroyed in ECR (T1485)
+#
+# MERGE TEST — THREE SOURCE RULES, ONE USE CASE, BECAUSE DESTRUCTION HAS THREE SHAPES.
+#   BatchDeleteImage       removes specified images now
+#   DeleteRepository force removes the repository AND its images now
+#   PutLifecyclePolicy     expires images on a schedule — destruction on a timer
+# They share one response: establish what was destroyed, whether it is recoverable, and what
+# depended on it. The third is the quietest and the only one the source pack rates as a privilege
+# escalation rather than an impact.
+#
+# NOTHING DELETED FROM ECR IS RECOVERABLE. There is no versioning, no recycle bin and no undelete —
+# unlike S3, where a delete marker can be removed. Once an image digest is gone the layers are gone,
+# and the only recovery is rebuilding from source. That is why the response prioritises establishing
+# WHAT was destroyed over restoring it.
+#
+# THE `force: true` FILTER IS A NARROW SLICE OF THE TECHNIQUE. `DeleteRepository` succeeds WITHOUT
+# force when the repository is empty — so deleting every image first and then the repository
+# achieves the same end state and never sets the flag. Both paths are matched below.
+#
+# THE LIFECYCLE RULE HAS NO CONTENT CHECK AND IS RATED AS PRIVILEGE ESCALATION. A lifecycle policy is
+# ordinary cost management; an aggressive one deletes images days later with no further event naming
+# them. The rule fires on every policy equally and maps to `T1484 — Domain or Tenant Policy
+# Modification`, which is about directory and tenant policy, not a registry retention rule.
+#
+# AND THE THREE RULES GROUP BY DIFFERENT FIELDS — two by `userIdentity.principalId`, one by
+# `repositoryName` plus `userIdentity.arn`. Sibling rules over the same resource at two
+# granularities cannot be correlated with each other, which is why the pack has no
+# destruction-at-breadth signal.
+title: ECR repository deleted
+id: 2e91c740-58b3-4d06-a9f2-71d0e4a86c35
+name: ecr_repository_deleted
+status: experimental
+description: >-
+  A successful DeleteRepository. With force it removes the repository and every image in it; without
+  force it succeeds only on an empty repository, which an actor reaches by deleting the images first
+  — so both paths are matched and the flag is reported rather than required. Nothing deleted from
+  ECR is recoverable: there is no versioning and no undelete.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_DeleteRepository.html
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource:
+      - 'ecr.amazonaws.com'
+      - 'ecr-public.amazonaws.com'
+    eventName: 'DeleteRepository'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the roles that own repository lifecycle.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    An environment teardown, which legitimately removes repositories. It should correlate with the
+    rest of the environment disappearing; a repository deletion with nothing around it is the
+    finding.
+level: critical
+---
+title: ECR images deleted
+id: 8d34a0f6-2c17-4b95-8e60-b31f752ce9a4
+name: ecr_images_deleted
+status: experimental
+description: >-
+  A successful BatchDeleteImage from a principal outside the provisioning path. Deleting the last
+  tag referencing a digest removes the image itself, and nothing in ECR is recoverable afterwards.
+  Note this rule's source sibling correctly included AssumedRole in its identity filter where the
+  push and pull rules in the same pack did not — the pack is inconsistent with itself.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_BatchDeleteImage.html
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource:
+      - 'ecr.amazonaws.com'
+      - 'ecr-public.amazonaws.com'
+    eventName: 'BatchDeleteImage'
+  success:
+    errorCode: null
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    Manual cleanup of untagged images, which is common and legitimate. The repository and the count
+    are what distinguish it — a handful of untagged digests in one repository is housekeeping, and
+    tagged images across several repositories is not.
+level: high
+---
+title: ECR lifecycle policy applied
+id: 6b05e2d9-91fa-4c38-b7e1-40d3859ac761
+name: ecr_lifecycle_policy_applied
+status: experimental
+description: >-
+  A successful PutLifecyclePolicy. This is destruction on a timer: the policy deletes images days
+  later, on a schedule, with no further event naming what went. A lifecycle policy is also ordinary
+  cost management, so this cannot be rated on the event alone — the triage step is running
+  StartLifecyclePolicyPreview, which reports exactly which images the policy would remove without
+  removing them.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_PutLifecyclePolicy.html
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecr.amazonaws.com'
+    eventName: 'PutLifecyclePolicy'
+  success:
+    errorCode: null
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    Genuine cost management, which is the common case. Rated medium for that reason — the preview
+    resolves it in one call, and an aggressive expiry from a non-provisioning principal is the
+    finding rather than the policy's existence.
+level: medium
+---
+title: ECR images destroyed across multiple repositories by one principal
+id: f7280caa-4e16-49b3-85d0-c6a19e037b42
+status: experimental
+description: >-
+  One principal destroyed images in three or more distinct repositories within an hour. A single
+  deletion has a housekeeping reading; destruction spread across repositories does not, and it is
+  the shape the source pack cannot produce because its three destruction rules group by different
+  fields and cannot be correlated with each other.
+references:
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: value_count
+  rules:
+    - ecr_image_destruction
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+  condition:
+    gte: 3
+    field: requestParameters.repositoryName
+falsepositives:
+  - >-
+    An environment teardown removing many repositories at once. Allowlist the teardown role on the
+    base rule rather than raising the threshold — three repositories is already generous for a
+    human operator.
+level: critical
+---
+title: ECR image or repository destruction
+id: 05c9b3e1-7a24-4f80-91d6-2e8407fb5a63
+name: ecr_image_destruction
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. Any successful call that
+  removes images or a repository. Untagged-image cleanup produces these routinely.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_BatchDeleteImage.html
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource:
+      - 'ecr.amazonaws.com'
+      - 'ecr-public.amazonaws.com'
+    eventName:
+      - 'BatchDeleteImage'
+      - 'DeleteRepository'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational

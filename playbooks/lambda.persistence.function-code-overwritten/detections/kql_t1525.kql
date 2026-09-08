@@ -1,0 +1,85 @@
+// Lambda function code overwritten (T1525)
+//
+// The source rule matches userIdentity.type "IAMUser" only, which excludes SSO, federation, EC2
+// instance roles, CI/CD roles and every cross-account path — all AssumedRole, and all of them are
+// what a compromised deployment pipeline looks like. This query reads every identity type and
+// projects the type so the size of that gap is visible in real output.
+//
+// `contains` throughout, never `has` — ARNs and function names are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+// POPULATE: the roles that legitimately deploy Lambda code. This is the entire discriminator — the
+// call itself is what every deployment does.
+let DeploymentRoles = dynamic(["PlatformAutomation", "iac-deploy"]);
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "lambda.amazonaws.com"
+// CloudTrail appends a date and version — UpdateFunctionCode20150331v2 is the documented form.
+| where EventName startswith "UpdateFunctionCode"
+     or EventName startswith "UpdateFunctionConfiguration"
+     or EventName startswith "PublishVersion"
+| extend Req = parse_json(RequestParameters)
+| extend FunctionName = tostring(Req.functionName)
+| extend IdentityType = tostring(parse_json(UserIdentity).type)
+| extend ServiceInvoked = isnotempty(tostring(parse_json(UserIdentity).invokedBy))
+| extend IsDeploymentRole = UserIdentityArn contains "PlatformAutomation" or UserIdentityArn contains "iac-deploy"
+| extend CodeChange = EventName startswith "UpdateFunctionCode" and isempty(ErrorCode)
+// Code signing blocks a deployment on signature mismatch or integrity failure. AWS notes the
+// integrity failure blocks "even if the code signing policy is set to WARN". A refused attempt is
+// still an attempt, and any success-only rule discards it.
+| extend SigningRejected = ErrorCode in ("CodeVerificationFailedException",
+                                         "InvalidCodeSignatureException",
+                                         "CodeSigningConfigNotFoundException")
+// A configuration change redirects execution while leaving CodeSha256 UNCHANGED — the
+// complementary blind spot. Surfaced here so one query shows both halves.
+| extend ConfigChange = EventName startswith "UpdateFunctionConfiguration" and isempty(ErrorCode)
+| where not(ServiceInvoked)
+| summarize
+    CodeOverwrites   = countif(CodeChange),
+    ByNonDeployRole  = countif(CodeChange and not(IsDeploymentRole)),
+    SigningBlocked   = countif(SigningRejected),
+    ConfigChanges    = countif(ConfigChange),
+    VersionsPublished= countif(EventName startswith "PublishVersion" and isempty(ErrorCode)),
+    DistinctFuncs    = dcountif(FunctionName, CodeChange),
+    Functions        = make_set_if(FunctionName, CodeChange, 20),
+    // In most estates this will be dominated by AssumedRole — which the source rule excluded.
+    IdentityTypes    = make_set(IdentityType, 5),
+    SourceIps        = make_set(SourceIpAddress, 5),
+    FirstSeen        = min(TimeGenerated),
+    LastSeen         = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where CodeOverwrites > 0 or SigningBlocked > 0
+| extend Verdict = case(
+    SigningBlocked > 0 and CodeOverwrites > 0,
+        "CODE SIGNING REJECTED AN OVERWRITE AND ANOTHER SUCCEEDED — the control worked once and did not cover every function, P0",
+    ByNonDeployRole > 0 and DistinctFuncs >= 3,
+        strcat("CODE REPLACED ON ", tostring(DistinctFuncs),
+               " FUNCTIONS BY A NON-DEPLOYMENT PRINCIPAL — a sweep, not a release, P0"),
+    ByNonDeployRole > 0,
+        "FUNCTION CODE REPLACED BY A NON-DEPLOYMENT PRINCIPAL — the new package runs on every invocation under the function's execution role, with no second act required, P0",
+    SigningBlocked > 0,
+        "CODE SIGNING REJECTED AN OVERWRITE — the control held. An attempt is still an attempt and any success-only rule discards this, P1",
+    ConfigChanges > 0 and CodeOverwrites > 0,
+        "CODE AND CONFIGURATION BOTH CHANGED by the same principal — check the handler and layers as well as the package, P1",
+    "lambda code deployment")
+| project FirstSeen, LastSeen, UserIdentityArn, IdentityTypes, Verdict, CodeOverwrites,
+          ByNonDeployRole, SigningBlocked, ConfigChanges, VersionsPublished, DistinctFuncs,
+          Functions, SourceIps
+| order by ByNonDeployRole desc, SigningBlocked desc
+//
+// ============================================================================
+// READ `IdentityTypes` AS A COVERAGE TEST OF THE ORIGINAL RULE
+// ============================================================================
+// The source rule required userIdentity.type == "IAMUser". If this column shows only "AssumedRole"
+// across a month of real deployments — which is the normal result in an estate using SSO or a CI/CD
+// role — then that rule has never fired here and never will. One query, definitive answer.
+//
+// ============================================================================
+// THE CODE HASH IS ONLY HALF THE PICTURE
+// ============================================================================
+// This technique moves CodeSha256, so a code-hash drift check catches it. The complementary
+// technique does NOT: changing Handler or Layers redirects execution while leaving CodeSha256
+// identical. A defender watching only the code hash and a defender watching only the configuration
+// are each blind to the other half — see
+// ../../lambda.defense-evasion.function-configuration-modified/.

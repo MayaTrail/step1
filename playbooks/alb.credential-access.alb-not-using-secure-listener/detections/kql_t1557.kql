@@ -1,0 +1,96 @@
+// Plaintext HTTP served by an Application Load Balancer (T1557 / T1040)
+//
+// The distinction this query exists to make: an HTTP listener that REDIRECTS to HTTPS is the
+// recommended pattern, and one that FORWARDS to a target is the defect. Both produce type=http
+// access log entries and only actions_executed separates them.
+//
+// `contains` throughout, never `has` — actions_executed is a comma-separated list and ARNs are
+// punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. Table name depends on ingestion.
+let LOOKBACK = 7d;
+ALBAccessLogs
+| where TimeGenerated > ago(LOOKBACK)
+| extend Type = tostring(Type_s)
+| extend Actions = tostring(ActionsExecuted)
+| extend SslProto = tostring(SslProtocol)
+| extend ClientIp = tostring(split(tostring(Client), ":")[0])
+| extend Plaintext = Type in ("http", "ws")
+| extend Served = Actions contains "forward"
+| extend Redirected = Actions contains "redirect"
+| extend WeakTls = SslProto in ("TLSv1", "TLSv1.1")
+| where (Plaintext and Served and not(Redirected)) or WeakTls
+// Private source space is computed but NOT filtered on. An internal client reaching a plaintext
+// endpoint is a smaller finding than an internet client, not a non-finding — the credential still
+// crossed a network somebody else can be on.
+| extend SrcPrivate = ClientIp startswith "10." or ClientIp startswith "192.168."
+                   or (ClientIp matches regex @"^172\.(1[6-9]|2[0-9]|3[01])\.")
+| summarize
+    Requests     = count(),
+    PlaintextFwd = countif(Plaintext and Served and not(Redirected)),
+    WeakTlsReqs  = countif(WeakTls),
+    FromInternet = countif(not(SrcPrivate)),
+    Clients      = dcount(ClientIp),
+    SampleReqs   = make_set(tostring(RequestLine), 10),
+    Agents       = make_set(tostring(UserAgent), 5),
+    Protocols    = make_set(SslProto, 5),
+    Targets      = make_set(tostring(TargetGroupArn), 5),
+    StatusCodes  = make_set(toint(ElbStatusCode), 10),
+    FirstSeen    = min(TimeGenerated),
+    LastSeen     = max(TimeGenerated)
+    by Elb = tostring(Elb), Type
+| extend Verdict = case(
+    PlaintextFwd > 0 and FromInternet > 0,
+        "PLAINTEXT SERVED FROM THE INTERNET — cookies, Authorization headers and request bodies crossed the public network in clear text. One request proves it; the count is not the finding, P0",
+    PlaintextFwd > 0,
+        "PLAINTEXT SERVED FROM INSIDE THE VPC — smaller blast radius, same exposure. Anything sharing that network path saw the credential, P1",
+    WeakTlsReqs > 0,
+        "DEPRECATED TLS NEGOTIATED — encrypted, but on a version an attacker can downgrade a client onto. Update the listener's SSL policy, P2",
+    "No plaintext forwarding detected in this window")
+| project FirstSeen, LastSeen, Elb, Type, Verdict, Requests, PlaintextFwd, WeakTlsReqs,
+          FromInternet, Clients, Protocols, StatusCodes, Targets, Agents, SampleReqs
+| order by PlaintextFwd desc, WeakTlsReqs desc
+//
+// ============================================================================
+// STATUS CODE IS NOT A FILTER, AND THAT IS DELIBERATE
+// ============================================================================
+// The source rule restricts to elb_status_code 200-299. A plaintext request that received a 401
+// still carried its credential over the wire before being rejected — the interception already
+// happened, and the response status has no bearing on whether the secret was exposed. StatusCodes
+// is projected so a responder can see what happened, and it is not used to include or exclude.
+//
+// ============================================================================
+// THE CONTROL PLANE — which finds the exposure before any traffic does
+// ============================================================================
+// AWSCloudTrail
+// | where TimeGenerated > ago(30d)
+// | where EventSource == "elasticloadbalancing.amazonaws.com"
+// | where EventName in ("CreateListener", "ModifyListener", "CreateLoadBalancer")
+// | where isempty(ErrorCode)
+// | extend Req = parse_json(RequestParameters)
+// | extend Proto = tostring(Req.protocol)
+// | extend DefaultActionTypes = tostring(Req.defaultActions)
+// | where Proto in ("HTTP", "TCP")
+// | project TimeGenerated, EventName, UserIdentityArn, SourceIpAddress,
+//           lb = tostring(Req.loadBalancerArn), Proto, port = toint(Req.port), DefaultActionTypes
+//
+// Read DefaultActionTypes: a `redirect` action to HTTPS is the recommended port 80 pattern, and a
+// `forward` action is the defect. This is the only view that finds a plaintext listener on an
+// endpoint too quiet to generate log volume — which is the endpoint most likely to be left that
+// way and most worth intercepting.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHETHER ANYTHING WAS ACTUALLY INTERCEPTED. Passive capture leaves no trace anywhere in AWS. The
+// correct posture is that every credential carried over a plaintext request is exposed, and the
+// remediation is rotation rather than investigation.
+//
+// WHAT WAS IN THE REQUEST. The access log carries the request LINE — method, URL, version — and no
+// headers or body. A password in a POST body is invisible here; a token in a query string is not,
+// because AWS "preserves the URL sent by the client, as is". That asymmetry means the log
+// understates the exposure and never overstates it.
+//
+// HOW MANY REQUESTS THERE REALLY WERE. AWS documents these logs as best-effort and "not a complete
+// accounting of all requests", with possible duplicate delivery. It does not matter here: the
+// finding is that the count is above zero.

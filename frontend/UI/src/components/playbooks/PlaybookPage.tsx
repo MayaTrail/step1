@@ -13,7 +13,7 @@ import { PlaybookSection } from './PlaybookSection'
  * Each phase carries a semantic design-token tone (cool for observe, red for
  * act, green for restore) used only as a subtle tinted badge, not a fill.
  */
-const IR_LIFECYCLE = [
+export const IR_LIFECYCLE = [
   { n: 1, name: 'Detect', hint: 'Alert triggered', badge: 'bg-accent-blue-glow text-accent-blue' },
   { n: 2, name: 'Triage', hint: 'Validate & scope', badge: 'bg-warning-dim text-warning' },
   { n: 3, name: 'Investigate', hint: 'Collect evidence', badge: 'bg-accent-blue-glow text-accent-blue' },
@@ -26,7 +26,7 @@ const IR_LIFECYCLE = [
  * Map a severity to a design-token text colour: CRITICAL/HIGH use the brand red
  * (danger), MEDIUM uses warning-yellow, anything lower stays muted.
  */
-function severityClass(severity: string): string {
+export function severityClass(severity: string): string {
   const s = (severity ?? '').toUpperCase()
   if (s === 'CRITICAL' || s === 'HIGH') return 'text-danger'
   if (s === 'MEDIUM') return 'text-warning'
@@ -247,7 +247,7 @@ function OverviewPane({ em, overviewMarkdown }: { em: Emulation; overviewMarkdow
   )
 }
 
-function TabButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+export function TabButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
@@ -262,7 +262,7 @@ function TabButton({ label, active, onClick }: { label: string; active: boolean;
   )
 }
 
-function MetaCell({ k, v, sub }: { k: string; v: ReactNode; sub?: string }) {
+export function MetaCell({ k, v, sub }: { k: string; v: ReactNode; sub?: string }) {
   return (
     <div className="bg-surface-card px-4 py-3.5">
       <div className="font-mono text-2xs uppercase tracking-label text-content-dim mb-1.5">{k}</div>
@@ -272,7 +272,7 @@ function MetaCell({ k, v, sub }: { k: string; v: ReactNode; sub?: string }) {
   )
 }
 
-function DetailRow({ k, v }: { k: string; v: ReactNode }) {
+export function DetailRow({ k, v }: { k: string; v: ReactNode }) {
   return (
     <div className="flex justify-between gap-4 py-2.5 border-b border-border last:border-b-0">
       <div className="font-mono text-2xs uppercase tracking-label text-content-dim pt-0.5 shrink-0">{k}</div>
@@ -281,7 +281,7 @@ function DetailRow({ k, v }: { k: string; v: ReactNode }) {
   )
 }
 
-function RelatedLink({ to, label }: { to: string; label: string }) {
+export function RelatedLink({ to, label }: { to: string; label: string }) {
   return (
     <Link
       to={to}

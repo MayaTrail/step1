@@ -120,10 +120,11 @@ export function TopNav({ onOpenSearch, onToggleSidebar }: TopNavProps) {
             className="bg-surface-elevated border border-border rounded-full pl-1 pr-3 py-1 text-content-primary font-display text-sm font-medium
               flex items-center gap-2 cursor-pointer transition-all hover:border-border-active"
           >
-            {/* Avatar — a green ring marks an AWS-verified (IAM) identity, amber for demo. */}
+            {/* Avatar ring encodes connection state: green for an AWS-verified
+                identity, amber for demo, red when no account is connected. */}
             <div
               className={`w-[26px] h-[26px] rounded-full bg-surface-card flex items-center justify-center text-[11px] font-bold text-content-primary
-                ${user?.isVerified ? 'ring-2 ring-safe/70' : user?.isDemo ? 'ring-2 ring-warning/70' : ''}`}
+                ${user?.isVerified ? 'ring-2 ring-safe/70' : user?.isDemo ? 'ring-2 ring-warning/70' : 'ring-2 ring-danger/70'}`}
             >
               {user?.initials ?? 'U'}
             </div>
@@ -136,6 +137,13 @@ export function TopNav({ onOpenSearch, onToggleSidebar }: TopNavProps) {
             {user?.isDemo && (
               <span className="hidden md:inline font-mono text-[9px] font-semibold tracking-wider text-warning border border-warning/30 rounded px-1.5 py-0.5">
                 DEMO
+              </span>
+            )}
+            {/* No AWS connection. Stated plainly and permanently rather than as a
+                dismissable banner, because it changes what the product can do. */}
+            {!user?.isVerified && !user?.isDemo && (
+              <span className="hidden md:inline font-mono text-[9px] font-semibold tracking-wider text-danger border border-danger/30 rounded px-1.5 py-0.5">
+                UNVERIFIED
               </span>
             )}
             <svg className="w-2.5 h-2.5 text-content-dim" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -151,6 +159,14 @@ export function TopNav({ onOpenSearch, onToggleSidebar }: TopNavProps) {
                 <div className="font-mono text-[10px] text-content-dim mt-0.5">{user?.username ?? ''}</div>
               </div>
               <div className="py-1">
+                {!user?.isVerified && !user?.isDemo && (
+                  <DropdownItem
+                    icon={<IconCloud />}
+                    label="Connect AWS"
+                    className="text-danger"
+                    onClick={() => { setDropdownOpen(false); navigate('/me') }}
+                  />
+                )}
                 <DropdownItem icon={<IconUser />} label="Profile" onClick={() => { setDropdownOpen(false); navigate('/me') }} />
                 <DropdownItem icon={<IconGear />} label="Settings" onClick={() => { setDropdownOpen(false); navigate('/settings') }} />
                 <DropdownItem icon={<IconKey />} label="API Keys" onClick={() => setDropdownOpen(false)} />
@@ -202,6 +218,14 @@ function DropdownItem({
 /* ── Inline SVG icons (no emoji, per the design system; all inherit currentColor) ── */
 
 const MENU_ICON = 'w-4 h-4'
+
+function IconCloud() {
+  return (
+    <svg className={MENU_ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.3A3.5 3.5 0 0 1 17 18H7Z" />
+    </svg>
+  )
+}
 
 function IconUser() {
   return (

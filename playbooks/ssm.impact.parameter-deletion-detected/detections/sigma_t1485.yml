@@ -1,0 +1,150 @@
+# Parameter Deletion Detected (T1485)
+#
+# The original rule is an immediate-type alert on
+#   eventSource:"ssm.amazonaws.com" AND (eventName:"deleteparameters" OR eventName:"deleteparameter")
+# with no threshold, no window, no group-by and no success filter. It fires on
+# every parameter deletion in the account, which means it fires on every
+# infrastructure-as-code teardown, and it is muted within a week.
+#
+# The empty group-by is the second problem: a mass deletion arrives as one alert
+# per event rather than one incident, so the responder reconstructs the scope by
+# hand from a page of notifications. The rules below group by userIdentity.arn.
+#
+# Two documented behaviours the rule does not account for:
+#
+#   * DeleteParameters (plural) takes up to 10 names per call and its ONLY
+#     documented error is InternalServerError. Names that do not exist come back
+#     in the 200-response InvalidParameters array, so an event with no errorCode
+#     may have destroyed anything from ten parameters to none. Counting events
+#     is not counting destruction.
+#
+#   * For DeleteParameter (singular), AWS documents that "if the specified
+#     parameter doesn't exist, the ParameterNotFound exception is not recorded in
+#     AWS CloudTrail event logs" — so a delete aimed at a name that is not there
+#     produces no event at all, and name-probing through the delete API is
+#     invisible.
+#
+# And the deletion this rule can never see: a parameter removed by an Expiration
+# parameter policy is deleted by Parameter Store itself, so no principal appears.
+# That is armed at PutParameter time — see
+# ../../ssm.discovery.excessive-parameter-creation-detected/.
+#
+# Deletion is terminal. AWS: "Deleting a parameter removes all versions of it.
+# Once deleted, the parameter and its versions can't be restored." There is no
+# recovery window and no soft delete, unlike Secrets Manager.
+title: SSM parameter deleted by a principal outside the owning pipeline
+id: 1a383a7e-e82c-47b3-bbbe-5f9d3f833d82
+name: ssm_parameter_deleted
+status: experimental
+description: >-
+  A successful DeleteParameter or DeleteParameters by a principal that is not the
+  infrastructure pipeline. Deletion removes every version and cannot be undone,
+  so this is terminal on one event.
+references:
+  - https://attack.mitre.org/techniques/T1485/
+  - https://docs.aws.amazon.com/systems-manager/latest/userguide/deleting-parameters.html
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_DeleteParameters.html
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName:
+      - 'DeleteParameter'
+      - 'DeleteParameters'
+  success:
+    errorCode: null
+  parameter_owners:                    # tune: principals that own configuration lifecycle
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'
+      - ':role/ci-cd'
+      - ':role/config-admin'
+  condition: selection and success and not parameter_owners
+falsepositives:
+  - An engineer cleaning up their own development path by hand — should be rare, attributable, and confined to non-production prefixes
+level: high
+---
+title: Multiple SSM parameter deletions by one principal in a short window
+id: ec482dbf-dffd-4290-a173-982dcce79ac2
+status: experimental
+description: >-
+  Five or more successful delete calls from one principal inside five minutes.
+  The threshold is deliberately low: DeleteParameters accepts ten names per call,
+  so five events is up to fifty parameters destroyed, and there is no recovery.
+references:
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: event_count
+  rules:
+    - ssm_parameter_deleted
+  group-by:
+    - userIdentity.arn
+  timespan: 5m
+  condition:
+    gte: 5
+falsepositives:
+  - A teardown that the pipeline allowlist did not cover — an environment being decommissioned by hand, which should carry a change record
+level: high
+---
+title: SSM parameter read with decryption then deleted by the same principal
+id: 265d3f68-5415-453b-9e66-766db6d0dce8
+status: experimental
+description: >-
+  A decrypting read followed by a deletion from the same principal inside an hour.
+  Collect-then-destroy: the value is taken while it is still readable, then the
+  parameter and its whole version history are removed so nobody can see what it
+  was.
+references:
+  - https://attack.mitre.org/techniques/T1485/
+  - https://attack.mitre.org/techniques/T1555/006/
+tags:
+  - attack.impact
+  - attack.t1485
+  - attack.t1555.006
+correlation:
+  type: temporal_ordered
+  rules:
+    - ssm_decrypted_read_before_delete
+    - ssm_parameter_deleted
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+level: high
+---
+title: SSM parameter read with decryption
+id: e8450df7-f9f9-41a4-9f93-117fcfd6b279
+name: ssm_decrypted_read_before_delete
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. A successful
+  parameter read that requested decryption. Shipped here so the correlation above
+  resolves within this file; the same observable is treated at length in the
+  credential-access use case.
+references:
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetParameter.html
+tags:
+  - attack.credential-access
+  - attack.t1555.006
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName:
+      - 'GetParameter'
+      - 'GetParameters'
+      - 'GetParametersByPath'
+  decrypt:
+    requestParameters.withDecryption: true
+  success:
+    errorCode: null
+  condition: selection and decrypt and success
+level: low

@@ -1,0 +1,21 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Known-Bad IP with Allowed Web Attack Detected
+  priority: P2
+  type: logs_threshold
+  mitre: T1190/TA0001
+  query: |
+    labels_field_extracted.keyword:/.*(AWSManagedIPReputationList|AWSManagedIPDDoSList|AWSManagedReconnaissanceList).*/ AND (labels_field_extracted.keyword:/.*(SQLi_|GenericRFI_|GenericLFI_|CrossSiteScripting_|EC2MetaDataSSRF_|Log4JRCE|JavaDeserializationRCE|ReactJSRCE|PHPHighRiskMethodsVariables|WindowsShellCommands|PowerShellCommands).*/ AND action:"ALLOW")
+  threshold: 0.0  window: 10m
+  group_by: ['httpRequest.clientIp']
+

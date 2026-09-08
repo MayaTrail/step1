@@ -1,0 +1,85 @@
+// CloudTrail audit configuration enumerated (T1654)
+//
+// The source rule matches userIdentity.type "IAMUser" only, which excludes SSO users, federated
+// identities, EC2 instance roles, Lambda execution roles and every cross-account path — all of
+// which arrive as AssumedRole, and which together are the normal shape of a modern compromise.
+// This query reads every identity type and rates on the SHAPE of the reads rather than on any one.
+//
+// `contains` throughout, never `has` — ARNs and event names are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource in ("cloudtrail.amazonaws.com", "logs.amazonaws.com")
+| where EventName in ("DescribeTrails", "ListTrails", "GetTrailStatus", "GetEventSelectors",
+                      "GetInsightSelectors", "LookupEvents",
+                      "FilterLogEvents", "GetLogEvents", "DescribeLogGroups",
+                      "StopLogging", "DeleteTrail", "UpdateTrail", "PutEventSelectors")
+// AWS-service-invoked calls set invokedBy. This replaces the source rule's sourceIPAddress regex,
+// which depended on an index mapping and covered nothing extra.
+| where isempty(tostring(parse_json(UserIdentity).invokedBy))
+| extend IdentityType = tostring(parse_json(UserIdentity).type)
+| extend Denied = ErrorCode contains "AccessDenied" or ErrorCode contains "Unauthorized"
+// GetTrailStatus returns IsLogging; DescribeTrails returns HomeRegion. StopLogging and DeleteTrail
+// are BOTH refused outside the home Region, so these two calls are the prerequisite for tampering.
+| extend ReadsStatus = EventName in ("GetTrailStatus", "DescribeTrails", "ListTrails")
+| extend ReadsSelectors = EventName in ("GetEventSelectors", "GetInsightSelectors")
+// Reading log CONTENT is a different act from reading the CONFIGURATION: one works out what the
+// defender already has, the other works out how to stop them getting more.
+| extend ReadsContent = EventName in ("LookupEvents", "FilterLogEvents", "GetLogEvents")
+| extend Tampered = EventName in ("StopLogging", "DeleteTrail", "UpdateTrail", "PutEventSelectors")
+                    and isempty(ErrorCode)
+| summarize
+    StatusReads    = countif(ReadsStatus and not(Denied)),
+    SelectorReads  = countif(ReadsSelectors and not(Denied)),
+    ContentReads   = countif(ReadsContent and not(Denied)),
+    DeniedReads    = countif(Denied),
+    TamperCount    = countif(Tampered),
+    DistinctCalls  = dcountif(EventName, not(Tampered)),
+    RegionsProbed  = dcount(AwsRegion),
+    IdentityTypes  = make_set(IdentityType, 5),
+    EventNames     = make_set(EventName, 12),
+    FirstRead      = minif(TimeGenerated, not(Tampered)),
+    FirstTamper    = minif(TimeGenerated, Tampered),
+    SourceIps      = make_set(SourceIpAddress, 5),
+    LastSeen       = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where StatusReads > 0 or SelectorReads > 0 or ContentReads > 0 or DeniedReads > 0
+| extend ReadThenTamper = TamperCount > 0 and isnotempty(FirstRead) and isnotempty(FirstTamper)
+                          and FirstRead < FirstTamper
+| extend Verdict = case(
+    ReadThenTamper,
+        "LOGGING CONFIGURATION READ, THEN A TRAIL TAMPERED WITH by the same principal — the enumeration is what made the tampering succeed on the first attempt, P0",
+    RegionsProbed >= 5 and StatusReads > 0,
+        strcat("LOGGING ESTATE SWEPT ACROSS ", tostring(RegionsProbed),
+               " REGIONS — GetTrailStatus and DescribeTrails together give IsLogging and the HomeRegion, which is exactly what StopLogging requires, P0"),
+    SelectorReads > 0 and StatusReads > 0,
+        "STATUS AND SELECTORS BOTH READ — what is captured, and whether it is running. That pair has few explanations other than deciding what to disable, P1",
+    DeniedReads > 0,
+        "LOGGING CONFIGURATION READS DENIED — a principal probing for visibility into the logging estate without the permission. Fewer innocent readings than the successful case, P1",
+    DistinctCalls >= 5,
+        "LOGGING CONFIGURATION SWEPT — five or more distinct read calls in the hour. Scripted rather than exploratory, P1",
+    ContentReads > 0,
+        "LOG CONTENT READ — working out what the defender already has, rather than how to stop them. Different follow-on from a configuration read, P2",
+    "single logging configuration read — informational")
+| project FirstRead, FirstTamper, LastSeen, UserIdentityArn, Verdict, IdentityTypes,
+          StatusReads, SelectorReads, ContentReads, DeniedReads, TamperCount,
+          DistinctCalls, RegionsProbed, EventNames, SourceIps
+| order by ReadThenTamper desc, RegionsProbed desc
+//
+// ============================================================================
+// WHY `GetTrailStatus` MATTERS MORE THAN `DescribeTrails`
+// ============================================================================
+// StopLogging and DeleteTrail are both refused outside the trail's home Region and refused entirely
+// on shadow trails. So an actor needs the home Region before either will work, and GetTrailStatus
+// plus DescribeTrails is how it is obtained. A rule that watches DescribeTrails alone — as the
+// source rule does — misses the more specific half of the prerequisite.
+//
+// ============================================================================
+// THE IDENTITY-TYPE FILTER IS THE LARGEST GAP IN THE SOURCE RULE
+// ============================================================================
+// Matching userIdentity.type "IAMUser" excludes AssumedRole, which covers SSO, federation, EC2
+// instance profiles, Lambda and cross-account access. The IdentityTypes column is projected here so
+// that a reviewer can see directly how much of their own traffic the original filter would have
+// discarded — in most estates it is nearly all of it.

@@ -1,0 +1,308 @@
+// IAM Role Trust-Policy Backdoor (T1098.001)
+//
+// Two signals: a role trust policy rewritten to trust a principal outside the
+// organisation with no confining Condition, and that trust then being exercised — a
+// cross-account or federated AssumeRole landing in this account's own trail.
+//
+// This query does what the Sigma rules structurally cannot. A trust policy is decided by
+// three things read together from the SAME statement: the Effect, the Principal, and
+// whether a Condition confines it. Substring matching answers none of them, so the Sigma
+// file approximates and this parses. Everything below the parse is exact.
+//
+// The key discriminator is the Condition, not the principal. A trust naming a foreign
+// 12-digit account and carrying `sts:ExternalId` is the documented third-party-access
+// pattern; the identical trust without it is a backdoor. A rule that alerts on the
+// principal alone pages on every partner integration and gets muted.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// DEPLOYMENT PARAMETERS — the two lets below. They are the same lists the Sigma rules
+// carry. Generate OrgAccounts from Organizations rather than maintaining it by hand.
+let OrgAccounts   = dynamic(["<this-account-id>", "<other-org-account-id>"]);
+let KnownIdPRegex = @"(oidc-provider/<your-idp-host>|saml-provider/<YourIdPName>|cognito-identity\.amazonaws\.com)";
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName in ("UpdateAssumeRolePolicy", "CreateRole")
+| where isempty(ErrorCode)
+| extend Req  = parse_json(RequestParameters)
+| extend Resp = parse_json(ResponseElements)
+| extend RoleName = tostring(Req.roleName)
+//
+// THE FIELD SPLIT. UpdateAssumeRolePolicy carries the trust document as `policyDocument`;
+// CreateRole carries it as `assumeRolePolicyDocument`. They never co-occur on one event,
+// so coalesce reads whichever is present. Testing for both on one event would match
+// neither.
+| extend DocRaw = tostring(coalesce(Req.policyDocument, Req.assumeRolePolicyDocument))
+//
+// There is no size-evasion branch here, and its absence is deliberate. CloudTrail omits
+// requestParameters only above 100 KB; a role trust policy is capped at 2,048 characters
+// by default and 8,192 at the adjustable maximum — twelve times below that threshold. The
+// 131,072 in the API reference is the parameter LENGTH CONSTRAINT, wire-level input
+// validation, not the enforced quota: a document between the two passes validation and is
+// then refused with LimitExceeded. It is never stored, never enforced, and never produces
+// a success event, so an empty DocRaw on a successful write is a malformed pipeline, not
+// an evasion. Do not build a verdict on it.
+//
+// THE DECODE, conditional and in the right direction. requestParameters is RAW JSON;
+// percent-encoding is a property of what IAM RETURNS. Decoding unconditionally corrupts a
+// raw document that legitimately contains a "%" or a "+". This handles a response-side
+// document too, which is what makes the same query reusable against ResponseElements.
+| extend Doc   = parse_json(iff(DocRaw startswith "%", url_decode(DocRaw), DocRaw))
+//
+// SHAPE GUARD, level 1. IAM permits Statement as a single object OR an array. mv-expand
+// over a bare object expands its PROPERTIES, so the statement is silently skipped and the
+// sweep reports clean on exactly the trust it exists to find.
+| extend Stmts = iff(gettype(Doc.Statement) == "array", Doc.Statement, pack_array(Doc.Statement))
+| mv-expand Stmt = Stmts
+| extend Effect = tostring(Stmt.Effect)
+| where Effect =~ "Allow"
+//
+// SHAPE GUARD, level 2. Principal is an OBJECT or the bare string "*" — documented as
+// equivalent to {"AWS":"*"} — and Principal.AWS / .Federated / .Service are each a string
+// OR an array. Three shapes, normalised to arrays before anything is tested.
+| extend P = Stmt.Principal
+| extend AwsP = case(
+      gettype(P) == "string",         pack_array(tostring(P)),
+      gettype(P.AWS) == "array",      todynamic(tostring(P.AWS)),
+      isnotempty(tostring(P.AWS)),    pack_array(tostring(P.AWS)),
+      dynamic([]))
+| extend FedP = case(
+      gettype(P.Federated) == "array",      todynamic(tostring(P.Federated)),
+      isnotempty(tostring(P.Federated)),    pack_array(tostring(P.Federated)),
+      dynamic([]))
+| extend SvcP = case(
+      gettype(P.Service) == "array",        todynamic(tostring(P.Service)),
+      isnotempty(tostring(P.Service)),      pack_array(tostring(P.Service)),
+      dynamic([]))
+//
+// NO NotPrincipal BRANCH, and the reason is the whole method in miniature. A role trust
+// policy cannot carry NotPrincipal at all: AWS documents that it "must be used with
+// "Effect":"Deny"" AND that "You cannot use the NotPrincipal element in an IAM
+// identity-based policy nor in an IAM role trust policy", and IAM Access Analyzer
+// publishes the rejection as ROLE_TRUST_POLICY_SYNTAX_ERROR_NOTPRINCIPAL. The write fails
+// with MalformedPolicyDocument, which sets ErrorCode, which `isempty(ErrorCode)` above
+// already excluded. A verdict here would have been dead twice over — rejected shape,
+// filtered event — and would have sent a responder looking for a stored document that was
+// never written. The attempt IS evidence; see the ATTEMPTED-AND-REJECTED companion below.
+//
+// `set_has_element`, never `strcat_array` plus equality: strcat_array strips the quotes,
+// so a test for a quoted asterisk is dead code and an equality test drops
+// ["123456789012","*"] — a multi-element array whose second element is the whole problem.
+// FedP is not tested for "*": "Federated":"*" is rejected too
+// (INVALID_FEDERATED_PRINCIPAL_SYNTAX_IN_ROLE_TRUST_POLICY — "Update the federated
+// principal to a domain name or a SAML metadata ARN"). {"AWS":"*"} is the one wildcard
+// form AWS documents as accepted in a trust policy, and the bare "Principal":"*" is not
+// (ROLE_TRUST_POLICY_UNSUPPORTED_WILDCARD_IN_PRINCIPAL) — but AwsP normalises the bare
+// string anyway, at no cost, because the same shape guard serves other resource policies.
+| extend WildcardPrincipal = set_has_element(AwsP, "*")
+//
+// `contains` throughout, never `has`. Every operand here is punctuated — "sts:ExternalId",
+// ":sub", "arn:aws:iam::" — and `has` is whole-term matching that breaks on all of them.
+| extend AwsStr = tostring(AwsP)
+| extend FedStr = tostring(FedP)
+// RE2 has no lookbehind; \b is the portable 12-digit boundary. extract_all returns NULL
+// when nothing matches — not an empty array — so it is coalesced before set_difference
+// and array_length see it. A null there propagates through both and silently disposes a
+// statement as clean.
+| extend AccountsFound    = coalesce(extract_all(@"\b(\d{12})\b", AwsStr), dynamic([]))
+| extend ExternalAccounts = set_difference(AccountsFound, OrgAccounts)
+| extend UnknownFederated = array_length(FedP) > 0 and not(FedStr matches regex KnownIdPRegex)
+//
+// THE DISCRIMINATOR. A Condition that names any of these narrows who may actually assume
+// the role. sts:ExternalId addresses the confused-deputy problem; aws:PrincipalOrgID binds
+// the caller to an Organizations membership; a pinned OIDC subject or audience binds a
+// federated trust to one workload. Their presence is what separates a partner integration
+// from a backdoor.
+| extend CondStr  = tostring(Stmt.Condition)
+| extend Confined = isnotempty(CondStr) and (
+       CondStr contains "sts:ExternalId"
+    or CondStr contains "aws:PrincipalOrgID"
+    or CondStr contains "aws:PrincipalOrgPaths"
+    or CondStr contains "aws:PrincipalArn"
+    or CondStr contains "aws:PrincipalAccount"
+    or CondStr contains "aws:SourceAccount"
+    or CondStr contains "aws:SourceArn"
+    or CondStr contains "aws:SourceIp"
+    or CondStr contains "aws:SourceVpce"
+    or CondStr contains ":sub"
+    or CondStr contains ":aud")
+| extend Verdict = case(
+    WildcardPrincipal and not(Confined),
+        "PUBLIC ROLE — any AWS principal may assume it, no confining Condition, P0",
+    array_length(ExternalAccounts) > 0 and not(Confined),
+        "EXTERNAL ACCOUNT TRUSTED with no confining Condition — persistence that survives credential rotation, P0",
+    UnknownFederated and not(Confined),
+        "UNRECOGNISED FEDERATED PROVIDER, token not pinned — the provider decides who gets in, P0",
+    WildcardPrincipal or array_length(ExternalAccounts) > 0 or UnknownFederated,
+        "OUTSIDE PRINCIPAL, Condition-bound — disposition it, do not act, P3",
+    "internal-or-service")
+| where Verdict != "internal-or-service"
+| summarize
+    Writes          = count(),
+    Verdicts        = make_set(Verdict, 5),
+    ExternalSeen    = make_set(ExternalAccounts, 10),
+    FederatedSeen   = make_set(FedStr, 5),
+    ServicesSeen    = make_set(tostring(SvcP), 5),
+    ConditionsSeen  = make_set(CondStr, 5),
+    RolesTouched    = make_set(RoleName, 10),
+    Events          = make_set(EventName, 3),
+    CreatedRoleArns = make_set(tostring(Resp.role.arn), 5),
+    SourceIPs       = make_set(SourceIpAddress, 5),
+    InvokedBy       = make_set(UserIdentityInvokedBy, 3),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 10m)
+| project FirstSeen, LastSeen, UserIdentityArn, Verdicts, RolesTouched, ExternalSeen,
+          FederatedSeen, ConditionsSeen, ServicesSeen, CreatedRoleArns, Events,
+          Writes, SourceIPs, InvokedBy
+| order by LastSeen desc
+//
+// ============================================================================
+// COMPANION — "WAS IT USED", the pivot that turns a config change into an intrusion
+// ============================================================================
+// Verified against the AWS-published cross-account example. When a principal in another
+// account assumes a role here, THIS account's trail carries its own AssumeRole event, and
+// its userIdentity has a shape nothing else produces:
+//
+//     "userIdentity": { "type": "AWSAccount",
+//                       "principalId": "AIDA...",
+//                       "accountId": "<the CALLING account>" }
+//
+// There is no userIdentity.arn on it. A query keyed on the ARN returns nothing and reads
+// as "not used". The events are management events, so they are queryable everywhere
+// management events are — this is not a data-plane blind spot.
+//
+// EVIDENCE LIMIT, stated because its absence is misread as safety: CloudTrail does not log
+// DENIED cross-account assume-role requests in the target account. An empty result here is
+// evidence about successful use only, never about attempts.
+//
+// THE ALLOWLIST IS NOT OPTIONAL HERE. Without one, `UserIdentityType in
+// ("WebIdentityUser","SAMLUser")` is every workforce SSO sign-in and every CI job in the
+// estate, each carrying the P0 verdict. The provider identity is NOT in a flattened
+// column — the AWSCloudTrail table publishes UserIdentityType, UserIdentityAccountId,
+// UserIdentityArn, UserIdentityInvokedBy and the rest, but nothing for
+// userIdentity.identityProvider — so it is read from the dynamic columns instead, and it
+// lives in a different one per protocol:
+//   SAML  requestParameters.principalArn  = arn:aws:iam::<acct>:saml-provider/<Name>
+//   OIDC  responseElements.provider       = arn:aws:iam::<acct>:oidc-provider/<issuer>
+// Both appear in AWS's own AssumeRoleWithSAML / AssumeRoleWithWebIdentity example events,
+// and AWS states that for the three AssumeRole* APIs "CloudTrail will include the full
+// responseElements except secretAccessKey", so the OIDC half is reliably present.
+// userIdentity.identityProvider would NOT serve both: for SAMLUser it is the
+// saml:namequalifier hash ("bdGOnTesti4+ExamplexL/jEvs=" in the AWS example), which no
+// provider-ARN allowlist can ever match.
+//
+// let OrgAccounts   = dynamic(["<this-account-id>", "<other-org-account-id>"]);
+// let KnownIdPRegex = @"(oidc-provider/<your-idp-host>|saml-provider/<YourIdPName>|cognito-identity\.amazonaws\.com)";
+// AWSCloudTrail
+// | where TimeGenerated > ago(7d)
+// | where EventSource == "sts.amazonaws.com"
+// | where EventName in ("AssumeRole", "AssumeRoleWithWebIdentity", "AssumeRoleWithSAML")
+// | where isempty(ErrorCode)
+// | extend Req  = parse_json(RequestParameters)
+// | extend Resp = parse_json(ResponseElements)
+// | extend RoleArn  = tostring(Req.roleArn)
+// // Join key back to the first query: the trust write logs roleName, the use logs roleArn.
+// | extend RoleName = tostring(split(RoleArn, "/")[-1])
+// | extend Session  = tostring(Req.roleSessionName)
+// // UserIdentityType values documented for the flattened column do not include the two
+// // federated forms, but AWS's own example events carry them. Match both and confirm the
+// // literal strings against your trail.
+// | where UserIdentityType == "AWSAccount"
+//      or UserIdentityType in ("WebIdentityUser", "SAMLUser", "FederatedUser")
+// | extend CallingAccount = tostring(UserIdentityAccountId)
+// | extend IdPArn = coalesce(tostring(Req.principalArn), tostring(Resp.provider))
+// | extend KnownIdP = isnotempty(IdPArn) and IdPArn matches regex KnownIdPRegex
+// | extend External = UserIdentityType == "AWSAccount"
+//                     and isnotempty(CallingAccount)
+//                     and not(set_has_element(OrgAccounts, CallingAccount))
+// // An empty IdPArn is NOT an allowlist miss — it is a federated event whose provider
+// // this query could not read. Keep it, and disposition it against the role's live trust
+// // document; do not let it pass as known.
+// | where External
+//      or (UserIdentityType in ("WebIdentityUser", "SAMLUser") and not(KnownIdP))
+// | summarize Assumptions = count(),
+//             CallingAccounts = make_set(CallingAccount, 5),
+//             IdentityTypes   = make_set(UserIdentityType, 3),
+//             IdPArns         = make_set(IdPArn, 5),
+//             Sessions        = make_set(Session, 5),
+//             SourceIPs       = make_set(SourceIpAddress, 5),
+//             SharedEventIds  = make_set(SharedEventId, 3),
+//             FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated)
+//             by RoleName, RoleArn
+// | extend Verdict = strcat("ROLE ASSUMED FROM OUTSIDE THE ORGANISATION — correlate RoleName ",
+//                            "against the trust writes above; a match within minutes is the ",
+//                            "backdoor being exercised, P0")
+// | order by LastSeen desc
+//
+// ============================================================================
+// COMPANION — ATTEMPTED AND REJECTED SHAPES, the error path
+// ============================================================================
+// The four shapes a role trust policy refuses (NotPrincipal, bare "Principal":"*",
+// "Federated":"*", "Service":"*") all fail with MalformedPolicyDocument. Nothing is
+// stored, so no content rule can see them — but somebody wrote them, and a principal
+// working through rejected principal shapes against a role it wants to reshape is the
+// same actor as the AccessDenied probing. Keep this separate from the success path: an
+// attempt and a completed rewrite are different incidents.
+//
+// AWSCloudTrail
+// | where TimeGenerated > ago(7d)
+// | where EventSource == "iam.amazonaws.com"
+// | where EventName in ("UpdateAssumeRolePolicy", "CreateRole")
+// | where ErrorCode == "MalformedPolicyDocument"
+// | extend Req = parse_json(RequestParameters)
+// | extend DocRaw = tostring(coalesce(Req.policyDocument, Req.assumeRolePolicyDocument))
+// // `contains`, never `has` — every operand here is punctuated.
+// | extend Shape = case(
+//     DocRaw contains "NotPrincipal",  "NotPrincipal in a role trust policy",
+//     DocRaw contains "\"Federated\"", "Federated principal syntax",
+//     DocRaw contains "\"Service\"",   "Service principal syntax",
+//     "other malformed document")
+// | summarize Attempts = count(), Shapes = make_set(Shape, 4),
+//             Roles = make_set(tostring(Req.roleName), 10),
+//             SourceIPs = make_set(SourceIpAddress, 5),
+//             FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated)
+//             by UserIdentityArn
+// | extend Verdict = strcat("REJECTED TRUST-POLICY SHAPES — an actor trying principal forms IAM ",
+//                            "refuses. Correlate with the denied-write correlation; treat as ",
+//                            "reconnaissance, P2")
+// | order by LastSeen desc
+//
+// The SharedEventId is the same GUID in the calling account's trail and in this one. If
+// the calling account is one you own, that GUID is how you attribute the session to a
+// named principal there — this account's copy only ever names the account.
+//
+// ============================================================================
+// FIELD SHAPE AND ERROR STRINGS — easy to get wrong, fails silently
+// ============================================================================
+// UpdateAssumeRolePolicy returns NO responseElements. Everything about the change is in
+// requestParameters, and the PREVIOUS trust policy is nowhere: the call overwrites it.
+// The only copy of what the trust used to be is the earlier CloudTrail event that set it.
+//
+// CreateRole NESTS its response: responseElements.role.arn, .roleName, .roleId,
+// .assumeRolePolicyDocument — never a flat responseElements.arn. A flat path yields null
+// silently, which is why CreatedRoleArns above reads Resp.role.arn.
+//
+// The trust document IS present on both sides of a CreateRole event —
+// requestParameters.assumeRolePolicyDocument and responseElements.role.assumeRolePolicyDocument.
+// AWS documents the RFC 3986 encoding for what GetRole returns, and documents nothing
+// about the encoding of the CreateRole response field; the conditional decode above is
+// correct for either, which is the reason it is conditional.
+//
+// Denials on this path: AccessDenied, and AccessDeniedException for service-evaluated
+// denials — match the substring, then confirm the exact form against a real denied event.
+// The complete non-denial set from the two API references: MalformedPolicyDocument,
+// NoSuchEntity, LimitExceeded, ServiceFailure, and UnmodifiableEntity (service-linked
+// roles, UpdateAssumeRolePolicy only) plus EntityAlreadyExists, InvalidInput and
+// ConcurrentModification (CreateRole only). None is a denial and none may be counted as
+// probing — but MalformedPolicyDocument is not inert either, see the companion above.
+//
+// ============================================================================
+// PREVENTION
+// ============================================================================
+// An SCP denying iam:UpdateAssumeRolePolicy to everyone outside the IAM-administration
+// role set is the only control that holds when detection is muted, and IAM Access
+// Analyzer with the organization as its zone of trust is the only control that reports a
+// role trusting an outside principal WITHOUT depending on having seen the write. Deploy
+// both: the SCP stops the change, the analyzer catches what predates the SCP.

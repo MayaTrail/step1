@@ -1,0 +1,367 @@
+# Cluster-admin granted after repeated authorization denials (T1098.006)
+#
+# TELEMETRY. These rules read the KUBERNETES AUDIT LOG, not CloudTrail. On EKS that log
+# exists only if the `audit` control-plane log type was enabled before the incident — AWS:
+# "By default, cluster control plane logs aren't sent to CloudWatch Logs. You must enable
+# each log type individually." It lands in CloudWatch Logs group /aws/eks/<cluster>/cluster,
+# stream prefix kube-apiserver-audit-. If it was off, every rule below returns zero and the
+# zero means "not recorded", never "did not happen".
+#
+# WHY THE ORIGINAL FLOW IS KEPT AS A FLOW. Its thesis is ORDERING: denials FIRST, admin
+# grant SECOND. Either half alone is ordinary — engineers hit RBAC denials all day, and
+# platform automation grants roles all day. The pair, bound to one identity inside an hour,
+# is self-escalation and nothing else. That is why this ships as its own correlation rather
+# than folding into a grant rule.
+#
+# WHAT THE SOURCE RULE CANNOT DO, AND THESE RULES CAN.
+#  * The grant is reachable on TWO planes and the source only watches one. A Kubernetes
+#    ClusterRoleBinding is an audit-log event; an EKS access policy association is a
+#    CLOUDTRAIL event that creates NO Kubernetes object at all. An account using access
+#    entries can be handed
+#    arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy — apiGroups *,
+#    resources *, verbs *, plus nonResourceURLs * — with nothing appearing in the cluster
+#    for a responder to find. eks_access_policy_cluster_admin below covers that plane.
+#  * "Cluster admin" is not one string. cluster-admin by roleRef is the obvious form; adding
+#    a subject to the system:masters GROUP reaches the same place through the default
+#    cluster-admin ClusterRoleBinding, and so does a fresh ClusterRole carrying
+#    apiGroups/resources/verbs "*". All three are matched.
+#  * Kubernetes RBAC's own escalation guard is bypassable with the `escalate` and `bind`
+#    verbs, which exist for no other purpose. Those get their own rule.
+#
+# FIELD SHAPES — verified against the Kubernetes audit Event API reference, 2026-08-29.
+#   user.groups and sourceIPs are ARRAYS ([]string). sourceIPs is the schema name; there is
+#   no `sourceIPAddresses` field, and a rule keyed on that name matches nothing unless the
+#   ingestion pipeline renames it.
+#   responseStatus.code is int32. Comparing it to a quoted string is backend-dependent.
+#   objectRef.name is ABSENT on list and watch, because those target a collection.
+#   requestObject is populated here only because the EKS default audit policy logs the
+#   rbac.authorization.k8s.io group at RequestResponse level for write verbs. It is NOT
+#   populated for secrets or configmaps, which that policy caps at Metadata — with one
+#   exception, the aws-auth ConfigMap, which is the first rule in the policy and is logged
+#   at RequestResponse for update, patch and delete. NOT for create: see the description on
+#   eks_aws_auth_masters_grant.
+title: Kubernetes cluster-admin binding created or modified
+id: 4a4a7b4a-3b02-4a58-9a2c-3a0d3d18a3c4
+name: eks_rbac_cluster_admin_granted
+status: experimental
+description: >-
+  A ClusterRoleBinding or RoleBinding was created or changed so that its roleRef names the
+  built-in cluster-admin ClusterRole, or a Role or ClusterRole was written granting
+  apiGroups, resources and verbs of "*". Either shape hands the subject full control of the
+  cluster, which on EKS includes reading every Secret and every projected ServiceAccount
+  token in it. Logged with a full requestObject because the EKS default audit policy records
+  the rbac.authorization.k8s.io group at RequestResponse level for write verbs.
+references:
+  - https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+  - https://docs.aws.amazon.com/eks/latest/userguide/control-plane-logs.html
+  - https://attack.mitre.org/techniques/T1098/006/
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.006
+logsource:
+  category: application
+  product: kubernetes
+  service: audit
+detection:
+  write_verb:
+    verb:
+      - 'create'
+      - 'update'
+      - 'patch'
+  rbac_binding:
+    objectRef.resource:
+      - 'clusterrolebindings'
+      - 'rolebindings'
+  admin_roleref:
+    requestObject.roleRef.name: 'cluster-admin'
+  rbac_role:
+    objectRef.resource:
+      - 'clusterroles'
+      - 'roles'
+  wildcard_rule:
+    requestObject.rules|contains: '"verbs":["*"]'
+  succeeded:
+    responseStatus.code:
+      - 200
+      - 201
+  condition: write_verb and succeeded and ((rbac_binding and admin_roleref) or (rbac_role and wildcard_rule))
+falsepositives:
+  - >-
+    Cluster bootstrap and platform automation. A GitOps controller or an installer reconciling
+    its own bindings will match. Filter on user.username for the named automation identities
+    before deploying, not on the resource — the resource is the whole signal.
+level: high
+---
+title: Kubernetes subject added to the system:masters group
+id: 6c1c1c5d-9a6a-4de9-9c62-9b0a5b23ab77
+name: eks_masters_group_grant
+status: experimental
+description: >-
+  A binding was written whose subjects include the group system:masters. This is the second
+  route to full control and it does not mention cluster-admin anywhere: Kubernetes ships a
+  default ClusterRoleBinding named cluster-admin that binds the system:masters group to the
+  cluster-admin ClusterRole, so naming the group is equivalent to naming the role. A rule
+  matching only roleRef misses it entirely.
+references:
+  - https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+  - https://attack.mitre.org/techniques/T1098/006/
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.006
+logsource:
+  category: application
+  product: kubernetes
+  service: audit
+detection:
+  write_verb:
+    verb:
+      - 'create'
+      - 'update'
+      - 'patch'
+  binding:
+    objectRef.resource:
+      - 'clusterrolebindings'
+      - 'rolebindings'
+  masters_subject:
+    requestObject.subjects|contains: 'system:masters'
+  succeeded:
+    responseStatus.code:
+      - 200
+      - 201
+  condition: write_verb and binding and masters_subject and succeeded
+falsepositives:
+  - >-
+    Almost none. system:masters is not a group any workload should be placed in after cluster
+    bootstrap. Treat a match as an incident until an owner is produced.
+level: high
+---
+title: aws-auth ConfigMap changed to add cluster-admin group membership
+id: 0e7a2fd6-6e2b-4a52-8b2b-14a1e8c9b2ba
+name: eks_aws_auth_masters_grant
+status: experimental
+description: >-
+  The kube-system/aws-auth ConfigMap — the legacy map from IAM principals to Kubernetes
+  identities — was changed and the new body contains system:masters. The EKS default audit
+  policy's FIRST rule records exactly this object at RequestResponse level for update, patch
+  and delete, so the full before-and-after is in the event. Note the gap that rule leaves,
+  which this rule inherits and cannot close: `create` is not in its verb list, so building
+  the ConfigMap from nothing on a cluster that has none is recorded at Metadata level with no
+  body. Cover that case with the EKS-side authentication-mode rule and with a periodic
+  configuration read, not with this rule.
+references:
+  - https://docs.aws.amazon.com/eks/latest/userguide/auth-configmap.html
+  - https://attack.mitre.org/techniques/T1098/006/
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.006
+logsource:
+  category: application
+  product: kubernetes
+  service: audit
+detection:
+  target:
+    objectRef.resource: 'configmaps'
+    objectRef.namespace: 'kube-system'
+    objectRef.name: 'aws-auth'
+  write_verb:
+    verb:
+      - 'update'
+      - 'patch'
+  masters:
+    requestObject.data.mapRoles|contains: 'system:masters'
+  masters_users:
+    requestObject.data.mapUsers|contains: 'system:masters'
+  succeeded:
+    responseStatus.code: 200
+  condition: target and write_verb and succeeded and (masters or masters_users)
+falsepositives:
+  - >-
+    A deliberate, ticketed administrative mapping. It should be rare and it should come from
+    the platform automation identity; anything else is worth a phone call.
+level: high
+---
+title: Kubernetes RBAC escalate or bind verb used
+id: b3f8e5d1-73a4-4c6f-9b47-2f3d2a5b8c19
+name: eks_rbac_escalate_verb
+status: experimental
+description: >-
+  A request used the `escalate` or `bind` verb against roles or clusterroles. Kubernetes
+  normally refuses to let a principal create or bind a role carrying permissions it does not
+  itself hold; these two verbs exist solely to switch that guard off. Their appearance is
+  the deliberate bypass of RBAC's own privilege-escalation prevention and has no routine use
+  outside a controller that was explicitly granted them.
+references:
+  - https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+  - https://attack.mitre.org/techniques/T1098/006/
+tags:
+  - attack.privilege-escalation
+  - attack.t1098.006
+logsource:
+  category: application
+  product: kubernetes
+  service: audit
+detection:
+  selection:
+    verb:
+      - 'escalate'
+      - 'bind'
+  rbac:
+    objectRef.resource:
+      - 'roles'
+      - 'clusterroles'
+  condition: selection and rbac
+falsepositives:
+  - >-
+    A controller holding escalate or bind by design — some ingress and service-mesh
+    installers do. Enumerate them once and filter on user.username; there should be a short,
+    closed list.
+level: high
+---
+title: Kubernetes authorization denied
+id: 2d9b7c04-8f1e-4a3d-b6c8-5e4a1f7d2b30
+name: eks_authz_denied
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. A request that authenticated
+  and was then refused by RBAC. The discriminator is HTTP 403, not 401: 403 means the
+  identity was established and the permission was missing, while 401 means authentication
+  itself failed and no Kubernetes identity was resolved. responseStatus.code is an int32 in
+  the audit Event schema, so it is matched unquoted here; a backend that ingests it as a
+  string needs the quoted form instead, and getting that wrong makes this rule silently
+  match nothing.
+references:
+  - https://kubernetes.io/docs/reference/config-api/apiserver-audit.v1/
+  - https://attack.mitre.org/techniques/T1613/
+tags:
+  - attack.discovery
+  - attack.t1613
+logsource:
+  category: application
+  product: kubernetes
+  service: audit
+detection:
+  denied:
+    responseStatus.code: 403
+  condition: denied
+level: informational
+---
+title: Repeated authorization denials followed by a cluster-admin grant by the same identity
+id: 8f1d4b26-2a97-4e88-9c33-7b6a0e5d4c11
+status: experimental
+description: >-
+  One Kubernetes identity accumulated authorization denials and then successfully granted
+  itself, or was granted, full cluster control within the hour. Neither half is remarkable
+  alone; the ordering is the finding. group-by is user.username because that is the only
+  field that carries the identity on both stages — an IAM principal arrives as the STS
+  assumed-role ARN its access entry maps to, a workload as system:serviceaccount:<ns>:<name>.
+  Timespan is 1h rather than the source rule's window: probing and escalation happen in one
+  working session, and a longer window pairs unrelated activity.
+references:
+  - https://attack.mitre.org/techniques/T1098/006/
+  - https://attack.mitre.org/techniques/T1613/
+tags:
+  - attack.privilege-escalation
+  - attack.persistence
+  - attack.t1098.006
+correlation:
+  type: temporal_ordered
+  rules:
+    - eks_authz_denied
+    - eks_rbac_cluster_admin_granted
+  group-by:
+    - user.username
+  timespan: 1h
+level: critical
+---
+title: EKS cluster-admin access policy associated with an IAM principal
+id: 5b0f9a3e-4c71-42d6-8e59-1c8f7a2b6d43
+name: eks_access_policy_cluster_admin
+status: experimental
+description: >-
+  AssociateAccessPolicy attached AmazonEKSClusterAdminPolicy — or one of the other
+  secret-reaching EKS access policies — to an access entry. This is the plane the Kubernetes
+  audit log cannot see: EKS authorizes the principal itself, so no ClusterRoleBinding, no
+  Role and no aws-auth entry is created, and a responder searching the cluster for the grant
+  finds nothing. It is a CloudTrail management event, logged on a default trail, which is why
+  this rule carries a different logsource from the rest of this file.
+references:
+  - https://docs.aws.amazon.com/eks/latest/userguide/access-policy-permissions.html
+  - https://attack.mitre.org/techniques/T1098/006/
+tags:
+  - attack.privilege-escalation
+  - attack.persistence
+  - attack.t1098.006
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'eks.amazonaws.com'
+    eventName: 'AssociateAccessPolicy'
+  admin_policy:
+    requestParameters.policyArn|contains:
+      - 'AmazonEKSClusterAdminPolicy'
+      - 'AmazonEKSAdminPolicy'
+      - 'AmazonEKSSecretAdminPolicy'
+      - 'AmazonEKSAdminViewPolicy'
+  success:
+    errorCode: null
+  condition: selection and admin_policy and success
+falsepositives:
+  - >-
+    Cluster provisioning, which associates the cluster-admin policy for the operators who
+    will run it. Expect a burst at cluster creation and near-silence afterwards; alert on the
+    silence being broken.
+level: high
+---
+title: EKS access entry created with a templated username or group
+id: c74e1a58-9d20-4e13-bb6f-3a5e8c1d9f27
+name: eks_access_entry_templated
+status: experimental
+description: >-
+  CreateAccessEntry or UpdateAccessEntry supplied a username or Kubernetes group containing
+  the SessionName template. AWS states plainly that these values are user-controlled when a
+  role is assumed, that a caller "can impersonate any Kubernetes username that doesn't match
+  a reserved prefix", and that placing the template in groups lets a caller "choose their own
+  Kubernetes group membership by crafting the session name". One such mapping is a standing
+  escalation primitive that produces no configuration change when it is exercised — the
+  escalation happens in the sts:AssumeRole call, which names no cluster.
+references:
+  - https://docs.aws.amazon.com/eks/latest/userguide/creating-access-entries.html
+  - https://docs.aws.amazon.com/eks/latest/userguide/auth-configmap.html
+  - https://attack.mitre.org/techniques/T1098/006/
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.006
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'eks.amazonaws.com'
+    eventName:
+      - 'CreateAccessEntry'
+      - 'UpdateAccessEntry'
+  templated_group:
+    requestParameters.kubernetesGroups|contains: 'SessionName'
+  templated_username:
+    requestParameters.username|contains: 'SessionName'
+  success:
+    errorCode: null
+  condition: selection and success and (templated_group or templated_username)
+falsepositives:
+  - >-
+    Very few, and the reason is a request-versus-response distinction worth stating. AWS
+    recommends letting EKS generate the username, and the generated value DOES contain the
+    template — its published CreateAccessEntry response returns
+    "arn:aws:sts::012345678910:assumed-role/my-role/{{SessionName}}". But that value appears
+    in responseElements.accessEntry.username, not in requestParameters.username, because the
+    caller did not send one. This rule reads the REQUEST, so the documented default does not
+    match it and only an explicitly supplied template does. Do not "fix" this rule by moving
+    it to the response field; that inverts it into an alert on every access entry ever
+    created.
+level: medium

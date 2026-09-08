@@ -1,0 +1,92 @@
+// Server-side encryption disabled on an SNS topic (T1600)
+//
+// Signal: SetTopicAttributes with AttributeName = KmsMasterKeyId and an empty or absent
+// AttributeValue — the only API shape that removes SSE from a topic. Both value shapes are
+// matched, because which one CloudTrail records is observed rather than documented; testing
+// only for absence is a silent false negative on `--attribute-value ""`.
+//
+// The second half joins each disable to any topic-policy write on the SAME topic. That pair
+// is what separates a compliance finding from an incident: a customer-managed key's policy
+// is an independent second gate, so an actor widening access to an encrypted topic has to
+// remove the key first or the new principal still reads nothing.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let AttrWrites =
+AWSCloudTrail
+| where TimeGenerated > ago(30d)
+| where EventSource == "sns.amazonaws.com" and EventName == "SetTopicAttributes"
+| extend Req = parse_json(RequestParameters)
+| extend AttrName  = tostring(Req.attributeName),
+         AttrValue = tostring(Req.attributeValue),
+         TopicArn  = tostring(Req.topicArn)
+// `contains` and `isempty`, never whole-term matching: an ARN and an alias path both break
+// term-splitting on their punctuation, and an empty string has no term to match at all.
+| extend ValueCleared = isempty(AttrValue);
+//
+let Disables =
+AttrWrites
+| where AttrName == "KmsMasterKeyId" and ValueCleared
+| project DisableTime = TimeGenerated, TopicArn, Actor = UserIdentityArn,
+          ActorType = UserIdentityType, ActorIP = SourceIpAddress, AwsRegion,
+          DisableError = ErrorCode, RequestId = tostring(parse_json(AdditionalEventData).requestId);
+//
+let PolicyWrites =
+AttrWrites
+| where AttrName == "Policy" and isempty(ErrorCode)
+| project PolicyTime = TimeGenerated, TopicArn, PolicyActor = UserIdentityArn,
+          PolicyDoc = AttrValue;
+//
+// Every encryption change on the topic, so the analyst can see what it WAS before.
+let KeyHistory =
+AttrWrites
+| where AttrName == "KmsMasterKeyId" and isempty(ErrorCode)
+| summarize KeysEverSet = make_set_if(AttrValue, isnotempty(AttrValue), 10),
+            FirstKeyChange = min(TimeGenerated), KeyChanges = count()
+  by TopicArn;
+//
+Disables
+| join kind=leftouter (PolicyWrites) on TopicArn
+| join kind=leftouter (KeyHistory) on TopicArn
+| where isempty(PolicyTime) or (PolicyTime >= DisableTime and PolicyTime <= DisableTime + 1h)
+| extend PreviousKey = tostring(KeysEverSet)
+| extend WasCustomerManaged = isnotempty(PreviousKey) and not(PreviousKey contains "alias/aws/sns")
+| extend Verdict = case(
+    isnotempty(DisableError),
+        strcat("DENIED attempt to disable encryption (", DisableError,
+               ") — SNS returns AuthorizationError, never AccessDenied. Permission probing, P2"),
+    isnotempty(PolicyTime) and WasCustomerManaged,
+        "ENCRYPTION REMOVED THEN POLICY REWRITTEN, and the key was customer-managed — the KMS key policy was the gate and it is gone, P0",
+    isnotempty(PolicyTime),
+        "ENCRYPTION REMOVED THEN POLICY REWRITTEN on the same topic — treat as deliberate, P0",
+    WasCustomerManaged,
+        "CUSTOMER-MANAGED KEY REMOVED — messages published from here on are stored without your key, and its CloudTrail record of this topic stops, P1",
+    "ENCRYPTION REMOVED — confirm what key the topic previously used before rating this, P1")
+| project DisableTime, PolicyTime, TopicArn, Actor, ActorType, ActorIP, AwsRegion,
+          DisableError, PreviousKey, WasCustomerManaged, KeyChanges, PolicyActor, Verdict
+| order by DisableTime desc
+//
+// ============================================================================
+// WHAT THIS QUERY CANNOT SEE
+// ============================================================================
+// 1. THE PREVIOUS KEY, unless a SetTopicAttributes that set it falls inside the 30d window.
+//    CloudTrail records the new value, never the old one, and there is no `oldValue` field.
+//    KeyHistory above reconstructs it only from events still in range; outside that, the
+//    only sources are your IaC state and the KMS key's own grant/usage history. Never treat
+//    an empty PreviousKey as "the topic was never encrypted".
+// 2. WHETHER ANY MESSAGE WAS PUBLISHED WHILE UNENCRYPTED. `sns:Publish` is a CloudTrail
+//    DATA event (eventCategory "Data", managementEvent false) on AWS::SNS::Topic and is OFF
+//    by default, so lookup-events returns zero for it forever without a data-event trail.
+//    Route to CloudWatch AWS/SNS NumberOfMessagesPublished, dimension TopicName, across the
+//    disable window. A zero there is a real zero; a zero from CloudTrail is not.
+// 3. WHAT SSE PROTECTED. AWS: SSE encrypts the message BODY only. Topic metadata, message
+//    metadata — subject, message id, timestamp, message attributes — the data protection
+//    policy and per-topic metrics were NEVER encrypted. Do not scope the disclosure as if
+//    they were.
+// 4. MESSAGES SENT BEFORE THE DISABLE. AWS: "Any encrypted message remains encrypted even
+//    if the encryption of its topic is disabled", and SNS does not retroactively encrypt
+//    backlogged messages. The exposure window is bounded on BOTH sides.
+//
+// PREVENTION: the durable control is on the KMS side as well as the SNS side — a key policy
+// or SCP denying kms:ScheduleKeyDeletion and kms:DisableKey does not stop this, because
+// nothing in this technique touches the key. Deny sns:SetTopicAttributes outside the
+// deployment role and detect on this rule; that is the control that actually applies.

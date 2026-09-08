@@ -1,0 +1,380 @@
+// S3 Bucket Public Exposure (T1530)
+//
+// Three routes to the same outcome, evaluated together because a responder needs the
+// answer "is this bucket public", not "which API was called": a bucket policy Allowing a
+// wildcard Principal, an ACL granting AllUsers or AuthenticatedUsers, and the removal or
+// weakening of Block Public Access — which makes an ALREADY-PRESENT policy or ACL
+// effective without emitting a policy or ACL event of its own.
+//
+// This query does what the Sigma rules structurally cannot: it walks into the nested
+// bucketPolicy object, expands the Statement array, and reads Effect, Principal and
+// Condition from the SAME statement. A Condition confining the grant to fixed values of
+// the keys S3 accepts makes a `Principal:"*"` policy non-public, and that is the single
+// distinction between a routine cross-account grant and an internet-readable bucket.
+//
+// FIELD SHAPE — this is where the IAM idiom does NOT carry over. CloudTrail records
+// `requestParameters.bucketPolicy` as a nested JSON OBJECT, not the JSON STRING that
+// `requestParameters.policyDocument` is for IAM. There is nothing to url_decode() and
+// nothing to parse a second time: after parse_json(RequestParameters), Req.bucketPolicy
+// is already walkable. Carrying the IAM decode step over here yields null.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// ===========================================================================
+// ROUTE 1 — bucket policy grants a wildcard principal
+// ===========================================================================
+let PolicyExposure =
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "s3.amazonaws.com"
+| where EventName == "PutBucketPolicy"
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend BucketName = tostring(Req.bucketName)
+// SHAPE GUARD. Statement is a single object OR an array. mv-expand over a bare object
+// expands its PROPERTIES, not the statement, so the sweep would silently evaluate the
+// wrong thing and report clean on exactly the policy it exists to find.
+| extend Stmts = iff(gettype(Req.bucketPolicy.Statement) == "array",
+                     Req.bucketPolicy.Statement, pack_array(Req.bucketPolicy.Statement))
+| mv-expand Stmt = Stmts
+| where tostring(Stmt.Effect) =~ "Allow"          // only an Allow can expose anything
+// SHAPE GUARD. Principal is the bare string "*" OR an object whose AWS value is a string
+// OR an array. tostring() on a dynamic keeps the JSON quoting, so a multi-element array
+// survives as ["a","b"] and `contains` still sees every element — strcat_array would
+// strip the quotes and an equality test would then miss ["arn:...","*"].
+| extend PrincipalRaw = Stmt.Principal
+| extend PrincipalStr = iff(gettype(PrincipalRaw) == "string",
+                            tostring(PrincipalRaw), tostring(PrincipalRaw.AWS))
+| extend NotPrincipalStr = tostring(Stmt.NotPrincipal)
+// AWS: a bucket policy is non-public only if it grants access to FIXED values. Any
+// wildcard in the principal makes it public — "*", {"AWS":"*"} and arn:aws:iam::*:root
+// all qualify. `contains`, never `has`: every one of these operands is punctuated and
+// `has` is whole-term matching, so it would match none of them.
+| extend WildcardPrincipal = PrincipalStr contains "*"
+// NotPrincipal in an Allow grants to EVERY principal except those listed — the silent
+// case a parser reading only Principal never reports.
+| extend NotPrincipalGrant = isnotempty(NotPrincipalStr)
+| where WildcardPrincipal or NotPrincipalGrant
+| extend Actions = iff(gettype(Stmt.Action) == "array", Stmt.Action, pack_array(tostring(Stmt.Action)))
+// set_has_element, not a joined string compared for equality: ["s3:GetObject","*"] is an
+// unconditioned grant of everything and an equality test drops it.
+| extend AdminAction = set_has_element(Actions, "*") or set_has_element(Actions, "s3:*")
+| extend ReadAction  = AdminAction or tostring(Actions) contains "s3:GetObject"
+                                   or tostring(Actions) contains "s3:List"
+| extend WriteAction = AdminAction or tostring(Actions) contains "s3:PutObject"
+                                   or tostring(Actions) contains "s3:DeleteObject"
+| extend ControlAction = AdminAction or tostring(Actions) contains "s3:PutBucketPolicy"
+                                     or tostring(Actions) contains "s3:PutBucketAcl"
+                                     or tostring(Actions) contains "s3:PutBucketPublicAccessBlock"
+| extend CondText = tostring(Stmt.Condition)
+// A Condition on a key S3 does not accept — s3:prefix, aws:SecureTransport — leaves the
+// statement public. Treating "has a Condition" as "confined" is the failure direction that
+// disposes a live exposure.
+//
+// THIS KEY LIST IS NOT CLOSED, and writing it as if it were is its own defect. AWS's first
+// entry is a CATEGORY given by example — "An AWS principal, user, role, or service
+// principal (e.g. aws:PrincipalOrgID)" — so S3's evaluator accepts principal-scoping keys
+// that no list here enumerates. aws:PrincipalArn and aws:PrincipalAccount are kept because
+// they sit plainly inside that category, but AWS does not enumerate them either. Treat a
+// ConfinedKey hit as "worth reading", never as a verdict, and resolve it with Query 2's
+// decoder or GetBucketPolicyStatus.
+| extend ConfinedKey = CondText contains "aws:PrincipalOrgID"
+                    or CondText contains "aws:PrincipalArn"
+                    or CondText contains "aws:PrincipalAccount"
+                    or CondText contains "aws:SourceArn"
+                    or CondText contains "aws:SourceVpc"
+                    or CondText contains "aws:SourceVpce"
+                    or CondText contains "aws:SourceAccount"
+                    or CondText contains "aws:SourceOwner"
+                    or CondText contains "aws:userid"
+                    or CondText contains "s3:DataAccessPointArn"
+                    or CondText contains "s3:DataAccessPointAccount"
+                    or CondText contains "aws:SourceIp"
+// THE FIXED-VALUE REQUIREMENT. A listed key confines only if its value contains no
+// wildcard and no IAM policy variable: {"StringLike":{"aws:SourceVpc":"vpc-*"}} is PUBLIC,
+// {"StringEquals":{"aws:SourceVpc":"vpc-91237329"}} is not. KQL cannot bind a value to its
+// own key through a `contains` on the flattened Condition text, so any wildcard or ${...}
+// anywhere in the block vetoes confinement. That over-matches — a wildcard on an unrelated
+// key voids the whole statement's confinement — which is the safe direction here.
+// aws:userid counts only OUTSIDE the pattern "AROLEID:*", and that value carries a `*`, so
+// the same veto covers it.
+| extend NotFixedValue = CondText contains "*" or CondText contains "${"
+// The one documented exception to the veto, and it is exception FOR A BUCKET POLICY ONLY:
+// s3:DataAccessPointArn may carry a wildcard access-point NAME without rendering the policy
+// public, provided the account ID is fixed. AWS states the same statement in an ACCESS
+// POINT policy IS public — do not carry this carve-out over to one.
+| extend DapAccountFixed = CondText matches regex @":s3:[a-z0-9\-]*:[0-9]{12}:accesspoint/"
+| extend Confined = ConfinedKey and (not(NotFixedValue) or DapAccountFixed)
+// A very broad CIDR does not confine anything: S3 evaluates values broader than /8 for
+// IPv4 (and /32 for IPv6) as public regardless — "excluding RFC1918 private ranges", which
+// are never internet-reachable whatever their prefix length.
+| extend BroadSourceIp = CondText contains "0.0.0.0/0" or CondText contains "::/0"
+| extend EffectivelyPublic = not(Confined) or BroadSourceIp
+| extend Mechanism = "bucket-policy"
+| extend Detail = strcat("Principal=", PrincipalStr,
+                         iff(NotPrincipalGrant, strcat(" NotPrincipal=", NotPrincipalStr), ""),
+                         " Action=", tostring(Actions),
+                         iff(isempty(CondText), " Condition=none", strcat(" Condition=", CondText)))
+| project TimeGenerated, UserIdentityArn, UserIdentityType, SessionIssuerUserName,
+          SourceIpAddress, UserAgent, EventName, BucketName, Mechanism, Detail,
+          EffectivelyPublic, AdminAction, ReadAction, WriteAction, ControlAction,
+          SessionMfaAuthenticated;
+//
+// ===========================================================================
+// ROUTE 2 — bucket ACL grants a public predefined group
+// ===========================================================================
+// PutBucketAcl carries the grant in one of THREE mutually exclusive request shapes: the
+// canned header requestParameters['x-amz-acl']; the XML body under AccessControlPolicy;
+// or explicit x-amz-grant-* headers naming the grantee by uri=, id= or emailAddress=.
+// AWS: "You cannot specify access permission using both the body and the request headers"
+// and "You can use either a canned ACL or specify access permissions explicitly. You
+// cannot do both." Reading fewer than three is a false negative whose rate is set by how
+// the operator invoked the API. All three are read and unioned.
+let AclCanned =
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "s3.amazonaws.com"
+| where EventName == "PutBucketAcl"
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend BucketName = tostring(Req.bucketName)
+| extend CannedAcl = tostring(Req["x-amz-acl"])
+// x-amz-acl on PutBucketAcl accepts exactly four values — "private | public-read |
+// public-read-write | authenticated-read" — not the eight in the user guide's canned-ACL
+// table, which also covers object ACLs and CreateBucket. THREE of the four are public,
+// because S3's test is group membership and not the name: "Amazon S3 considers a bucket or
+// object ACL public if it grants any permissions to members of the predefined AllUsers or
+// AuthenticatedUsers groups." authenticated-read grants READ to AuthenticatedUsers, so a
+// `startswith "public-"` test would drop it. Enumerated, never prefix-matched.
+| where CannedAcl in ("public-read", "public-read-write", "authenticated-read")
+| extend Mechanism = "bucket-acl-canned"
+| extend Detail = strcat("x-amz-acl=", CannedAcl)
+| extend EffectivelyPublic = true
+| extend AdminAction = false,
+         ReadAction = true,
+         WriteAction = (CannedAcl == "public-read-write"),
+         ControlAction = false
+| project TimeGenerated, UserIdentityArn, UserIdentityType, SessionIssuerUserName,
+          SourceIpAddress, UserAgent, EventName, BucketName, Mechanism, Detail,
+          EffectivelyPublic, AdminAction, ReadAction, WriteAction, ControlAction,
+          SessionMfaAuthenticated;
+let AclGrants =
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "s3.amazonaws.com"
+| where EventName == "PutBucketAcl"
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend BucketName = tostring(Req.bucketName)
+// Grant is a single object when the ACL has exactly one grant, an array otherwise.
+| extend GrantsRaw = Req.AccessControlPolicy.AccessControlList.Grant
+| extend Grants = iff(gettype(GrantsRaw) == "array", GrantsRaw, pack_array(GrantsRaw))
+| mv-expand Grant = Grants
+| extend GranteeUri = tostring(Grant.Grantee.URI)
+| extend Permission = tostring(Grant.Permission)
+// `contains`, never `has`. These URIs contain "://" and "/" and would break into terms.
+// AuthenticatedUsers is NOT a lesser case: AWS states any AWS authenticated user in the
+// world can read the resource, and an AWS account costs nothing to open.
+| where GranteeUri contains "acs.amazonaws.com/groups/global/AllUsers"
+     or GranteeUri contains "acs.amazonaws.com/groups/global/AuthenticatedUsers"
+| extend Mechanism = "bucket-acl-grant"
+| extend Detail = strcat("Grantee=", GranteeUri, " Permission=", Permission)
+| extend EffectivelyPublic = true
+| extend AdminAction = (Permission == "FULL_CONTROL"),
+         ReadAction = Permission in ("READ", "FULL_CONTROL"),
+         WriteAction = Permission in ("WRITE", "WRITE_ACP", "FULL_CONTROL"),
+         ControlAction = Permission in ("WRITE_ACP", "FULL_CONTROL")
+| project TimeGenerated, UserIdentityArn, UserIdentityType, SessionIssuerUserName,
+          SourceIpAddress, UserAgent, EventName, BucketName, Mechanism, Detail,
+          EffectivelyPublic, AdminAction, ReadAction, WriteAction, ControlAction,
+          SessionMfaAuthenticated;
+let AclGrantHeaders =
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "s3.amazonaws.com"
+| where EventName == "PutBucketAcl"
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend BucketName = tostring(Req.bucketName)
+// Shape 3, and the one AWS's own worked example uses to make a bucket world-readable with
+// no canned ACL and no body:  x-amz-grant-read: uri="http://acs.amazonaws.com/groups/
+// global/AllUsers". Five headers exist and each is read INDEPENDENTLY — a request normally
+// carries one or two, so testing them as a conjunction would match nothing at all.
+//
+// CAVEAT: the header names are documented on the PutBucketAcl API reference, but the key
+// CloudTrail writes each header under in requestParameters is not documented by AWS for any
+// request header, x-amz-acl included. Confirm against a real event in your own workspace
+// before relying on this block.
+| extend GrantRead     = tostring(Req["x-amz-grant-read"]),
+         GrantWrite    = tostring(Req["x-amz-grant-write"]),
+         GrantReadAcp  = tostring(Req["x-amz-grant-read-acp"]),
+         GrantWriteAcp = tostring(Req["x-amz-grant-write-acp"]),
+         GrantFull     = tostring(Req["x-amz-grant-full-control"])
+// `contains`, never `has`: the grantee is a type=value pair wrapping a punctuated URI.
+| extend PubRead     = GrantRead contains "groups/global/AllUsers"
+                    or GrantRead contains "groups/global/AuthenticatedUsers",
+         PubWrite    = GrantWrite contains "groups/global/AllUsers"
+                    or GrantWrite contains "groups/global/AuthenticatedUsers",
+         PubReadAcp  = GrantReadAcp contains "groups/global/AllUsers"
+                    or GrantReadAcp contains "groups/global/AuthenticatedUsers",
+         PubWriteAcp = GrantWriteAcp contains "groups/global/AllUsers"
+                    or GrantWriteAcp contains "groups/global/AuthenticatedUsers",
+         PubFull     = GrantFull contains "groups/global/AllUsers"
+                    or GrantFull contains "groups/global/AuthenticatedUsers"
+| where PubRead or PubWrite or PubReadAcp or PubWriteAcp or PubFull
+| extend Mechanism = "bucket-acl-grant-header"
+| extend Detail = strcat("x-amz-grant header(s) naming a public predefined group:",
+                         iff(PubRead, " read", ""), iff(PubWrite, " write", ""),
+                         iff(PubReadAcp, " read-acp", ""), iff(PubWriteAcp, " write-acp", ""),
+                         iff(PubFull, " full-control", ""))
+| extend EffectivelyPublic = true
+| extend AdminAction = PubFull,
+         ReadAction = PubRead or PubFull,
+         WriteAction = PubWrite or PubWriteAcp or PubFull,
+         ControlAction = PubWriteAcp or PubFull
+| project TimeGenerated, UserIdentityArn, UserIdentityType, SessionIssuerUserName,
+          SourceIpAddress, UserAgent, EventName, BucketName, Mechanism, Detail,
+          EffectivelyPublic, AdminAction, ReadAction, WriteAction, ControlAction,
+          SessionMfaAuthenticated;
+//
+// ===========================================================================
+// ROUTE 3 — Block Public Access removed or weakened (bucket AND account level)
+// ===========================================================================
+// The route the source rules rate P3/P4 and the one that most often converts a latent
+// misconfiguration into a live exposure. No PutBucketPolicy and no PutBucketAcl occurs.
+// Account level is included: S3 applies the most restrictive combination of account and
+// bucket settings, so removing the account-level block exposes every bucket that was
+// relying on it. Account-level events carry no bucketName — hence the ACCOUNT-LEVEL
+// literal rather than an empty column an analyst would read as missing data.
+let PabRemoval =
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource in ("s3.amazonaws.com", "s3-control.amazonaws.com")
+| where EventName in ("DeleteBucketPublicAccessBlock", "DeleteAccountPublicAccessBlock",
+                      "PutBucketPublicAccessBlock", "PutAccountPublicAccessBlock")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend BucketName = iff(isempty(tostring(Req.bucketName)), "ACCOUNT-LEVEL", tostring(Req.bucketName))
+| extend Pab = Req.PublicAccessBlockConfiguration
+| extend Deleted = EventName startswith "Delete"
+// Each of the four is independent — any one going false weakens the block. ORed, never
+// ANDed: ANDing them is the source rule's inverted condition, which fires only when none
+// is false and therefore alerts on somebody turning protection ON.
+| extend Weakened = tostring(Pab.BlockPublicAcls) =~ "false"
+                 or tostring(Pab.IgnorePublicAcls) =~ "false"
+                 or tostring(Pab.BlockPublicPolicy) =~ "false"
+                 or tostring(Pab.RestrictPublicBuckets) =~ "false"
+| where Deleted or Weakened
+| extend Mechanism = iff(Deleted, "public-access-block-deleted", "public-access-block-weakened")
+| extend Detail = iff(Deleted, "configuration deleted — all four settings gone",
+                      strcat("BlockPublicAcls=", tostring(Pab.BlockPublicAcls),
+                             " IgnorePublicAcls=", tostring(Pab.IgnorePublicAcls),
+                             " BlockPublicPolicy=", tostring(Pab.BlockPublicPolicy),
+                             " RestrictPublicBuckets=", tostring(Pab.RestrictPublicBuckets)))
+| extend EffectivelyPublic = true
+| extend AdminAction = false, ReadAction = false, WriteAction = false, ControlAction = false
+| project TimeGenerated, UserIdentityArn, UserIdentityType, SessionIssuerUserName,
+          SourceIpAddress, UserAgent, EventName, BucketName, Mechanism, Detail,
+          EffectivelyPublic, AdminAction, ReadAction, WriteAction, ControlAction,
+          SessionMfaAuthenticated;
+//
+// ===========================================================================
+// UNION AND VERDICT
+// ===========================================================================
+union PolicyExposure, AclCanned, AclGrants, AclGrantHeaders, PabRemoval
+| summarize
+    Events        = count(),
+    Mechanisms    = make_set(Mechanism, 5),
+    Buckets       = make_set(BucketName, 5),
+    Details       = make_set(Detail, 5),
+    EventNames    = make_set(EventName, 5),
+    SourceIPs     = make_set(SourceIpAddress, 5),
+    UserAgents    = make_set(UserAgent, 5),
+    AnyPublic     = max(EffectivelyPublic),
+    AnyWrite      = max(WriteAction),
+    AnyControl    = max(ControlAction),
+    AnyPabRemoval = maxif(1, Mechanism startswith "public-access-block"),
+    AnyGrant      = maxif(1, Mechanism startswith "bucket-"),
+    MfaUsed       = max(SessionMfaAuthenticated),
+    FirstSeen     = min(TimeGenerated),
+    LastSeen      = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 24h)
+| extend Verdict = case(
+    AnyPabRemoval == 1 and AnyGrant == 1,
+        "EXPOSED THEN UNBLOCKED — one principal staged a public grant and removed the block that held it; the bucket is public now, P0",
+    AnyControl and AnyPublic,
+        "PUBLIC BUCKET-CONTROL GRANT — the internet may rewrite this bucket's own policy, ACL or public-access-block, P0",
+    AnyWrite and AnyPublic,
+        "PUBLIC WRITE GRANTED — anonymous callers may add, overwrite or delete objects, P0",
+    AnyPabRemoval == 1,
+        "BLOCK PUBLIC ACCESS REMOVED — any pre-existing public policy or ACL is effective from this moment, P0",
+    AnyPublic,
+        "PUBLIC READ GRANTED — confirm with GetBucketPolicyStatus before disposing, P1",
+    "PUBLIC-ACCESS CHANGE, CONDITION-CONFINED — read the Condition values, P2")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, Buckets, Mechanisms, Details,
+          EventNames, Events, SourceIPs, UserAgents, MfaUsed
+| order by LastSeen desc
+//
+// ============================================================================
+// WHAT THIS QUERY CANNOT TELL YOU — the honesty section
+// ============================================================================
+// It tells you a bucket was EXPOSED. It cannot tell you the bucket was READ.
+//
+// s3:GetObject is a DATA-plane event. `aws cloudtrail lookup-events` returns zero for it
+// forever, and CloudTrail does not log data events by default. That zero is not evidence
+// of no exfiltration — it is evidence of no logging. Three sources can record a read of a
+// public object and NONE of them is on by default:
+//
+//   1. S3 server access logs      — PutBucketLogging; best-effort, delivered "within a
+//                                   few hours", "might not be delivered at all". The only
+//                                   source that records ANONYMOUS reads with their IP.
+//   2. CloudTrail data-event trail — advanced event selector on AWS::S3::Object; charged
+//                                   per event; covers only buckets it was configured for.
+//   3. CloudWatch AWS/S3 request metrics (BytesDownloaded, GetRequests) — require a
+//                                   metrics configuration per bucket. Daily STORAGE
+//                                   metrics are always on and are not the same thing.
+//
+// If none of the three was configured before the exposure window, the read record does
+// not exist and cannot be reconstructed afterwards. Say so in the incident report; do not
+// let an empty CloudTrail query stand in for "no data was taken".
+//
+// It also cannot be checked by reading the ACL back, and that inverts the obvious sweep.
+// AWS: "Calls to GetBucketAcl and GetObjectAcl always return the effective permissions in
+// place for the specified bucket or object. For example, suppose that a bucket has an ACL
+// that grants public access, but the bucket also has the IgnorePublicAcls setting enabled.
+// In this case, GetBucketAcl returns an ACL that reflects the access permissions that
+// Amazon S3 is enforcing, rather than the actual ACL that is associated with the bucket."
+// So with IgnorePublicAcls enabled, an account-wide GetBucketAcl sweep cannot see the very
+// grant it exists to find, reports the bucket clean, and the grant goes live the moment
+// Block Public Access is removed. Where IgnorePublicAcls is on, THIS query — the CloudTrail
+// PutBucketAcl history — is the only record that the grant exists. GetBucketPolicyStatus
+// has no documented equivalent masking; AWS says only that "RestrictPublicBuckets only
+// applies to buckets that have public policies", which makes policy publicness an input to
+// Block Public Access enforcement rather than an output of it.
+//
+// ============================================================================
+// FIELD SHAPE AND ERROR STRINGS
+// ============================================================================
+// requestParameters.bucketPolicy is a nested OBJECT (IAM's policyDocument is a STRING).
+// PutBucketPolicy / PutBucketAcl / Put*PublicAccessBlock all return responseElements:
+// null — everything is in the request, there is no response object to pivot from.
+// The CloudTrail eventName differs from the API operation name for public access block:
+// the operations are PutPublicAccessBlock / DeletePublicAccessBlock, the eventNames are
+// Put|DeleteBucketPublicAccessBlock and Put|DeleteAccountPublicAccessBlock.
+//
+// Denials on these calls: AccessDenied (not Client.-prefixed like EC2). A PutBucketPolicy
+// refused because BlockPublicPolicy is on is an AccessDenied whose message names the
+// setting — that is a BLOCKED ATTEMPT and belongs in a separate queue from a success.
+// Other codes these calls throw, which are NOT denials: NoSuchBucket, NoSuchBucketPolicy,
+// MalformedPolicy, InvalidPolicyDocument, InvalidRequest, and — when Object Ownership is
+// BucketOwnerEnforced so ACLs are disabled — AccessControlListNotSupported.
+//
+// ============================================================================
+// PREVENTION
+// ============================================================================
+// Block Public Access at the ACCOUNT level with all four settings true, protected by an
+// SCP that denies s3:PutAccountPublicAccessBlock and s3:PutBucketPublicAccessBlock to
+// everything but a break-glass role, plus Object Ownership = BucketOwnerEnforced so the
+// ACL route stops existing. That combination makes the technique structurally
+// unavailable rather than merely detectable, which matters here because the exposure is
+// complete the moment the call succeeds.

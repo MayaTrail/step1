@@ -1,0 +1,22 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Snapshot Made Public
+  priority: P2
+  type: logs_threshold
+  mitre: T1526/TA0010
+  query: |
+    eventSource:"rds.amazonaws.com" AND (eventName:("ModifyDBSnapshotAttribute" OR "ModifyDBClusterSnapshotAttribute") AND (responseElements.attributeName:"restore" OR requestParameters.attributeName:"restore") AND valueToAdd_Extracted:"all" AND 
+NOT _exists_:errorCode)
+  threshold: 0.0  window: 10m
+  group_by: ['userIdentity.arn']
+

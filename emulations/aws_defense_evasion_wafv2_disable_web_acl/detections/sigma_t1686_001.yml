@@ -1,0 +1,243 @@
+title: Suspicious AssumeRole to WAF Operator Role
+id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+status: experimental
+description: >
+  Detects STS AssumeRole calls that land a session targeting a WAF-related IAM role.
+  Adversaries who have compromised over-permissioned credentials (or a root-trusted principal)
+  use AssumeRole to pivot into a dedicated WAF operator role before enumerating or modifying
+  Web ACL rules. This rule fires on the role assumption step; pair it with downstream
+  wafv2:ListWebACLs and wafv2:UpdateWebACL rules for a full kill-chain correlation.
+references:
+    - https://attack.mitre.org/techniques/T1686/001/
+    - https://docs.aws.amazon.com/waf/latest/developerguide/logging-and-monitoring.html
+author: MayaTrail
+date: 2026/08/25
+tags:
+    - attack.defense_impairment
+    - attack.t1686.001
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: sts.amazonaws.com
+        eventName: AssumeRole
+        requestParameters.roleArn|contains: waf
+    filter_automation:
+        # Exclude well-known CI/CD or service-linked automation principals
+        userIdentity.arn|contains:
+            - 'AWSServiceRoleForWAF'
+            - 'waf-automation'
+    condition: selection and not filter_automation
+fields:
+    - userIdentity.arn
+    - userIdentity.type
+    - requestParameters.roleArn
+    - requestParameters.roleSessionName
+    - sourceIPAddress
+    - userAgent
+falsepositives:
+    - Legitimate WAF administrators using role assumption for least-privilege access
+    - Automated WAF management tooling that assumes a named WAF role
+    - Penetration testing engagements with documented scope
+level: medium
+---
+title: WAFv2 Web ACL Enumeration via ListWebACLs
+id: b2c3d4e5-f6a7-8901-bcde-f12345678901
+status: experimental
+description: >
+  Detects wafv2:ListWebACLs calls from non-service principals. An adversary holding
+  over-scoped WAF credentials will enumerate regional Web ACLs to discover ACL IDs,
+  Names, and ARNs required for subsequent GetWebACL and UpdateWebACL calls. A single
+  ListWebACLs call from an assumed-role session is a reliable leading indicator of
+  WAF reconnaissance, especially when followed within minutes by GetWebACL.
+references:
+    - https://attack.mitre.org/techniques/T1686/001/
+    - https://docs.aws.amazon.com/waf/latest/APIReference/API_ListWebACLs.html
+author: MayaTrail
+date: 2026/08/25
+tags:
+    - attack.defense_impairment
+    - attack.t1686.001
+    - attack.discovery
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: wafv2.amazonaws.com
+        eventName: ListWebACLs
+    filter_service_principals:
+        userIdentity.type: Service
+    filter_known_scanners:
+        # Exclude well-known security posture tools that legitimately enumerate WAF ACLs
+        userAgent|contains:
+            - 'SecurityHub'
+            - 'aws-sdk-go/config-service'
+            - 'Prowler'
+    condition: selection and not filter_service_principals and not filter_known_scanners
+fields:
+    - userIdentity.arn
+    - userIdentity.type
+    - userIdentity.principalId
+    - sourceIPAddress
+    - userAgent
+    - awsRegion
+falsepositives:
+    - Cloud security posture management (CSPM) tools scanning for WAF coverage gaps
+    - WAF reporting dashboards or cost-optimization tooling
+    - Legitimate security engineers performing manual WAF audits
+level: low
+---
+title: WAFv2 Web ACL Configuration Read - Pre-Modification Reconnaissance
+id: c3d4e5f6-a7b8-9012-cdef-123456789012
+status: experimental
+description: >
+  Detects wafv2:GetWebACL calls from assumed-role sessions. An adversary must read the
+  current Web ACL configuration and capture the optimistic-lock LockToken before issuing
+  UpdateWebACL -- WAF rejects modifications that omit the current LockToken with
+  WAFOptimisticLockException. GetWebACL from an AssumedRole principal, especially shortly
+  after ListWebACLs, is a strong precursor signal for imminent WAF rule modification.
+  High-confidence when the same principalId issues GetWebACL and UpdateWebACL within
+  minutes (see correlation rule kql_T1686.001_wafv2_modify_sequence.kql).
+references:
+    - https://attack.mitre.org/techniques/T1686/001/
+    - https://docs.aws.amazon.com/waf/latest/APIReference/API_GetWebACL.html
+author: MayaTrail
+date: 2026/08/25
+tags:
+    - attack.defense_impairment
+    - attack.t1686.001
+    - attack.discovery
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: wafv2.amazonaws.com
+        eventName: GetWebACL
+        userIdentity.type: AssumedRole
+    filter_service_principals:
+        userIdentity.arn|contains:
+            - ':assumed-role/AWSServiceRole'
+            - ':assumed-role/aws-service-role'
+    condition: selection and not filter_service_principals
+fields:
+    - userIdentity.arn
+    - userIdentity.principalId
+    - requestParameters.id
+    - requestParameters.name
+    - requestParameters.scope
+    - sourceIPAddress
+    - userAgent
+    - awsRegion
+falsepositives:
+    - Automated WAF configuration backup or drift-detection tooling running under assumed roles
+    - Terraform/Pulumi IaC refresh operations reading current WAF state
+    - Security team tooling that reads WAF config for compliance reporting
+level: low
+---
+title: WAFv2 Web ACL Rule Modification from AssumedRole
+id: e5f6a7b8-c9d0-1234-ef01-345678901234
+status: experimental
+description: >
+  Detects any wafv2:UpdateWebACL call issued by an AssumedRole principal. This is a
+  broader complement to the ByteMatch-specific rule (sigma_T1686.001_wafv2_update_bytematch_allow)
+  and catches rule modifications that do not include an obvious ByteMatch keyword -- for
+  example removing managed rule groups entirely, setting DefaultAction to ALLOW, or modifying
+  VisibilityConfig to suppress logging. UpdateWebACL is a low-frequency operation in most
+  environments and any call from an assumed-role that is not a known IaC deployer warrants
+  investigation.
+references:
+    - https://attack.mitre.org/techniques/T1686/001/
+    - https://docs.aws.amazon.com/waf/latest/APIReference/API_UpdateWebACL.html
+author: MayaTrail
+date: 2026/08/25
+tags:
+    - attack.defense_impairment
+    - attack.t1686.001
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: wafv2.amazonaws.com
+        eventName: UpdateWebACL
+        userIdentity.type: AssumedRole
+    filter_iac_deployers:
+        userIdentity.arn|contains:
+            - 'pulumi-deployer'
+            - 'terraform-deployer'
+            - 'cdk-deployer'
+            - 'AWSServiceRole'
+    condition: selection and not filter_iac_deployers
+fields:
+    - userIdentity.arn
+    - userIdentity.principalId
+    - requestParameters.name
+    - requestParameters.defaultAction
+    - requestParameters.rules
+    - sourceIPAddress
+    - userAgent
+    - awsRegion
+falsepositives:
+    - Infrastructure engineers updating WAF rules via assumed deployment roles
+    - Automated WAF management scripts running under least-privilege assumed roles
+    - Authorized security testing or red team exercises
+level: medium
+---
+title: WAFv2 Web ACL Modified with ByteMatch Allow Rule Injection
+id: d4e5f6a7-b8c9-0123-def0-234567890123
+status: experimental
+description: >
+  Detects wafv2:UpdateWebACL calls that inject a ByteMatch ALLOW rule -- the canonical
+  technique for creating a magic-header bypass. CloudTrail logs the full requestParameters
+  including rule statements in plaintext. An adversary prepends a high-priority ByteMatch
+  Allow rule matching a secret header value (e.g. X-Bypass: <secret>) ahead of managed
+  rule groups, allowing crafted requests to bypass AWSManagedRulesCommonRuleSet and other
+  protections while appearing stealthy because the managed rules remain in the configuration.
+  This detection fires on the keyword 'byteMatchStatement' combined with 'ALLOW' action in
+  the UpdateWebACL requestParameters -- both are present in plaintext in CloudTrail.
+  HIGH priority: UpdateWebACL is an uncommon API call and any ByteMatch Allow injection
+  is a critical security event.
+references:
+    - https://attack.mitre.org/techniques/T1686/001/
+    - https://docs.aws.amazon.com/waf/latest/APIReference/API_UpdateWebACL.html
+    - https://docs.aws.amazon.com/waf/latest/APIReference/API_ByteMatchStatement.html
+author: MayaTrail
+date: 2026/08/25
+tags:
+    - attack.defense_impairment
+    - attack.t1686.001
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_event:
+        eventSource: wafv2.amazonaws.com
+        eventName: UpdateWebACL
+    selection_payload:
+        requestParameters|contains|all:
+            - 'byteMatchStatement'
+            - 'ALLOW'
+    filter_legitimate_iac:
+        # Known IaC deployer service accounts -- adjust to your environment
+        userIdentity.arn|contains:
+            - 'pulumi-deployer'
+            - 'terraform-deployer'
+            - 'cdk-deployer'
+    condition: selection_event and selection_payload and not filter_legitimate_iac
+fields:
+    - userIdentity.arn
+    - userIdentity.principalId
+    - requestParameters.name
+    - requestParameters.id
+    - requestParameters.rules
+    - sourceIPAddress
+    - userAgent
+    - awsRegion
+falsepositives:
+    - Intentional ByteMatch Allow rules deployed via IaC for known traffic patterns (IP allowlisting flows)
+    - WAF rule testing during authorized security assessments
+    - Custom header-based routing rules deployed by application teams
+level: high

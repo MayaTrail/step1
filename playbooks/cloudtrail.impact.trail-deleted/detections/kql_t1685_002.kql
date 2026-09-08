@@ -1,0 +1,75 @@
+// CloudTrail trail deleted (T1685.002)
+//
+// This query answers the two questions the DeleteTrail event does not: how wide the loss of
+// coverage is, and what the trail was configured to do before it went. Both come from the trail's
+// own history — the last CreateTrail or UpdateTrail — because the delete request carries only a name.
+//
+// `contains` throughout, never `has` — trail names and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 90d;
+// The configuration of the deleted trail exists ONLY in its last create/update event.
+let TrailConfig =
+    AWSCloudTrail
+    | where TimeGenerated > ago(LOOKBACK)
+    | where EventSource == "cloudtrail.amazonaws.com"
+    | where EventName in ("CreateTrail", "UpdateTrail")
+    | where isempty(ErrorCode)
+    | extend Req = parse_json(RequestParameters)
+    | extend TrailName = tostring(Req.name)
+    | project ConfigTime = TimeGenerated, TrailName,
+              WasMultiRegion = tostring(Req.isMultiRegionTrail) == "true",
+              HadGlobalEvents = tostring(Req.includeGlobalServiceEvents) == "true",
+              HadValidation = tostring(Req.enableLogFileValidation) == "true",
+              WasOrgTrail = tostring(Req.isOrganizationTrail) == "true",
+              DeliveredTo = tostring(Req.s3BucketName);
+let Deletions =
+    AWSCloudTrail
+    | where TimeGenerated > ago(LOOKBACK)
+    | where EventSource == "cloudtrail.amazonaws.com" and EventName == "DeleteTrail"
+    | extend TrailName = tostring(parse_json(RequestParameters).name)
+    | project DeleteTime = TimeGenerated, TrailName, UserIdentityArn, SourceIpAddress,
+              ErrorCode, AwsRegion;
+Deletions
+| join kind=leftouter (TrailConfig) on TrailName
+| where isnull(ConfigTime) or ConfigTime < DeleteTime
+| summarize arg_max(ConfigTime, WasMultiRegion, HadGlobalEvents, HadValidation, WasOrgTrail, DeliveredTo)
+    by DeleteTime, TrailName, UserIdentityArn, SourceIpAddress, ErrorCode, AwsRegion
+| extend Failed = isnotempty(ErrorCode)
+| extend Recoverable = isnotnull(ConfigTime)
+| extend Verdict = case(
+    not(Failed) and WasOrgTrail == true,
+        "ORGANIZATION TRAIL DELETED — coverage lost for every member account at once, and only the management account could have done it, P0",
+    not(Failed) and WasMultiRegion == true,
+        "MULTI-REGION TRAIL DELETED — 'Deleting a multi-Region trail will stop logging of events in all AWS Regions enabled in your AWS account', P0",
+    not(Failed) and isnull(ConfigTime),
+        "TRAIL DELETED AND ITS CONFIGURATION IS UNRECOVERABLE — no create/update event inside the lookback, so what it captured cannot be established and cannot be rebuilt faithfully, P0",
+    not(Failed),
+        "SINGLE-REGION TRAIL DELETED — logging stops in this Region only; other Regions are unaffected even if their trails share the name, P1",
+    ErrorCode == "InvalidHomeRegionException",
+        "DeleteTrail REFUSED — WRONG REGION. AWS accepts this only in the trail's home Region and never on a shadow trail, so the caller was guessing. This precedes success, P0",
+    ErrorCode == "NotOrganizationMasterAccountException",
+        "DeleteTrail REFUSED — ORGANIZATION TRAIL. A member account tried to remove a trail it cannot touch; the org trail did its job and the attempt is the finding, P1",
+    "DeleteTrail refused — read ErrorCode, an attempt is an attempt whether or not it landed")
+| project DeleteTime, TrailName, UserIdentityArn, Verdict, WasMultiRegion, WasOrgTrail,
+          HadGlobalEvents, HadValidation, DeliveredTo, Recoverable, ErrorCode, AwsRegion, SourceIpAddress
+| order by DeleteTime desc
+//
+// ============================================================================
+// THE LOG FILES ARE NOT GONE, AND THIS IS THE FIRST THING TO TELL THE RESPONDER
+// ============================================================================
+// AWS: "While deleting a CloudTrail trail is an irreversible action, CloudTrail does not delete log
+// files in the Amazon S3 bucket for that trail, the Amazon S3 bucket itself, or the CloudWatch log
+// group to which the trail delivers events."
+// So everything delivered before the deletion is still there and still searchable — the `DeliveredTo`
+// column is where. What was destroyed is FUTURE coverage and the trail's CONFIGURATION, not the
+// historical record. A response that opens with "our logs are gone" wastes the hour in which the
+// surviving history is most useful.
+//
+// ============================================================================
+// WHAT IS ACTUALLY IRREVERSIBLE, AND ITS DEADLINE
+// ============================================================================
+// The delete request carries only the trail name. Selectors, bucket, KMS key, multi-Region flag,
+// global-service-events flag and log file validation live only in the last CreateTrail/UpdateTrail
+// event — which lookup-events serves for 90 days. `Recoverable` false means that window has already
+// passed and the trail cannot be rebuilt faithfully, only re-specified from intent.

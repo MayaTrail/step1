@@ -54,12 +54,14 @@ services:
       POSTGRES_PASSWORD: mayatrail
       REDIS_URL: redis://redis:6379/0
       EMULATIONS_BASE_DIR: /opt/emulations
+      PLAYBOOKS_BASE_DIR: /opt/playbooks
       GUARDRAILS_BASE_DIR: /opt/guardrails
     ports:
       - "8000:8000"
     volumes:
       # Mount emulations package so the API registry can discover packages.
       - ./emulations:/opt/emulations:ro
+      - ./playbooks:/opt/playbooks:ro
       # Mount guardrails package so the API registry can discover policies.
       - ./guardrails:/opt/guardrails:ro
     depends_on: # waits for db and redis to be healthy before starting backend.
@@ -105,9 +107,11 @@ services:
       # Base directory where emulation packages are mounted.
       # Infra programs are resolved as {EMULATIONS_BASE_DIR}/{type}/infra/
       EMULATIONS_BASE_DIR: /opt/emulations
+      PLAYBOOKS_BASE_DIR: /opt/playbooks
     volumes:
       # Emulation packages: attack scripts and per-emulation infra/ programs.
       - ./emulations:/opt/emulations:ro
+      - ./playbooks:/opt/playbooks:ro
     depends_on:
       db:
         condition: service_healthy

@@ -388,6 +388,24 @@ export async function fetchProfile(): Promise<UserProfile> {
 
 // Connector / Demo API
 
+/**
+ * Disconnect the AWS account, clearing the stored role ARN.
+ *
+ * The backend refuses with 409 while a stack operation is running; that message
+ * names the blocking stacks and is surfaced verbatim so the user knows what to
+ * wait for.
+ */
+export async function disconnectConnector(): Promise<void> {
+  try {
+    await api.delete('/connectors/aws/verify/')
+  } catch (err: any) {
+    if (err.response) {
+      throw new Error(extractApiError(err))
+    }
+    throw new Error('Unable to reach the server. Please check your connection.')
+  }
+}
+
 export async function verifyConnector(req: ConnectorRequest): Promise<ConnectorResponse> {
   try {
     const { data } = await api.post<ConnectorResponse>('/connectors/aws/verify/', req)

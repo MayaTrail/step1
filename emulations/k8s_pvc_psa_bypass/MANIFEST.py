@@ -27,7 +27,7 @@ MANIFEST = {
         {
             "phase": 1,
             "name": "PSA Bypass via HostPath PV",
-            "techniques": [{"id": "T1211", "name": "Exploitation for Defense Evasion"}],
+            "techniques": [{"id": "T1211", "name": "Exploitation for Stealth"}],
         },
         {
             "phase": 2,
@@ -43,7 +43,7 @@ MANIFEST = {
     "mitre_mappings": [
         {
             "id": "T1211",
-            "name": "Exploitation for Defense Evasion",
+            "name": "Exploitation for Stealth",
             "tactic": "Defense Evasion",
             "platform": "Kubernetes",
             "description": "Circumventing container file restrictions by creating hostPath-backed PVs that PSA does not inspect."

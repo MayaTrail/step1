@@ -1,6 +1,6 @@
 """
 Technique : aws.defense-evasion.dns-delete-logs
-Tactic    : Defense Evasion (T1562.008 - Impair Defenses: Disable or Modify Cloud Logs)
+Tactic    : Defense Evasion (T1685.002 - Disable or Modify Tools: Disable or Modify Cloud Log)
 Source    : https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.dns-delete-logs/
 
 How the attack works:
@@ -114,7 +114,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
         raise RuntimeError("Missing required Pulumi output: resolver_query_log_config_id")
 
     banner("Step 0 - Assume the scoped attacker role (AssumeRole)")
-    session = _attacker_session(outputs, region, "atomic-t1562008-dnslogs")
+    session = _attacker_session(outputs, region, "atomic-t1685002-dnslogs")
     r53_client = session.client("route53resolver", region_name=region)
 
     # ── Step 1: Disassociate the config from every VPC ──────────────────────

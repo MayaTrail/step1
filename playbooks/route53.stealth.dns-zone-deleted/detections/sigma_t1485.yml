@@ -1,0 +1,177 @@
+# DNS Zone Deleted (T1485 — Data Destruction)
+#
+# WHAT THE SOURCE RULE DOES. `eventName:"DeleteHostedZone"` plus a success filter, grouped by
+# caller. It fires on the LAST call of the sequence and on nothing else, and the event it fires
+# on is the least informative one in the whole chain.
+#
+# THE DELETE IS THE TIDY-UP, NOT THE DESTRUCTION. AWS: "You can delete a hosted zone only if it
+# contains only the default SOA and NS records and has DNSSEC signing disabled. If the hosted
+# zone contains other records or has DNSSEC enabled, you must delete the records and disable
+# DNSSEC before deletion. Attempting to delete a hosted zone with additional records or DNSSEC
+# enabled returns a `HostedZoneNotEmpty` error." So a SUCCESSFUL DeleteHostedZone PROVES that a
+# ChangeResourceRecordSets batch already emptied the zone, and that batch is where resolution
+# actually stopped. The correlation below is therefore not a bonus - it is the rule that catches
+# the incident while it is still in progress, and `HostedZoneNotEmpty` is the actor who tried the
+# delete before finishing the purge.
+#
+# THE EVENT CARRIES A ZONE ID AND NOTHING ELSE. `requestParameters.id` - flat, and a DIFFERENT
+# field name from ChangeResourceRecordSets' `hostedZoneId`. No zone name, no record count, no
+# public/private flag. After the delete, GetHostedZone returns NoSuchHostedZone, so the NAME IS
+# NOT RECOVERABLE FROM ANY ROUTE 53 API. Enrichment must come from AWS Config
+# (`AWS::Route53::HostedZone` is a recorded resource type) or from an earlier CloudTrail event on
+# the same ID. An alert that reaches an analyst carrying only `Z1PA6795UKMFR9` is not actionable.
+#
+# WHY THIS IS NOT MERELY AN OUTAGE. AWS, on the same page: "if you delete a hosted zone, someone
+# could hijack the domain and route traffic to their own resources using your domain name." The
+# registrar's delegation still names four Route 53 nameservers that no longer hold the zone. AWS
+# also documents the correct teardown ORDER for a child zone - "We suggest that you delete the NS
+# record first, and wait for the TTL on that NS record to expire before you delete the child
+# hosted zone. This ensures that no one can hijack the child hosted zone while DNS resolvers
+# still have the child hosted zone's name servers cached." An actor deleting the zone while the
+# parent NS record stands is operating in exactly the window AWS warns about.
+#
+# REGION. `route53.amazonaws.com` events are stamped `us-east-1` and AWS requires the console
+# Region selector to be US East (N. Virginia) to see them at all. A pipeline that filters
+# Route 53 to the account's home Region receives nothing, forever.
+title: Route 53 public or private hosted zone deleted outside the deployment pipeline
+id: 13089582-c23d-4ef0-923c-4982be648044
+name: route53_hosted_zone_deleted
+status: experimental
+description: >-
+  A Route 53 hosted zone was destroyed by a principal that does not own the infrastructure
+  pipeline. Deletion cannot be undone; a recreated zone is assigned four DIFFERENT name servers,
+  so resolution stays broken until the registrar is updated, and until then AWS warns the name
+  can be hijacked.
+references:
+  - https://attack.mitre.org/techniques/T1485/                                                    # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/Route53/latest/APIReference/API_DeleteHostedZone.html             # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/DeleteHostedZone.html               # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/logging-using-cloudtrail.html       # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53.amazonaws.com'
+    eventName: 'DeleteHostedZone'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING. Hosted zones are torn down legitimately by infrastructure code,
+  # and an unpopulated allowlist reproduces the source rule's false-positive rate. Allowlist the
+  # PRINCIPAL: the zone ID is not predictable and cannot be allowlisted in advance.
+  iac_pipeline:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'          # replace with this account's Terraform/CDK execution role
+      - ':role/cloudformation-exec' # replace with this account's CloudFormation service role
+  condition: selection and success and not iac_pipeline
+falsepositives:
+  - >-
+    Decommissioning a domain, or collapsing a subdomain zone into its parent. Legitimate, and it
+    should arrive with a change record; if it routinely does not, the finding is that DNS is not
+    under change control. Service-linked teardowns (AWS Cloud Map and similar) carry
+    userIdentity.invokedBy — check it before treating a deletion as human activity.
+level: high
+---
+# Base rule — sequence component only, not for direct alerting. Carries the success filter so a
+# refused purge cannot compose into the correlation below (D-f).
+#
+# The DELETE action is the one Route 53 change that records what it removed: "To delete a
+# resource record set, you must specify all the same values that you specified when you created
+# it." So this event's `resourceRecords` ARE the destroyed records - the only machine-readable
+# copy of them that will exist. UPSERT carries no such guarantee.
+#
+# ARRAY ADDRESSING. `changes` is a list and `resourceRecords` is a list inside it. The dotted
+# form below is what Elastic-family and Sentinel backends produce from a flattened event; a
+# backend requiring explicit indices needs `[0]` inserted. Confirm against one real event.
+title: Route 53 records deleted from a hosted zone
+id: 01f6f23e-faa8-4b10-8e27-9ace91c22d03
+name: route53_zone_records_purged_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/APIReference/API_ChangeResourceRecordSets.html     # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53.amazonaws.com'
+    eventName: 'ChangeResourceRecordSets'
+  delete_action:
+    requestParameters.changeBatch.changes.action: 'DELETE'
+  success:
+    errorCode: null
+  condition: selection and delete_action and success
+level: informational
+---
+# A zone emptied and then deleted by one principal is one operation, and the emptying is where
+# resolution actually stopped. Route 53 REFUSES DeleteHostedZone on a non-empty zone, so this
+# ordering is not a heuristic about attacker behaviour - it is the only order in which the API
+# permits the sequence to complete. One hour covers a scripted purge of a large zone; Route 53
+# rejects a second change to the same zone while the first is in flight
+# (`PriorRequestNotComplete`), which serialises a bulk purge and stretches it.
+title: Route 53 hosted zone emptied and then deleted by one principal
+id: 5afa532b-d279-46cb-9339-6323588403ba
+status: experimental
+description: >-
+  One principal deleted records from a hosted zone and then deleted the zone within an hour. The
+  record deletions are the destruction; the zone deletion is the tidy-up behind them and the
+  point past which the zone name is no longer recoverable from any Route 53 API.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/APIReference/API_DeleteHostedZone.html             # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: temporal_ordered
+  rules:
+    - route53_zone_records_purged_bb
+    - route53_hosted_zone_deleted
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+level: critical
+---
+# THE EARLY WARNING, AND THE ONLY ONE THIS TECHNIQUE OFFERS. `HostedZoneNotEmpty` is somebody
+# calling DeleteHostedZone on a zone that still holds records - the destruction attempted before
+# its own precondition was met. It is intent observed BEFORE any record is lost, and no
+# legitimate pipeline produces it: infrastructure code deletes the records it created and then
+# the zone, in that order, and gets no refusal.
+#
+# No allowlist is applied and that is deliberate: the refusal itself is the finding, it is rare
+# enough to alert on unfiltered, and adding a principal filter would hide precisely the case
+# where the pipeline role is the compromised one.
+title: Route 53 hosted zone deletion refused because the zone still holds records
+id: f3af98a2-e2f0-4caf-b039-0f45d4d52e74
+name: route53_hosted_zone_delete_refused
+status: experimental
+description: >-
+  A DeleteHostedZone call was refused with HostedZoneNotEmpty. Somebody tried to destroy a zone
+  before emptying it. Nothing has been lost yet; the next events in this principal's session are
+  the record deletions that make the retry succeed.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/APIReference/API_DeleteHostedZone.html             # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53.amazonaws.com'
+    eventName: 'DeleteHostedZone'
+  refused:
+    errorCode: 'HostedZoneNotEmpty'
+  condition: selection and refused
+falsepositives:
+  - >-
+    An operator exploring the console and backing out. Should be traceable to a person within
+    minutes; if it is not, treat it as the first event of the incident.
+level: medium

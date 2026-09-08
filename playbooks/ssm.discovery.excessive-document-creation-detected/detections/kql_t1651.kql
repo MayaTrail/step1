@@ -1,0 +1,97 @@
+// Excessive Document Creation Detected (T1651 — Cloud Administration Command)
+//
+// Three signals, in descending order of how little volume they need:
+//   1. A write to SSM-SessionManagerRunShell — the Session-type document holding
+//      Session Manager preferences. One call changes what every session on every
+//      managed node runs at start-up (shellProfile) and where or whether the
+//      session is logged (S3 / CloudWatch / KMS).
+//   2. A Command, Automation or Session document created outside the deployment
+//      pipeline, then dispatched by the same principal.
+//   3. Bulk creation, the original rule's axis, kept as a weak tertiary signal.
+//
+// Document content is NOT matched here. Content is a request parameter capped at
+// 64 KB — comfortably under CloudTrail's 100 KB omission threshold — but AWS does
+// not document whether requestParameters.content is recorded for CreateDocument.
+// Fetch it with `aws ssm get-document` instead; the section at the foot of this
+// file says what to look for.
+//
+// The name is a reliable field: AWS reserves the prefixes aws, amazon, amzn,
+// AWSEC2, AWSConfigRemediation and AWSSupport, so an attacker CANNOT create a
+// document that impersonates an AWS-owned one. Anything that looks AWS-owned is.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "ssm.amazonaws.com"
+| where EventName in ("CreateDocument", "UpdateDocument", "UpdateDocumentDefaultVersion",
+                      "SendCommand", "StartAutomationExecution", "StartSession", "CreateAssociation")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Resp = parse_json(ResponseElements)
+| extend DocName = tostring(coalesce(Req.name, Req.Name, Req.documentName, Req.DocumentName, ""))
+| extend DocType = tostring(coalesce(Req.documentType, Req.DocumentType, ""))
+// CreateDocument responseElements NESTS under documentDescription — a flat
+// .hash path silently yields empty and every hash IOC disappears.
+| extend DocHash = tostring(Resp.documentDescription.hash)
+| extend IsWrite = EventName in ("CreateDocument", "UpdateDocument", "UpdateDocumentDefaultVersion")
+| summarize
+    Writes        = countif(IsWrite),
+    Dispatches    = countif(not(IsWrite)),
+    SessionPrefs  = countif(IsWrite and DocName == "SSM-SessionManagerRunShell"),
+    ExecTypes     = countif(IsWrite and DocType in ("Command", "Automation", "Session")),
+    DocNames      = make_set_if(DocName, isnotempty(DocName), 25),
+    DocTypes      = make_set_if(DocType, isnotempty(DocType), 10),
+    Hashes        = make_set_if(DocHash, isnotempty(DocHash), 10),
+    SourceIPs     = make_set(SourceIpAddress, 5),
+    Agents        = make_set(UserAgent, 3),
+    FirstSeen     = min(TimeGenerated),
+    LastSeen      = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 30m)
+| where Writes > 0
+| where not(UserIdentityArn contains "role/iac-deploy" or UserIdentityArn contains "role/ci-cd")
+| extend Verdict = case(
+    SessionPrefs > 0,
+        "SESSION MANAGER PREFERENCES REWRITTEN — code at every session start and log control, P0",
+    ExecTypes > 0 and Dispatches > 0,
+        "EXECUTABLE DOCUMENT CREATED THEN DISPATCHED — the payload ran, P0",
+    ExecTypes > 0,
+        "EXECUTABLE DOCUMENT CREATED OUTSIDE THE PIPELINE — staged, fetch the content, P1",
+    "DOCUMENT CREATION OUTSIDE THE PIPELINE — confirm against change records, P3")
+| project FirstSeen, LastSeen, UserIdentityArn, Writes, Dispatches, SessionPrefs,
+          ExecTypes, DocNames, DocTypes, Hashes, SourceIPs, Agents, Verdict
+| order by LastSeen desc
+//
+// ============================================================================
+// WHAT THE QUERY CANNOT SEE — fetch the content
+// ============================================================================
+// aws ssm get-document --name <DocName> --document-version '$LATEST' \
+//   --query 'Content' --output text
+//
+// In a Command document, look for the runShellScript / runPowerShellScript
+// plugins and their runCommand arrays; in an Automation document, aws:executeScript
+// and the assumeRole it runs under; in a Session document, shellProfile (commands
+// run at session start), s3BucketName / cloudWatchLogGroupName / kmsKeyId (session
+// logging), and runAsEnabled.
+//
+// responseElements.documentDescription.hash is the Sha256 of the content at
+// creation. Store it: if the live content stops matching it, the document was
+// updated after the fact and UpdateDocument is the event to hunt for.
+//
+// ============================================================================
+// ERROR CODES — the ones a probing principal generates
+// ============================================================================
+// DocumentAlreadyExists, DocumentLimitExceeded (the account cap is 500 active
+// documents), MaxDocumentSizeExceeded (64 KB), InvalidDocumentContent,
+// InvalidDocumentSchemaVersion, NoLongerSupportedException, TooManyUpdates,
+// InternalServerError. IAM denials surface as AccessDenied, service-evaluated
+// denials as AccessDeniedException — match both. A run of DocumentAlreadyExists
+// against names the principal did not create is name enumeration, not a retry loop.
+//
+// ============================================================================
+// PREVENTION
+// ============================================================================
+// ssm:SessionDocumentAccessCheck forces StartSession to verify the caller has
+// explicit permission on the session document it names, which closes the path
+// where an attacker-authored Session document is used by someone else. Pair it
+// with a deny on CreateDocument/UpdateDocument for the name
+// SSM-SessionManagerRunShell outside the session-admin role.

@@ -1,0 +1,227 @@
+// Lambda Resource-Policy Backdoor (T1098)
+//
+// Signal: a statement added to a Lambda function's resource-based policy that grants
+// invoke rights to a principal nothing confines — a bare wildcard with no organisation
+// condition, an account outside the organisation, or an AWS service principal carrying
+// neither a source ARN nor a source account.
+//
+// The event name is matched with startswith, never equality. AWS documents the CloudTrail
+// event name for this API as AddPermission20150331v2; an equality match on
+// "AddPermission" returns zero rows, which is precisely how both source rules failed.
+//
+// This query does what the Sigma rules structurally cannot: it extracts the 12-digit
+// account ID embedded in the principal and compares it against the organisation set, and
+// it parses responseElements.statement — which is a JSON STRING, not an object — to show
+// the analyst the exact statement that was written.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE THIS BEFORE DEPLOYING: every account ID in your organisation, including this
+// account's own. Without it every cross-account grant reads as external.
+let OrgAccounts = dynamic(["000000000000", "111111111111"]);
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "lambda.amazonaws.com"
+| where EventName startswith "AddPermission"
+| where isempty(ErrorCode)
+//
+// RequestParameters is typed `string` in this table, not dynamic — parse_json is required
+// before any field access. Same for ResponseElements and Resources.
+| extend Req = parse_json(RequestParameters)
+| extend FunctionName = tostring(Req.functionName)
+| extend StatementId  = tostring(Req.statementId)
+| extend Principal    = tostring(Req.principal)
+| extend GrantedAction = tostring(Req.action)
+| extend SourceArn     = tostring(Req.sourceArn)
+| extend SourceAccount = tostring(Req.sourceAccount)
+// CloudTrail lower-cases the first character of the API parameter name, so PrincipalOrgID
+// should arrive as principalOrgID. Both plausible casings are coalesced so a casing
+// difference cannot silently turn a confined org grant into a "public" verdict.
+| extend PrincipalOrgId = tostring(coalesce(Req.principalOrgID, Req.principalOrgId))
+//
+// responseElements.statement is the statement Lambda actually wrote, returned as a JSON
+// STRING. Reaching into it without the inner parse_json yields empty for every field —
+// the response-shape trap on this API. It is the ground truth for what the policy now
+// says, because requestParameters carries the caller's intent and the response carries
+// the result.
+| extend Resp          = parse_json(ResponseElements)
+| extend Statement     = parse_json(tostring(Resp.statement))
+| extend StatementSid  = tostring(Statement.Sid)
+| extend StatementCond = tostring(Statement.Condition)
+//
+// `contains` throughout, never `has`. `has` is whole-term and breaks on every operand
+// here — ".amazonaws.com", "arn:aws", a 12-digit ID inside an ARN are all punctuated.
+| extend IsServicePrincipal  = Principal endswith ".amazonaws.com"
+| extend IsWildcardPrincipal = Principal == "*"
+| extend PrincipalAccount    = extract(@"(?<!\d)(\d{12})(?!\d)", 1, Principal)
+//
+// Confinement, evaluated per statement. A service principal is bounded only by sourceArn
+// or sourceAccount; a wildcard principal only by principalOrgID. Nothing else AddPermission
+// accepts confines anything.
+| extend HasSourceConfinement = isnotempty(SourceArn) or isnotempty(SourceAccount)
+| extend HasOrgConfinement    = isnotempty(PrincipalOrgId)
+| extend IsExternalAccount    = isnotempty(PrincipalAccount)
+                                and not(set_has_element(OrgAccounts, PrincipalAccount))
+//
+// The three shapes that are backdoors, and nothing else.
+| extend ConfusedDeputy = IsServicePrincipal and not(HasSourceConfinement)
+| extend PublicGrant    = IsWildcardPrincipal and not(HasOrgConfinement)
+| where ConfusedDeputy or PublicGrant or IsExternalAccount
+| summarize
+    Grants        = count(),
+    Functions     = make_set(FunctionName, 10),
+    FunctionCount = dcount(FunctionName),
+    Principals    = make_set(Principal, 10),
+    Actions       = make_set(GrantedAction, 5),
+    StatementIds  = make_set(StatementId, 10),
+    Statements    = make_set(StatementSid, 10),
+    AnyPublic     = max(PublicGrant),
+    AnyDeputy     = max(ConfusedDeputy),
+    AnyExternal   = max(IsExternalAccount),
+    CallerTypes   = make_set(UserIdentityType, 5),
+    SourceIPs     = make_set(SourceIpAddress, 5),
+    Regions       = make_set(AWSRegion, 5),
+    FirstSeen     = min(TimeGenerated),
+    LastSeen      = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 15m)
+| extend Verdict = case(
+    FunctionCount >= 3,
+        "SWEEP — one principal backdoored 3+ functions, treat as campaign, P0",
+    AnyPublic,
+        "PUBLIC INVOKE GRANT — wildcard principal with no organisation condition, P0",
+    AnyExternal,
+        "CROSS-ACCOUNT INVOKE GRANT to an account outside the organisation, P0",
+    "UNCONFINED SERVICE PRINCIPAL — any account's resource can invoke this function, P0")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, Functions, FunctionCount,
+          Principals, Actions, StatementIds, Statements, CallerTypes, Regions,
+          SourceIPs, Grants
+| order by LastSeen desc
+//
+// ============================================================================
+// COMPANION — "was it used", and the field-shape trap that decides whether it works
+// ============================================================================
+// lambda:Invoke is a DATA event (resources.type AWS::Lambda::Function). It is not in a
+// default trail and it is not in lookup-events. Everything below assumes a Lambda
+// data-event trail is already ingesting into this workspace.
+//
+// A SYNCHRONOUS invoke — the default `aws lambda invoke`, and the natural way an attacker
+// tests a backdoor — records requestParameters: null. The function identity exists only in
+// resources[].ARN. The filter on the left silently drops exactly those invokes:
+//
+//   WRONG    | where tostring(parse_json(RequestParameters).functionName) == FunctionName
+//   RIGHT    | mv-apply R = parse_json(Resources) on (...)  and match R.ARN
+//
+// AWSCloudTrail
+// | where TimeGenerated > ago(7d)
+// | where EventSource == "lambda.amazonaws.com"
+// | where EventName == "Invoke"
+// | extend Res = parse_json(Resources)
+// | mv-expand R = Res
+// | where tostring(R.type) == "AWS::Lambda::Function"
+// | extend FunctionArn = tostring(R.ARN)
+// | where FunctionArn contains ":function:my-backdoored-function"
+// // A cross-account invoke lands in the FUNCTION OWNER's trail, and UserIdentityAccountId
+// // is the CALLING account — that mismatch against RecipientAccountId is the proof the
+// // backdoor was exercised from outside.
+// | extend CallerAccount   = UserIdentityAccountId
+// | extend OwnerAccount    = RecipientAccountId
+// | extend CrossAccount    = isnotempty(CallerAccount) and CallerAccount != OwnerAccount
+// // Present only on ASYNCHRONOUS invokes. Empty here means "synchronous", not "unknown".
+// | extend InvocationType  = tostring(parse_json(RequestParameters).invocationType)
+// | summarize Invocations = count(), FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated),
+//             Types = make_set(InvocationType, 5), IPs = make_set(SourceIpAddress, 5)
+//             by FunctionArn, UserIdentityArn, CallerAccount, OwnerAccount, CrossAccount
+// | where CrossAccount
+// | order by LastSeen desc
+//
+// ============================================================================
+// COMPANION — adjacent exposure: unauthenticated function URLs
+// ============================================================================
+// CreateFunctionUrlConfig with AuthType NONE publishes an unauthenticated HTTPS endpoint.
+// It grants nothing on its own — without the paired resource-policy statement the URL
+// returns 403 — so the AddPermission half is covered by the primary query above. This
+// companion catches the configuration half, and the pairing within a few minutes is the
+// strongest single signal in the whole technique.
+//
+// AWSCloudTrail
+// | where TimeGenerated > ago(7d)
+// | where EventSource == "lambda.amazonaws.com"
+// | where EventName startswith "CreateFunctionUrlConfig" or EventName startswith "UpdateFunctionUrlConfig"
+// | where isempty(ErrorCode)
+// | extend AuthType = tostring(parse_json(RequestParameters).authType)
+// | where AuthType == "NONE"
+// | project TimeGenerated, UserIdentityArn, AWSRegion,
+//           FunctionName = tostring(parse_json(RequestParameters).functionName),
+//           AuthType, SourceIpAddress
+// | order by TimeGenerated desc
+//
+// ============================================================================
+// FIELD SHAPE AND ERROR STRINGS — each of these fails silently
+// ============================================================================
+// EventName: AWS documents AddPermission20150331v2 / RemovePermission20150331v2 /
+// PutResourcePolicy. Equality against the bare API name returns zero rows. Use startswith.
+//
+// responseElements.statement is a JSON STRING and needs a SECOND parse_json. It carries
+// only the ONE statement just added — never the whole policy. Reconstructing a function's
+// policy from AddPermission events alone misses every statement added before the log
+// window; GetPolicy is the only call that returns the whole document.
+//
+// PutResourcePolicy REPLACES the entire policy. requestParameters.policy is the full JSON
+// document as a string; there is no per-statement field and no prior version anywhere.
+//
+// Denials on this path: AccessDenied and AccessDeniedException — match both, prefix
+// tolerantly, and confirm against a real denied event in your own trail. Codes that are
+// NOT denials and must not be counted as probing: PublicPolicyException (the public-access
+// block rejected the content — the caller HAD the permission), ResourceConflictException
+// (that StatementId already exists), ResourceNotFoundException, InvalidParameterValueException,
+// PreconditionFailedException (stale RevisionId), PolicyLengthExceededException (the 20 KB
+// policy quota), TooManyRequestsException.
+//
+// There is no size-based evasion path here. A function's resource policy is capped at
+// 20 KB — far below CloudTrail's 100 KB requestParameters omission threshold — so an
+// oversized document is rejected with PolicyLengthExceededException rather than logged
+// with its body missing.
+//
+// ============================================================================
+// PREVENTION — and the control that is NOT available here
+// ============================================================================
+// A resource control policy (RCP) is the usual answer for an external-principal threat,
+// and it is NOT available for this technique. AWS Organizations lists the services whose
+// actions RCPs apply to, and lambda is not on it (verified 2026-08-28: S3, STS, KMS, SQS,
+// Secrets Manager, DynamoDB, EventBridge, ECR, CloudFront, CloudWatch Logs and others —
+// no lambda prefix). An RCP denying lambda:InvokeFunction on a foreign aws:PrincipalOrgID
+// is therefore unenforceable, not merely awkward. Do not write one and do not report the
+// gap as covered.
+//
+// An SCP cannot reach the invoker either — SCPs bind only principals in your own
+// organisation, so a deny conditioned on a foreign org ID never evaluates against the
+// account that would use the backdoor.
+//
+// What an SCP CAN do is constrain the call that creates the grant, because that call is
+// made by YOUR principal. Lambda's own lambda:Principal condition key restricts which
+// service or account a caller may grant invoke rights to:
+//
+//   Deny lambda:AddPermission / lambda:PutResourcePolicy
+//   Condition StringNotLike { "lambda:Principal": [<allowlisted service principals>,
+//                                                  <your own account IDs>] }
+//
+// StringNotLike, never StringNotEquals — the allowlist carries wildcards, and Deny with
+// an equality operator against a wildcarded value denies everything, which is an outage.
+//
+// For the function-URL half, AWS documents an SCP denying lambda:CreateFunctionUrlConfig
+// and lambda:UpdateFunctionUrlConfig where lambda:FunctionUrlAuthType is not AWS_IAM.
+//
+// Structural controls that do apply to the resource itself:
+//   - Lambda's public-access block (BlockPublicPolicy / RestrictPublicResource), which
+//     rejects a policy that would grant public access with PublicPolicyException.
+//   - AWS Config managed rule LAMBDA_FUNCTION_PUBLIC_ACCESS_PROHIBITED
+//     (AWS::Lambda::Function, configuration-change triggered). It is NON_COMPLIANT for an
+//     empty or wildcard Principal, and also for an S3-invoked function whose statement
+//     carries no condition limiting the source — the confused-deputy case, checked
+//     continuously.
+//   - IAM Access Analyzer external-access findings, the continuous version of the
+//     GetPolicy sweep. CAVEAT: AWS states it reports external access from resource-based
+//     policies attached to FUNCTIONS AND LAYERS, and does NOT report it for policies
+//     attached to aliases or specific versions invoked using a qualified ARN. A grant
+//     added with --qualifier is therefore invisible to Access Analyzer and must be caught
+//     by the AddPermission event or by a GetPolicy sweep that iterates qualifiers.

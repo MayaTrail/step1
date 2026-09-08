@@ -1,0 +1,113 @@
+// ECS Service Scaled to a High Desired Count (T1496.001 / T1496)
+//
+// Signal: UpdateService raising desiredCount far above the service's own baseline; the same
+// across several services by one principal; the register-then-scale pair that means the
+// multiplied compute is the actor's image; and the DENIED attempts, kept separate.
+//
+// This query does what the Sigma rule structurally cannot: it compares each UpdateService
+// against THE SERVICE'S OWN PREVIOUS desiredCount. A fixed threshold is the wrong instrument
+// for a magnitude signal - 50 is an incident on a service that normally runs 2 and routine on
+// one that normally runs 200 - and Sigma has no way to reference a prior event's value. The
+// ratio below is the real discriminator; the absolute floor is only there to catch the first
+// scale-out of a service with no history.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let Lookback = 90d;
+let AbsoluteFloor = 50;      // see the threshold basis in sigma_t1496_001.yml
+let RatioFloor = 10.0;       // 10x the service's own previous desiredCount
+let Ecs =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "ecs.amazonaws.com"
+    // RequestParameters and ResponseElements are typed `string` in this table, not dynamic.
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    // cluster and service are caller-typed on every ECS event - short name or full ARN.
+    | extend ClusterName = tostring(split(tostring(Req.cluster), "/")[-1])
+    // `contains`, never `has`: role paths and ARNs are punctuated and `has` is whole-term.
+    | extend IsPipeline = (UserIdentityArn contains ":role/iac-deploy")
+                       or (UserIdentityArn contains ":role/BreakGlassAdmin");
+let Updates = Ecs
+    | where EventName == "UpdateService"
+    | extend ServiceName = tostring(split(tostring(Req.service), "/")[-1])
+    // desiredCount is an INTEGER in the event. It is also OPTIONAL: an UpdateService that only
+    // changes the task definition omits it entirely, and toint(null) is null - which must not
+    // be read as zero. Those rows are dropped below rather than counted as scale-to-zero.
+    | extend RequestedCount = toint(Req.desiredCount)
+    // responseElements.service.desiredCount is the value AFTER the call, so on a SUCCESSFUL
+    // update it equals the request. On a denied one there is no response object at all.
+    | extend PostCount = toint(Resp.service.desiredCount),
+             PostRunning = toint(Resp.service.runningCount),
+             PostTaskDef = tostring(Resp.service.taskDefinition)
+    | extend NewTaskDef = tostring(Req.taskDefinition),
+             ForcedDeploy = tostring(Req.forceNewDeployment),
+             ExecToggled = tostring(Req.enableExecuteCommand);
+// The service's own history. `prev()` needs a serialised, ordered stream, so the rows are
+// sorted per service before the previous successful count is carried forward.
+let WithBaseline =
+    Updates
+    | where isnotnull(RequestedCount)
+    | order by ClusterName asc, ServiceName asc, TimeGenerated asc
+    | serialize
+    | extend PrevCount = iff(prev(ServiceName) == ServiceName and prev(ClusterName) == ClusterName,
+                             prev(PostCount), int(null))
+    // A first-seen service has no prior value. That is UNKNOWN, not zero: dividing by an
+    // assumed zero would make every first observation an infinite ratio and flood the alert.
+    | extend GrowthRatio = iff(isnotnull(PrevCount) and PrevCount > 0,
+                               todouble(RequestedCount) / todouble(PrevCount), real(null));
+let TaskDefs = Ecs
+    | where EventName == "RegisterTaskDefinition" and isempty(ErrorCode)
+    | summarize RegisteredAt = max(TimeGenerated), Registrar = any(UserIdentityArn),
+                Images = any(tostring(Req.containerDefinitions))
+             by Family = tostring(Req.family);
+WithBaseline
+| where RequestedCount >= AbsoluteFloor or GrowthRatio >= RatioFloor
+// Join on the FAMILY: taskDefinition is caller-typed as family, family:revision or an ARN, so
+// a raw string join drops every event that used a different form.
+| extend Family = tostring(split(tostring(split(coalesce(NewTaskDef, PostTaskDef), "/")[-1]), ":")[0])
+| join kind=leftouter TaskDefs on Family
+| extend SelfSuppliedImage = isnotempty(RegisteredAt) and Registrar == UserIdentityArn
+                             and RegisteredAt <= TimeGenerated
+                             and RegisteredAt > TimeGenerated - 1h
+| extend Denied = isnotempty(ErrorCode)
+| extend Verdict = case(
+    Denied,
+        strcat("SCALE-OUT DENIED (", ErrorCode, ") - no compute was created. Intent signal and a map of where this principal's permissions end; do NOT count it as consumption"),
+    SelfSuppliedImage,
+        strcat("RESOURCE HIJACKING - this principal registered the task definition within the hour and then scaled the service running it to ", RequestedCount, ". Image field: ", Images),
+    isnotnull(GrowthRatio) and GrowthRatio >= RatioFloor and not(IsPipeline),
+        strcat("ANOMALOUS SCALE-OUT - desiredCount went from ", PrevCount, " to ", RequestedCount, ", a ", round(GrowthRatio, 1), "x increase, by a principal outside the deployment pipeline"),
+    isnull(GrowthRatio) and RequestedCount >= AbsoluteFloor and not(IsPipeline),
+        strcat("HIGH DESIRED COUNT, NO BASELINE - first observed update for this service in the lookback, set to ", RequestedCount, ". Establish the baseline before deciding"),
+    IsPipeline,
+        "PIPELINE SCALE-OUT - large but from the deployment role. Confirm against the change record",
+        strcat("SCALE-OUT TO ", RequestedCount, " - above the absolute floor but within the service's normal range"))
+| project TimeGenerated, Verdict, Actor = UserIdentityArn, ClusterName, ServiceName,
+          PrevCount, RequestedCount, GrowthRatio, PostRunning, Family, Images,
+          NewTaskDef, ForcedDeploy, ExecToggled, ErrorCode, SelfSuppliedImage,
+          SourceIpAddress, UserAgent, UserIdentityAccessKeyId
+| order by TimeGenerated desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// Whether the tasks actually ran. desiredCount is an intent; capacity decides the outcome. On
+// Fargate the "On-Demand vCPU resource count" quota defaults to 6 per Region - about 24 tasks
+// at the 0.25 vCPU minimum - so a desiredCount of 1,000 on a default-quota account never
+// materialises and the tasks sit unplaceable. responseElements.service.runningCount is the
+// count at the MOMENT OF THE CALL, before any of the new tasks start, so it is never the
+// answer. The AWS/ECS CPUUtilization metric on the ClusterName+ServiceName dimensions is, and
+// so is the bill.
+//
+// What the containers computed. ECS logs control-plane calls as management events; the only
+// documented ECS data events are ecs:Poll, ecs:StartTelemetrySession and
+// ecs:PutSystemLogEvents under resources.type AWS::ECS::ContainerInstance. There is no
+// AWS::ECS::Task data event type, so mining is inferred from CPU and cost, never observed here.
+//
+// The opposite direction. desiredCount 0 is the destructive setting and the mandatory
+// precursor to DeleteService and DeleteCluster. It is deliberately out of scope here and is
+// covered by ecs.stealth.service-is-deleted and ecs.stealth.cluster-is-deleted, each of which
+// ships a scale-to-zero base rule.
+//
+// PREVENTION. There is no IAM condition key for a maximum desiredCount, so the control is not
+// a policy on the value - it is confining ecs:UpdateService to the deployment pipeline, and a
+// billing anomaly alarm as the backstop for whatever gets through.

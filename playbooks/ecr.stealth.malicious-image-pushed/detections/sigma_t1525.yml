@@ -1,0 +1,178 @@
+# Container image pushed to ECR by an unexpected principal (T1525)
+#
+# THE PUSH RULE CANNOT FIRE. It matches `userIdentity.type:"iamuser"`; CloudTrail emits `IAMUser`.
+# On a case-sensitive field the lowercase form matches nothing. Four other rules in the same ECR set
+# spell it correctly, so the pack writes one field two ways.
+#
+# AND EVEN CORRECTED, THE FILTER EXCLUDES THE NORMAL PUSH PATH. `userIdentity.type` of IAMUser
+# excludes `AssumedRole`, which is what every CI/CD pipeline and every SSO session is. In a modern
+# estate the pushes a detection most wants to see — from a build role — are exactly the ones the
+# filter removes. All identity types are matched below; the discriminator is the ALLOWLIST, not the
+# type.
+#
+# VOLUME IS THE WRONG SIGNAL FOR THIS TECHNIQUE. The source ships this as a building block with a
+# threshold of five pushes in fifteen minutes. A single malicious image is the incident, and a normal
+# CI run legitimately pushes several tags for one build (`latest`, a semver, a commit SHA), so the
+# threshold is simultaneously too high to catch the attack and too low to avoid the pipeline.
+#
+# EVERY RULE IN THE ECR SET EXCLUDES THE SAME NAMED HUMAN BY ARN. That is a personal allowlist
+# compiled into detection logic for a whole service: if that identity is compromised, all seven rules
+# go blind together. Replaced here with a populated provisioner list a responder can read and change.
+#
+# THE REPOSITORY RULE CARRIES `NOT "TLSv1.3"`, AN UNFIELDED TERM NEGATION. It is not bound to a
+# field, so it drops any event whose serialised record contains that string anywhere — which is the
+# TLS version of the call itself. Modern SDKs negotiate TLS 1.3 by default, so the clause discards
+# much of the traffic the rule exists to inspect, attacker and administrator alike.
+#
+# WHAT THE SOURCE GOT RIGHT: it matches `ecr-public.amazonaws.com` alongside the private registry.
+# A push to the public registry distributes the image outside the account entirely, and it is a
+# genuinely different outcome — so it ships here as its own rule rather than being folded in.
+title: Container image pushed to ECR by a principal outside the deployment path
+id: 3b7f04c1-98ae-4d52-a6f0-51c9e278b3da
+name: ecr_image_pushed_by_unexpected_principal
+status: experimental
+description: >-
+  A successful PutImage from a principal that is not a recorded deployment identity. One image is
+  the incident — this is where a supply-chain implant enters, and everything downstream that pulls
+  the tag runs it. All identity types are matched, because a compromised build role is the most
+  likely route and it is an AssumedRole.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_PutImage.html
+  - https://attack.mitre.org/techniques/T1525/
+tags:
+  - attack.persistence
+  - attack.t1525
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecr.amazonaws.com'
+    eventName: 'PutImage'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the roles that own image builds. This is the entire
+  # discriminator — PutImage is what every deployment does.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/ci-build'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    A build role missing from the allowlist. That is the list being incomplete rather than the rule
+    being wrong, and completing it is what makes this usable.
+level: high
+---
+title: Container image pushed to the ECR Public registry
+id: c6021ae7-4d38-49b1-83f5-70e6c4a19b2f
+name: ecr_public_image_pushed
+status: experimental
+description: >-
+  A successful PutImage against ecr-public.amazonaws.com. The public registry distributes the image
+  outside the account and outside the organisation, so this is a different outcome from a private
+  push — it is publication, and it is reachable by anyone. Shipped separately because the response
+  differs: a private push is contained by deleting the image, a public one has already been
+  distributed and may have been pulled by third parties.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_PutImage.html
+  - https://attack.mitre.org/techniques/T1525/
+tags:
+  - attack.persistence
+  - attack.exfiltration
+  - attack.t1525
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecr-public.amazonaws.com'
+    eventName: 'PutImage'
+  success:
+    errorCode: null
+  condition: selection and success
+falsepositives:
+  - >-
+    An organisation that genuinely publishes public images. It should be a short, recorded list of
+    repositories, and a push to anything outside it is the finding.
+level: high
+---
+title: ECR repository created and an image pushed to it by the same principal
+id: 90e5cb43-1a76-42df-b508-3c7e061a94d8
+status: experimental
+description: >-
+  A repository was created and an image pushed into it by the same principal within the hour. An
+  empty repository implants nothing, which is why creating one is informational on its own — but a
+  new repository appearing with an image in it is how a lookalike or typosquatted repository gets
+  planted, and it is invisible to anything watching only established repositories.
+references:
+  - https://attack.mitre.org/techniques/T1525/
+tags:
+  - attack.persistence
+  - attack.t1525
+correlation:
+  type: temporal_ordered
+  rules:
+    - ecr_repository_created
+    - ecr_image_pushed
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+falsepositives:
+  - >-
+    A new service being onboarded, which legitimately creates a repository and pushes its first
+    image. Allowlist the provisioning role on the base rules; the repository name is what a
+    responder should read, since a lookalike is the whole point of the technique.
+level: high
+---
+title: ECR repository created
+id: 51fa9d02-6bc7-4e18-90a3-d825b6f04e17
+name: ecr_repository_created
+status: experimental
+description: >-
+  Base rule — correlation component and change accounting, never for direct alerting. A successful
+  CreateRepository. A new repository is empty, so on its own it grants nothing and implants nothing;
+  the source pack rates it P4 and maps it to Implant Internal Image, which an empty repository is
+  not.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_CreateRepository.html
+tags:
+  - attack.persistence
+  - attack.t1525
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecr.amazonaws.com'
+    eventName: 'CreateRepository'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+title: Container image pushed to ECR
+id: 7c48e6b0-2f91-4a35-b7d6-04e159a3c827
+name: ecr_image_pushed
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. Any successful PutImage to
+  either registry, including every ordinary build.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_PutImage.html
+tags:
+  - attack.persistence
+  - attack.t1525
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource:
+      - 'ecr.amazonaws.com'
+      - 'ecr-public.amazonaws.com'
+    eventName: 'PutImage'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational

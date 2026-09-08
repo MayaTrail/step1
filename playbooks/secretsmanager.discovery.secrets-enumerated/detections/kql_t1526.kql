@@ -1,0 +1,64 @@
+// Secrets Manager inventory enumerated (T1526)
+//
+// The building block excludes errors, so a DENIED ListSecrets is not a listing event — a principal
+// that asked for the whole inventory and was refused produces nothing. Reported here with no
+// threshold.
+//
+// And ListSecrets is not the only enumeration path. A principal holding ARNs but not ListSecrets
+// enumerates with DescribeSecret one call at a time, returning the same metadata. Nothing in the
+// source set sees it.
+//
+// Denial BURSTS across the service are a separate use case:
+// ../../secretsmanager.discovery.access-repeatedly-denied/
+//
+// `contains` throughout, never `has` — secret names and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+let WINDOW = 15m;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "secretsmanager.amazonaws.com"
+| where EventName in ("ListSecrets", "DescribeSecret", "GetSecretValue", "BatchGetSecretValue")
+| extend Req = parse_json(RequestParameters)
+| extend SecretId = tostring(Req.secretId)
+| extend IsKnownConsumer = UserIdentityArn contains "SecretsConsumerRole"
+                        or UserIdentityArn contains "PlatformAutomation"
+| extend Listed        = EventName == "ListSecrets" and isempty(ErrorCode)
+| extend ListDenied    = EventName == "ListSecrets" and isnotempty(ErrorCode)
+| extend Described     = EventName == "DescribeSecret" and isempty(ErrorCode)
+// Retrieval is the objective the enumeration serves. Owned by the neighbouring playbook, but
+// surfaced here because it is the single fact that decides this incident's severity.
+| extend Retrieved     = EventName in ("GetSecretValue", "BatchGetSecretValue") and isempty(ErrorCode)
+| summarize
+    Listings          = countif(Listed),
+    ListingsDenied    = countif(ListDenied),
+    Describes         = countif(Described),
+    DescribedSecrets  = dcountif(SecretId, Described),
+    Retrievals        = countif(Retrieved),
+    RetrievedSecrets  = dcountif(SecretId, Retrieved),
+    Actions           = make_set(EventName, 10),
+    Secrets           = make_set(iff(Described or Retrieved, SecretId, ""), 20),
+    FirstSeen         = min(TimeGenerated),
+    LastSeen          = max(TimeGenerated)
+    by bin(TimeGenerated, WINDOW), UserIdentityArn, SourceIpAddress, IsKnownConsumer
+| where ListingsDenied > 0
+     or DescribedSecrets >= 10
+     or (Listings > 0 and not(IsKnownConsumer))
+| extend Verdict = case(
+    Retrievals > 0,
+        "CRITICAL - enumeration became retrieval; treat the retrieved secrets as disclosed",
+    DescribedSecrets >= 10 and Listings == 0,
+        "HIGH - inventory walked one ARN at a time via DescribeSecret, never touching ListSecrets",
+    ListingsDenied > 0,
+        "MEDIUM - inventory listing refused; the source building block excludes errors and cannot see this",
+    DescribedSecrets >= 10,
+        "MEDIUM - metadata read across many secrets",
+    "MEDIUM - inventory listed by a principal outside the consumer allowlist")
+// A principal that describes many secrets without ever calling ListSecrets either lacks the
+// permission or is avoiding the call the rules watch. Both are worth knowing.
+| extend AvoidedListSecrets = DescribedSecrets >= 10 and Listings == 0
+| project TimeGenerated, Verdict, AvoidedListSecrets, UserIdentityArn, SourceIpAddress,
+          Listings, ListingsDenied, Describes, DescribedSecrets, Retrievals, RetrievedSecrets,
+          Actions, Secrets, FirstSeen, LastSeen
+| order by Retrievals desc, DescribedSecrets desc, TimeGenerated desc

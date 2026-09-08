@@ -1,0 +1,35 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Amazon SNS - Building Block - SNS Enumerated by Previously Unseen User
+  priority: building-block
+  type: logs_new_value
+  mitre: T1526/TA0007
+  group_by: []
+
+- name: Amazon SNS - Building Block - SNS Topic Was Published
+  priority: building-block
+  type: logs_threshold
+  mitre: T1566/TA0001
+  query: |
+    eventSource:"sns.amazonaws.com" AND eventName:("Publish") AND NOT _exists_:errorCode
+  threshold: 0.0  window: 10m
+  group_by: ['userIdentity.arn']
+
+- name: Amazon SNS - Flow Alert - Possible Smishing Observed
+  priority: P2
+  type: flow
+  mitre: T1566/TA0001
+  flow_stage: (8)  timeframeMs: 0
+  flow_stage: (9)  timeframeMs: 86400000
+  group_by: []
+

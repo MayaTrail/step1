@@ -1,0 +1,178 @@
+# S3 Block Public Access weakened by flag (T1530)
+#
+# THE FOUR FLAGS ARE NOT INTERCHANGEABLE AND THE SOURCE RULE ORs THEM AS IF THEY WERE.
+# RestrictPublicBuckets and IgnorePublicAcls change how an EXISTING configuration is evaluated, so
+# data can be public immediately. BlockPublicPolicy and BlockPublicAcls only refuse a FUTURE write.
+# One rule reporting all four identically cannot tell a responder which they have.
+#
+# All four are `Required: No`, so these rules read what is present and never infer absence. And the
+# account setting is the floor — AWS applies "the most restrictive combination" — so a bucket flag
+# set false is inert while the account block holds it true.
+# Full rationale: detections/detection_note_t1530.md.
+title: S3 Block Public Access weakened so an existing public configuration takes effect
+id: 9f27b054-6e18-41a3-b8c7-2d05e69a4713
+name: s3_pab_weakened_immediate
+status: experimental
+description: >-
+  RestrictPublicBuckets or IgnorePublicAcls set to false. These two change how an EXISTING
+  configuration is evaluated, so if the bucket already carries a public policy or ACL it becomes
+  effective the moment this call succeeds — no second act required.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutPublicAccessBlock.html
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketPublicAccessBlock'
+  success:
+    errorCode: null
+  restrict_off:
+    requestParameters.PublicAccessBlockConfiguration.RestrictPublicBuckets: false
+  ignore_acls_off:
+    requestParameters.PublicAccessBlockConfiguration.IgnorePublicAcls: false
+  # POPULATE BEFORE DEPLOYING with the roles that own bucket lifecycle.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and (restrict_off or ignore_acls_off) and not known_provisioners
+falsepositives:
+  - >-
+    A bucket deliberately serving public content, where these flags are false by design. It should
+    be on the recorded public-bucket list; if it is not, the list is wrong or the bucket is.
+level: high
+---
+title: S3 Block Public Access weakened so a public configuration may be written
+id: 3c8e1d97-40ba-4276-95f1-c8047b62ae30
+name: s3_pab_weakened_prospective
+status: experimental
+description: >-
+  BlockPublicPolicy or BlockPublicAcls set to false. Neither exposes anything on its own — AWS
+  states these flags "doesn't affect existing policies or ACLs" — but they are the refusal, so the
+  next public PutBucketPolicy or PutBucketAcl will now succeed. Shipped apart from the
+  immediate-effect flags because a window still remains.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutPublicAccessBlock.html
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketPublicAccessBlock'
+  success:
+    errorCode: null
+  block_policy_off:
+    requestParameters.PublicAccessBlockConfiguration.BlockPublicPolicy: false
+  block_acls_off:
+    requestParameters.PublicAccessBlockConfiguration.BlockPublicAcls: false
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and (block_policy_off or block_acls_off) and not known_provisioners
+falsepositives:
+  - >-
+    A bucket being prepared for public hosting, where the gate is lowered before the policy is
+    written. The correlation below is what turns that into a finding when no policy follows.
+level: medium
+---
+title: S3 account-level Block Public Access weakened
+id: e40726ba-15c9-4d83-a071-58b6c3e29f14
+name: s3_account_pab_weakened
+status: experimental
+description: >-
+  PutAccountPublicAccessBlock set any flag to false. The account setting is the floor for every
+  bucket — AWS applies "the most restrictive combination of the bucket-level and account-level
+  settings" — so lowering it lets every bucket fall to its own configuration in one call, under an
+  event name no bucket-scoped rule matches.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutAccountPublicAccessBlock'
+  success:
+    errorCode: null
+  restrict_off:
+    requestParameters.PublicAccessBlockConfiguration.RestrictPublicBuckets: false
+  policy_off:
+    requestParameters.PublicAccessBlockConfiguration.BlockPublicPolicy: false
+  acls_off:
+    requestParameters.PublicAccessBlockConfiguration.BlockPublicAcls: false
+  ignore_off:
+    requestParameters.PublicAccessBlockConfiguration.IgnorePublicAcls: false
+  condition: selection and success and (restrict_off or policy_off or acls_off or ignore_off)
+falsepositives:
+  - >-
+    An account genuinely repurposed for public static hosting. Rare, and it should be a recorded
+    decision rather than a tuning exception.
+level: critical
+---
+title: Block Public Access lowered and then the bucket opened
+id: 6b91af38-c750-4e24-83db-1f7052ce9a46
+status: experimental
+description: >-
+  A prospective flag was lowered and a policy or ACL written afterwards by the same principal. This
+  is the pair the flag exists to prevent: with BlockPublicPolicy true the write is refused, so an
+  actor has to lower the gate first. The ordering carries the signal — the reverse order is a
+  bucket being locked down. group-by is the principal, because the bucket name is not carried
+  identically across both event shapes.
+references:
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+correlation:
+  type: temporal_ordered
+  rules:
+    - s3_pab_weakened_prospective
+    - s3_bucket_open_write
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+level: critical
+---
+title: S3 bucket policy or ACL written
+id: 82d5401e-73fc-4b96-a8e0-950dc17e2f64
+name: s3_bucket_open_write
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. Any successful write to a
+  bucket's policy or ACL, including ordinary infrastructure applies.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketPolicy.html
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName:
+      - 'PutBucketPolicy'
+      - 'PutBucketAcl'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational

@@ -74,12 +74,12 @@ export function LoginPage() {
   const handleGoogleCredential = useCallback(async (idToken: string) => {
     clearError()
     try {
-      const user = await googleSSO(idToken)
-      if (!user.isVerified && !user.isDemo) {
-        navigate('/connector', { replace: true })
-      } else {
-        navigate('/', { replace: true })
-      }
+      await googleSSO(idToken)
+      // Every signed-in user lands on the dashboard, connected or not. An
+      // unconnected user ("Explorer") browses read-only and connects from their
+      // profile when they choose to; the backend refuses every mutating request
+      // meanwhile. See product-design-requirements/connector-access-design/.
+      navigate('/', { replace: true })
     } catch {
       // error is set in AuthContext
     }
@@ -227,12 +227,12 @@ function SignInForm() {
     e.preventDefault()
     clearError()
     try {
-      const user = await login({ username, password })
-      if (!user.isVerified && !user.isDemo) {
-        navigate('/connector', { replace: true })
-      } else {
-        navigate('/', { replace: true })
-      }
+      await login({ username, password })
+      // Every signed-in user lands on the dashboard, connected or not. An
+      // unconnected user ("Explorer") browses read-only and connects from their
+      // profile when they choose to; the backend refuses every mutating request
+      // meanwhile. See product-design-requirements/connector-access-design/.
+      navigate('/', { replace: true })
     } catch {
       // error is set in AuthContext
     }

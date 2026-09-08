@@ -1,0 +1,148 @@
+# Long-lived low-rate egress, and the beaconing the rule is named for (T1071 / T1041)
+#
+# THE RULE'S NAME AND ITS LOGIC DESCRIBE DIFFERENT THINGS. It matches a flow with age >= 3600
+# seconds AND bytes >= 5,000,000 — a session lasting at least an hour and moving at least 5 MB.
+# That is roughly 1.4 KB/s, which is low RATE but substantial VOLUME: it detects slow exfiltration
+# over a persistent connection.
+#
+# Classic command-and-control BEACONING is the opposite shape — many SHORT flows at regular
+# intervals, each carrying a few hundred bytes. Every one of those has an age near zero and a byte
+# count far below the threshold, so the rule cannot see beaconing at all. Both shapes are shipped
+# below because both are real and the pack has a rule for only one of them.
+#
+# `netflow` IS UNI-DIRECTIONAL AND THIS BREAKS THE VOLUME TEST QUIETLY. AWS: "The log type
+# `netflow` logs uni-directional flows, so each event represents traffic going in a single
+# direction." So `bytes` is ONE LEG of a conversation. A large download and a large upload both
+# produce a matching record, and only one of them is exfiltration. The rules below read
+# `event.direction` — to_server is the outbound leg — rather than inferring intent from volume.
+#
+# THE ALERT IS STRUCTURALLY LATE AND THE WINDOW DOES NOT CHANGE THAT. Netflow records are emitted
+# when a flow ENDS or times out, not continuously. A flow matching age >= 3600 produces its record
+# at least an hour after it started, so a 10-minute evaluation window is a window on RECORD ARRIVAL
+# and not on traffic. The data has already moved by the time anything fires. This is stated rather
+# than tuned away, because no window setting fixes it — it is a property of the log format.
+#
+# THE STATELESS ENGINE IS INVISIBLE. AWS: "Firewall logging is only available for traffic that you
+# forward to the stateful rules engine." Traffic a stateless rule handled produces no netflow record
+# at all, so absence here is never evidence that a transfer did not happen.
+#
+# `group_by src_ip` WITH A THRESHOLD OF ZERO means every matching flow alerts individually. The
+# correlations below group by the source and destination pair, which is the unit an analyst acts on.
+title: Long-lived outbound flow carrying substantial volume
+id: 3e91c704-27b6-4f5a-8d13-608a5e2bc47f
+name: netfw_slow_egress_flow
+status: experimental
+description: >-
+  An outbound flow lasting an hour or more and carrying at least 5 MB. Low rate, substantial
+  volume — the shape of a deliberate slow transfer designed to stay under volumetric thresholds.
+  Direction is read from event.direction rather than inferred, because netflow records one leg per
+  event and a large inbound transfer would otherwise match identically. Note that the record is
+  emitted when the flow ends, so this fires after the data has moved; it is a detection of what
+  happened rather than an interception.
+references:
+  - https://docs.aws.amazon.com/network-firewall/latest/developerguide/firewall-logging-contents.html
+  - https://attack.mitre.org/techniques/T1041/
+tags:
+  - attack.exfiltration
+  - attack.t1041
+logsource:
+  product: aws
+  service: networkfirewall
+detection:
+  netflow_event:
+    event.event_type: 'netflow'
+  outbound:
+    event.direction: 'to_server'
+  long_lived:
+    event.netflow.age|gte: 3600
+  substantial:
+    event.netflow.bytes|gte: 5000000
+  # Private destination space is excluded rather than public space enumerated. An internal
+  # long-lived transfer is a different question and usually a backup.
+  internal_destination:
+    event.dest_ip|startswith:
+      - '10.'
+      - '192.168.'
+      - '172.16.'
+      - '172.17.'
+      - '172.18.'
+      - '172.19.'
+      - '172.2'
+      - '172.30.'
+      - '172.31.'
+  condition: netflow_event and outbound and long_lived and substantial and not internal_destination
+falsepositives:
+  - >-
+    Backup jobs, log shipping, container image pulls and software update channels — all long-lived
+    and all substantial. This is a large false-positive surface and the tuning is by destination
+    address or SNI, not by threshold: raising the byte count only moves the line, while naming the
+    known destinations removes them.
+level: medium
+---
+title: Outbound flow to an external destination
+id: 8b47d0e2-5193-4c86-a7f0-2e63175bc9d4
+name: netfw_egress_flow
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. Every outbound flow to a
+  non-private destination. It exists so the beaconing correlation below has something to count, and
+  it matches essentially all egress traffic.
+references:
+  - https://docs.aws.amazon.com/network-firewall/latest/developerguide/firewall-logging-contents.html
+tags:
+  - attack.command-and-control
+  - attack.t1071
+logsource:
+  product: aws
+  service: networkfirewall
+detection:
+  netflow_event:
+    event.event_type: 'netflow'
+  outbound:
+    event.direction: 'to_server'
+  internal_destination:
+    event.dest_ip|startswith:
+      - '10.'
+      - '192.168.'
+      - '172.16.'
+      - '172.17.'
+      - '172.18.'
+      - '172.19.'
+      - '172.2'
+      - '172.30.'
+      - '172.31.'
+  condition: netflow_event and outbound and not internal_destination
+level: informational
+---
+title: Many short outbound flows from one source to one destination
+id: c25f68a1-9d04-4b73-85e6-701da9c34b28
+status: experimental
+description: >-
+  The shape the source rule is named for and cannot detect. Command-and-control beaconing is many
+  SHORT flows at regular intervals, each carrying a few hundred bytes — every one of which has an
+  age near zero and a byte count far below any volumetric threshold. Counting flows per
+  source-destination pair is what makes it visible. This rule cannot measure the interval
+  regularity that would confirm beaconing, because Sigma correlations have no variance operator;
+  the KQL computes it, and this rule's job is to surface the candidate.
+references:
+  - https://attack.mitre.org/techniques/T1071/
+tags:
+  - attack.command-and-control
+  - attack.t1071
+correlation:
+  type: event_count
+  rules:
+    - netfw_egress_flow
+  group-by:
+    - event.src_ip
+    - event.dest_ip
+  timespan: 6h
+  condition:
+    gte: 60
+falsepositives:
+  - >-
+    Monitoring agents, telemetry SDKs, health checks and metrics push endpoints all beacon by
+    design and produce exactly this shape. They are a nameable set of destinations — exclude by
+    dest_ip or SNI, and note that the interval regularity in the KQL is what separates them from a
+    tool trying to look like them, though neither is conclusive alone.
+level: medium

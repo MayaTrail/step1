@@ -1,0 +1,71 @@
+// KMS key policy access removed (T1486)
+//
+// The source rule ends `NOT bypassPolicyLockoutSafetyCheck:"false"`. The parameter is OPTIONAL, so on
+// an ordinary PutKeyPolicy it is ABSENT — not present-and-false — and `NOT field:"false"` is
+// therefore true for every ordinary call. This query tests for the VALUE `true` being present.
+//
+// The rule's `policyName:"default"` clause is a no-op that also drops events: AWS permits exactly one
+// value, so it excludes nothing, but it requires the field to be PRESENT and silently drops callers
+// who omitted it. There is no policyName clause here.
+//
+// PutKeyPolicy REPLACES the policy rather than merging it, so the event carries the new document and
+// never says what was removed. The account-root test below is how removal is inferred.
+//
+// `contains` throughout, never `has` — key ARNs and policy documents are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+let WINDOW = 30m;
+let ThisAccount = "111122223333";   // POPULATE with this account id.
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "kms.amazonaws.com"
+| where EventName in ("PutKeyPolicy", "CreateGrant", "RevokeGrant", "DisableKey",
+                      "ScheduleKeyDeletion", "GetKeyPolicy")
+| extend Req = parse_json(RequestParameters)
+| extend KeyId = tostring(Req.keyId)
+| extend IsProvisioner = UserIdentityArn contains "PlatformAutomation"
+                      or UserIdentityArn contains "iac-deploy"
+// PutKeyPolicy's policy parameter is a RAW JSON string on the REQUEST side. The percent-encoded
+// convention applies to response elements, not here — so no decoding step.
+| extend PolicyDoc = tostring(Req.policy)
+| extend Bypassed  = tostring(Req.bypassPolicyLockoutSafetyCheck) == "true"
+| extend Repolicied = EventName == "PutKeyPolicy" and isempty(ErrorCode)
+// The account-root statement is what lets IAM delegate access to the key at all. A submitted policy
+// without it removes every IAM-delegated principal in one call.
+| extend DropsAccountRoot = Repolicied and isnotempty(PolicyDoc) and not(PolicyDoc contains ":root")
+| extend NamesExternalAccount =
+      Repolicied and PolicyDoc contains "arn:aws:iam::"
+      and not(PolicyDoc contains strcat("arn:aws:iam::", ThisAccount))
+| extend PolicyBytes = strlen(PolicyDoc)
+| summarize
+    PolicyWrites   = countif(Repolicied),
+    Bypasses       = countif(Repolicied and Bypassed),
+    RootDropped    = countif(DropsAccountRoot),
+    ExternalNamed  = countif(NamesExternalAccount),
+    GrantsRevoked  = countif(EventName == "RevokeGrant" and isempty(ErrorCode)),
+    KeysTouched    = dcountif(KeyId, Repolicied),
+    SmallestPolicy = minif(PolicyBytes, Repolicied and PolicyBytes > 0),
+    Keys           = make_set(iff(Repolicied, KeyId, ""), 20),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated)
+    by bin(TimeGenerated, WINDOW), UserIdentityArn, SourceIpAddress, IsProvisioner
+| where PolicyWrites > 0
+| extend Verdict = case(
+    Bypasses > 0,
+        "CRITICAL - lockout safety check bypassed; AWS documents this as intent to lock the caller out",
+    RootDropped > 0 and KeysTouched >= 3,
+        "CRITICAL - account-root statement dropped across multiple keys; IAM cannot restore access",
+    RootDropped > 0,
+        "HIGH - submitted policy has no account-root statement; every IAM-delegated principal loses access",
+    ExternalNamed > 0,
+        "HIGH - policy names a principal outside this account",
+    KeysTouched >= 3 and not(IsProvisioner),
+        "HIGH - key policies replaced across multiple keys outside provisioning",
+    "MEDIUM - key policy replaced")
+// A very short policy document is the shape of a policy stripped to a single statement.
+| extend StrippedPolicy = SmallestPolicy > 0 and SmallestPolicy < 400
+| project TimeGenerated, Verdict, StrippedPolicy, UserIdentityArn, SourceIpAddress, IsProvisioner,
+          PolicyWrites, Bypasses, RootDropped, ExternalNamed, GrantsRevoked, KeysTouched,
+          SmallestPolicy, Keys, FirstSeen, LastSeen
+| order by Bypasses desc, RootDropped desc, TimeGenerated desc

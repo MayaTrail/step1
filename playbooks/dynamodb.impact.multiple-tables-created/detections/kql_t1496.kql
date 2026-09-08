@@ -1,0 +1,71 @@
+// DynamoDB tables created at volume (T1496)
+//
+// The source rule matches `createtable` — lowercase, against a case-sensitive field, so it cannot
+// fire. Its threshold is also five in sixty seconds, which is a deployment burst rather than a
+// human: tuned to catch the traffic it should ignore and to miss a slower actor.
+//
+// `contains` throughout, never `has` — table names and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+let KnownProvisioners = dynamic(["PlatformAutomation", "iac-deploy"]);
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "dynamodb.amazonaws.com"
+| where EventName in ("CreateTable", "DeleteTable", "ListTables", "Scan", "BatchWriteItem")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Table = tostring(Req.tableName)
+| extend IsProvisioner = UserIdentityArn contains "PlatformAutomation" or UserIdentityArn contains "iac-deploy"
+| extend Created = EventName == "CreateTable"
+// An empty table costs capacity and money; a table being WRITTEN INTO after creation is staging.
+| extend WroteInto = EventName == "BatchWriteItem"
+| extend BillingMode = tostring(Req.billingMode)
+| summarize
+    TablesCreated  = countif(Created),
+    DistinctTables = dcountif(Table, Created),
+    TablesDeleted  = countif(EventName == "DeleteTable"),
+    WritesAfter    = countif(WroteInto),
+    ByProvisioner  = countif(Created and IsProvisioner),
+    OnDemandTables = countif(Created and BillingMode == "PAY_PER_REQUEST"),
+    NewTables      = make_set_if(Table, Created, 25),
+    FirstCreate    = minif(TimeGenerated, Created),
+    FirstWrite     = minif(TimeGenerated, WroteInto),
+    SourceIps      = make_set(SourceIpAddress, 5),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 10m)
+| where TablesCreated > 0
+| extend CreatedThenWritten = WritesAfter > 0 and isnotempty(FirstCreate) and isnotempty(FirstWrite)
+                              and FirstCreate < FirstWrite
+| extend Verdict = case(
+    CreatedThenWritten and ByProvisioner == 0,
+        "TABLE CREATED AND WRITTEN INTO by a non-provisioning principal — an empty table is harmless; one being populated is staging, P0",
+    DistinctTables >= 5 and ByProvisioner == 0,
+        strcat(tostring(DistinctTables),
+               " TABLES CREATED IN TEN MINUTES by a principal outside the provisioning path — capacity and cost consumption, P1"),
+    DistinctTables >= 5,
+        strcat(tostring(DistinctTables),
+               " tables created in ten minutes — almost certainly a deployment. Confirm the role and allowlist it, P3"),
+    ByProvisioner == 0,
+        "TABLE CREATED BY AN UNEXPECTED PRINCIPAL — an empty table is not itself harmful, so this is context rather than a finding, P3",
+    "tables created by a provisioning role")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, TablesCreated, DistinctTables,
+          TablesDeleted, WritesAfter, OnDemandTables, NewTables, SourceIps
+| order by DistinctTables desc
+//
+// ============================================================================
+// AN EMPTY TABLE IS NOT A FINDING, AND THE SOURCE RULE TREATS IT AS ONE
+// ============================================================================
+// CreateTable produces a resource containing no data. What mass creation costs is capacity and
+// money — T1496 Resource Hijacking — not data manipulation, which is what the source maps it to.
+// The shape that matters is creation followed by WRITES into the new table, which is staging for
+// extraction, and the read side of that is ../../dynamodb.collection.table-scanned/.
+//
+// ============================================================================
+// SIXTY SECONDS IS A DEPLOYMENT WINDOW
+// ============================================================================
+// The source threshold is five tables in one minute. An infrastructure apply reaches that; a person
+// creating tables by hand does not. The window is widened to ten minutes here and the provisioning
+// allowlist does the discrimination, because a tighter window excludes the actor along with the
+// pipeline.

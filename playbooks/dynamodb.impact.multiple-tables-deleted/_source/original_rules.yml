@@ -1,0 +1,22 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Amazon DynamoDB - Multiple Tables Deleted
+  priority: P3
+  type: logs_unique_count
+  mitre: T1490/TA0040
+  query: |
+    eventSource:"dynamodb.amazonaws.com" AND eventName:"DeleteTable" AND NOT _exists_:errorCode
+  threshold: 5  window: 1m
+  unique_count_key: requestParameters.tableName
+  group_by: []
+

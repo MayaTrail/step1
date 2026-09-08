@@ -1,0 +1,175 @@
+# SNS topic policy modified after creation (T1098)
+#
+# THE RULE'S NAME AND ITS LOGIC DESCRIBE DIFFERENT FEATURES. It is called *SNS Access Policy Has
+# Changed* and it matches `PutDataProtectionPolicy` — a policy that audits or de-identifies sensitive
+# data inside message BODIES, and which has nothing to do with who may publish or subscribe.
+#
+# AND THE FEATURE IT DOES MATCH IS CLOSED. AWS: "Amazon SNS message data protection is no longer
+# available to new customers." In most accounts the API cannot be called at all, so the rule has never
+# fired — while the rule list reports the access policy as covered.
+#
+# THE ACCESS POLICY HAS THREE PATHS AND TWO ARE UNCOVERED ACROSS THE WHOLE SOURCE SET.
+# `CreateTopic` with a public Policy attribute is matched by two sibling rules. `SetTopicAttributes`
+# with AttributeName=Policy and `AddPermission` are matched by nothing, so a topic made public AFTER
+# creation produces no alert. AddPermission is the call to expect: it grants an account access with
+# two parameters and no JSON document at all. See ../../_ground-truth/sns.md §1.
+title: SNS topic opened to an external principal via AddPermission
+id: c61d46cc-4c7d-4543-9445-dcf352e82f53
+status: experimental
+description: >-
+  AddPermission adds a statement to a topic's access control policy for named AWS accounts. It needs
+  no policy document — an account id and an action name are enough — which makes it the simplest way
+  to open an existing topic, and it is matched nowhere in the source set.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_AddPermission.html
+  - https://attack.mitre.org/techniques/T1098/
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: sns.amazonaws.com
+    eventName: AddPermission
+    errorCode: null
+  # POPULATE with this account's own id so that same-account grants do not dominate. A grant naming
+  # any other account is the finding.
+  filter_own_account:
+    requestParameters.aWSAccountId|contains: '111122223333'
+  condition: selection and not filter_own_account
+falsepositives:
+  - Deliberate cross-account integrations, which are a small and enumerable set and belong in an
+    explicit account allowlist rather than in the removal of this document
+level: high
+---
+# SetTopicAttributes REPLACES the whole policy document, so a principal is added by appearing and
+# removed by being left out. The wildcard test is on the submitted value.
+title: SNS topic policy replaced with a wildcard principal
+id: be778e4f-180c-4b83-a549-ffc363a94f93
+status: experimental
+description: >-
+  SetTopicAttributes with AttributeName Policy submitted a document granting a wildcard principal.
+  The two sibling rules in this source set only match CreateTopic, so a topic made public after
+  creation is otherwise undetected.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_SetTopicAttributes.html
+  - https://attack.mitre.org/techniques/T1098/
+tags:
+  - attack.persistence
+  - attack.t1098
+  - attack.t1213
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # All four keys are on the SAME event: CloudTrail writes eventSource, eventName and the request
+  # body of one API call into one record. ANDing them is correct.
+  selection:
+    eventSource: sns.amazonaws.com
+    eventName: SetTopicAttributes
+    requestParameters.attributeName: Policy
+    requestParameters.attributeValue|contains: '"AWS":"*"'
+  # justified: no threshold and no allowlist. A topic policy naming a wildcard principal is the
+  # finding on its first occurrence, and no automation legitimately publishes one.
+  condition: selection
+falsepositives:
+  - A topic deliberately opened to the world for a public notification feed, which should be a named
+    exception rather than a filter
+level: critical
+---
+name: sns_topic_policy_changed
+title: SNS topic access policy replaced
+id: 32b4e592-6c48-4173-ba4a-f9d026f5897a
+status: experimental
+description: >-
+  SetTopicAttributes changed a topic's Policy attribute. Informational alone — the document replaces
+  rather than merges, so the event carries the new policy and never says what was removed. Base rule
+  for the correlation below.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_SetTopicAttributes.html
+  - https://attack.mitre.org/techniques/T1098/
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: sns.amazonaws.com
+    eventName:
+      - SetTopicAttributes
+      - AddPermission
+      - RemovePermission
+    errorCode: null
+  filter_provisioning:
+    userIdentity.arn|contains:
+      - 'PlatformAutomation'
+      - 'iac-deploy'
+  condition: selection and not filter_provisioning
+falsepositives:
+  - Infrastructure provisioning under a role not yet in the allowlist
+level: informational
+---
+# The data protection policy — what the source rule actually matches. Kept, correctly described, and
+# rated for what it does: removing it unredacts message bodies for every existing subscriber.
+title: SNS message data protection policy replaced or removed
+id: ffac0546-31c1-48ab-a3d3-c56f5a9efb02
+status: experimental
+description: >-
+  PutDataProtectionPolicy changed the policy that audits or de-identifies sensitive data inside
+  message bodies. This is not the access policy. AWS has closed the feature to new customers, so in
+  most accounts this cannot fire at all — which is why it must not be relied on as access-policy
+  coverage.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_PutDataProtectionPolicy.html
+  - https://attack.mitre.org/techniques/T1213/
+tags:
+  - attack.collection
+  - attack.t1213
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: sns.amazonaws.com
+    eventName: PutDataProtectionPolicy
+    errorCode: null
+  # justified: no threshold. Accounts that still hold this feature have very few such policies and
+  # change them rarely, so any change is worth reading; accounts that do not hold it will never see
+  # this document fire.
+  condition: selection
+falsepositives:
+  - The small number of accounts that adopted message data protection before it closed and still
+    maintain policies through a pipeline
+level: medium
+---
+# Several topics re-policied by one principal is a sweep rather than a change.
+title: SNS topic policies changed across multiple topics by one principal
+id: f7ce6ac4-b192-45f7-998e-47e8d69a5476
+status: experimental
+description: >-
+  One principal changed the access policy on three or more topics within thirty minutes. A single
+  change is routine; a walk across the account's topics is access being granted at scale.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_SetTopicAttributes.html
+  - https://attack.mitre.org/techniques/T1098/
+tags:
+  - attack.persistence
+  - attack.t1098
+correlation:
+  type: value_count
+  rules:
+    - sns_topic_policy_changed
+  group-by:
+    - userIdentity.arn
+  timespan: 30m
+  condition:
+    gte: 3
+    field: requestParameters.topicArn
+falsepositives:
+  - A compliance remediation applying a standard policy across every topic, identifiable from a change
+    record naming the same topic ARNs
+level: high

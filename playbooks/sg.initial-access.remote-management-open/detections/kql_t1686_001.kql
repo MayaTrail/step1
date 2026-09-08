@@ -1,0 +1,97 @@
+// Security group ingress opened to the internet (T1686.001)
+//
+// Reads BOTH request shapes. AuthorizeSecurityGroupIngress accepts flat top-level parameters
+// (cidrIp, fromPort, ipProtocol) or the structured ipPermissions array, and the source rule reads
+// only the flat one — which cannot express IPv6 at all and is not what the console, CLI or SDKs
+// emit for anything but a single IPv4 rule.
+//
+// `contains` throughout, never `has` — CIDRs and protocol values are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+let RemotePorts = dynamic([22, 23, 3389, 5900, 5985, 5986]);
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "ec2.amazonaws.com"
+| where EventName in ("AuthorizeSecurityGroupIngress", "RevokeSecurityGroupIngress",
+                      "ModifySecurityGroupRules", "AuthorizeSecurityGroupEgress")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend GroupId = tostring(coalesce(Req.groupId, Req.groupName))
+| extend Perms = tostring(Req.ipPermissions)
+// FLAT form — present only when a single IPv4 rule was submitted without ipPermissions.
+| extend FlatCidr = tostring(Req.cidrIp)
+| extend FlatPort = toint(Req.fromPort)
+| extend FlatProto = tostring(Req.ipProtocol)
+// STRUCTURED form. IPv6 can ONLY appear here: "To specify an IPv6 address range, use IP
+// permissions instead."
+| extend OpenV4 = FlatCidr == "0.0.0.0/0" or Perms contains "0.0.0.0/0"
+| extend OpenV6 = FlatCidr == "::/0" or Perms contains "::/0"
+// IpProtocol -1 is ALL protocols: every remote port is open with no port field saying so. AWS also
+// warns that an UNSUPPORTED protocol value allows all ports regardless of the ports specified.
+| extend AllProtocols = FlatProto == "-1" or Perms contains '"ipProtocol":"-1"'
+| extend RemotePortHit = FlatPort in (RemotePorts)
+    or Perms contains '"fromPort":22' or Perms contains '"fromPort":23'
+    or Perms contains '"fromPort":3389' or Perms contains '"fromPort":5900'
+    or Perms contains '"fromPort":5985' or Perms contains '"fromPort":5986'
+| extend UsedFlatForm = isnotempty(FlatCidr)
+| summarize
+    OpenToWorld    = countif(EventName == "AuthorizeSecurityGroupIngress" and (OpenV4 or OpenV6)),
+    RemoteMgmtOpen = countif(EventName == "AuthorizeSecurityGroupIngress" and (OpenV4 or OpenV6)
+                             and (RemotePortHit or AllProtocols)),
+    AllProtoOpen   = countif(EventName == "AuthorizeSecurityGroupIngress" and (OpenV4 or OpenV6) and AllProtocols),
+    IPv6Open       = countif(EventName == "AuthorizeSecurityGroupIngress" and OpenV6),
+    Modifications  = countif(EventName == "ModifySecurityGroupRules"),
+    Revokes        = countif(EventName == "RevokeSecurityGroupIngress"),
+    // If this is 0 while OpenToWorld is not, every hit came from the structured form — which is
+    // exactly what the source rule cannot see.
+    FlatFormUsed   = countif(UsedFlatForm),
+    Groups         = make_set(GroupId, 10),
+    FirstOpen      = minif(TimeGenerated, EventName == "AuthorizeSecurityGroupIngress" and (OpenV4 or OpenV6)),
+    FirstRevoke    = minif(TimeGenerated, EventName == "RevokeSecurityGroupIngress"),
+    SourceIps      = make_set(SourceIpAddress, 5),
+    LastSeen       = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where OpenToWorld > 0 or Modifications > 0
+| extend ClosedAfter = Revokes > 0 and isnotempty(FirstOpen) and isnotempty(FirstRevoke)
+                       and FirstRevoke > FirstOpen
+| extend OpenMinutes = iff(ClosedAfter, datetime_diff('minute', FirstRevoke, FirstOpen), int(null))
+| extend Verdict = case(
+    AllProtoOpen > 0,
+        "ALL PROTOCOLS OPEN TO THE INTERNET — ipProtocol -1, so every remote-management port is reachable and NO fromPort field says so. A port-list rule misses this entirely, P0",
+    RemoteMgmtOpen > 0 and ClosedAfter,
+        strcat("REMOTE MANAGEMENT OPENED TO THE INTERNET AND CLOSED AGAIN after ", tostring(OpenMinutes),
+               " min — the end state is clean and only this history holds the window, P0"),
+    RemoteMgmtOpen > 0,
+        "REMOTE MANAGEMENT OPEN TO THE INTERNET — SSH, RDP, VNC or WinRM reachable from 0.0.0.0/0 or ::/0, P0",
+    IPv6Open > 0,
+        "IPv6 ::/0 OPENED — as open as 0.0.0.0/0, and invisible to any rule reading the flat cidrIp field, which cannot carry IPv6 at all, P0",
+    Modifications > 0,
+        "EXISTING RULE MODIFIED — ModifySecurityGroupRules changes a rule's CIDR and ports with no Authorize event. Read the updated rule; the pack watches nowhere for this, P1",
+    OpenToWorld > 0,
+        "SECURITY GROUP OPENED TO THE INTERNET on a non-management port — expected for a public web tier, a finding anywhere else, P1",
+    "security group change")
+| project FirstOpen, LastSeen, UserIdentityArn, Verdict, OpenToWorld, RemoteMgmtOpen, AllProtoOpen,
+          IPv6Open, Modifications, Revokes, OpenMinutes, FlatFormUsed, Groups, SourceIps
+| order by RemoteMgmtOpen desc, AllProtoOpen desc
+//
+// ============================================================================
+// READ `FlatFormUsed` ONCE, AS A COVERAGE TEST OF YOUR OWN ESTATE
+// ============================================================================
+// It counts requests that carried the top-level cidrIp field. If it is 0 across a month while
+// OpenToWorld is not, then every open-to-the-world rule in this account was submitted in the
+// STRUCTURED form — and the source rule, which reads only `requestParameters.cidrIp`, has never
+// fired and never will. That is a one-query answer to "is our existing detection working".
+//
+// ============================================================================
+// WHAT THIS STILL CANNOT SEE
+// ============================================================================
+// SAME-ENTRY SCOPING. `Perms contains` cannot tie a port and a CIDR to the same permission entry,
+// so a request adding port 22 to a corporate CIDR alongside port 443 to 0.0.0.0/0 matches. That is
+// a deliberate over-match, resolved by parsing in the playbook.
+//
+// SPLIT CIDRS. 0.0.0.0/1 plus 128.0.0.0/1 covers the internet and matches no 0.0.0.0/0 test.
+//
+// PREFIX LISTS AND SOURCE SECURITY GROUPS. AWS: the source may be "an IPv4 or IPv6 address range, a
+// prefix list, or a security group". A managed prefix list can contain 0.0.0.0/0 and the event names
+// only the prefix list ID — resolving it needs GetManagedPrefixListEntries.

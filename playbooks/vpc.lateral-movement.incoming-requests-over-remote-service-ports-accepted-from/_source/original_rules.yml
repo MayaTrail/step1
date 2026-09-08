@@ -1,0 +1,21 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Incoming Requests Over Remote Service Ports Accepted From Malicious IP
+  priority: P2
+  type: logs_threshold
+  mitre: T1021/TA0008
+  query: |
+    action:"ACCEPT" AND dstport:("22" OR "3389" OR "5900") AND destination_ip_geoip.is_local:"true" AND source_ip_geoip.is_local:"false" AND source_ip_suspected.reporting_feeds.<provider>.confidence_level.numeric:[7 TO 10]
+  threshold: 0.0  window: 15m
+  group_by: ['source_ip_geoip.ip']
+

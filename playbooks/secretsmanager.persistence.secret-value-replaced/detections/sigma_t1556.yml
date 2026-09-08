@@ -1,0 +1,145 @@
+# Secrets Manager secret value replaced (T1556)
+#
+# THE RULE CANNOT FIRE. It matches `eventName:"updatesecret"`; CloudTrail emits `UpdateSecret`, and
+# on a case-sensitive field the lowercase form matches nothing. Eleventh instance of that defect
+# class across the source set — see ../../_ground-truth/secretsmanager.md §7.
+#
+# AND `UpdateSecret` IS ONE OF THREE WRITE PATHS, AND NOT THE ONE THE SDKs USE. `PutSecretValue`
+# writes a new version and moves AWSCURRENT to it — it is what the AWS SDKs and rotation Lambdas
+# call. `UpdateSecretVersionStage` writes NOTHING; it moves AWSCURRENT to a version that already
+# exists, so an actor who once staged a value can make it operative again with no permission to write
+# the secret and no write event at all. See ../../_ground-truth/secretsmanager.md §6.
+#
+# IT EXCLUDES ERRORS, so a denied write — an actor the permissions caught — produces no alert.
+#
+# Every Secrets Manager call is a management event, so all four documents work without data events.
+# Rotation being turned off is a different use case and lives in
+# ../../secretsmanager.persistence.rotation-disabled/.
+title: Secrets Manager AWSCURRENT moved to an existing version
+id: 61736bf9-db20-4ed2-ad73-4441d42dc9fd
+status: experimental
+description: >-
+  UpdateSecretVersionStage moved the AWSCURRENT label to a version that already existed. No value was
+  written, so no write path fired and no permission to write the secret was needed — an actor who
+  once had a value staged can make it operative again this way.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_UpdateSecretVersionStage.html
+  - https://attack.mitre.org/techniques/T1556/
+tags:
+  - attack.persistence
+  - attack.t1556
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # All four keys are on the SAME event: CloudTrail writes eventSource, eventName, the request body
+  # and the outcome of one API call into one record. ANDing them is correct.
+  selection:
+    eventSource: secretsmanager.amazonaws.com
+    eventName: UpdateSecretVersionStage
+    requestParameters.versionStage: AWSCURRENT
+    errorCode: null
+  filter_automation:
+    userIdentity.arn|contains:
+      - 'PlatformAutomation'
+      - 'SecretsRotationFunction'
+  condition: selection and not filter_automation
+falsepositives:
+  - An operator rolling a secret back to AWSPREVIOUS after a bad deployment, which is the same call
+    used for exactly the right reason — confirm against a change record
+level: high
+---
+name: secretsmanager_secret_value_written
+title: Secrets Manager secret value written
+id: baebb5d1-9e1b-4d5d-9827-f77e9edb64eb
+status: experimental
+description: >-
+  UpdateSecret or PutSecretValue wrote a new version outside the automation allowlist. Informational
+  alone — applications and pipelines write secrets legitimately. Base rule for the correlation below.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_PutSecretValue.html
+  - https://attack.mitre.org/techniques/T1556/
+tags:
+  - attack.persistence
+  - attack.t1556
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: secretsmanager.amazonaws.com
+    eventName:
+      - UpdateSecret
+      - PutSecretValue
+    errorCode: null
+  filter_automation:
+    userIdentity.arn|contains:
+      - 'PlatformAutomation'
+      - 'SecretsRotationFunction'
+  condition: selection and not filter_automation
+falsepositives:
+  - Deployment pipelines that seed secret values — add the role to the allowlist rather than removing
+    this document
+  - Operators updating a credential by hand after an upstream change
+level: informational
+---
+# The refused case, which the source rule's error filter excludes.
+title: Secrets Manager secret write refused
+id: 0b1994f5-d493-48d4-86b1-b1a592b99be2
+status: experimental
+description: >-
+  UpdateSecret, PutSecretValue or UpdateSecretVersionStage returned an error. The source rule filters
+  errors out, so a write the permissions caught leaves no alert at all.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_UpdateSecret.html
+  - https://attack.mitre.org/techniques/T1556/
+tags:
+  - attack.persistence
+  - attack.t1556
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: secretsmanager.amazonaws.com
+    eventName:
+      - UpdateSecret
+      - PutSecretValue
+      - UpdateSecretVersionStage
+  filter_success:
+    errorCode: null
+  condition: selection and not filter_success
+falsepositives:
+  - A workload deployed before its policy grant, which repeats against one secret id rather than
+    walking several
+level: medium
+---
+# Values replaced across several secrets by one principal is a sweep. The source rule thresholds at
+# zero and cannot express it.
+title: Secrets Manager values replaced across multiple secrets by one principal
+id: 279fae34-fdf0-44b3-b4e1-0080b65e7045
+status: experimental
+description: >-
+  One principal wrote new values into three or more distinct secrets within thirty minutes, outside
+  automation. Every consumer of every one of those secrets will pick up the new value on its next
+  fetch.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_PutSecretValue.html
+  - https://attack.mitre.org/techniques/T1556/
+tags:
+  - attack.persistence
+  - attack.t1556
+correlation:
+  type: value_count
+  rules:
+    - secretsmanager_secret_value_written
+  group-by:
+    - userIdentity.arn
+  timespan: 30m
+  condition:
+    gte: 3
+    field: requestParameters.secretId
+falsepositives:
+  - A credential-rotation exercise run by hand across an application's secrets, identifiable from a
+    change record naming the same secrets
+level: high

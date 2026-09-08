@@ -1,0 +1,85 @@
+// Authentication failures at the Application Load Balancer (T1110 / T1212)
+//
+// The two error families are separated in the output, not merged. AWS maps them to two different
+// CloudWatch metrics — ELBAuthFailure for request-side problems and ELBAuthError for identity
+// provider problems — and merging them is what turns an IdP outage into a fleet-wide brute-force
+// alert.
+//
+// `contains` throughout, never `has` — error reasons and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. Table name depends on how access logs are ingested.
+let LOOKBACK = 24h;
+let WINDOW = 15m;
+let RequestSideFailures = dynamic(["AuthInvalidCookie","AuthInvalidGrantError","AuthInvalidIdToken",
+    "AuthInvalidTokenResponse","AuthInvalidUserinfoResponse","AuthMissingCodeParam"]);
+let StateFailures = dynamic(["AuthInvalidStateParam","AuthMissingStateParam"]);
+let JwtFailures = dynamic(["JWTSignatureValidationError","JWTClaimValueInvalid","JWTClaimNotPresent",
+    "JWTClaimFormatInvalid","JWTRequestFormatInvalid","JWTHeaderNotPresent"]);
+let IdpErrors = dynamic(["AuthTokenEpRequestFailed","AuthTokenEpRequestTimeout",
+    "AuthUserinfoEpRequestFailed","AuthUserinfoEpRequestTimeout","AuthUnhandledException",
+    "AuthMissingHostHeader","AuthUserinfoResponseSizeExceeded"]);
+ALBAccessLogs
+| where TimeGenerated > ago(LOOKBACK)
+| extend Reason = tostring(ErrorReason)
+| where isnotempty(Reason) and Reason != "-"
+// The client field is "client:port". Split it, and carry the caveat: AWS states that with a proxy
+// in front of the load balancer this field holds the PROXY's address. Behind CloudFront every
+// request collapses onto a handful of edge addresses and any per-client threshold is meaningless.
+| extend ClientIp = tostring(split(tostring(Client), ":")[0])
+| extend Family = case(
+    set_has_element(StateFailures, Reason), "state",
+    set_has_element(JwtFailures, Reason), "jwt",
+    set_has_element(RequestSideFailures, Reason), "request",
+    set_has_element(IdpErrors, Reason), "idp",
+    "other")
+| summarize
+    Failures   = count(),
+    Reasons    = make_set(Reason, 10),
+    Targets    = make_set(tostring(TargetGroupArn), 5),
+    Paths      = make_set(tostring(RequestLine), 10),
+    Agents     = make_set(tostring(UserAgent), 5),
+    Elbs       = make_set(tostring(Elb), 5),
+    StateFails = countif(Family == "state"),
+    JwtFails   = countif(Family == "jwt"),
+    ReqFails   = countif(Family == "request"),
+    IdpFails   = countif(Family == "idp"),
+    FirstSeen  = min(TimeGenerated),
+    LastSeen   = max(TimeGenerated)
+    by ClientIp, Family, bin(TimeGenerated, WINDOW)
+| extend Verdict = case(
+    Family == "idp",
+        "IDENTITY PROVIDER UNREACHABLE — an availability event, not an attack. Route to the identity or platform team. This is the family the source rule counts as brute force, P4",
+    JwtFails > 0 and set_has_element(Reasons, "JWTSignatureValidationError"),
+        "JWT SIGNATURE DID NOT VERIFY — a token was presented that was forged or signed with the wrong key. No benign explanation at volume, P0",
+    StateFails > 3,
+        "OAUTH STATE PARAMETER REPEATEDLY INVALID — the CSRF binding between the authorization response and the browser session is failing. Shape of authorization-code interception, P0",
+    Family == "jwt",
+        "JWT CLAIM VALIDATION FAILED — the signature verified and a claim did not. A valid token used where it should not be, P1",
+    Family == "state",
+        "OAUTH STATE PARAMETER INVALID — single occurrence. A bookmarked callback or a stripped cookie does this; a repeat does not, P2",
+    ReqFails >= 50,
+        "SUSTAINED AUTHENTICATION REJECTIONS FROM ONE SOURCE — credential or session-token guessing. Confirm the source is a real client and not a proxy address, P1",
+    "Authentication rejections — below threshold, or a client retrying a stale session")
+| project FirstSeen, LastSeen, ClientIp, Family, Verdict, Failures, Reasons,
+          StateFails, JwtFails, ReqFails, IdpFails, Elbs, Targets, Agents, Paths
+| order by JwtFails desc, StateFails desc, Failures desc
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHICH USER. Access logs carry no username, no subject claim and no session identifier. The load
+// balancer authenticated (or failed to) and the identity is in the IdP's own logs. Correlate on
+// time and client address, and say that you are doing so.
+//
+// WHETHER A LOGIN SUCCEEDED. A successful authenticate action leaves error_reason as "-", which is
+// indistinguishable from a request that never attempted authentication. This log source can count
+// failures and cannot count successes, so a failure-to-success ratio is not computable here.
+//
+// WHO THE CLIENT IS, BEHIND A PROXY. AWS: "If there is a proxy in front of the load balancer, this
+// field contains the IP address of the proxy." ALB access logs carry no X-Forwarded-For field. In
+// a CloudFront-fronted topology the per-client detection belongs in the CloudFront log or the web
+// ACL, and this query's ClientIp column is the edge, not the attacker.
+//
+// HOW MANY THERE REALLY WERE. AWS: "Elastic Load Balancing logs requests on a best-effort basis...
+// not as a complete accounting of all requests", delivery is eventually consistent, and "the load
+// balancer can deliver multiple logs for the same period". Counts here can be short AND doubled.

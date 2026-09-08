@@ -1,0 +1,118 @@
+// KMS Key Disabled (T1489 / T1486)
+//
+// Signal: DisableKey succeeding on a customer managed key - once, or across several keys by
+// one principal - plus the denied attempts, which a success-only rule discards.
+//
+// This query does what the Sigma rules structurally cannot. It joins each disable to the
+// DisabledException errors that follow it, so the analyst sees WHICH WORKLOADS actually broke
+// and when, rather than inferring blast radius from the disable event alone. And it reports
+// the EnableKey that reverses each disable, so a key already restored is never worked as a
+// live outage.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let Lookback = 30d;
+// Every operand below uses `contains`, never whole-term matching: ARNs, key ARNs and dotted
+// exception names are all punctuated, and term matching breaks on every one of them (C1).
+let KeyEventsTyped =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "kms.amazonaws.com"
+    | where EventName in ("DisableKey", "EnableKey")
+    // RequestParameters and ResponseElements are dynamic JSON in this table and need
+    // parse_json. UserIdentityArn, SessionIssuerUserName, SourceIpAddress and ErrorCode are
+    // FLATTENED top-level columns and must NOT be parsed (C2).
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    // requestParameters.keyId is CALLER-TYPED - a bare key ID or a full ARN, whatever the
+    // caller passed. responseElements.keyId is the normalised KEY ARN, added by AWS in
+    // December 2022 to DisableKey and EnableKey entries even though neither API returns it.
+    // Prefer the response; fall back to the request only when the call failed and there is
+    // no response at all.
+    | extend KeyArn    = tostring(Resp.keyId)
+    | extend KeyIdReq  = tostring(Req.keyId)
+    | extend KeyRef    = iff(isempty(KeyArn), KeyIdReq, KeyArn)
+    | extend KeyId     = tostring(split(KeyRef, "/")[-1])
+    | extend Denied    = isnotempty(ErrorCode)
+    // Written as an explicit `contains` fold rather than a set-membership test over a
+    // dynamic array: role ARNs are punctuated, and every term-matching form breaks on the
+    // colon and the slash. Mirror the allowlist in sigma_t1489.yml when you populate it.
+    | extend IsAdmin   = UserIdentityArn contains ":role/KeyAdministrator"
+                      or UserIdentityArn contains ":role/InfrastructureDeploy";
+let Disables = KeyEventsTyped | where EventName == "DisableKey";
+let Enables  = KeyEventsTyped | where EventName == "EnableKey" and not(Denied);
+// The consequence, not the act: every cryptographic operation refused because the key is in
+// the Disabled state. AWS's documented message is "<key ARN> is disabled." and the exception
+// is DisabledException. These are the workloads that actually noticed.
+let Fallout =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "kms.amazonaws.com"
+    | where ErrorCode contains "DisabledException"
+    | extend Req = parse_json(RequestParameters)
+    | extend KeyRef = tostring(Req.keyId)
+    | extend KeyId  = tostring(split(KeyRef, "/")[-1])
+    | summarize
+        BrokenOps      = count(),
+        BrokenOpNames  = make_set(EventName, 8),
+        BrokenCallers  = make_set(UserIdentityArn, 8),
+        FirstBreak     = min(TimeGenerated),
+        LastBreak      = max(TimeGenerated)
+      by KeyId;
+Disables
+| summarize
+    Successes      = countif(not(Denied)),
+    DeniedAttempts = countif(Denied),
+    DeniedCodes    = make_set_if(ErrorCode, Denied, 5),
+    SourceIPs      = make_set(SourceIpAddress, 5),
+    Agents         = make_set(UserAgent, 3),
+    Callers        = make_set(UserIdentityArn, 5),
+    ByAdmin        = max(IsAdmin),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated)
+  by KeyId, AwsRegion, RecipientAccountId, SessionIssuerUserName, UserIdentityType
+| join kind=leftouter (
+    Enables | summarize ReEnabled = max(TimeGenerated), ReEnabledBy = make_set(UserIdentityArn, 3) by KeyId
+  ) on KeyId
+| join kind=leftouter Fallout on KeyId
+| extend StillDisabled = isempty(ReEnabled) or ReEnabled < LastSeen
+| extend Verdict = case(
+    Successes > 0 and StillDisabled and BrokenOps > 0,
+        "LIVE OUTAGE - key disabled and still disabled; cryptographic operations are being refused with DisabledException right now",
+    Successes > 0 and StillDisabled and ByAdmin == false,
+        "DISABLED BY NON-ADMINISTRATOR - no workload has hit the key yet, which is NOT evidence that nothing depends on it: data keys already issued keep working until next use",
+    Successes > 0 and StillDisabled,
+        "DISABLED BY AN ALLOWLISTED ADMINISTRATOR - reconcile against a change record before closing",
+    Successes > 0 and not(StillDisabled),
+        "DISABLED AND RE-ENABLED - confirm who re-enabled it and whether the disable was authorised; the window is still an incident",
+    DeniedAttempts > 0,
+        "DISABLE ATTEMPTED AND DENIED - the key policy or IAM held; treat as intent, not impact",
+        "KMS KEY-STATE ACTIVITY - review")
+| project FirstSeen, LastSeen, Verdict, KeyId, AwsRegion, RecipientAccountId, Callers,
+          UserIdentityType, SessionIssuerUserName, Successes, DeniedAttempts, DeniedCodes,
+          StillDisabled, ReEnabled, ReEnabledBy, BrokenOps, BrokenOpNames, BrokenCallers,
+          FirstBreak, LastBreak, SourceIPs, Agents, ByAdmin
+| order by LastSeen desc
+
+//
+// WHAT THIS QUERY CANNOT SEE, AND WHY THE "BrokenOps" COLUMN UNDER-REPORTS
+//
+// A zero in BrokenOps is not a clean result. AWS documents that when a KMS key becomes
+// unusable, the effect on DATA KEYS already issued under it "is delayed until the KMS key is
+// used again". An encrypted EBS volume already attached to a running instance keeps serving
+// disk I/O from the data key held in the Nitro hardware and produces no KMS call and no
+// error; the failure appears only on the next attach, which may be days later. So BrokenOps
+// measures what has already broken, never what is going to.
+//
+// THE VOLUME OF KMS EVENTS. Cryptographic operations - Decrypt, GenerateDataKey, Encrypt -
+// ARE CloudTrail MANAGEMENT events, logged by default, with managementEvent true and
+// eventCategory Management. They are also high-volume. Bound the Fallout lookback tightly
+// before running this in a busy account.
+//
+// IF THERE ARE NO KMS ROWS AT ALL, that is a finding, not an absence. CloudTrail supports a
+// per-trail exclusion - PutEventSelectors with ExcludeManagementEventSources set to
+// kms.amazonaws.com - which drops EVERY KMS event, cannot be applied selectively, and cannot
+// recover the events that occurred while it was in force. Look for that PutEventSelectors
+// event before concluding the account is quiet.
+//
+// PREVENTION. kms:TrailingDaysWithoutKeyUsage is a numeric condition key valid on DisableKey
+// and ScheduleKeyDeletion: a Deny with NumericLessThan "90" refuses both operations on any
+// key used in the last ninety days. See ../PLAYBOOK.md section 6 for the failure direction.

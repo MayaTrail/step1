@@ -1,0 +1,206 @@
+# IAM managed policy authored with administrative permissions (T1098.003)
+#
+# A SUBSTRING MATCH CANNOT READ A POLICY, AND THE SOURCE RULE IS A SUBSTRING MATCH.
+# It requires `"Effect":"Allow"` AND (`"Action":"*"` OR `"Resource":"*"`) to appear anywhere in the
+# serialised document. It cannot answer the one question that decides whether the policy is
+# dangerous: do the Allow and the wildcard sit in the SAME statement? A document with a narrow Allow
+# and a separate `Deny` on `Action:"*"` — the safest shape there is — satisfies every clause.
+# Credit where it is due: the regex anchors on exactly `"*"`, so it does NOT confuse `"s3:Get*"`
+# with `"*"`. That part is right. The statement-scoping is the part that is not, and Sigma cannot
+# express it either — which is why §2 of ../PLAYBOOK.md parses the document rather than matching it.
+#
+# `Resource: "*"` IS NORMAL AND OR-ING IT WITH `Action: "*"` IS THE LARGEST FALSE-POSITIVE SOURCE.
+# Many legitimate actions accept no other value — s3:ListAllMyBuckets, ec2:DescribeInstances,
+# iam:ListRoles. A policy granting exactly those is correct and matches the source rule. `Action:"*"`
+# is administrative; `Resource:"*"` is a shape. They ship at different severities below.
+#
+# A VERSION THAT IS NOT DEFAULT GRANTS NOTHING. AWS: SetAsDefault "becomes the version that is in
+# effect for the IAM users, groups, and roles that the policy is attached to." Without it the new
+# version is dormant. The source rule does not read the flag, so it rates an unactivated draft
+# identically to a live escalation — and it also misses that a dormant permissive version is a
+# PRE-LOADED escalation, one SetDefaultPolicyVersion call away, which is a different and
+# longer-lived finding. Both ship, at different levels.
+#
+# AND IT ONLY WATCHES `CreatePolicyVersion`. A brand-new policy created administrative is the same
+# escalation under `CreatePolicy`, which the pack does not cover anywhere.
+#
+# Related: ../../iam.privilege-escalation.default-policy-version-reverted/ covers ACTIVATION,
+# including of versions authored long before. This directory covers CONTENT. They overlap on
+# create-and-activate by design — one reads the flag, the other reads the document.
+title: IAM managed policy version authored with Action "*" and made operative
+id: 7d51e9a3-2c80-4b47-91f6-a3e02c8b415d
+name: iam_policy_version_admin_and_default
+status: experimental
+description: >-
+  CreatePolicyVersion succeeded with setAsDefault true and a document granting Action "*". This is
+  live administrative access applied to every principal the policy is attached to, in one call. The
+  match is deliberately narrow — Action "*" only, not Resource "*" — because the two are not
+  equivalent and rating them alike is what makes this class of rule unusable.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_CreatePolicyVersion.html
+  - https://attack.mitre.org/techniques/T1098/003/
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # Four keys ANDed, and they do co-occur on a single event: a CreatePolicyVersion record carries
+  # eventSource, eventName, the setAsDefault flag and the submitted document together.
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'CreatePolicyVersion'
+    requestParameters.setAsDefault: true
+    requestParameters.policyDocument|contains:
+      - '"Action":"*"'
+      - '"Action": "*"'
+      - '"Action":["*"]'
+      - '"Action": ["*"]'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the roles that own IAM policy lifecycle.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    A deliberately administrative policy being updated — a break-glass policy, or an
+    infrastructure role's own policy. It should be a short, known list; if the provisioner
+    allowlist does not cover it, the policy inventory is the thing to fix.
+  - >-
+    A document whose only Action "*" sits inside a Deny. Sigma cannot scope a match to a statement,
+    so this is a known and accepted false positive, resolved by the parser in §2 Query 2.
+level: critical
+---
+title: IAM managed policy version authored with Action "*" but left dormant
+id: 1b48f60c-97d2-4e53-8a01-5cf7d2e94b68
+name: iam_policy_version_admin_dormant
+status: experimental
+description: >-
+  CreatePolicyVersion succeeded with a document granting Action "*" and setAsDefault absent or
+  false. Nothing is granted yet — the version is not operative — so this is not an escalation. It is
+  a pre-loaded one: the permissive text now exists inside a policy that may be attached to many
+  principals, and a single SetDefaultPolicyVersion call activates it with no document write for
+  anyone to review. Shipped at medium because the window to remove it is open and long.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_CreatePolicyVersion.html
+  - https://attack.mitre.org/techniques/T1098/003/
+tags:
+  - attack.persistence
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # Keys ANDed, and they do co-occur on a single event: the record carries eventSource,
+  # eventName and the submitted document together. `activated` is a sibling, negated below.
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'CreatePolicyVersion'
+    requestParameters.policyDocument|contains:
+      - '"Action":"*"'
+      - '"Action": "*"'
+      - '"Action":["*"]'
+      - '"Action": ["*"]'
+  success:
+    errorCode: null
+  activated:
+    requestParameters.setAsDefault: true
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not activated and not known_provisioners
+falsepositives:
+  - >-
+    A staged policy change awaiting approval, which is exactly this shape and is good practice.
+    The distinguishing question is whether an approval record exists, not whether the event looks
+    unusual.
+level: medium
+---
+title: IAM policy created with administrative permissions
+id: c04a7b25-63f1-49de-b8a7-30e5169cf742
+name: iam_policy_created_admin
+status: experimental
+description: >-
+  CreatePolicy succeeded with a document granting Action "*". A brand-new administrative policy is
+  the same escalation as an administrative policy version, under an event name the source pack does
+  not watch anywhere. A newly created policy is attached to nothing, so it grants nobody anything
+  until an Attach call follows — which makes this the earliest point at which the intent is visible.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_CreatePolicy.html
+  - https://attack.mitre.org/techniques/T1098/003/
+tags:
+  - attack.persistence
+  - attack.privilege-escalation
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # Keys ANDed, and they do co-occur on a single event: the record carries eventSource,
+  # eventName and the submitted document together.
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName: 'CreatePolicy'
+    requestParameters.policyDocument|contains:
+      - '"Action":"*"'
+      - '"Action": "*"'
+      - '"Action":["*"]'
+      - '"Action": ["*"]'
+  success:
+    errorCode: null
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    A deliberately administrative policy being created as part of a new environment. It should
+    arrive from the provisioning role; from anywhere else it is worth a question.
+level: high
+---
+title: IAM policy authored with Resource "*" and no Action wildcard
+id: 9e3706fd-8a14-42cb-b05f-c7261de4830a
+name: iam_policy_resource_wildcard_only
+status: experimental
+description: >-
+  Base rule — informational, and shipped explicitly to record that this shape is NORMAL rather than
+  to alert on it. A policy granting Resource "*" without Action "*" is what many legitimate actions
+  require: s3:ListAllMyBuckets, ec2:DescribeInstances and iam:ListRoles accept no other value. The
+  source rule ORs this with Action "*" at the same severity, which is the largest false-positive
+  source in that pack. Routed to a log for inventory, never to a human.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/APIReference/API_CreatePolicyVersion.html
+tags:
+  - attack.persistence
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # Keys ANDed, and they do co-occur on a single event: the record carries eventSource,
+  # eventName and the submitted document together.
+  selection:
+    eventSource: 'iam.amazonaws.com'
+    eventName:
+      - 'CreatePolicy'
+      - 'CreatePolicyVersion'
+    requestParameters.policyDocument|contains:
+      - '"Resource":"*"'
+      - '"Resource": "*"'
+  success:
+    errorCode: null
+  action_wildcard:
+    requestParameters.policyDocument|contains:
+      - '"Action":"*"'
+      - '"Action": "*"'
+      - '"Action":["*"]'
+      - '"Action": ["*"]'
+  condition: selection and success and not action_wildcard
+level: informational

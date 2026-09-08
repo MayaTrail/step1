@@ -1,0 +1,74 @@
+// KMS keys scheduled for deletion (T1485)
+//
+// This technique is unusual in AWS: it has a MANDATORY WAITING PERIOD of 7 to 30 days before the
+// key is destroyed, and CancelKeyDeletion reverses it in full during that window. So the query is
+// built around time remaining rather than around what was lost — the number that matters is how
+// long is left to act.
+//
+// `contains` throughout, never `has` — key ARNs and aliases are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 35d;                    // longer than the maximum 30-day window, deliberately
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "kms.amazonaws.com"
+| where EventName in ("ScheduleKeyDeletion", "CancelKeyDeletion", "DisableKey", "EnableKey",
+                      "PutKeyPolicy", "DisableKeyRotation")
+| extend Req = parse_json(RequestParameters)
+| extend Resp = parse_json(ResponseElements)
+| extend KeyId = tostring(Req.keyId)
+| extend PendingDays = toint(coalesce(Req.pendingWindowInDays, Resp.pendingWindowInDays))
+| extend DeletionDate = todatetime(Resp.deletionDate)
+| extend Failed = isnotempty(ErrorCode)
+| summarize
+    Scheduled  = countif(EventName == "ScheduleKeyDeletion" and not(Failed)),
+    Cancelled  = countif(EventName == "CancelKeyDeletion" and not(Failed)),
+    Disabled   = countif(EventName == "DisableKey" and not(Failed)),
+    PolicyPut  = countif(EventName == "PutKeyPolicy" and not(Failed)),
+    Denied     = countif(Failed),
+    Keys       = dcount(KeyId),
+    KeyList    = make_set(KeyId, 20),
+    MinWindow  = minif(PendingDays, EventName == "ScheduleKeyDeletion"),
+    Soonest    = minif(DeletionDate, EventName == "ScheduleKeyDeletion"),
+    Errors     = make_set(ErrorCode, 5),
+    SourceIps  = make_set(SourceIpAddress, 5),
+    Agents     = make_set(UserAgent, 3),
+    FirstSeen  = min(TimeGenerated),
+    LastSeen   = max(TimeGenerated)
+    by UserIdentityArn
+| extend HoursLeft = iff(isnotempty(Soonest), datetime_diff('hour', Soonest, now()), int(-1))
+| extend Verdict = case(
+    Scheduled > 0 and HoursLeft >= 0 and HoursLeft < 48,
+        strcat("KEY DELETION IMMINENT — ", tostring(HoursLeft), " hours until the earliest key is destroyed. Cancel first and investigate second; after the window there is no recovery of any kind, P0"),
+    Scheduled >= 5,
+        strcat("MULTIPLE KEYS SCHEDULED — ", tostring(Keys), " distinct keys by one principal. Scripted destruction of the decryption path, P0"),
+    Scheduled > 0 and MinWindow <= 7,
+        "KEY SCHEDULED WITH THE MINIMUM WINDOW — 7 days is the shortest AWS permits, and choosing it shortens the response window deliberately. Routine decommissioning has no reason to, P0",
+    Scheduled > 0 and Disabled > 0,
+        "KEY DISABLED AND SCHEDULED — disabling takes effect immediately, so the data is already undecryptable while the deletion window runs, P0",
+    Scheduled > 0,
+        "KEY SCHEDULED FOR DELETION — one key is enough. Confirm the principal owns key lifecycle before treating this as routine, P0",
+    Denied > 3,
+        "REPEATED DELETION REFUSALS — a principal mapping which keys it can destroy. No state changes, so nothing else in the estate notices, P1",
+    Cancelled > 0,
+        "DELETION CANCELLED — expected during a response; confirm it was your team that cancelled it, P2",
+    "KMS activity — read alongside the key policy changes in the same window")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, HoursLeft, Soonest, MinWindow,
+          Scheduled, Cancelled, Disabled, PolicyPut, Denied, Keys, KeyList, Errors, SourceIps, Agents
+| order by HoursLeft asc, Scheduled desc
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHAT THE KEY ENCRYPTS. KMS records that a key was used, not what it protected. The blast radius
+// is assembled from the services that reference the key — S3 bucket encryption configuration, EBS
+// volume attributes, RDS storage encryption, Secrets Manager secrets — and each has to be asked
+// separately. Query 3 does that; nothing in CloudTrail does it for you.
+//
+// WHETHER A DISABLED KEY IS ALREADY CAUSING FAILURES. DisableKey takes effect immediately, so
+// decrypt calls start failing at once with KMSInvalidStateException — in the CALLING service's
+// logs, not in this table.
+//
+// WHETHER THE KEY IS A MULTI-REGION PRIMARY. A primary with replicas cannot be deleted until the
+// replicas are, so a schedule against one may be blocked by AWS — which is a real control and is
+// visible only in describe-key, not here.

@@ -1,0 +1,165 @@
+# S3 bucket ACL configured to grant public or cross-account access (T1530)
+#
+# AWS'S DEFINITION OF A PUBLIC ACL IS TWO URIs: "Amazon S3 considers a bucket or object ACL public
+# if it grants any permissions to members of the predefined AllUsers or AuthenticatedUsers groups."
+# So the content check the source rule omits costs one `contains`.
+#
+# AuthenticatedUsers is ANY principal in ANY AWS account, not any principal in yours. And neither
+# the event nor a live read is authoritative: AWS redacts the grantee on a cross-account write, and
+# GetBucketAcl returns ENFORCED rather than stored permissions.
+# Full rationale: detections/detection_note_t1530.md.
+title: S3 bucket ACL granting to a predefined public group
+id: 7a4e91c3-58d2-4b06-9f71-3c0a86e2b5d4
+name: s3_bucket_acl_public_grant
+status: experimental
+description: >-
+  A successful PutBucketAcl granting to AllUsers or AuthenticatedUsers, the two predefined groups
+  AWS treats as public, or applying a canned public ACL. Because BlockPublicAcls makes S3 reject
+  exactly this call when set, a success here is also evidence that the flag was false at that
+  moment. AuthenticatedUsers means any principal in any AWS account and is public in the same sense
+  as AllUsers.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketAcl.html
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketAcl'
+  success:
+    errorCode: null
+  # The predefined group URIs are the whole of AWS's public-ACL definition.
+  public_group:
+    requestParameters|contains:
+      - 'acs.amazonaws.com/groups/global/AllUsers'
+      - 'acs.amazonaws.com/groups/global/AuthenticatedUsers'
+  # The canned-ACL header form carries no grantee URI at all, so it needs its own match.
+  canned_public:
+    requestParameters.x-amz-acl:
+      - 'public-read'
+      - 'public-read-write'
+      - 'authenticated-read'
+  # POPULATE BEFORE DEPLOYING with the roles that own bucket lifecycle.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and (public_group or canned_public) and not known_provisioners
+falsepositives:
+  - >-
+    A bucket deliberately serving public content. It should be on the recorded public-bucket list;
+    if it is not, either the list is wrong or the bucket is.
+level: high
+---
+title: S3 bucket ACL written with no readable grantee detail
+id: c06b83fa-4719-4e25-8d3b-51fa07c4e6b9
+name: s3_bucket_acl_opaque_write
+status: experimental
+description: >-
+  A successful PutBucketAcl whose event carries no grantee URI and no canned-ACL header. This is
+  the shape produced when another account sets the ACL — AWS redacts the grantee from the bucket
+  owner's copy of the event — and it is also what a malformed or unusual request looks like. The
+  correct verdict is that the grant cannot be determined from this event, which is different from
+  clean, and different from what a rule matching every PutBucketAcl would report. Requires a live
+  read to resolve, and even that is qualified.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketAcl.html
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketAcl'
+  success:
+    errorCode: null
+  has_grants:
+    requestParameters|contains: 'acs.amazonaws.com/groups/global/'
+  has_canned:
+    requestParameters.x-amz-acl|exists: true
+  has_named_grantee:
+    requestParameters|contains: 'CanonicalUser'
+  condition: selection and success and not (has_grants or has_canned or has_named_grantee)
+falsepositives:
+  - >-
+    An SDK that serialises the ACL differently from what this rule expects. Worth confirming once
+    against a known-good request rather than tuning away, because the same shape is what a
+    cross-account write looks like.
+level: low
+---
+title: ACL gate lowered and a public ACL then written
+id: e5109d7b-2a64-4c83-b0f5-97d3e6a10c28
+status: experimental
+description: >-
+  BlockPublicAcls or IgnorePublicAcls was set false and a public ACL was written afterwards by the
+  same principal. This is the sequence BlockPublicAcls exists to make impossible: with it set, S3
+  rejects a PutBucketAcl carrying a public ACL, so the gate has to come down first. Critical
+  because the two halves together describe a completed exposure where either alone is ambiguous.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.collection
+  - attack.t1530
+correlation:
+  type: temporal_ordered
+  rules:
+    - s3_pab_acl_gate_lowered
+    - s3_bucket_acl_public_grant
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+level: critical
+---
+title: S3 Block Public Access ACL gate lowered
+id: 4f7c2801-9e56-4a1d-b7e2-08a5c3d69f14
+name: s3_pab_acl_gate_lowered
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. BlockPublicAcls or
+  IgnorePublicAcls set to false, or the Block Public Access configuration deleted outright, at
+  either scope. The rated detections for this act are in
+  ../../s3.exfiltration.public-access-block-removed/.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutPublicAccessBlock.html
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # Sibling blocks: each is a complete alternative shape of "the ACL gate came down". Within each
+  # block the keys are ANDed and they do co-occur on a single event — a PutBucketPublicAccessBlock
+  # record carries eventSource, eventName and the submitted flags together.
+  block_acls_off:
+    eventSource: 's3.amazonaws.com'
+    eventName:
+      - 'PutBucketPublicAccessBlock'
+      - 'PutAccountPublicAccessBlock'
+    requestParameters.PublicAccessBlockConfiguration.BlockPublicAcls: false
+  ignore_acls_off:
+    eventSource: 's3.amazonaws.com'
+    eventName:
+      - 'PutBucketPublicAccessBlock'
+      - 'PutAccountPublicAccessBlock'
+    requestParameters.PublicAccessBlockConfiguration.IgnorePublicAcls: false
+  deleted:
+    eventSource: 's3.amazonaws.com'
+    eventName:
+      - 'DeleteBucketPublicAccessBlock'
+      - 'DeleteAccountPublicAccessBlock'
+  success:
+    errorCode: null
+  condition: (block_acls_off or ignore_acls_off or deleted) and success
+level: informational

@@ -1,0 +1,114 @@
+// SNS topic opened for public subscribe (T1213 / T1098)
+//
+// Signal: an SNS access policy that allows a subscribe-granting action to Principal "*"
+// with no principal-scoping Condition IN THE SAME STATEMENT, plus the Subscribe calls that
+// exercise it. Covers CreateTopic (Attributes.Policy) and SetTopicAttributes (Policy).
+//
+// This query does what the Sigma rules structurally cannot: Sigma `|re` runs over raw event
+// text, so its "no confining Condition" test is document-wide and a policy whose first
+// statement is confined and whose second is wide open is suppressed. Here the document is
+// parsed and each statement is judged on its own Condition, which is how IAM evaluates it.
+//
+// Shape guards, all three, because IAM accepts every one of these forms:
+//   Statement  a single object OR an array
+//   Principal  an object OR the bare string "*"; Principal.AWS a string OR an array
+//   Action     a string OR an array — set_has_element, NEVER strcat_array + equality,
+//              which strips quotes and misses ["sns:Subscribe","*"]
+//
+// Action-prefix case is unstable: AWS's default topic policy writes "SNS:Subscribe" while
+// AddPermission generates "sns:Subscribe". Every action test below is case-folded.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let PolicyWrites =
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "sns.amazonaws.com"
+| where EventName in ("CreateTopic", "SetTopicAttributes")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+| where EventName == "CreateTopic" or tostring(Req.attributeName) == "Policy"
+| extend PolicyStr = tostring(coalesce(Req.attributes.Policy, Req.attributeValue))
+| where isnotempty(PolicyStr)
+| extend TopicArn = tostring(coalesce(Resp.topicArn, Req.topicArn))
+| extend Pol = parse_json(PolicyStr)
+| extend Stmts = iff(gettype(Pol.Statement) == "array", Pol.Statement, pack_array(Pol.Statement))
+| mv-expand St = Stmts
+| where tolower(tostring(St.Effect)) == "allow"
+| extend PrincRaw = iff(gettype(St.Principal) == "string", pack_array(tostring(St.Principal)),
+                    iff(gettype(St.Principal.AWS) == "array", St.Principal.AWS,
+                        pack_array(tostring(St.Principal.AWS))))
+| where set_has_element(PrincRaw, "*")
+| extend Actions = iff(gettype(St.Action) == "array", St.Action, pack_array(tostring(St.Action)))
+| extend ActionsLower = tolower(tostring(Actions))
+| extend HasNotAction = isnotempty(tostring(St.NotAction)) and tostring(St.NotAction) != ""
+| extend GrantsSubscribe = HasNotAction
+      or set_has_element(Actions, "*")
+      or ActionsLower contains ":subscribe"
+      or ActionsLower contains ":receive"
+      or ActionsLower contains "sns:*"
+| extend CondStr = tolower(tostring(St.Condition))
+| extend IsConfined =
+       CondStr contains "sourceowner"   or CondStr contains "sourceaccount"
+    or CondStr contains "sourcearn"     or CondStr contains "principalorgid"
+    or CondStr contains "principalorgpaths" or CondStr contains "principalaccount"
+    or CondStr contains "principalarn"  or CondStr contains "sourcevpce"
+    or CondStr contains "sns:protocol"  or CondStr contains "sns:endpoint"
+| where GrantsSubscribe
+| project GrantTime = TimeGenerated, EventName, TopicArn, Grantor = UserIdentityArn,
+          GrantorIP = SourceIpAddress, AwsRegion, Actions, HasNotAction, IsConfined, CondStr;
+//
+// The exercise: who actually attached an endpoint to those topics.
+let Subs =
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "sns.amazonaws.com" and EventName == "Subscribe"
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+| extend TopicArn = tostring(Req.topicArn),
+         Protocol = tostring(Req.protocol),
+         Endpoint = tostring(Req.endpoint),
+         SubArn   = tostring(Resp.subscriptionArn)
+// http/https/email/email-json/sms deliver OUTSIDE AWS identity control: no IAM principal in
+// any account is required, so the subscriber is whoever holds the URL, mailbox or handset.
+| extend OffAccount = Protocol in ("http", "https", "email", "email-json", "sms")
+| project SubTime = TimeGenerated, TopicArn, Subscriber = UserIdentityArn,
+          SubscriberIP = SourceIpAddress, Protocol, Endpoint, SubArn, OffAccount;
+PolicyWrites
+| join kind=leftouter (Subs) on TopicArn
+| where isempty(SubTime) or SubTime >= GrantTime
+| extend Verdict = case(
+    IsConfined,
+        "Wildcard principal, Condition-bound — matches the AWS default topic policy; confirm the value is YOUR account, P3",
+    isnotempty(SubTime) and OffAccount,
+        "PUBLIC SUBSCRIBE GRANT, THEN EXERCISED to an off-account endpoint — treat every message since SubTime as read, P0",
+    isnotempty(SubTime),
+        "PUBLIC SUBSCRIBE GRANT, THEN EXERCISED — verify the subscriber owns the endpoint, P1",
+    HasNotAction,
+        "PUBLIC NotAction GRANT — the internet may perform every SNS action except those listed, P0",
+    "PUBLIC SUBSCRIBE GRANT, not yet exercised — the internet may attach an endpoint at will, P1")
+| project GrantTime, SubTime, TopicArn, EventName, Grantor, GrantorIP, Actions,
+          HasNotAction, IsConfined, CondStr, Subscriber, SubscriberIP, Protocol,
+          Endpoint, SubArn, Verdict
+| order by GrantTime desc
+//
+// ============================================================================
+// WHAT THIS QUERY CANNOT SEE — read this before declaring a topic clean
+// ============================================================================
+// 1. THE MOMENT A SUBSCRIPTION WENT LIVE. AWS: ConfirmSubscription and Unsubscribe invoked
+//    in unauthenticated mode "will not be logged to CloudTrail" — and the emailed or POSTed
+//    confirmation link IS unauthenticated mode. Every http/https/email subscription is
+//    confirmed that way. So the Subscribe row above is the last event you get; whether it
+//    became active is answerable ONLY by enumerating ListSubscriptionsByTopic live.
+// 2. SUBSCRIPTIONS CREATED BEFORE THE QUERY WINDOW, or by a principal in another account
+//    under a cross-account grant. Same remedy: enumerate live, do not infer from the log.
+// 3. WHETHER SubArn == "pending confirmation" IS TRUSTWORTHY. AWS returns that literal only
+//    when ReturnSubscriptionArn is false, which is the default; a caller passing true gets
+//    a real ARN back even for an unconfirmed subscription. Absence of the literal therefore
+//    does NOT mean the subscription is confirmed.
+// 4. WHAT WAS DELIVERED. Message bodies appear in no CloudTrail record at any configuration.
+//    Volume only, from CloudWatch AWS/SNS NumberOfNotificationsDelivered by TopicName.
+//
+// PREVENTION: a topic policy is a resource-based policy, so the org-level control is a
+// Resource control policy, not an SCP — an SCP cannot reach a principal outside your
+// organisation. Constrain the delivery shape too: sns:Protocol and sns:Endpoint are the
+// SNS-specific condition keys AWS documents for restricting what a subscriber may attach.

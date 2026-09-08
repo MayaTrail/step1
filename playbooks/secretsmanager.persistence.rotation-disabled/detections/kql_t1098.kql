@@ -1,0 +1,59 @@
+// Secrets Manager automatic rotation turned off (T1098)
+//
+// HTTP 200 and reads as a live citation. Cancelling rotation is persistence, not evasion: nothing
+// about the defender's visibility changes and the call is fully logged. What changes is that a
+// value the actor already holds stops expiring.
+//
+// The source rule excludes errors, so a REFUSED CancelRotateSecret is invisible to it. Included here.
+//
+// `contains` throughout, never `has` — secret names and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+let WINDOW = 30m;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "secretsmanager.amazonaws.com"
+| where EventName in ("CancelRotateSecret", "RotateSecret", "GetSecretValue",
+                      "UpdateSecretVersionStage", "ListSecretVersionIds")
+| extend Req = parse_json(RequestParameters)
+| extend SecretId = tostring(Req.secretId)
+| extend IsAutomation = UserIdentityArn contains "PlatformAutomation"
+| extend Cancelled     = EventName == "CancelRotateSecret" and isempty(ErrorCode)
+| extend CancelRefused = EventName == "CancelRotateSecret" and isnotempty(ErrorCode)
+| extend RotationBack  = EventName == "RotateSecret" and isempty(ErrorCode)
+// Reading the value and then stopping it from changing is the complete shape: take the credential,
+// then remove the mechanism that would replace it.
+| extend ValueRead     = EventName == "GetSecretValue" and isempty(ErrorCode)
+// Clearing an orphaned AWSPENDING label is part of a legitimate recovery, so its presence argues
+// for an operator cleaning up rather than an actor.
+| extend StageCleared  = EventName == "UpdateSecretVersionStage" and isempty(ErrorCode)
+| summarize
+    Cancellations  = countif(Cancelled),
+    CancelRefusals = countif(CancelRefused),
+    RotationsBack  = countif(RotationBack),
+    Reads          = countif(ValueRead),
+    StageClears    = countif(StageCleared),
+    SecretsTouched = dcountif(SecretId, Cancelled),
+    Secrets        = make_set(iff(Cancelled, SecretId, ""), 20),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated)
+    by bin(TimeGenerated, WINDOW), UserIdentityArn, SourceIpAddress, IsAutomation
+| where Cancellations > 0 or CancelRefusals > 0
+| extend Verdict = case(
+    SecretsTouched >= 3,
+        "CRITICAL - rotation cancelled across several secrets; every credential involved now stays valid indefinitely",
+    Cancellations > 0 and Reads > 0,
+        "CRITICAL - value read, then rotation stopped so it stays valid",
+    Cancellations > 0 and RotationsBack == 0,
+        "HIGH - rotation cancelled and not restored",
+    Cancellations > 0,
+        "MEDIUM - cancelled and re-enabled in the same window; likely a rotation Lambda swap",
+    "MEDIUM - rotation cancellation refused")
+// Cancel-then-rotate inside the same window, with the staging label cleared, is the signature of a
+// legitimate Lambda replacement done correctly.
+| extend LikelyLambdaSwap = Cancellations > 0 and RotationsBack > 0
+| project TimeGenerated, Verdict, LikelyLambdaSwap, UserIdentityArn, SourceIpAddress, IsAutomation,
+          Cancellations, CancelRefusals, RotationsBack, Reads, StageClears,
+          SecretsTouched, Secrets, FirstSeen, LastSeen
+| order by SecretsTouched desc, Cancellations desc, TimeGenerated desc

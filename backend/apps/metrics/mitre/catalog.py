@@ -91,8 +91,19 @@ def normalize_technique(technique_id: str) -> str:
     Returns:
         The normalised parent technique ID.
     """
-    parent = technique_id.strip().split(".", 1)[0]
-    return _catalog().get("revoked_map", {}).get(parent, parent)
+    raw = technique_id.strip()
+    revoked = _catalog().get("revoked_map", {})
+
+    # Resolve at sub-technique granularity FIRST. A parent-level revocation can
+    # fan out to more than one replacement parent: ATT&CK v19 revoked T1562 in
+    # favour of T1685, but its firewall sub-technique T1562.007 was replaced by
+    # T1686.001, a different parent. Rolling up before consulting the map would
+    # attribute a firewall technique to T1685's heatmap row.
+    if "." in raw and raw in revoked:
+        raw = revoked[raw]
+
+    parent = raw.split(".", 1)[0]
+    return revoked.get(parent, parent)
 
 
 def is_known(technique_id: str) -> bool:
@@ -102,6 +113,52 @@ def is_known(technique_id: str) -> bool:
     The ID is normalised (roll-up + revoked-map) before the membership check.
     """
     return normalize_technique(technique_id) in _technique_index()
+
+
+def subtechniques() -> dict[str, str]:
+    """
+    Return the sub-technique ID -> official ATT&CK name map.
+
+    Not part of the coverage denominator (that stays technique-level); this
+    exists so manifest validation can confirm a cited sub-technique is real and
+    that the name printed beside it is MITRE's own.
+    """
+    return _catalog().get("subtechniques", {})
+
+
+def official_name(technique_id: str) -> str | None:
+    """
+    Return MITRE's own name for a technique or sub-technique ID.
+
+    Unlike technique_name(), a sub-technique keeps its own name rather than
+    rolling up to the parent's, so "T1685.002" returns "Disable or Modify Cloud
+    Log" rather than "Disable or Modify Tools". Revoked IDs resolve to their
+    replacement's name.
+
+    Args:
+        technique_id: Raw ATT&CK technique or sub-technique ID.
+
+    Returns:
+        The official name, or None when the ID resolves to nothing live.
+    """
+    raw = technique_id.strip()
+    revoked = _catalog().get("revoked_map", {})
+    if raw in revoked:
+        raw = revoked[raw]
+    if "." in raw:
+        return subtechniques().get(raw)
+    entry = _technique_index().get(normalize_technique(raw))
+    return entry["name"] if entry else None
+
+
+def is_known_exact(technique_id: str) -> bool:
+    """
+    Return True if the ID names a live technique OR a live sub-technique.
+
+    is_known() only proves the PARENT resolves, so it accepts an invented
+    sub-technique number such as "T1685.999". This is the stricter check.
+    """
+    return official_name(technique_id) is not None
 
 
 def technique_name(technique_id: str) -> str | None:

@@ -1,0 +1,58 @@
+// Secrets Manager access repeatedly denied (T1526)
+//
+// The source rule maps this to brute force under Initial Access. An AccessDenied from Secrets
+// Manager goes to a principal whose credential already AUTHENTICATED and whose authorization failed
+// — the actor is already inside, and this is discovery.
+//
+// It groups by sessionIssuer.userName, which is the ROLE name: every concurrent session of a role
+// shares it. Grouped on the session ARN here.
+//
+// Its threshold is twenty in five minutes — a retry loop, not a person. And it matches AccessDenied
+// exactly, so SCP and permissions-boundary denials that surface as AccessDeniedException are dropped.
+//
+// `contains` throughout, never `has` — secret names and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+let WINDOW = 15m;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "secretsmanager.amazonaws.com"
+| extend Req = parse_json(RequestParameters)
+| extend SecretId = tostring(Req.secretId)
+| extend IsAutomation = UserIdentityArn contains "PlatformAutomation"
+// startswith, not equality: an SCP or boundary denial can surface as AccessDeniedException.
+| extend Denied = ErrorCode startswith "AccessDenied" or ErrorCode == "UnauthorizedOperation"
+| extend Allowed = isempty(ErrorCode)
+// Retrieval succeeding anywhere in the same window changes the incident class entirely.
+| extend Retrieved = Allowed and EventName in ("GetSecretValue", "BatchGetSecretValue")
+| summarize
+    Denials         = countif(Denied),
+    Successes       = countif(Allowed),
+    Retrievals      = countif(Retrieved),
+    DeniedSecrets   = dcountif(SecretId, Denied),
+    DeniedActions   = dcountif(EventName, Denied),
+    ErrorCodes      = make_set(iff(Denied, ErrorCode, ""), 10),
+    Actions         = make_set(iff(Denied, EventName, ""), 10),
+    Secrets         = make_set(iff(Denied, SecretId, ""), 20),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated)
+    by bin(TimeGenerated, WINDOW), UserIdentityArn, SourceIpAddress, IsAutomation
+| where not(IsAutomation)
+| where Denials > 0
+| extend Verdict = case(
+    Retrievals > 0 and Denials >= 10,
+        "CRITICAL - probing alongside a successful retrieval; treat the retrieved secret as disclosed",
+    DeniedSecrets >= 5,
+        "HIGH - denials across several distinct secrets; the inventory is being walked",
+    Denials >= 10 and DeniedSecrets <= 1,
+        "MEDIUM - repeated denials against ONE secret; the signature of a workload missing a grant",
+    Denials >= 10,
+        "HIGH - repeated denials from one session",
+    "LOW - isolated denial")
+// The single most useful discriminator, and the one the source rule cannot express.
+| extend LikelyRetryLoop = DeniedSecrets <= 1 and DeniedActions <= 1 and Denials >= 5
+| project TimeGenerated, Verdict, LikelyRetryLoop, UserIdentityArn, SourceIpAddress,
+          Denials, DeniedSecrets, DeniedActions, Successes, Retrievals,
+          ErrorCodes, Actions, Secrets, FirstSeen, LastSeen
+| order by Retrievals desc, DeniedSecrets desc, Denials desc

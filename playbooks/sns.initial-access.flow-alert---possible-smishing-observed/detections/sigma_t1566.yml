@@ -1,0 +1,214 @@
+# Outbound SMS abuse from a compromised AWS account — smishing (T1566 / T1584.006)
+#
+# THE ORIGINAL FLOW CANNOT FIRE, AND THE REASON IS STRUCTURAL RATHER THAN A TYPO.
+# Its second stage matches `eventName:("Publish")`. AWS documents `Publish` and
+# `PublishBatch` as CloudTrail DATA events — the published example carries
+# `"eventCategory": "Data"` and `"managementEvent": false` — and data events are OFF by
+# default. On a default trail the second stage never matches, so the flow never completes.
+#
+# Worse, enabling SNS data events does not fix it. AWS lists the loggable SNS data-event
+# resource types as AWS::SNS::Topic and AWS::SNS::PlatformEndpoint, and states plainly:
+# "SNS resource type AWS::SNS::PhoneNumber is not logged by CloudTrail." A Publish carrying
+# a PhoneNumber and no TopicArn — which is precisely what sending an SMS to a stranger is —
+# produces NO CloudTrail record under ANY trail configuration. The sending step of this
+# technique is invisible to CloudTrail by design, and no Sigma rule over CloudTrail can
+# recover it. Even for topic-based publishes, `requestParameters.message` and `.subject` are
+# recorded as the literal HIDDEN_DUE_TO_SECURITY_REASONS, so the phishing text is never
+# available either.
+#
+# A third defect is independent of all that: the flow's own group-by is EMPTY, so its two
+# stages are not bound to the same principal. An enumeration by one identity and an unrelated
+# publish by a legitimate service would satisfy it account-wide.
+#
+# SO THESE RULES MOVE THE DETECTION ENTIRELY ONTO THE MANAGEMENT PLANE, where the setup for
+# bulk SMS is fully logged by default and cannot be turned off:
+#   * reconnaissance of the SMS configuration and sandbox status,
+#   * raising the monthly SMS spend limit via SetSMSAttributes — the single most reliable
+#     precursor, because the account default is 1.00 USD and no volume campaign fits in it,
+#   * escaping the SMS sandbox by registering and verifying destination numbers.
+# The correlation below binds them to ONE principal, which the original flow did not do, and
+# fires on a default trail, which the original flow could not.
+title: SNS SMS spend or delivery configuration changed
+id: 336be6e7-a985-432f-a9a5-42003b45141f
+name: sns_sms_attributes_changed
+status: experimental
+description: >-
+  SetSMSAttributes by a principal outside the messaging-platform allowlist. This call sets
+  the account-wide MonthlySpendLimit, the default sender id, the default SMS type and the
+  delivery-status logging role — every lever a bulk-SMS campaign needs. The account default
+  spend quota is 1.00 USD, so raising it is close to mandatory for volume abuse and is
+  logged as a management event whether or not any data-event trail exists.
+references:
+  - https://docs.aws.amazon.com/sns/latest/dg/sms_preferences.html
+  - https://docs.aws.amazon.com/sns/latest/dg/logging-using-cloudtrail.html
+  - https://attack.mitre.org/techniques/T1566/
+tags:
+  - attack.initial-access
+  - attack.resource-development
+  - attack.t1566
+  - attack.t1584.006
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sns.amazonaws.com'
+    eventName: 'SetSMSAttributes'
+  known_admins:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'
+      - ':role/ci-cd'
+      - ':role/messaging-platform'
+  success:
+    errorCode: null
+  condition: selection and success and not known_admins
+falsepositives:
+  - A planned spend-limit increase before a legitimate campaign. Rare, scheduled, and
+    performed by the messaging-platform role — allowlist that role rather than the event.
+level: high
+---
+title: SNS SMS configuration and sandbox reconnaissance
+id: 7d8fd630-e9d9-42ca-9c47-97257669ed19
+name: sns_sms_reconnaissance
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. Read-only enumeration of the
+  account's SMS posture: spend attributes, sandbox status, origination numbers, opt-out
+  lists. Individually these are routine console and support activity; they matter only as
+  the first half of the sequence below. Carries the success filter so a denied probe cannot
+  satisfy the correlation's first stage.
+references:
+  - https://docs.aws.amazon.com/sns/latest/dg/logging-using-cloudtrail.html
+  - https://attack.mitre.org/techniques/T1526/
+tags:
+  - attack.discovery
+  - attack.t1526
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sns.amazonaws.com'
+    eventName:
+      - 'GetSMSAttributes'
+      - 'GetSMSSandboxAccountStatus'
+      - 'ListOriginationNumbers'
+      - 'ListPhoneNumbersOptedOut'
+      - 'ListSMSSandboxPhoneNumbers'
+      - 'CheckIfPhoneNumberIsOptedOut'
+  success:
+    errorCode: null
+  condition: selection and success
+level: low
+---
+title: SNS SMS sandbox destination registered or verified
+id: 51b5a830-b9ee-4dfe-beee-62f9c6227994
+name: sns_sms_sandbox_change
+status: experimental
+description: >-
+  Registration, verification or removal of an SMS sandbox destination number. In the SMS
+  sandbox an account may only send to numbers it has verified, so an actor must either
+  verify each destination — visible here, one event per number — or get the account out of
+  the sandbox entirely. Either way this is the boundary between "cannot send to strangers"
+  and "can", and it is a management event logged by default.
+references:
+  - https://docs.aws.amazon.com/sns/latest/dg/logging-using-cloudtrail.html
+  - https://attack.mitre.org/techniques/T1566/
+tags:
+  - attack.initial-access
+  - attack.resource-development
+  - attack.t1566
+  - attack.t1584.006
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sns.amazonaws.com'
+    eventName:
+      - 'CreateSMSSandboxPhoneNumber'
+      - 'VerifySMSSandboxPhoneNumber'
+      - 'DeleteSMSSandboxPhoneNumber'
+  known_admins:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'
+      - ':role/ci-cd'
+      - ':role/messaging-platform'
+  success:
+    errorCode: null
+  condition: selection and success and not known_admins
+falsepositives:
+  - A developer verifying their own handset while building an SMS feature. Expect this in
+    non-production accounts; it should be rare and attributable in production.
+level: medium
+---
+title: SMS reconnaissance followed by an SMS configuration change by the same principal
+id: 0fc02b1f-55b0-47e8-b3a7-9cd41d55ddd6
+status: experimental
+description: >-
+  One principal enumerating the account's SMS posture and then changing it within a day.
+  This replaces the original flow's second stage, which keyed on Publish and therefore could
+  never fire, with a management-plane event that is logged by default — and unlike the
+  original it is GROUPED BY PRINCIPAL, so an unrelated legitimate change elsewhere in the
+  account cannot complete the sequence. Timespan basis — 24h is carried over from the source
+  rule deliberately: it is the only tuning figure in the original worth keeping, and it
+  matches the observed shape of this activity, where reconnaissance and setup happen in one
+  working session. Shorten it before lengthening it.
+references:
+  - https://docs.aws.amazon.com/sns/latest/dg/sms_preferences.html
+  - https://attack.mitre.org/techniques/T1566/
+tags:
+  - attack.initial-access
+  - attack.discovery
+  - attack.t1566
+  - attack.t1526
+correlation:
+  type: temporal_ordered
+  rules:
+    - sns_sms_reconnaissance
+    - sns_sms_attributes_changed
+  group-by:
+    - userIdentity.arn
+  timespan: 24h
+level: high
+---
+title: SNS publish to a topic by a principal outside the publishing allowlist
+id: 98f05bf3-feb8-4b1d-9091-45224ad69833
+name: sns_publish_unexpected_principal
+status: experimental
+description: >-
+  DATA EVENT — this rule is INERT unless a CloudTrail data-event trail exists on
+  resources.type AWS::SNS::Topic, and it can never see the direct-to-phone form of this
+  technique at all, because AWS does not log AWS::SNS::PhoneNumber to CloudTrail under any
+  configuration. It is shipped for accounts that publish SMS through a topic with sms
+  subscriptions, where it is the only event-level view of sending. Message content is not
+  available even here: requestParameters.message and .subject are recorded as the literal
+  HIDDEN_DUE_TO_SECURITY_REASONS. Treat a zero from this rule as "not logged", never as
+  "nothing was sent", and use the CloudWatch pivots in the playbook instead.
+references:
+  - https://docs.aws.amazon.com/sns/latest/dg/logging-using-cloudtrail.html
+  - https://attack.mitre.org/techniques/T1566/
+tags:
+  - attack.initial-access
+  - attack.t1566
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sns.amazonaws.com'
+    eventName:
+      - 'Publish'
+      - 'PublishBatch'
+  known_publishers:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'
+      - ':role/app-publisher'
+      - ':role/messaging-platform'
+  success:
+    errorCode: null
+  condition: selection and success and not known_publishers
+falsepositives:
+  - Any application publisher missing from the allowlist. Populate the allowlist from a
+    baseline before enabling, or this fires on ordinary traffic.
+level: low

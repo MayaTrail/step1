@@ -1,0 +1,145 @@
+// Failed Administrative Authentication Attempts (T1110.001 / T1078.004)
+//
+// Signal: an AWS principal repeatedly failing server-side user-pool authentication, and the
+// two things the Sigma correlations structurally cannot express — the SAME target account
+// across the failure/success pair, and the shape of the run (one sub many times = guessing and
+// the account is now locked out; many subs once each = spraying and nothing is locked out).
+//
+// This query covers BOTH halves of every authentication flow. AdminInitiateAuth is where the
+// password fails for ADMIN_USER_PASSWORD_AUTH and ADMIN_NO_SRP_AUTH; AdminRespondToAuthChallenge
+// is where it fails for USER_SRP_AUTH, CUSTOM_AUTH and the PASSWORD challenge of USER_AUTH. A
+// query that watches only the Initiate call sees nothing on a default app client, because an
+// app client with no ExplicitAuthFlows supports only ALLOW_REFRESH_TOKEN_AUTH,
+// ALLOW_USER_SRP_AUTH and ALLOW_CUSTOM_AUTH.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE BackendAuthRoles BELOW BEFORE DEPLOYING. Unpopulated, every legitimate server-side
+// sign-in reads as out-of-allowlist — noisy toward surfacing rather than toward hiding.
+let Lookback = 7d;
+let FailWindow = 10m;
+// AWS locks a user out after exactly five failed password attempts and doubles the lockout
+// from there, so five is the count at which a real account's state has already changed.
+let FailThreshold = 5;
+let Admin =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "cognito-idp.amazonaws.com"
+    | where EventName in ("AdminInitiateAuth", "AdminRespondToAuthChallenge")
+    // RequestParameters is typed `string` in this table, not dynamic — parse_json is required.
+    // AWS publishes NO example CloudTrail event for any cognito-idp management operation, so
+    // the exact requestParameters shape here is UNVERIFIED. Everything below tolerates a null:
+    // authFlow and userPoolId are read for context and never used as a filter.
+    | extend Req = parse_json(RequestParameters)
+    | extend AuthFlow  = tostring(Req.authFlow)
+    | extend PoolId    = tostring(Req.userPoolId)
+    | extend ClientId  = tostring(Req.clientId)
+    // CloudTrail records UserSub, never UserName, for user-specific requests, and obscures
+    // private fields with the literal HIDDEN_DUE_TO_SECURITY_REASONS. The target is therefore
+    // a sub; resolve it to a username with cognito-idp list-users --filter "sub = ...".
+    | extend TargetSub = coalesce(tostring(Req.userSub), tostring(Req.sub), "")
+    // column_ifexists degrades to "" where the workspace's connector does not carry
+    // ErrorMessage, rather than failing the whole query. The lockout exception is documented by
+    // its MESSAGE ("Password attempts exceeded"), not by a distinct errorCode, so without this
+    // column a sustained run against one account goes uncounted after the fifth attempt.
+    | extend ErrMsg = tostring(column_ifexists("ErrorMessage", ""))
+    // `contains`, never `has`: an ARN and a role path are punctuated and `has` is whole-term.
+    | extend IsBackendAuth = (UserIdentityArn contains ":role/app-backend-auth")
+                          or (UserIdentityArn contains ":role/BreakGlassAdmin")
+    | extend Outcome = case(
+        isempty(ErrorCode),                                   "SUCCESS",
+        ErrMsg contains "Password attempts exceeded",         "LOCKED_OUT",
+        ErrorCode == "NotAuthorizedException",                "BAD_PASSWORD_OR_HIDDEN_USER",
+        ErrorCode == "UserNotFoundException",                 "NO_SUCH_USER",
+        ErrorCode == "UserNotConfirmedException",             "USER_EXISTS_UNCONFIRMED",
+        ErrorCode == "AccessDeniedException",                 "IAM_DENIED",
+        ErrorCode == "PasswordResetRequiredException",        "USER_EXISTS_RESET_REQUIRED",
+        ErrorCode == "TooManyRequestsException",              "THROTTLED",
+                                                              strcat("OTHER:", ErrorCode));
+let Failures = Admin
+    | where Outcome in ("BAD_PASSWORD_OR_HIDDEN_USER", "NO_SUCH_USER",
+                        "USER_EXISTS_UNCONFIRMED", "LOCKED_OUT");
+// IAM denials are counted SEPARATELY and never folded into the failure count. A principal
+// probing whether it holds cognito-idp:AdminInitiateAuth produces the same event volume as a
+// real guessing run; conflating them puts reconnaissance and credential attack in one bucket.
+let Denials = Admin
+    | where Outcome == "IAM_DENIED"
+    | summarize DeniedAttempts = count(), DeniedPools = make_set(PoolId, 5)
+      by Actor = UserIdentityArn;
+let Successes = Admin
+    | where Outcome == "SUCCESS"
+    | summarize SuccessCount = count(), SuccessSubs = make_set(TargetSub, 10),
+                FirstSuccess = min(TimeGenerated), LastSuccess = max(TimeGenerated)
+      by Actor = UserIdentityArn;
+Failures
+| summarize
+    Failures        = count(),
+    FirstFailure    = min(TimeGenerated),
+    LastFailure     = max(TimeGenerated),
+    DistinctSubs    = dcountif(TargetSub, isnotempty(TargetSub)),
+    TargetSubs      = make_set_if(TargetSub, isnotempty(TargetSub), 20),
+    AuthFlows       = make_set(AuthFlow, 5),
+    Pools           = make_set(PoolId, 5),
+    Clients         = make_set(ClientId, 5),
+    SourceIPs       = make_set(SourceIpAddress, 5),
+    Agents          = make_set(UserAgent, 3),
+    Outcomes        = make_set(Outcome, 8),
+    Regions         = make_set(AwsRegion, 3),
+    Lockouts        = countif(Outcome == "LOCKED_OUT"),
+    Enumerations    = countif(Outcome in ("NO_SUCH_USER", "USER_EXISTS_UNCONFIRMED")),
+    OutOfAllowlist  = max(iff(IsBackendAuth, 0, 1))
+  by Actor = UserIdentityArn, SourceIp = SourceIpAddress
+| where Failures >= FailThreshold
+| join kind=leftouter Successes on Actor
+| join kind=leftouter Denials on Actor
+// A success landing inside the run — and specifically on a sub the run was failing against —
+// is the only shape here that says the brute force worked.
+| extend SuccessInsideRun = isnotempty(LastSuccess)
+                            and LastSuccess between (FirstFailure .. (LastFailure + FailWindow))
+| extend SuccessOnTargetedSub = SuccessInsideRun
+                                and array_length(set_intersect(TargetSubs, SuccessSubs)) > 0
+| extend Verdict = case(
+    SuccessOnTargetedSub,
+        "CONFIRMED CREDENTIAL COMPROMISE - a sub this principal was failing against then authenticated successfully; user pool tokens have been issued for that account",
+    SuccessInsideRun,
+        "FAILURES THEN A SUCCESS - same principal, overlapping window, but a DIFFERENT sub. Confirm by hand before calling it compromise",
+    DistinctSubs >= FailThreshold,
+        "PASSWORD SPRAYING - one attempt against each of many accounts; no account is locked out and the directory has been enumerated",
+    Lockouts > 0,
+        "PASSWORD GUESSING PAST LOCKOUT - the run continued after AWS locked the account out; every further attempt returns Password attempts exceeded and does not extend the lockout",
+    Enumerations > 0 and DistinctSubs > 1,
+        "DIRECTORY ENUMERATION - failures name accounts that do not exist or are unconfirmed, which is a user-existence oracle rather than a password attack",
+    OutOfAllowlist == 1,
+        "ADMIN AUTH BY AN UNEXPECTED PRINCIPAL - this role does not own server-side authentication; treat the AWS credential as the incident, not the user pool account",
+        "REPEATED ADMIN AUTH FAILURES - volume threshold met by an allowlisted backend; most likely a stale service credential, confirm before dismissing")
+| project FirstFailure, LastFailure, Verdict, Actor, SourceIp, Failures, DistinctSubs,
+          Lockouts, Enumerations, Outcomes, TargetSubs, AuthFlows, Pools, Clients,
+          SuccessCount, SuccessSubs, DeniedAttempts, DeniedPools, Agents, Regions
+| order by LastFailure desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// The username. AWS: "Amazon Cognito records UserSub but not UserName in CloudTrail logs for
+// requests that are specific to a user." Resolve each sub with
+// `aws cognito-idp list-users --user-pool-id <pool> --filter "sub = \"<sub>\""`. The password
+// and the AuthParameters map are redaction-class and appear as HIDDEN_DUE_TO_SECURITY_REASONS.
+//
+// Managed login and the classic hosted UI. Browser sign-in does not produce AdminInitiateAuth
+// or InitiateAuth at all - it produces its own event names with eventType AwsServiceEvent
+// (login_POST, selectChallenge_POST, Login_GET, CognitoAuthentication, Token_POST and the
+// rest). Neither this query nor the source rule sees a brute force driven through the hosted
+// pages. Cover that with a separate rule keyed on those event names, and with AWS WAF.
+//
+// Whether the guessed password was already known to be breached. That is threat protection's
+// compromised-credentials check, which requires the Plus feature plan and - AWS - "doesn't
+// have access to passwords in USER_SRP_AUTH sign-in, and doesn't monitor or act on events with
+// this flow."
+//
+// PREVENTION AND ITS LIMIT. AWS WAF can be associated with a user pool, but its scope is
+// "Public API operations - Requests from your app to the Amazon Cognito API that don't use AWS
+// credentials to authorize", naming InitiateAuth, RespondToAuthChallenge and GetUser. The
+// AdminInitiateAuth path is IAM-authorized and is therefore NOT inspected by WAF. Rate-limiting
+// this technique is an IAM problem, not a WAF problem - which is precisely why it is a separate
+// use case from
+// ../../cognito.credential-access.multiple-failed-authentication-attempts-from-single-source/.

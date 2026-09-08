@@ -1,0 +1,215 @@
+# DynamoDB Backup Deleted (T1490)
+#
+# THE SOURCE RULE COVERS THE LEAST DESTRUCTIVE OF THE THREE WAYS TO REMOVE RECOVERY. Deleting
+# one on-demand backup removes one recovery point. The two it does not cover remove all of them
+# at once, and neither produces a `DeleteBackup` event:
+#
+#   1. UpdateContinuousBackups with PointInTimeRecoveryEnabled:false turns PITR off. Every
+#      restorable instant in the window is gone in one call.
+#   2. UpdateContinuousBackups with a reduced RecoveryPeriodInDays. AWS: "If you change the
+#      recovery period and decrease it to a value lower than previously set, your
+#      EarliestRestorePoint will immediately decrease to match your recovery period, and any
+#      continuous backups that fall outside of the new set value will not be recoverable."
+#      The range is 1-35 days and the default is 35, so a single parameter change can destroy
+#      34 days of recovery capability while PITR still reads as ENABLED on every dashboard.
+#
+# Rule 3 below covers both, WITH A CAVEAT STATED IN ITS OWN COMMENT that must be read before
+# deploying it.
+#
+# NO SUCCESS FILTER. The source rule excludes service-initiated deletions and then matches
+# everything else including failures, so a principal DENIED on twenty backups raises the same
+# twenty alerts as a real destruction of twenty backups. The denial case is the more urgent
+# finding operationally - it means someone is probing - but it is not a destruction, and
+# putting the two in one bucket makes the volume meaningless.
+#
+# WHAT THE SOURCE RULE GETS RIGHT, AND IT IS NOT NOTHING. It excludes AWS Backup's own
+# service-initiated deletions on BOTH the user agent and userIdentity.invokedBy, ANDed. That
+# is the correct shape: an AND makes the exclusion narrower, so if only one of the two fields
+# is populated the event is still alerted on. An exclusion that fails open in the direction of
+# more alerts is the right way to fail.
+#
+# FIELD SHAPE, AND HOW MUCH OF IT IS DERIVED. DeleteBackup takes exactly one request parameter,
+# BackupArn, and returns a BackupDescription wrapper object containing BackupDetails
+# (BackupArn, BackupName, BackupSizeBytes, BackupStatus, BackupType, BackupCreationDateTime,
+# BackupExpiryDateTime). AWS publishes no DeleteBackup CloudTrail example, so the event paths
+# below are derived from that documented API response shape plus CloudTrail's usual
+# lowercasing of the leading character - they are NOT read off a published event. Confirm
+# against a real event in your own trail before depending on the nested paths.
+title: DynamoDB backup deleted by a principal outside the backup-lifecycle pipeline
+id: d92f471a-0c68-4e35-b8a7-5f31c9e2074b
+name: dynamodb_backup_deleted_nonpipeline
+status: experimental
+description: >-
+  An on-demand or system backup was deleted by a principal that does not own backup lifecycle,
+  and not by AWS Backup acting on its own schedule. A backup is the only thing that makes an
+  unrecoverable table deletion recoverable, so removing one is preparation as often as it is
+  housekeeping.
+references:
+  - https://attack.mitre.org/techniques/T1490/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_DeleteBackup.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/PointInTimeRecovery_Howitworks.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1490
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'DeleteBackup'
+  # AWS Backup expiring a recovery point on its own lifecycle schedule. Kept as a sibling
+  # block on invokedBy alone: it is the field AWS populates for service-initiated calls, and
+  # a user agent can look like anything.
+  service_initiated:
+    userIdentity.invokedBy: 'backup.amazonaws.com'
+  # POPULATE BEFORE DEPLOYING. Unpopulated, this fires on every scheduled backup rotation.
+  backup_lifecycle_pipeline:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'          # replace with this account's backup-lifecycle role
+      - ':role/BackupOperator'      # replace with this account's backup operator role
+  success:
+    errorCode: null
+  condition: selection and success and not service_initiated and not backup_lifecycle_pipeline
+falsepositives:
+  - >-
+    An operator pruning old on-demand backups by hand outside the pipeline. Distinguishable by
+    the backup's age and by whether any recovery point survives it; if it is routine, the
+    finding is that backup retention is being managed manually rather than by a lifecycle.
+level: high
+---
+# THE SHARPEST CASE THE SOURCE RULE CANNOT SEE. When a table with PITR enabled is deleted,
+# DynamoDB "automatically creates a backup snapshot called a system backup and retains it for
+# 35 days", named <table-name>$DeletedTableBackup. That snapshot is the ONLY remaining copy of
+# an already-destroyed table. Deleting it is categorically worse than deleting a routine
+# on-demand backup, and DeleteBackup's request parameter is only a BackupArn, so the request
+# side cannot distinguish them. The response side can: BackupType is SYSTEM and the name ends
+# in the documented suffix. Both paths are derived from the API response shape - see the file
+# header - so verify them against a real event before relying on this rule alone.
+title: DynamoDB system backup of an already-deleted table destroyed
+id: 4b8c05e1-6a2d-49f7-83b0-1c7e5d94af26
+status: experimental
+description: >-
+  A DeleteBackup removed a SYSTEM backup - the automatic snapshot DynamoDB creates when a
+  PITR-enabled table is deleted, retained 35 days. That snapshot is the last remaining copy of
+  a table that no longer exists, so its deletion makes the earlier destruction permanent.
+references:
+  - https://attack.mitre.org/techniques/T1490/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/PointInTimeRecovery_Howitworks.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1490
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'DeleteBackup'
+  system_backup_type:
+    responseElements.backupDescription.backupDetails.backupType: 'SYSTEM'
+  system_backup_name:
+    responseElements.backupDescription.backupDetails.backupName|contains: '$DeletedTableBackup'
+  success:
+    errorCode: null
+  # Either signal alone is enough. They are ORed rather than ANDed because both paths are
+  # derived rather than observed, and requiring both would mean a single wrong path silently
+  # stops the rule firing (B4) on the most destructive case in this playbook.
+  condition: selection and success and (system_backup_type or system_backup_name)
+falsepositives:
+  - >-
+    Deliberate cleanup after a table was decommissioned on purpose and the 35-day system backup
+    is no longer wanted. Should be traceable to the decommission change record.
+level: critical
+---
+# UNVERIFIED AGAINST PRIMARY DOCUMENTATION - READ BEFORE DEPLOYING.
+#
+# This rule covers the two PITR paths described in the file header, and it is the most
+# important rule in this file. But AWS's DynamoDB CloudTrail page enumerates the control-plane
+# operations "logged by default" and UpdateContinuousBackups is NOT on that list, even though
+# DescribeContinuousBackups IS. That is almost certainly a documentation omission - it is a
+# control-plane API and there is no mechanism by which its sibling would be logged and it
+# would not - but "almost certainly" is not verification, and shipping a rule that silently
+# never fires is the failure this corpus exists to avoid.
+#
+# BEFORE RELYING ON THIS RULE: run `aws dynamodb update-continuous-backups` against a
+# throwaway table and confirm the event appears in your own trail with this event name. If it
+# does not, the PITR gap is worse than described here, because it would mean PITR can be
+# turned off with no management-event record at all - and the only remaining detection is a
+# periodic DescribeContinuousBackups sweep, which is what §5 of the playbook does anyway.
+title: DynamoDB point-in-time recovery disabled or its window shortened
+id: 7e35a06c-8d41-4b92-a5f3-2b60c8e179d4
+status: experimental
+description: >-
+  UpdateContinuousBackups either turned point-in-time recovery off or reduced its recovery
+  period. AWS documents that a reduction takes effect immediately and that continuous backups
+  falling outside the new value are no longer recoverable, so one parameter change can destroy
+  up to 34 days of recovery capability while PITR still reports as enabled.
+references:
+  - https://attack.mitre.org/techniques/T1490/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_UpdateContinuousBackups.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/PointInTimeRecovery_Howitworks.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1490
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'UpdateContinuousBackups'
+  # PointInTimeRecoveryEnabled is documented Type: Boolean - a quoted 'false' matches nothing
+  # on a JSON-typed backend.
+  pitr_off:
+    requestParameters.pointInTimeRecoverySpecification.pointInTimeRecoveryEnabled: false
+  # A shortened window. The parameter is optional and defaults to 35; any value below 35 is a
+  # reduction relative to the default, and the analyst compares against the table's previous
+  # value from DescribeContinuousBackups. Enumerated rather than ranged because Sigma has no
+  # numeric comparison operator.
+  window_shortened:
+    requestParameters.pointInTimeRecoverySpecification.recoveryPeriodInDays:
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+  success:
+    errorCode: null
+  condition: selection and success and (pitr_off or window_shortened)
+falsepositives:
+  - >-
+    A deliberate cost reduction on a non-production table. PITR is billed on table size and not
+    on the length of the window, so shortening the window saves nothing - a change made for
+    cost reasons is a change made on a wrong premise, and is worth a conversation either way.
+level: high
+---
+# Volume basis, stated so a deployer can change it knowingly. Three is not observed, it is
+# derived: a single backup deletion is routine pruning and is already covered per-event by Rule
+# 1, while backups are deleted one at a time by an actor working through a table's recovery
+# points, and three inside ten minutes is faster than any human pruning workflow and slower
+# than nothing. The base rule already excludes AWS Backup's own lifecycle expiries and the
+# backup-lifecycle pipeline, so scheduled rotation does not reach this correlation.
+title: DynamoDB backups deleted at volume by one principal
+id: 2c0b7f39-4e18-4a6d-9b53-e7d1a0c86f42
+status: experimental
+description: >-
+  One principal outside the backup-lifecycle pipeline deleted three or more backups inside ten
+  minutes. Working through a table's recovery points is preparation for destroying the table.
+references:
+  - https://attack.mitre.org/techniques/T1490/  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1490
+correlation:
+  type: event_count
+  rules:
+    - dynamodb_backup_deleted_nonpipeline
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gte: 3
+level: high

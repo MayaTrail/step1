@@ -1,0 +1,51 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Trail Modified
+  priority: P3
+  type: logs_threshold
+  query: |
+    eventSource.keyword:"cloudtrail.amazonaws.com" AND eventName:"UpdateTrail" AND NOT _exists_:errorCode
+  threshold: 0.0  window: 10m
+  group_by: ['userIdentity.arn']
+
+- name: Trail Logging Stopped
+  priority: P2
+  type: logs_threshold
+  query: |
+    eventSource:"cloudtrail.amazonaws.com" AND eventName:"StopLogging" AND NOT _exists_:errorCode
+  threshold: 0.0  window: 10m
+  group_by: ['userIdentity.arn']
+
+- name: No Logs From AWS CloudTrail
+  priority: P1
+  type: logs_threshold
+  threshold: 1.0  window: 2h
+  group_by: ['<log-stream-identifier>']   # platform metadata field, de-identified — see PROVENANCE.md
+
+- name: Trail Deleted
+  priority: P2
+  type: logs_threshold
+  query: |
+    eventSource:"cloudtrail.amazonaws.com" AND eventName:"DeleteTrail" AND NOT _exists_:errorCode
+  threshold: 0.0  window: 10m
+  group_by: ['userIdentity.arn']
+
+- name: Audit Logging Configuration Accessed
+  priority: P3
+  type: logs_threshold
+  mitre: T1654/TA0007
+  query: |
+    userIdentity.type:"IAMUser" AND eventName:(DescribeTrails OR LookupEvents OR FilterLogEvents) AND NOT _exists_:errorCode AND NOT _exists_:userIdentity.invokedBy AND NOT sourceIPAddress.keyword:/.*\.amazonaws.com/
+  threshold: 0.0  window: 5m
+  group_by: ['userIdentity.principalId']
+

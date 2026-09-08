@@ -1,0 +1,134 @@
+# CloudTrail trail deleted (T1685.002)
+#
+# THE DELIVERED LOG FILES SURVIVE. AWS: deleting a trail "does not delete log files in the Amazon S3
+# bucket for that trail, the Amazon S3 bucket itself, or the CloudWatch log group". This destroys
+# FUTURE coverage, not PAST evidence, and a responder who assumes otherwise loses the hour in which
+# the surviving history is most useful.
+#
+# What IS irreversible is the configuration, which exists only in the last CreateTrail or UpdateTrail
+# event — a 90-day window and the real deadline. Blast radius (isMultiRegionTrail) is likewise not in
+# the event. Full rationale: detections/detection_note_t1685_002.md.
+title: CloudTrail trail deleted
+id: 2b7c40e9-6f13-4a58-9c02-d81e5b3a7f04
+name: cloudtrail_trail_deleted
+status: experimental
+description: >-
+  A successful DeleteTrail. Future coverage from this trail ends immediately, and the trail's
+  configuration is gone irreversibly — it exists only in the last CreateTrail or UpdateTrail event.
+  The already-delivered log files, the bucket and the CloudWatch log group are NOT deleted, so the
+  historical record survives and remains fully searchable.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_DeleteTrail.html
+  - https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-concepts.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'DeleteTrail'
+  success:
+    errorCode: null
+  condition: selection and success
+falsepositives:
+  - >-
+    A decommissioning that removes a trail alongside the account or workload it served. The
+    surrounding teardown activity is the corroborating evidence, and a deletion with nothing around
+    it is what makes this worth waking someone for.
+level: critical
+---
+title: CloudTrail DeleteTrail attempted and refused
+id: 8f1a63d7-c058-4e92-b346-70ad9e2c15b4
+name: cloudtrail_trail_delete_refused
+status: experimental
+description: >-
+  A DeleteTrail that failed. As with StopLogging, AWS accepts this call only in the trail's home
+  Region and never on a shadow trail, so InvalidHomeRegion means the caller was guessing.
+  NotOrganizationMasterAccount means a member account tried to remove an organization trail it
+  cannot touch, and TrailNotFound means it was enumerating names. All three arrive before coverage
+  is lost, and all three are dropped by any rule filtering on success.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_DeleteTrail.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'DeleteTrail'
+  diagnostic_errors:
+    errorCode:
+      - 'InvalidHomeRegionException'
+      - 'NotOrganizationMasterAccountException'
+      - 'TrailNotFoundException'
+      - 'AccessDenied'
+      - 'InsufficientDependencyServiceAccessPermissionException'
+  condition: selection and diagnostic_errors
+falsepositives:
+  - >-
+    A cross-Region teardown loop that calls DeleteTrail everywhere and expects most calls to fail.
+    A real and unfortunate pattern; allowlist the role rather than dropping the rule, because it is
+    indistinguishable from an actor searching for the home Region.
+level: high
+---
+title: CloudTrail trail deleted and replaced by the same principal
+id: 4d90e2b8-53af-41c6-8e07-b2f491c6a3d5
+status: experimental
+description: >-
+  A trail was deleted and a new one created by the same principal shortly after. This is the shape
+  that survives review: describe-trails still returns a trail, often with the same name, so every
+  check that asks "is there a trail" passes. What changed is what it captures — selectors, Regions,
+  global service events — and none of that is visible without comparing the new configuration to the
+  deleted one.
+references:
+  - https://attack.mitre.org/techniques/T1685/002/
+  - https://attack.mitre.org/techniques/T1070/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+  - attack.t1070
+correlation:
+  type: temporal_ordered
+  rules:
+    - cloudtrail_trail_deleted
+    - cloudtrail_trail_created
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+falsepositives:
+  - >-
+    A trail being recreated to change a setting that cannot be updated in place. Rare, and it should
+    arrive with a change record; the comparison in the playbook resolves it in one step.
+level: critical
+---
+title: CloudTrail trail created
+id: 7e5b18ca-024d-4f31-a96b-3c08d7e51f62
+name: cloudtrail_trail_created
+status: experimental
+description: >-
+  Base rule — correlation component and change accounting, never for direct alerting. A successful
+  CreateTrail. On its own this is a trail being set up, which is a good thing happening.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_CreateTrail.html
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'CreateTrail'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational

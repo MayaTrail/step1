@@ -1,0 +1,76 @@
+// Route 53 Resolver query logging stopped (T1685.002)
+//
+// Control-plane first, because it is the only view that names the VPC. Disassociation is the
+// common case and the one an account-wide absence rule cannot see: the configuration survives,
+// every other VPC keeps logging, and only the named VPC goes dark.
+//
+// `contains` throughout, never `has` — ARNs and resource IDs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "route53resolver.amazonaws.com"
+| where EventName in ("CreateResolverQueryLogConfig", "DeleteResolverQueryLogConfig",
+                      "AssociateResolverQueryLogConfig", "DisassociateResolverQueryLogConfig",
+                      "AssociateFirewallRuleGroup", "DisassociateFirewallRuleGroup",
+                      "DeleteFirewallRule", "DeleteFirewallRuleGroup",
+                      "UpdateFirewallRuleGroupAssociation")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Resp = parse_json(ResponseElements)
+| extend ConfigId = coalesce(tostring(Req.resolverQueryLogConfigId), tostring(Resp.resolverQueryLogConfigAssociation.resolverQueryLogConfigId), "")
+| extend ResourceId = coalesce(tostring(Req.resourceId), tostring(Resp.resolverQueryLogConfigAssociation.resourceId), tostring(Req.vpcId), "")
+| extend RuleGroupId = coalesce(tostring(Req.firewallRuleGroupId), "")
+| extend Verdict = case(
+    EventName == "DisassociateResolverQueryLogConfig",
+        "QUERY LOGGING REMOVED FROM ONE VPC — the surgical form. The configuration still exists and every other VPC keeps logging, so an account-wide absence rule never fires. This names the VPC, P0",
+    EventName == "DeleteResolverQueryLogConfig",
+        "QUERY LOG CONFIGURATION DELETED — every VPC associated with it stops logging. AWS requires associations to be removed first, so look for the Disassociate events that preceded this, P0",
+    EventName == "DisassociateFirewallRuleGroup" or EventName == "DeleteFirewallRuleGroup",
+        "DNS FIREWALL REMOVED FROM A VPC — blocking stops, and the firewall fields in the query log go empty. An empty firewall_rule_action reads as 'no match', which is true and looks like 'allowed', P0",
+    EventName == "DeleteFirewallRule",
+        "DNS FIREWALL RULE DELETED — narrower than removing the group and equally effective for one domain list, P1",
+    EventName == "UpdateFirewallRuleGroupAssociation",
+        "DNS FIREWALL PRIORITY CHANGED — a permissive group moved in front of a blocking one achieves the same result without deleting anything. Read the priority, P1",
+    EventName == "AssociateResolverQueryLogConfig",
+        "Query logging associated with a VPC — expected after a disassociation; confirm it is the same VPC",
+    EventName == "CreateResolverQueryLogConfig",
+        "Query log configuration created — a configuration is not coverage. Confirm associations follow",
+    "Resolver configuration changed")
+| project TimeGenerated, EventName, Verdict, UserIdentityArn, SourceIpAddress,
+          ConfigId, ResourceId, RuleGroupId, UserAgent, Req
+| order by TimeGenerated desc
+//
+// ============================================================================
+// THE ABSENCE VIEW — group by VPC, and read it as weak evidence
+// ============================================================================
+// Route53ResolverQueryLogs
+// | where TimeGenerated > ago(7d)
+// | summarize Queries = count(),
+//             Delayed = countif(tostring(todynamic(additional_properties).is_delayed) == "true"),
+//             LastSeen = max(TimeGenerated)
+//           by Vpc = tostring(vpc_id), bin(TimeGenerated, 1h)
+// | extend GapHours = datetime_diff('hour', now(), LastSeen)
+// | where GapHours >= 4
+//
+// FOUR THINGS PRODUCE AN EMPTY WINDOW AND ONLY ONE IS AN INCIDENT:
+//   1. The association was removed        -> DisassociateResolverQueryLogConfig above names the VPC
+//   2. The configuration was deleted      -> DeleteResolverQueryLogConfig above
+//   3. Delivery is delayed                -> additional_properties.is_delayed is a DOCUMENTED flag,
+//      "If there is a delay in delivering the logs", with no published maximum
+//   4. There genuinely were few unique queries -> AWS logs "only unique queries, not queries that
+//      VPC Resolver is able to respond to from the cache". A VPC with a small, stable set of
+//      destinations produces very few records once its caches are warm. Low volume is normal.
+//
+// AND A FIFTH THE ABSENCE RULE CANNOT SEE AT ALL: a VPC that was NEVER associated. Query logging is
+// opt-in per VPC, so a VPC with no association has always produced nothing, and looks exactly like
+// one just silenced. Only the state sweep in Query 2 of ../PLAYBOOK.md separates them.
+//
+// ============================================================================
+// THE STATE VIEW — which neither log carries
+// ============================================================================
+// `aws route53resolver list-resolver-query-log-config-associations` returns Status per association.
+// An association in FAILED or a configuration whose destination has become unwritable delivers
+// nothing while the console shows the resource — and no CloudTrail event marks the moment delivery
+// starts failing, because nothing is called. Query 2 reads it; run it on a schedule.

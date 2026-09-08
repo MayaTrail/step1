@@ -1,0 +1,241 @@
+# RDS DB Instance or Cluster Made Publicly Accessible (T1578.005 / T1133)
+#
+# WHAT THE SOURCE RULE DOES, AND THE THREE WAYS IT MISSES. The original matches ten event
+# names ANDed with `requestParameters.publiclyAccessible:"true"`, with no success filter.
+#
+#   1. THE MOST COMMON REAL EXPOSURE CARRIES NO SUCH REQUEST PARAMETER. AWS: "The default
+#      behavior when PubliclyAccessible is not specified depends on whether a DBSubnetGroup
+#      is specified. If DBSubnetGroup isn't specified, PubliclyAccessible defaults to false
+#      for Aurora instances and true for non-Aurora instances. If DBSubnetGroup is
+#      specified, PubliclyAccessible defaults to false unless the value of DBSubnetGroup is
+#      `default`, in which case PubliclyAccessible defaults to true." So a CreateDBInstance
+#      that omits the subnet group, or names the `default` one, produces a PUBLIC MySQL or
+#      PostgreSQL instance from an event whose requestParameters contain no
+#      `publiclyAccessible` key at all. AWS's own published CloudTrail sample event for
+#      CreateDBInstance is exactly this case - requestParameters has no publiclyAccessible,
+#      responseElements has `"publiclyAccessible": true` and `"dBSubnetGroupName": "default"`.
+#      The rule below therefore reads the RESPONSE as well as the request.
+#   2. `ModifyDBCluster` HAS NO PubliclyAccessible PARAMETER. It is absent from the entire
+#      request-parameter list of that API; a cluster becomes public at create time or through
+#      its member instances, never through ModifyDBCluster. That disjunct can never match.
+#      `CreateDBClusterFromSnapshot`, also in the source list, IS NOT AN RDS API ACTION - the
+#      real call is `RestoreDBClusterFromSnapshot`, which appears in the same list. Two of the
+#      ten names are dead.
+#   3. NO SUCCESS FILTER. A denied attempt fires the same alert as a completed exposure.
+#      Successes and denials are split below: one is an incident, the other is boundary
+#      mapping, and they do not belong on one triage path.
+#
+# WHY REQUEST AND RESPONSE ARE BOTH READ, AND WHY THEY ARE SEPARATE BLOCKS. `ModifyDBInstance`
+# is asynchronous: the returned DBInstance reflects state at the time of the call, and
+# `PendingModifiedValues` - verified against the DBInstance data type - does NOT carry
+# PubliclyAccessible. So a modify that turns public access ON can return
+# `publiclyAccessible: false` and record the intent only in requestParameters. Creates are the
+# mirror image: the request may omit the field entirely while the response states the outcome.
+# Neither field is sufficient alone, and the two never both settle the question on one event,
+# so they are sibling blocks ORed in the condition - never two keys in one block, which would
+# AND them into a rule that fires on almost nothing.
+#
+# THE FLAG IS NOT THE EXPOSURE. AWS: "Access to the DB instance is ultimately controlled by
+# the security group it uses. That public access is not permitted if the security group
+# assigned to the DB instance doesn't include inbound rules that permit it. In addition, for a
+# DB instance to be publicly accessible, the subnets in its DB subnet group must have an
+# internet gateway." A fourth condition is easy to miss: the VPC needs DNS hostnames and DNS
+# resolution enabled. This rule fires on the ADDRESSING half only. The correlation at the end
+# of this file pairs it with the firewall half; the full reachability walk is Query 2 of
+# ../PLAYBOOK.md, and it is what turns a hit into a disposition.
+#
+# FIELD SHAPE. eventSource `rds.amazonaws.com`, management plane, regional. CloudTrail
+# lower-camel-cases RDS API parameters and renders the DB prefix as `dB`
+# (`dBInstanceIdentifier`, `dBSubnetGroup`), but the convention is not uniform inside a single
+# event - the same published sample carries `dbInstancePort`, `dbiResourceId`,
+# `cACertificateIdentifier` and `iAMDatabaseAuthenticationEnabled`. Do not derive a path from
+# the rule; read one real event. `responseElements` for CreateDBInstance is FLAT: the DBInstance
+# wrapper does not appear, so it is `responseElements.publiclyAccessible`, not
+# `responseElements.dBInstance.publiclyAccessible`.
+title: RDS database made publicly accessible
+id: 8a0b57f1-9681-421a-a456-fc94241843ac
+name: rds_made_publicly_accessible
+status: experimental
+description: >-
+  A DB instance or Multi-AZ DB cluster entered a publicly accessible state - by an explicit
+  publiclyAccessible request parameter, or by the documented default-true behaviour of a create
+  that omits a DB subnet group or names the default one.
+references:
+  - https://attack.mitre.org/techniques/T1578/005/                                                    # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1133/                                                        # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_CreateDBInstance.html                # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_VPC.WorkingWithRDSInstanceinaVPC.html  # retrieved 2026-08-29
+tags:
+  - attack.defense-impairment
+  - attack.initial-access
+  - attack.t1578.005
+  - attack.t1133
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # ModifyDBCluster and CreateDBClusterFromSnapshot are ABSENT on purpose: the first has no such
+  # parameter, the second is not an API action. CreateDBShardGroup does accept it and is added.
+  selection:
+    eventSource: 'rds.amazonaws.com'
+    eventName:
+      - 'CreateDBInstance'
+      - 'ModifyDBInstance'
+      - 'CreateDBInstanceReadReplica'
+      - 'RestoreDBInstanceFromDBSnapshot'
+      - 'RestoreDBInstanceToPointInTime'
+      - 'RestoreDBInstanceFromS3'
+      - 'CreateDBCluster'
+      - 'RestoreDBClusterFromSnapshot'
+      - 'RestoreDBClusterToPointInTime'
+      - 'CreateDBShardGroup'
+  # Asked for. Authoritative for ModifyDBInstance, whose response reflects pre-change state.
+  public_requested:
+    requestParameters.publiclyAccessible: true
+  # Got. Authoritative for creates, where the request may omit the field and the subnet-group
+  # default decides. Pipelines that index CloudTrail booleans as the STRING "true" need 'true'
+  # added as a second value under both keys.
+  public_returned:
+    responseElements.publiclyAccessible: true
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING. Where public read replicas are genuinely run, allowlist the
+  # PRINCIPAL, never the instance identifier - the identifier is attacker-chosen.
+  database_lifecycle_pipeline:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'          # replace with this account's deployment role
+      - ':role/BreakGlassAdmin'     # replace with this account's break-glass role
+  condition: selection and success and (public_requested or public_returned) and not database_lifecycle_pipeline
+falsepositives:
+  - >-
+    A deliberately public read replica provisioned outside the pipeline. Rare - and if it is not
+    rare here, the finding is that database lifecycle is not owned by the pipeline.
+  - >-
+    A sandbox create that omits the DB subnet group and inherits the documented default-true.
+    A real exposure rather than a false positive, but a configuration default rather than intent.
+level: high
+---
+# Denied attempts are a SEPARATE rule at a lower level, not a filtered-out nuisance. The source
+# rule has no success filter and therefore rates a refusal identically to a completed exposure.
+# A principal repeatedly refused on publiclyAccessible is mapping its boundary, which is worth
+# knowing and is not worth waking anyone.
+#
+# LIMITATION, stated because it is invisible otherwise: a DENIED create that would have relied
+# on the subnet-group default carries no publiclyAccessible in the request and produces no
+# response at all, so it cannot be distinguished from any other denied create. This rule sees
+# only explicit attempts.
+title: RDS public-accessibility change refused
+id: b8bff61d-222b-45b1-bd11-d16c533c5b17
+name: rds_public_change_denied
+status: experimental
+description: >-
+  A principal asked RDS to make a database publicly accessible and was refused. Treated as
+  boundary mapping rather than as an exposure - nothing changed, but somebody tried.
+references:
+  - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/CommonErrors.html   # retrieved 2026-08-29
+tags:
+  - attack.defense-impairment
+  - attack.t1578.005
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'rds.amazonaws.com'
+    eventName:
+      - 'CreateDBInstance'
+      - 'ModifyDBInstance'
+      - 'CreateDBInstanceReadReplica'
+      - 'RestoreDBInstanceFromDBSnapshot'
+      - 'RestoreDBInstanceToPointInTime'
+      - 'RestoreDBInstanceFromS3'
+      - 'CreateDBCluster'
+      - 'RestoreDBClusterFromSnapshot'
+      - 'RestoreDBClusterToPointInTime'
+      - 'CreateDBShardGroup'
+  public_requested:
+    requestParameters.publiclyAccessible: true
+  # RDS documents AccessDeniedException (403) and NotAuthorized (401) as its own denial forms.
+  # The bare `AccessDenied` string is NOT in the RDS common-error list, and
+  # Client.UnauthorizedOperation is EC2's. Matched by substring so a prefixed variant still hits.
+  denied:
+    errorCode|contains:
+      - 'AccessDenied'
+      - 'NotAuthorized'
+      - 'UnauthorizedOperation'
+  condition: selection and public_requested and denied
+falsepositives:
+  - >-
+    A permissions-boundary or SCP working as designed against a developer who did not know the
+    control existed. Confirm the principal, then leave it alone.
+level: medium
+---
+# Base rule - sequence component only, not for direct alerting. Carries the success filter so a
+# refused ingress cannot compose into the high-severity correlation below.
+#
+# This deliberately duplicates a narrow slice of ../../_superseded/aws.initial-access.sg-remote-management-open/,
+# which owns the general case including port-RANGE containment and the nested
+# ipPermissions.items[] request form. This slice exists only so the correlation has something to
+# join to inside one file; deploy that playbook's rules for the firewall problem itself.
+title: EC2 security group ingress opened to the internet on a database port
+id: 3468f117-e246-4c89-91de-0f3ba2c69deb
+name: sg_ingress_world_open_db_port_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_AuthorizeSecurityGroupIngress.html  # retrieved 2026-08-29
+tags:
+  - attack.defense-impairment
+  - attack.t1686.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'AuthorizeSecurityGroupIngress'
+  # `|endswith: '/0'` rather than the literal 0.0.0.0/0: AWS canonicalizes CIDRs, so a rule
+  # submitted as 1.2.3.4/0 is stored fully open, and no other prefix length ends in '/0'.
+  world_open:
+    requestParameters.cidrIp|endswith: '/0'
+  success:
+    errorCode: null
+  condition: selection and world_open and success
+level: informational
+---
+# THE EXPOSURE IS THE PAIR, NOT EITHER HALF. AWS requires BOTH the addressing flag AND a
+# permitting security group before a database is reachable from the internet. One principal
+# doing both inside an hour is a deliberate exposure and is rated accordingly.
+#
+# WHAT THIS CORRELATION CANNOT DO, and it matters: the common real case is that the two halves
+# have DIFFERENT causes - an engineer flips publiclyAccessible on an instance whose security
+# group was already open to 0.0.0.0/0 from some earlier change, or from a shared group nobody
+# owns. Grouping by principal misses that entirely, and so does any time window, because the
+# firewall half happened months ago. Only a live reachability walk answers it. That walk is
+# Query 2 of ../PLAYBOOK.md and it is not optional.
+#
+# Sigma also cannot check that the opened security group is the one ATTACHED to the exposed
+# database - that join needs live state. Confirm it before rating the correlation as critical.
+title: RDS database made public and a database port opened to the internet by one principal
+id: 49d45bdc-e6c7-47e2-8b07-c22dd295e772
+status: experimental
+description: >-
+  Within one hour, the same principal made an RDS database publicly accessible and authorised
+  an unrestricted-source ingress rule. Both halves of internet reachability were supplied by
+  one actor; if the security group is the one attached to that database, it is live.
+references:
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_VPC.WorkingWithRDSInstanceinaVPC.html  # retrieved 2026-08-29
+tags:
+  - attack.defense-impairment
+  - attack.initial-access
+  - attack.t1578.005
+  - attack.t1686.001
+correlation:
+  type: temporal
+  rules:
+    - rds_made_publicly_accessible
+    - sg_ingress_world_open_db_port_bb
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+level: critical

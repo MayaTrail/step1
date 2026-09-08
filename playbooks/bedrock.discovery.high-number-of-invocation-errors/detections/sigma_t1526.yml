@@ -1,0 +1,174 @@
+# Model access enumeration through invocation errors (T1526 / T1078.004)
+#
+# THE SOURCE ENTRY IS A BUILDING BLOCK WITH NO LOGIC — no query, no threshold, no grouping. It is a
+# CloudWatch metric alarm for availability. There is nothing to correct, and this file does not
+# manufacture defects in an empty rule; it is a new security use case, and ../PLAYBOOK.md §2 says so.
+#
+# THE ERROR TYPE IS THE INFORMATION THE ATTACKER IS BUYING, AND THAT IS THE WHOLE DETECTION.
+# A credential holder who does not know what they hold sweeps models and reads the failures:
+#
+#   AccessDeniedException      -> the model EXISTS and is enabled here, and this principal is not
+#                                 permitted. That is a positive result for enumeration: it maps the
+#                                 boundary of the permission.
+#   ValidationException        -> the model is not enabled in this Region, or the request shape is
+#                                 wrong for that model. Distinguishes "not available" from "not
+#                                 allowed", which is exactly the distinction an attacker wants.
+#   ResourceNotFoundException  -> no such model identifier here.
+#   ThrottlingException        -> the request was permitted and rate-limited, which confirms access.
+#   ServiceQuotaExceededException / ModelNotReadyException -> also confirm the model is reachable.
+#
+# So a burst of AccessDenied across many distinct modelIds is a permission map being drawn, and a
+# SINGLE ThrottlingException among them is more significant than all of them — it means one model
+# answered. An availability alarm counting "errors" merges all of these into one number and loses
+# every distinction that matters.
+#
+# ERRORS ARE IN CLOUDTRAIL, NOT IN THE INVOCATION LOG. Model invocation logging records invocations;
+# a call that failed authorisation produced no invocation to log. So this use case is CloudTrail-only
+# by construction, which also means it works in the common case where invocation logging was never
+# enabled — the opposite of the sibling playbook on invocation volume.
+#
+# identity.arn HAS NO EQUIVALENT HERE. In CloudTrail the actor is userIdentity.arn and the key is
+# userIdentity.accessKeyId, which is the better grouping key for a credential being explored: one
+# leaked key may be used from several sessions.
+title: Bedrock invocation refused
+id: 2f5a70c8-4b19-4ed6-93a2-c07f18b5e246
+name: bedrock_invocation_refused
+status: experimental
+description: >-
+  A Bedrock runtime call failed. Base rule for the correlations below and not for direct alerting —
+  a single refusal is an application using a model it is not entitled to, which is a deployment
+  problem. The error codes are enumerated rather than matching any failure, because each one tells
+  the caller something different and the corrected detections read that difference.
+references:
+  - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html
+  - https://attack.mitre.org/techniques/T1526/
+tags:
+  - attack.discovery
+  - attack.t1526
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'bedrock-runtime.amazonaws.com'
+    eventName:
+      - 'InvokeModel'
+      - 'InvokeModelWithResponseStream'
+      - 'Converse'
+      - 'ConverseStream'
+  refused:
+    errorCode:
+      - 'AccessDeniedException'
+      - 'AccessDenied'
+      - 'ValidationException'
+      - 'ResourceNotFoundException'
+      - 'ThrottlingException'
+      - 'ServiceQuotaExceededException'
+      - 'ModelNotReadyException'
+  condition: selection and refused
+level: informational
+---
+title: One credential refused across many distinct models
+id: 8d0c364f-7a25-41be-b980-53e2914cf7a0
+status: experimental
+description: >-
+  A single access key was refused against an unusual number of distinct models. This is a permission
+  map being drawn: each AccessDeniedException confirms the model exists and is enabled in the
+  Region while this principal cannot use it, and each ValidationException separates "not available
+  here" from "not allowed". The sweep costs the attacker nothing and produces no successful
+  invocation, so no cost signal and no invocation-log record exists — this rule and CloudTrail are
+  the only places it appears. group-by is the access key rather than the ARN, because one leaked
+  credential is used across several sessions and the key is what identifies it.
+references:
+  - https://attack.mitre.org/techniques/T1526/
+tags:
+  - attack.discovery
+  - attack.t1526
+correlation:
+  type: value_count
+  rules:
+    - bedrock_invocation_refused
+  group-by:
+    - userIdentity.accessKeyId
+  timespan: 1h
+  condition:
+    field: requestParameters.modelId
+    gte: 5
+falsepositives:
+  - >-
+    A model router or evaluation harness discovering which models are available at start-up, which
+    produces exactly this shape once per deployment. Distinguished by recurring on a schedule and by
+    the principal being nameable; exclude by key or role, not by raising the count.
+level: high
+---
+title: Sustained refusals from one credential
+id: 4b19e07d-58ca-42f3-a6c1-90d7325be814
+status: experimental
+description: >-
+  Volume of refusals from one access key, regardless of model breadth. Separated from the breadth
+  rule because they catch different things: breadth is a survey, and volume with low breadth is a
+  credential being retried against a single target — a script that does not know it has already
+  failed, or one waiting for an entitlement to be granted. Lower confidence than breadth and worth
+  having, because a broken application produces the same shape and both are worth someone's
+  attention.
+references:
+  - https://attack.mitre.org/techniques/T1078/004/
+tags:
+  - attack.discovery
+  - attack.t1078.004
+correlation:
+  type: event_count
+  rules:
+    - bedrock_invocation_refused
+  group-by:
+    - userIdentity.accessKeyId
+  timespan: 1h
+  condition:
+    gte: 100
+falsepositives:
+  - >-
+    An application whose entitlement was revoked and which retries in a loop. Common, genuinely a
+    defect, and it should be fixed rather than allowlisted — an application retrying a forbidden
+    call forever is a problem whichever way the permission question lands.
+level: medium
+---
+title: Bedrock model access entitlement changed
+id: c7241b95-6e30-49da-8f07-1a5b83c60d29
+name: bedrock_model_entitlement_changed
+status: experimental
+description: >-
+  Model access was requested or granted in the account. This is the control-plane companion to the
+  enumeration rules and it closes the loop: an actor who maps the permission boundary and then finds
+  they can widen it does so here. Model access is per-Region and per-model, so a grant in a Region
+  nobody operates in is the same signal as an invocation from one. It is shipped at medium because
+  legitimate enablement is routine — the finding is enablement by a principal outside the platform
+  function, or in an unexpected Region.
+references:
+  - https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html
+  - https://attack.mitre.org/techniques/T1526/
+tags:
+  - attack.discovery
+  - attack.t1526
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'bedrock.amazonaws.com'
+    eventName:
+      - 'PutFoundationModelEntitlement'
+      - 'CreateModelInvocationJob'
+      - 'PutUseCaseForModelAccess'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the roles that own model enablement.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    A team enabling a model they intend to use. Routine, and the alert is how you learn it happened
+    without a request — the Region in the same event is the fastest triage field.
+level: medium

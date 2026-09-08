@@ -1,0 +1,22 @@
+// FILE: kql_t1685.002.kql
+// SCARLETEEL - CloudTrail Logging Disabled or Trail Deleted (T1685.002)
+// High-fidelity, single-event detection. cloudtrail:StopLogging / DeleteTrail is
+// rarely legitimate and is how SCARLETEEL blinds CloudTrail before lateral
+// movement and persistence. Because the emulation stops the stack's own trail
+// here, later phases are only visible to a separate org/management trail - route
+// this alert to an out-of-band pipeline that does not depend on the same trail.
+//
+// Reference: https://attack.mitre.org/techniques/T1685/002/
+
+AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "cloudtrail.amazonaws.com"
+| where EventName in ("StopLogging", "DeleteTrail")
+// Allowlist a named break-glass principal that is permitted to pause trails:
+// | where UserIdentityArn !contains "BreakGlassAdmin"
+| project
+    TimeGenerated, EventName, UserIdentityType, UserIdentityArn, UserIdentityPrincipalId,
+    SourceIpAddress, UserAgent, AWSRegion, RequestParameters, ResponseElements
+| extend AlertTitle = "CloudTrail StopLogging/DeleteTrail - active trail disabled"
+| extend Severity = "HIGH"
+| order by TimeGenerated desc

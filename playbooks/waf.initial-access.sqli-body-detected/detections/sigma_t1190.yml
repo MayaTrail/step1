@@ -1,0 +1,148 @@
+# SQL Injection Detected in Request Body (T1190)
+#
+# The source rule is `action:"ALLOW" AND labels ~ SQLi_Body|SQLiExtendedPatterns_Body`,
+# thresholded at 4 in 5 minutes. Three defects, in descending order of consequence.
+#
+# 1. THE ALLOW GATE INVERTS THE ALERT. Every rule in AWSManagedRulesSQLiRuleSet has a
+#    default action of Block. In a web ACL running that group at its defaults the rule is
+#    SILENT, and a blocked injection attempt raises nothing at all — the attacker is
+#    invisible exactly when the control is working. An ALLOW alongside an SQLi label means
+#    the rule group was overridden to Count or the rule was excluded: the finding is that
+#    THE PROTECTION IS OFF, which is not what the rule's title says.
+# 2. THE VOLUME THRESHOLD COMPOUNDS IT. Four allowed injections in five minutes is not a
+#    tuning floor for a signal that already means the control is disabled; one is an
+#    incident.
+# 3. THE BODY LIMIT IS AN EVASION PATH THE RULE CANNOT SEE. Body inspection stops at 8 KB
+#    on ALB and AppSync (fixed, not adjustable) and 16 KB by default elsewhere. Every AWS
+#    managed body rule uses oversize handling Continue, and AWS forwards the ENTIRE body to
+#    the application regardless. Padding past the limit defeats the rule while the log
+#    records oversizeFields REQUEST_BODY and no body rule match.
+#
+# The label casing here is correct in the source and is preserved: SQLi_Body and
+# SQLiExtendedPatterns_Body. Do not "normalise" it — the same rule group ships
+# SQLi_URIPath and SQLiExtendedPatterns_UriPath, which differ from each other.
+title: SQL injection matched in request body and allowed to the application
+id: 4e32bc9b-f7fd-4053-85ae-bcb15c59a0c0
+name: waf_sqli_body_allowed
+status: experimental
+description: >-
+  AWS WAF matched an SQL-injection pattern in a request body and the request was still
+  served to the backend. Because these rules default to Block, an ALLOW means the rule
+  group was overridden to Count or the rule excluded — the protection is off.
+references:
+  - https://attack.mitre.org/techniques/T1190/                                # retrieved 2026-08-30
+  - https://docs.aws.amazon.com/waf/latest/developerguide/aws-managed-rule-groups-use-case.html  # retrieved 2026-08-30
+tags:
+  - attack.initial-access
+  - attack.t1190
+logsource:
+  product: aws
+  service: waf
+detection:
+  # labels is an array of single-key objects: [{"name": "..."}]. The path is labels.name,
+  # not a bare string array — a flat match on `labels` returns nothing.
+  sqli_body_label:
+    labels.name|endswith:
+      - ':SQLi_Body'
+      - ':SQLiExtendedPatterns_Body'
+  reached_backend:
+    action: 'ALLOW'
+  condition: sqli_body_label and reached_backend
+falsepositives:
+  - An application that legitimately accepts SQL text in a body field — a query builder, an
+    admin console, a BI tool. Allowlist by URI path, never by source IP.
+  - A deliberate Count-mode evaluation of a newly added rule group. That is the same
+    condition this rule detects; confirm it is intentional and time-boxed.
+level: high
+---
+# The same match, blocked. Not the same incident: this is the control working, and it is
+# the volume signal the source rule has no way to express because its ALLOW gate discards
+# every one of these events.
+title: SQL injection matched in request body and blocked
+id: 3726bcd3-fd69-4e82-ad8b-478aaa4c8e7a
+name: waf_sqli_body_blocked
+status: experimental
+description: Base rule — volume component only, not for direct alerting.
+references:
+  - https://attack.mitre.org/techniques/T1190/                                # retrieved 2026-08-30
+tags:
+  - attack.initial-access
+  - attack.t1190
+logsource:
+  product: aws
+  service: waf
+detection:
+  sqli_body_label:
+    labels.name|endswith:
+      - ':SQLi_Body'
+      - ':SQLiExtendedPatterns_Body'
+  stopped:
+    action:
+      - 'BLOCK'
+      - 'CAPTCHA'
+      - 'CHALLENGE'
+  condition: sqli_body_label and stopped
+level: low
+---
+# Threshold basis, stated rather than invented: this counts BLOCKED attempts, so it is a
+# targeting signal, not a compromise signal. A single scanner sweep trivially exceeds any
+# small number, so the value is set where sustained hand-driven probing of one client
+# against one host becomes distinguishable from a drive-by. Baseline against your own edge
+# before deploying; a public site will need it higher.
+title: Sustained SQL injection attempts against one host from one client
+id: 8182b333-f4ef-4054-94b8-726acdd6b96d
+status: experimental
+description: >-
+  One client sent twenty or more blocked SQL-injection request bodies to a single host in
+  ten minutes — targeted probing rather than background scanning.
+references:
+  - https://attack.mitre.org/techniques/T1190/                                # retrieved 2026-08-30
+tags:
+  - attack.initial-access
+  - attack.t1190
+correlation:
+  type: event_count
+  rules:
+    - waf_sqli_body_blocked
+  group-by:
+    - httpRequest.clientIp
+    - webaclId
+  timespan: 10m
+  condition:
+    gt: 19
+level: medium
+---
+# The evasion the body rules structurally cannot catch, made visible. oversizeFields is
+# populated by WAF itself when a component exceeded the inspection limit; if the body was
+# oversize AND no body rule matched, the tail of that body was never inspected and was
+# still forwarded to the application. This does not prove an attack — it proves the body
+# rules did not see the whole request.
+title: Request body exceeded the WAF inspection limit and was forwarded uninspected
+id: 39d92190-b7fe-4bb3-ac5a-e52545eb2632
+status: experimental
+description: >-
+  A request body was larger than AWS WAF could inspect, so the portion beyond the limit
+  reached the application unexamined. Read alongside any body-rule finding, and as the
+  blind spot behind their absence.
+references:
+  - https://docs.aws.amazon.com/waf/latest/developerguide/waf-oversize-request-components.html  # retrieved 2026-08-30
+tags:
+  - attack.initial-access
+  - attack.t1190
+  - attack.defense-impairment
+logsource:
+  product: aws
+  service: waf
+detection:
+  oversize_body:
+    oversizeFields|contains:
+      - 'REQUEST_BODY'
+      - 'REQUEST_JSON_BODY'
+  reached_backend:
+    action: 'ALLOW'
+  condition: oversize_body and reached_backend
+falsepositives:
+  - Any application that legitimately accepts large uploads. This is expected traffic on
+    such a path; the rule earns its place as context for a body-rule finding, not as a
+    standalone alert. Scope it to paths that should never receive a large body.
+level: informational

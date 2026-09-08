@@ -1,0 +1,74 @@
+// DynamoDB backup enumeration, and what it precedes (T1580 / T1490 / T1530)
+//
+// The enumeration is not the finding — it is called by the console, by reporting jobs and by any
+// recovery-point inventory. What matters is the pair: enumeration followed by deletion is
+// reconnaissance for destroying the recovery path, and enumeration followed by a restore into a
+// NEW table name is reconnaissance for copying the data out.
+//
+// `contains` throughout, never `has` — ARNs and table names are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 7d;
+let WINDOW = 24h;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "dynamodb.amazonaws.com"
+| where EventName in ("ListBackups", "DeleteBackup", "RestoreTableFromBackup",
+                      "RestoreTableToPointInTime", "DescribeBackup", "UpdateContinuousBackups")
+| extend Req = parse_json(RequestParameters)
+| extend Resp = parse_json(ResponseElements)
+| extend Table = coalesce(tostring(Req.tableName), tostring(Req.targetTableName), "")
+| extend SourceTable = tostring(Req.sourceTableName)
+| extend TargetTable = tostring(Req.targetTableName)
+| extend BackupArn = tostring(Req.backupArn)
+| extend Failed = isnotempty(ErrorCode)
+| summarize
+    Listed    = countif(EventName == "ListBackups" and not(Failed)),
+    Described = countif(EventName == "DescribeBackup" and not(Failed)),
+    Deleted   = countif(EventName == "DeleteBackup" and not(Failed)),
+    Restored  = countif(EventName startswith "RestoreTable" and not(Failed)),
+    PitrOff   = countif(EventName == "UpdateContinuousBackups" and not(Failed)
+                        and tostring(Req.pointInTimeRecoverySpecification.pointInTimeRecoveryEnabled) == "false"),
+    Denied    = countif(Failed),
+    Tables    = make_set(Table, 15),
+    // A restore whose target name differs from its source is a COPY, not a recovery.
+    RenamedRestores = make_set_if(strcat(SourceTable, " -> ", TargetTable),
+                                  EventName startswith "RestoreTable"
+                                  and isnotempty(TargetTable) and SourceTable != TargetTable, 10),
+    Backups   = make_set(BackupArn, 10),
+    Errors    = make_set(ErrorCode, 5),
+    SourceIps = make_set(SourceIpAddress, 5),
+    FirstSeen = min(TimeGenerated),
+    LastSeen  = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, WINDOW)
+| where Listed > 0 or Deleted > 0 or Restored > 0
+| extend Verdict = case(
+    Listed > 0 and Deleted > 0 and PitrOff > 0,
+        "ENUMERATED, DELETED, AND TURNED OFF POINT-IN-TIME RECOVERY — the full recovery path removed by one principal. This is preparation for destruction and it is the highest-severity shape in this service, P0",
+    Listed > 0 and Deleted > 0,
+        "ENUMERATED THEN DELETED — reconnaissance for destroying the recovery path. Deletion is immediate and there is no recycle bin, so the work-list is what remains rather than what to restore, P0",
+    Listed > 0 and array_length(RenamedRestores) > 0,
+        "ENUMERATED THEN RESTORED UNDER A DIFFERENT NAME — a restore to a new table is a COPY. The original is untouched, so nothing looks wrong, and the copy carries every item, P0",
+    Listed > 0 and Restored > 0,
+        "ENUMERATED THEN RESTORED — confirm against a change record. A genuine recovery has an incident behind it; this one may not, P1",
+    Denied > 5 and Listed > 0,
+        "ENUMERATION WITH REFUSALS — the principal is mapping what it can reach in the recovery path. Intent observed even where nothing succeeded, P2",
+    "Backup enumeration — routine on its own; the finding is what follows it")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, Listed, Described, Deleted,
+          Restored, PitrOff, Denied, Tables, RenamedRestores, Backups, Errors, SourceIps
+| order by Deleted desc, Restored desc, Listed desc
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHAT WAS IN THE BACKUP. Item-level operations are DATA events and are off by default;
+// `lookup-events` returns zero for them regardless of whether they happened. A restore's contents
+// are knowable only by reading the restored table, which is why Query 3 goes to the table rather
+// than to the trail.
+//
+// WHETHER A RESTORE WAS LEGITIMATE. The API is identical for a recovery and for a copy. The only
+// discriminator available is whether the TARGET name differs from the source and whether an
+// incident record exists — the first is in the event, the second is not in AWS at all.
+//
+// WHETHER ENUMERATION HAPPENED AT ALL BEFORE THE TRAIL WINDOW. `ListBackups` is high-volume and
+// routine, so it is the first thing an aggressive retention policy drops.

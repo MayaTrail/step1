@@ -1,0 +1,176 @@
+// T1686.001 Step 1 -- AssumeRole to WAF Operator Role
+// Detects STS AssumeRole calls where the target role name contains "waf".
+// An adversary who has compromised an admin/root-trusted principal will assume
+// a WAF operator role before enumerating or modifying Web ACL rules.
+// Tune the RoleArn filter to match your environment's WAF role naming convention.
+AWSCloudTrail
+| where EventName == "AssumeRole"
+    and EventSource == "sts.amazonaws.com"
+    and RequestParameters has "waf"
+| where UserIdentityArn !has "AWSServiceRoleForWAF"
+    and UserIdentityArn !has "waf-automation"
+| extend
+    AssumedRoleArn    = tostring(parse_json(RequestParameters).roleArn),
+    SessionName       = tostring(parse_json(RequestParameters).roleSessionName),
+    CallerArn         = UserIdentityArn,
+    CallerType        = UserIdentityType
+| project
+    TimeGenerated,
+    CallerArn,
+    CallerType,
+    AssumedRoleArn,
+    SessionName,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion
+| sort by TimeGenerated desc
+
+// ======================================================================
+
+// T1686.001 Step 2 -- WAFv2 Enumeration via ListWebACLs
+// Detects ListWebACLs calls from non-service principals.
+// An adversary with WAF credentials will enumerate all regional ACLs to discover
+// target ACL IDs/ARNs before reading configuration (GetWebACL) and modifying rules.
+// Low severity on its own; correlate with GetWebACL and UpdateWebACL from same
+// UserIdentityPrincipalId within a short time window for elevated confidence.
+AWSCloudTrail
+| where EventName == "ListWebACLs"
+    and EventSource == "wafv2.amazonaws.com"
+| where UserIdentityType != "Service"
+| where UserAgent !has "SecurityHub"
+    and UserAgent !has "Prowler"
+    and UserAgent !has "config-service"
+| project
+    TimeGenerated,
+    UserIdentityArn,
+    UserIdentityType,
+    UserIdentityPrincipalId,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion
+| sort by TimeGenerated desc
+
+// ======================================================================
+
+// T1686.001 -- Full Kill-Chain Correlation: WAF Recon -> Read -> Modify
+// Identifies the complete adversary sequence for T1686.001 within a 30-minute window:
+//   1. ListWebACLs  (enumeration)
+//   2. GetWebACL    (LockToken harvest / config read)
+//   3. UpdateWebACL (rule injection)
+// All three events from the same UserIdentityPrincipalId within 30 minutes.
+// HIGH CONFIDENCE: this sequence is extremely uncommon in normal operations.
+// Adjust the lookback window (30m) to your environment's change-management cadence.
+
+let LookbackWindow = 30m;
+let Enumeration = AWSCloudTrail
+    | where EventName == "ListWebACLs"
+        and EventSource == "wafv2.amazonaws.com"
+    | where UserIdentityType != "Service"
+    | project EnumTime = TimeGenerated, PrincipalId = UserIdentityPrincipalId,
+              EnumArn = UserIdentityArn, EnumRegion = AWSRegion, EnumIP = SourceIpAddress;
+let ReadConfig = AWSCloudTrail
+    | where EventName == "GetWebACL"
+        and EventSource == "wafv2.amazonaws.com"
+    | project ReadTime = TimeGenerated, PrincipalId = UserIdentityPrincipalId,
+              ReadArn = UserIdentityArn,
+              WebAclId = tostring(parse_json(RequestParameters).id),
+              WebAclName = tostring(parse_json(RequestParameters).name);
+let Modification = AWSCloudTrail
+    | where EventName == "UpdateWebACL"
+        and EventSource == "wafv2.amazonaws.com"
+    | project ModTime = TimeGenerated, PrincipalId = UserIdentityPrincipalId,
+              ModArn = UserIdentityArn,
+              ModRules = tostring(parse_json(RequestParameters).rules),
+              ModDefault = tostring(parse_json(RequestParameters).defaultAction),
+              ModIP = SourceIpAddress;
+Enumeration
+| join kind=inner ReadConfig on PrincipalId
+| join kind=inner Modification on PrincipalId
+| where ReadTime between (EnumTime .. (EnumTime + LookbackWindow))
+    and ModTime between (EnumTime .. (EnumTime + LookbackWindow))
+    and ModTime > ReadTime
+| project
+    EnumTime,
+    ReadTime,
+    ModTime,
+    PrincipalId,
+    EnumArn,
+    EnumIP,
+    EnumRegion,
+    WebAclId,
+    WebAclName,
+    ModRules,
+    ModDefault
+| extend
+    HasByteMathBypass = ModRules has "byteMatchStatement" and ModRules has "ALLOW",
+    SequenceDuration_min = datetime_diff('minute', ModTime, EnumTime)
+| sort by EnumTime desc
+
+// ======================================================================
+
+// T1686.001 Step 3 -- GetWebACL Configuration Reconnaissance
+// Detects GetWebACL calls from AssumedRole sessions.
+// An adversary must read the ACL configuration to capture the LockToken before
+// UpdateWebACL -- WAF rejects modifications without the current LockToken
+// (WAFOptimisticLockException). GetWebACL from an AssumedRole, especially when
+// preceded by ListWebACLs from the same principalId, is a strong pre-modification signal.
+AWSCloudTrail
+| where EventName == "GetWebACL"
+    and EventSource == "wafv2.amazonaws.com"
+    and UserIdentityType == "AssumedRole"
+| where UserIdentityArn !has ":assumed-role/AWSServiceRole"
+    and UserIdentityArn !has ":assumed-role/aws-service-role"
+| extend
+    WebAclId    = tostring(parse_json(RequestParameters).id),
+    WebAclName  = tostring(parse_json(RequestParameters).name),
+    Scope       = tostring(parse_json(RequestParameters).scope)
+| project
+    TimeGenerated,
+    UserIdentityArn,
+    UserIdentityPrincipalId,
+    WebAclId,
+    WebAclName,
+    Scope,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion
+| sort by TimeGenerated desc
+
+// ======================================================================
+
+// T1686.001 Step 4 -- UpdateWebACL ByteMatch Allow Rule Injection (HIGH SEVERITY)
+// Detects UpdateWebACL where requestParameters contains both "byteMatchStatement"
+// and "ALLOW" -- the canonical magic-header bypass injection pattern.
+// CloudTrail logs the full rule statements in plaintext in RequestParameters,
+// exposing the injected header name, positional constraint, and SearchString.
+// This is the highest-fidelity detection for T1686.001: UpdateWebACL is low-frequency
+// and any ByteMatch Allow injection is a critical security event.
+AWSCloudTrail
+| where EventName == "UpdateWebACL"
+    and EventSource == "wafv2.amazonaws.com"
+| where RequestParameters has "byteMatchStatement"
+    and RequestParameters has "ALLOW"
+| where UserIdentityArn !has "pulumi-deployer"
+    and UserIdentityArn !has "terraform-deployer"
+    and UserIdentityArn !has "cdk-deployer"
+    and UserIdentityArn !has "AWSServiceRole"
+| extend
+    WebAclName     = tostring(parse_json(RequestParameters).name),
+    WebAclId       = tostring(parse_json(RequestParameters).id),
+    RulesRaw       = tostring(parse_json(RequestParameters).rules),
+    DefaultAction  = tostring(parse_json(RequestParameters).defaultAction),
+    Scope          = tostring(parse_json(RequestParameters).scope)
+| project
+    TimeGenerated,
+    UserIdentityArn,
+    UserIdentityType,
+    UserIdentityPrincipalId,
+    WebAclName,
+    WebAclId,
+    Scope,
+    DefaultAction,
+    RulesRaw,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion
+| sort by TimeGenerated desc

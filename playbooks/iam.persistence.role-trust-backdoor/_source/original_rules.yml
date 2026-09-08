@@ -1,0 +1,28 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Assume Role Policy Was Updated
+  priority: P2
+  type: logs_threshold
+  query: |
+    eventName:"UpdateAssumeRolePolicy" AND NOT _exists_:errorCode
+  threshold: 0.0  window: 10m
+  group_by: []
+
+- name: Unexpected Trusts - Wildcard As Principal
+  priority: P3
+  type: logs_threshold
+  query: |
+    eventSource:"iam.amazonaws.com" AND eventName:("UpdateAssumeRolePolicy" OR "<automation-role>") AND NOT _exists_:errorCode AND (requestParameters.policyDocument.keyword:/.*\x22Principal\x22:\s*\x22\*\x22.*/ OR requestParameters.policyDocument.keyword:/.*\x22AWS\x22:\s*\x22\*\x22.*/ OR requestParameters.policyDocument.keyword:/.*\x22Federated\x22:\s*\x22\*\x22.*/ OR requestParameters.policyDocument.keyword:/.*\x22Service\x22:\s*\x22\*\x22.*/ OR requestParameters.assumeRolePolicyDocument.keyword:/.*\x22Principal\x22:\s*\x22\*\x22.*/ OR requestParameters.assumeRolePolicyDocument.keyword:/.*\x22AWS\x22:\s*\x22\*\x22.*/ OR requestParameters.assumeRolePolicyDocument.keyword:/.*\x22Federated\x22:\s*\x22\*\x22.*/ OR requestParameters.assumeRolePolicyDocument.keyword:/.*\x22Service\x22:\s*\x22\*\x22.*/)
+  threshold: 0.0  window: 5m
+  group_by: ['userIdentity.arn']
+

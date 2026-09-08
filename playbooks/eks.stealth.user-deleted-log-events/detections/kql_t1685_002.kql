@@ -1,0 +1,69 @@
+// Kubernetes Events Deleted (T1685.002)
+//
+// The source rule matches verb delete on objectRef.resource events in the Kubernetes audit
+// log. On EKS that CANNOT FIRE: AWS's managed audit policy sets core `events` to level
+// None, and level None means the request is not logged at all. So this query runs against
+// CLOUDTRAIL — the AWS plane — because the two things an actor clearing traces must touch
+// are AWS calls that survive.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL over AWSCloudTrail. Flattened columns.
+AWSCloudTrail
+| where TimeGenerated > ago(30d)
+| where (EventSource == "eks.amazonaws.com"  and EventName == "UpdateClusterConfig")
+     or (EventSource == "logs.amazonaws.com" and EventName in ("DeleteLogGroup","PutRetentionPolicy","DeleteRetentionPolicy"))
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Cluster      = tostring(coalesce(Req.name, Req.clusterName))
+| extend LogGroup     = tostring(Req.logGroupName)
+| extend RetentionDays = toint(Req.retentionInDays)
+// contains, never has: the JSON fragment is punctuated and `has` is whole-term matching.
+| extend Disabling    = tostring(Req.logging) contains '"enabled":false'
+| extend EksLogGroup  = LogGroup startswith "/aws/eks/"
+| where Disabling or EksLogGroup
+// ARN parsing: assumed-role ARNs put the ROLE name in the 2nd segment and the SESSION name
+// last. One idiom does not serve both forms.
+| extend ArnParts = split(UserIdentityArn, "/")
+| extend Actor    = iff(UserIdentityArn contains ":assumed-role/",
+                        tostring(ArnParts[1]),
+                        tostring(ArnParts[array_length(ArnParts) - 1]))
+| summarize
+    Calls        = count(),
+    LoggingOff   = countif(Disabling),
+    GroupDeleted = countif(EventName == "DeleteLogGroup"),
+    RetentionSet = countif(EventName == "PutRetentionPolicy"),
+    MinRetention = min(RetentionDays),
+    Targets      = make_set(coalesce(Cluster, LogGroup), 5),
+    SourceIPs    = make_set(SourceIpAddress, 5),
+    FirstSeen    = min(TimeGenerated),
+    LastSeen     = max(TimeGenerated)
+    by Actor, UserIdentityArn
+| extend Verdict = case(
+    GroupDeleted > 0,
+        "EKS AUDIT LOG GROUP DELETED — the cluster still reports logging as enabled and no records survive, P0",
+    LoggingOff > 0,
+        "EKS CONTROL-PLANE LOG TYPES DISABLED — audit and authenticator streams stopped, P0",
+    RetentionSet > 0 and MinRetention <= 1,
+        "AUDIT LOG RETENTION CUT TO ONE DAY — records expire before anyone reads them, P1",
+    "EKS log configuration changed — read the resulting configuration before dispositioning, P2")
+| project FirstSeen, LastSeen, Actor, UserIdentityArn, Verdict,
+          LoggingOff, GroupDeleted, RetentionSet, MinRetention, Targets, SourceIPs
+| order by LastSeen desc
+//
+// ============================================================================
+// WHY THERE IS NO KUBERNETES-SIDE QUERY FOR THE ACT ITSELF
+// ============================================================================
+// EKS runs a managed control plane. The audit policy is a kube-apiserver flag that AWS
+// controls; it is not customer-modifiable and is not exposed through any EKS API. In AWS's
+// published policy, core `events` — ANY verb, ANY user — is level None, and rules are
+// evaluated first-match-wins. Level None is not "metadata only"; it is not logged.
+//
+// So no audit-log query can find an event deletion on EKS, and none is offered here. The
+// source rule's silence has always meant "the policy suppresses this", never "nobody did
+// it". Anyone reading an empty result as assurance is reading a configuration fact as a
+// security fact.
+//
+// Two adjacent gaps from the same policy, worth knowing while you are here:
+//   * `secrets` and `configmaps` are Metadata level — you learn who read which object,
+//     never the value or the body.
+//   * A `list` or `watch` carries NO objectRef.name, so "kubectl get secrets -n prod" is a
+//     single event naming no object, having returned every secret in the namespace.

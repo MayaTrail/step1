@@ -1,11 +1,10 @@
-import { Routes, Route } from 'react-router-dom'
+import { Navigate, Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import { ThemeProvider } from './context/ThemeContext'
 import { PlatformProvider } from './context/PlatformContext'
 import { ProtectedRoute } from './components/auth/ProtectedRoute'
 import { AppLayout } from './components/layout/AppLayout'
 import { LoginPage } from './components/auth/LoginPage'
-import { ConnectorPage } from './components/auth/ConnectorPage'
 import { DashboardPage } from './components/dashboard/DashboardPage'
 import { ProfilePage } from './components/profile/ProfilePage'
 import { SettingsPage } from './components/settings/SettingsPage'
@@ -20,6 +19,7 @@ import { GuardrailsPage } from './components/guardrails/GuardrailsPage'
 import { EmulationsHub } from './components/emulations/EmulationsHub'
 import { DetectionsHub } from './components/detections/DetectionsHub'
 import { PlaybooksHub } from './components/playbooks/PlaybooksHub'
+import { LibraryPlaybookPage } from './components/playbooks/LibraryPlaybookPage'
 import { GuardrailsHub } from './components/guardrails/GuardrailsHub'
 import { ComingSoon } from './components/common/ComingSoon'
 import { ActiveRunsPage } from './components/operations/ActiveRunsPage'
@@ -34,7 +34,6 @@ export default function App() {
         <PlatformProvider>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/connector" element={<ConnectorPage />} />
             <Route element={<ProtectedRoute />}>
               <Route element={<AppLayout />}>
                 <Route index element={<DashboardPage />} />
@@ -53,6 +52,7 @@ export default function App() {
                 <Route path="emulations" element={<EmulationsHub />} />
                 <Route path="detections" element={<DetectionsHub />} />
                 <Route path="playbooks" element={<PlaybooksHub />} />
+                <Route path="playbooks/library/:playbookId" element={<LibraryPlaybookPage />} />
                 <Route path="guardrails" element={<GuardrailsHub />} />
 
                 {/* Administration */}
@@ -80,6 +80,10 @@ export default function App() {
                 <Route path=":platformId/emulations/:emulationId/logging/:runId" element={<DetectionCoveragePage />} />
                 <Route path=":platformId/guardrails" element={<GuardrailsPage />} />
                 <Route path=":platformId/guardrails/:guardrailId" element={<GuardrailsPage />} />
+                {/* Unknown paths fall back to the dashboard. Without this a removed
+                    route such as the old /connector renders the shell with an empty
+                    content area, which reads as a broken page rather than a dead link. */}
+                <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Route>
           </Routes>

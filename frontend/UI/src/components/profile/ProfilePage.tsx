@@ -6,6 +6,7 @@ import { fetchProfile, type UserProfile } from '@/services/auth.service'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
+import { ConnectCloudDialog } from './ConnectCloudDialog'
 import {
     IconChevron,
     IconGear,
@@ -33,6 +34,7 @@ export function ProfilePage() {
     const [profile, setProfile] = useState<UserProfile | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
+    const [connectOpen, setConnectOpen] = useState(false)
 
     const loadProfile = useCallback(async () => {
         setLoading(true)
@@ -105,8 +107,9 @@ export function ProfilePage() {
     const authMethod = profile?.auth_method === 'google_sso' ? 'Google SSO' : 'Credentials'
 
     return (
-        <div className="max-w-3xl mx-auto py-8 px-4 animate-fadeIn">
-            <div className="flex flex-col gap-6">
+        <>
+            <div className="max-w-3xl mx-auto py-8 px-4 animate-fadeIn">
+                <div className="flex flex-col gap-6">
                 {/* ── Profile header hero ── */}
                 <ProfileHeader
                     initials={initials}
@@ -137,7 +140,7 @@ export function ProfilePage() {
                 <ConnectionModeCard
                     user={user}
                     profile={profile}
-                    onUpgrade={() => navigate('/connector?upgrade=1')}
+                    onConnect={() => setConnectOpen(true)}
                 />
 
                 {/* ── Security & access ── */}
@@ -172,8 +175,19 @@ export function ProfilePage() {
                         Sign out
                     </Button>
                 </Card>
+                </div>
             </div>
-        </div>
+
+            {/* Reloading on close picks up a newly verified ARN without a page refresh. */}
+            {connectOpen && (
+                <ConnectCloudDialog
+                    onClose={() => {
+                        setConnectOpen(false)
+                        loadProfile()
+                    }}
+                />
+            )}
+        </>
     )
 }
 
@@ -202,7 +216,7 @@ function ProfileHeader({
         if (user.isDemo) {
             return { label: 'Demo Active', tone: 'yellow' as const }
         }
-        return { label: 'Not Connected', tone: 'neutral' as const }
+        return { label: 'Unverified', tone: 'red' as const }
     })()
 
     return (
@@ -333,16 +347,20 @@ function AccessRow({
 function ConnectionModeCard({
     user,
     profile,
-    onUpgrade,
+    onConnect,
 }: {
     user: ReturnType<typeof useAuth>['user']
     profile: UserProfile | null
-    onUpgrade: () => void
+    onConnect: () => void
 }) {
     if (!user) return null
 
     if (user.isDemo) {
-        return <DemoModeCard user={user} onUpgrade={onUpgrade} />
+        return <DemoModeCard user={user} onUpgrade={onConnect} />
+    }
+
+    if (!user.isVerified) {
+        return <ConnectAWSCard onConnect={onConnect} />
     }
 
     if (user.isVerified) {
@@ -378,11 +396,64 @@ function ConnectionModeCard({
                         <div className="font-mono text-xs text-accent-blue break-all">{maskedArn}</div>
                     </div>
                 )}
+                <div className="mt-4">
+                    <Button variant="secondary" onClick={onConnect}>
+                        Manage connection
+                    </Button>
+                </div>
             </Card>
         )
     }
 
     return null
+}
+
+/* ── AWS connection form, shown to an unconnected user ────────────────────────
+   The profile is the connector's permanent home: it is where a user looks when
+   they have decided to connect. The just-in-time prompt on a blocked action
+   links here rather than duplicating the form. ------------------------------ */
+
+/**
+ * Shown when no cloud account is connected.
+ *
+ * Deliberately a launcher rather than a form. Connecting means creating an IAM
+ * role and choosing a policy, which needs the explanation and the policy JSON
+ * the dialog carries; a bare ARN field here would ask for the answer without
+ * showing the question.
+ */
+function ConnectAWSCard({ onConnect }: { onConnect: () => void }) {
+    return (
+        <Card accent="red" className="p-6">
+            <div className="flex items-center justify-between gap-4 mb-4">
+                <div className="flex items-center gap-3">
+                    <span className="w-10 h-10 rounded-btn flex items-center justify-center bg-danger/10 border border-danger/20 text-danger">
+                        <IconCloud size={20} />
+                    </span>
+                    <div>
+                        <div className="font-mono text-2xs uppercase tracking-label text-content-dim mb-0.5">
+                            Connection mode
+                        </div>
+                        <div className="font-display text-sm font-semibold text-content-primary">
+                            No AWS account connected
+                        </div>
+                    </div>
+                </div>
+                <Badge tone="red" mono dot>
+                    Unverified
+                </Badge>
+            </div>
+
+            <p className="text-[0.9rem] leading-relaxed text-content-secondary mb-4">
+                You can browse the full catalogue, detection rules and playbooks without connecting.
+                Deploying infrastructure and running emulations needs a verified IAM role, because
+                those actions change resources in your own AWS account.
+            </p>
+
+            <Button icon={<IconCloud size={14} />} onClick={onConnect}>
+                Connect cloud account
+            </Button>
+        </Card>
+    )
 }
 
 /* ── Demo Mode hero with live countdown ── */

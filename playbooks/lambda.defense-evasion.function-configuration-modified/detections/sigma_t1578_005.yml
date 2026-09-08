@@ -1,0 +1,209 @@
+# Lambda function configuration modified (T1578.005)
+#
+# THE SOURCE RULE HAS NO CONTENT CHECK ON A CALL THAT CHANGES TWENTY DIFFERENT THINGS, AND RATES IT
+# P4. `UpdateFunctionConfiguration` accepts Handler, Layers, Role, Environment, VpcConfig, KMSKeyArn,
+# Runtime, Timeout, MemorySize and more. A memory bump and an execution-role swap arrive identically.
+#
+# TWO OF THOSE FIELDS HIJACK EXECUTION WITHOUT TOUCHING CODE, WHICH IS THE POINT.
+#   Handler — "The name of the method within your code that Lambda calls to run your function."
+#             Repointing it runs a DIFFERENT function already inside the package.
+#   Layers  — "A list of function layers to add to the function's execution environment."
+#             A layer is code, its ARN may belong to ANOTHER ACCOUNT, and it loads with the function.
+# Neither changes the deployment package, so `CodeSha256` is unchanged and every code-integrity
+# check, code-signing policy and package-hash baseline still passes. A detection built on code
+# hashes — including the one in reference/PLAYBOOK.md — is structurally blind to both.
+#
+# THE ANSWER IS `ConfigSha256`, WHICH IS THE CONFIGURATION'S OWN HASH.
+# GetFunctionConfiguration returns it alongside CodeSha256. It is the drift primitive for everything
+# in this file, and §2 of ../PLAYBOOK.md baselines against it rather than against the code hash.
+#
+# ENVIRONMENT VARIABLE VALUES ARE NOT IN CLOUDTRAIL. AWS on the response element: "The function's
+# environment variables. Omitted from AWS CloudTrail logs." So a rule cannot read what was set, and
+# a responder cannot recover it from the event — only GetFunctionConfiguration shows the current
+# values, and only if the caller can read them.
+#
+# AND THE SOURCE RULE MAPS TO `T1584` — Compromise Infrastructure, a RESOURCE DEVELOPMENT technique
+# about adversaries compromising third-party infrastructure to use in their own operations. Modifying
+# your own Lambda is not that. All four rules in the original pack carry it.
+title: Lambda execution hijacked by handler or layer change
+id: 5d92c1a7-38e0-4b64-9f27-c081a3e57b4d
+name: lambda_execution_hijacked_by_config
+status: experimental
+description: >-
+  UpdateFunctionConfiguration changed the Handler or the Layers. Both redirect what actually runs
+  without modifying the deployment package, so CodeSha256 is unchanged and code-signing and
+  package-hash controls all still pass. A layer ARN can belong to another account, which makes the
+  injected code something the function owner cannot see the contents of.
+references:
+  - https://docs.aws.amazon.com/lambda/latest/api/API_UpdateFunctionConfiguration.html
+  - https://attack.mitre.org/techniques/T1578/005/
+  - https://attack.mitre.org/techniques/T1525/
+tags:
+  - attack.defense-evasion
+  - attack.persistence
+  - attack.t1578.005
+  - attack.t1525
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # CloudTrail appends a date and version to Lambda event names — the documented form is
+  # `UpdateFunctionConfiguration20150331v2`. Match by PREFIX, never by equality.
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName|startswith: 'UpdateFunctionConfiguration'
+  success:
+    errorCode: null
+  hijack_fields:
+    requestParameters|contains:
+      - '"handler"'
+      - '"layers"'
+  service_invoked:
+    userIdentity.invokedBy|exists: true
+  condition: selection and success and hijack_fields and not service_invoked
+falsepositives:
+  - >-
+    A deployment that legitimately changes the handler or adds a layer. Common in an IaC estate, and
+    the distinguishing question is whether the layer ARN belongs to an account you own — which the
+    query surfaces and the rule cannot.
+level: high
+---
+title: Lambda execution role changed
+id: c7148ea3-60bf-4d29-85a0-9e6b02f7d158
+name: lambda_execution_role_changed
+status: experimental
+description: >-
+  UpdateFunctionConfiguration changed the function's Role. The function keeps running the same code
+  and gains a different set of permissions, so this is privilege escalation by way of the compute
+  layer rather than the identity layer — and it will not appear in any IAM attach or policy event,
+  because no IAM object changed.
+references:
+  - https://docs.aws.amazon.com/lambda/latest/api/API_UpdateFunctionConfiguration.html
+  - https://attack.mitre.org/techniques/T1578/005/
+  - https://attack.mitre.org/techniques/T1098/003/
+tags:
+  - attack.defense-evasion
+  - attack.privilege-escalation
+  - attack.t1578.005
+  - attack.t1098.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName|startswith: 'UpdateFunctionConfiguration'
+  success:
+    errorCode: null
+  role_changed:
+    requestParameters|contains: '"role"'
+  service_invoked:
+    userIdentity.invokedBy|exists: true
+  # POPULATE BEFORE DEPLOYING with the roles that own Lambda deployment.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and role_changed and not service_invoked and not known_provisioners
+falsepositives:
+  - >-
+    A deployment moving a function to a new execution role, which is a normal refactor. The check
+    that matters is whether the new role is more permissive than the old one, and that is an IAM
+    question the event cannot answer.
+level: high
+---
+title: Lambda network placement or encryption key changed
+id: 0e63b48f-a951-4c72-b3d6-72f0158ae9c4
+name: lambda_network_or_key_changed
+status: experimental
+description: >-
+  UpdateFunctionConfiguration changed VpcConfig or KMSKeyArn. AWS on VpcConfig: "When you connect a
+  function to a VPC, it can access resources and the internet only through that VPC" — so changing
+  it changes what the function can reach and which egress controls apply to it. KMSKeyArn encrypts
+  the environment variables and SnapStart snapshots, so changing it changes who can read them.
+references:
+  - https://docs.aws.amazon.com/lambda/latest/api/API_UpdateFunctionConfiguration.html
+  - https://attack.mitre.org/techniques/T1578/005/
+tags:
+  - attack.defense-evasion
+  - attack.t1578.005
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName|startswith: 'UpdateFunctionConfiguration'
+  success:
+    errorCode: null
+  network_or_key:
+    requestParameters|contains:
+      - '"vpcConfig"'
+      - '"kmsKeyArn"'
+  service_invoked:
+    userIdentity.invokedBy|exists: true
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and network_or_key and not service_invoked and not known_provisioners
+falsepositives:
+  - >-
+    A function being moved into or out of a VPC as part of a normal architecture change. Removing a
+    function FROM a VPC is the direction worth reading, because it returns the function to Lambda's
+    own network where VPC egress controls do not apply.
+level: medium
+---
+title: Lambda function configuration changed
+id: a2f507bc-4e13-49d8-b6c0-31da85e7620f
+name: lambda_function_config_changed
+status: experimental
+description: >-
+  Base rule — correlation component and change accounting, never for direct alerting. Any successful
+  UpdateFunctionConfiguration. Matched by prefix because CloudTrail appends a date and version to
+  Lambda event names.
+references:
+  - https://docs.aws.amazon.com/lambda/latest/api/API_UpdateFunctionConfiguration.html
+tags:
+  - attack.defense-evasion
+  - attack.t1578.005
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName|startswith: 'UpdateFunctionConfiguration'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+title: Lambda configuration changed across multiple functions by one principal
+id: 831b0d6e-97c5-4a20-8f14-e6350cb7a2d9
+status: experimental
+description: >-
+  One principal changed the configuration of three or more functions within an hour. A single
+  configuration change has many ordinary readings; a sweep across functions does not, and it is the
+  shape that matters when a layer is being attached broadly rather than a single function being
+  tuned.
+references:
+  - https://attack.mitre.org/techniques/T1578/005/
+tags:
+  - attack.defense-evasion
+  - attack.t1578.005
+correlation:
+  type: value_count
+  rules:
+    - lambda_function_config_changed
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+  condition:
+    gte: 3
+    field: requestParameters.functionName
+falsepositives:
+  - >-
+    A deployment updating a fleet of functions in one run. Allowlist the pipeline role on the base
+    rule rather than raising the threshold.
+level: high

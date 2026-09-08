@@ -1,0 +1,154 @@
+# Secrets Manager inventory enumerated (T1526)
+#
+# TWO SOURCE RULES, AND THE GAP BETWEEN THEM IS WHERE A CAREFUL ACTOR SITS. The listing building
+# block excludes errors (`NOT _exists_:errorCode`), so a DENIED ListSecrets is not a listing event.
+# The denial rule needs twenty failures in five minutes. A principal issuing three denied calls a
+# minute is invisible to both. `secretsmanager_secrets_listed_denied` below has no threshold and
+# closes it.
+#
+# THE DENIAL RULE IS MAPPED TO BRUTE FORCE UNDER INITIAL ACCESS. Brute force is guessing
+# credentials. An AccessDenied from Secrets Manager goes to a principal whose credential already
+# worked and whose AUTHORIZATION did not — the actor is already inside, and this is discovery.
+#
+# IT ALSO GROUPS BY `sessionIssuer.userName`, WHICH IS THE ROLE NAME. Every concurrent session of a
+# role shares it, so twenty sessions with one denial each look identical to one session with twenty,
+# and the alert names the role instead of the actor. Regrouped on the session below. See
+# ../../_ground-truth/secretsmanager.md §8.
+#
+# LISTING IS NOT HARMLESS BECAUSE NO VALUE IS RETURNED. ListSecrets returns names, descriptions,
+# tags, RotationEnabled and LastAccessedDate — which systems exist, which secrets are live, and which
+# will never rotate. See ../../_ground-truth/secretsmanager.md §3.
+#
+# EVERY SECRETS MANAGER CALL IS A MANAGEMENT EVENT. There are no data events to buy, so all four
+# documents below work in any account with a trail.
+title: Secrets Manager inventory listed by an unexpected principal
+id: 146a47ed-a255-4c5f-87f1-f56f36dd89af
+status: experimental
+description: >-
+  A principal outside the known-consumer allowlist called ListSecrets successfully. The response
+  carries secret names, descriptions, tags, rotation state and last-accessed dates — the inventory an
+  actor uses to choose what to retrieve next. Retrieval itself is owned by
+  secretsmanager.credential-access.high-number-of-secrets-retrievals-from-single-user.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_ListSecrets.html
+  - https://attack.mitre.org/techniques/T1526/
+tags:
+  - attack.discovery
+  - attack.t1526
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: secretsmanager.amazonaws.com
+    eventName: ListSecrets
+    errorCode: null
+  filter_known:
+    userIdentity.arn|contains:
+      - 'SecretsConsumerRole'
+      - 'PlatformAutomation'
+  condition: selection and not filter_known
+falsepositives:
+  - Secrets Manager console sessions — opening the Secrets page calls ListSecrets
+  - Inventory, backup and compliance tooling that walks every secret on a schedule
+  - SDK credential providers that list before selecting
+level: medium
+---
+# The gap-closer. NO THRESHOLD. A single denied ListSecrets is a principal that tried to read the
+# inventory and was refused, which is a stronger signal than a successful one from a role that is
+# supposed to list. The source pair sees this only at twenty denials in five minutes.
+title: Secrets Manager inventory listing denied
+id: 79d2a509-689a-4220-94fb-b1312e255026
+status: experimental
+description: >-
+  ListSecrets returned AccessDenied. The source building block excludes errors and the source denial
+  rule requires twenty failures in five minutes, so a slow enumerator falls through both. This has no
+  threshold.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_ListSecrets.html
+  - https://attack.mitre.org/techniques/T1526/
+tags:
+  - attack.discovery
+  - attack.t1526
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: secretsmanager.amazonaws.com
+    eventName: ListSecrets
+    errorCode: AccessDenied
+  # justified: no threshold and no allowlist, deliberately. A refused ListSecrets is a principal that
+  # asked for the whole inventory and was told no; there is no volume at which that becomes more or
+  # less interesting, and an allowlist would reintroduce the gap this document exists to close. The
+  # expected false positive — a workload deployed before its policy grant — is named below and is
+  # resolved by reading the target principal once.
+  condition: selection
+falsepositives:
+  - A newly deployed workload whose IAM policy has not been granted secretsmanager:ListSecrets yet
+  - A console user without Secrets Manager permissions opening the service page
+level: medium
+---
+name: secretsmanager_secret_described
+title: Secrets Manager secret metadata read
+id: 6c47d928-07fc-4f38-a5bf-6f5918f1e260
+status: experimental
+description: >-
+  DescribeSecret returns the same metadata as a ListSecrets entry for one secret. A principal holding
+  ARNs but not ListSecrets enumerates this way, one call at a time, and nothing in the source set
+  sees it. Base rule for the correlation below.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_DescribeSecret.html
+  - https://attack.mitre.org/techniques/T1526/
+tags:
+  - attack.discovery
+  - attack.t1526
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: secretsmanager.amazonaws.com
+    eventName: DescribeSecret
+    errorCode: null
+  filter_known:
+    userIdentity.arn|contains:
+      - 'SecretsConsumerRole'
+      - 'PlatformAutomation'
+  condition: selection and not filter_known
+falsepositives:
+  - Console sessions, which call DescribeSecret on each secret the user opens
+  - SDK credential providers that describe before retrieving
+level: informational
+
+---
+# The path the source set has no rule for. Ten distinct secrets described in fifteen minutes is an
+# inventory being walked one ARN at a time, by a principal that either lacks ListSecrets or is
+# avoiding it.
+title: Secrets Manager metadata read across many distinct secrets
+id: 970ad2e7-6a13-40d2-81a7-79c388247478
+status: experimental
+description: >-
+  One session called DescribeSecret against ten or more distinct secrets within fifteen minutes.
+  This returns the same reconnaissance metadata as ListSecrets — names, tags, rotation state,
+  last-accessed dates — without ever calling the API the source rules watch.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_DescribeSecret.html
+  - https://attack.mitre.org/techniques/T1526/
+tags:
+  - attack.discovery
+  - attack.t1526
+correlation:
+  type: value_count
+  rules:
+    - secretsmanager_secret_described
+  group-by:
+    - userIdentity.arn
+  timespan: 15m
+  condition:
+    gte: 10
+    field: requestParameters.secretId
+falsepositives:
+  - An inventory or compliance job walking every secret on a schedule, which should be identified by
+    role and added to the base rule's allowlist
+level: medium

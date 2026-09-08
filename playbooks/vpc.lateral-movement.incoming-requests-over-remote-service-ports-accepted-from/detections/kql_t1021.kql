@@ -1,0 +1,97 @@
+// Remote-service port reachable from the public internet (T1021 / T1133)
+//
+// Reputation is a COLUMN here, never a filter. The source rule requires a threat-intel hit before
+// it fires, which means an address nobody has reported yet — every address on its first day, and
+// every address an attacker rents fresh — produces no alert, while the finding that SSH is
+// reachable from the whole internet is never stated. Below, the exposure is the row and the
+// reputation is a field on it.
+//
+// `contains` throughout, never `has` — addresses are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. Table name depends on ingestion.
+let LOOKBACK = 7d;
+let RemotePorts = dynamic([22, 2222, 23, 3389, 3390, 5900, 5901, 5902, 5903, 5985, 5986]);
+// POPULATE: the public addresses of the corporate VPN and any managed bastion. Short list, and
+// the entire tuning surface. Leaving it empty reports every such connection once, which is how
+// the list gets built.
+let AdminSources = dynamic(["203.0.113.10", "203.0.113.11"]);
+let PortName = (p:int) { case(
+    p == 22 or p == 2222, "SSH", p == 23, "telnet", p == 3389 or p == 3390, "RDP",
+    p >= 5900 and p <= 5903, "VNC", p == 5985 or p == 5986, "WinRM", "unknown") };
+AWSVPCFlow
+| where TimeGenerated > ago(LOOKBACK)
+| extend PktSrc = coalesce(column_ifexists("pkt_srcaddr", ""), tostring(SrcAddr))
+| extend PktDst = coalesce(column_ifexists("pkt_dstaddr", ""), tostring(DstAddr))
+| extend Direction = coalesce(column_ifexists("flow_direction", ""), "")
+| extend Degraded = isempty(column_ifexists("pkt_srcaddr", "")) or isempty(Direction)
+| extend Proto = toint(Protocol), Dport = toint(DstPort)
+| where Proto == 6 and set_has_element(RemotePorts, Dport)
+| where Direction == "ingress" or Degraded
+| where tostring(column_ifexists("LogStatus", "OK")) == "OK"
+| extend SrcPrivate = PktSrc startswith "10." or PktSrc startswith "192.168."
+                   or PktSrc startswith "127." or PktSrc startswith "100.64."
+                   or (PktSrc matches regex @"^172\.(1[6-9]|2[0-9]|3[01])\.")
+| where not(SrcPrivate)
+| where not(set_has_element(AdminSources, PktSrc))
+// Reputation joined as an OPTIONAL left-outer enrichment. If the watchlist does not exist, every
+// row still appears with Reputation empty — which is the behaviour the source rule lacks.
+| extend Reputation = ""     // replace with a leftouter join to the local intel watchlist
+| summarize
+    Accepted    = countif(Action == "ACCEPT"),
+    Refused     = countif(Action == "REJECT"),
+    Sources     = dcount(PktSrc),
+    PortsProbed = dcount(Dport),
+    Bytes       = sumif(tolong(Bytes), Action == "ACCEPT"),
+    Packets     = sumif(tolong(Packets), Action == "ACCEPT"),
+    AcceptedFrom= make_set_if(PktSrc, Action == "ACCEPT", 10),
+    RefusedFrom = make_set_if(PktSrc, Action == "REJECT", 10),
+    Reputations = make_set_if(Reputation, isnotempty(Reputation), 5),
+    AnyDegraded = max(Degraded),
+    FirstSeen   = min(TimeGenerated),
+    LastSeen    = max(TimeGenerated)
+    by Target = PktDst, Dport
+| extend Service = PortName(Dport)
+| extend Verdict = case(
+    Accepted > 0 and array_length(Reputations) > 0,
+        strcat("REPORTED-MALICIOUS SOURCE REACHED ", Service, " — accepted, and the source carries a reputation hit. Treat the host as compromised until proven otherwise, P0"),
+    Accepted > 0 and Packets > 100,
+        strcat(Service, " REACHED FROM THE INTERNET AND A SESSION SUSTAINED — packet volume beyond a handshake means somebody stayed. Authentication logs on the host are the next step, P0"),
+    Accepted > 0,
+        strcat(Service, " IS REACHABLE FROM THE INTERNET — accepted from a public address outside the admin allowlist. The exposure is the finding whether or not the source is known, P0"),
+    PortsProbed >= 4,
+        strcat("ADMIN SURFACE ENUMERATED — one source refused across ", tostring(PortsProbed), " remote-service ports. Somebody is mapping your remote access, not scanning the internet, P1"),
+    Refused > 200,
+        strcat("HEAVILY PROBED, NOT REACHABLE — ", Service, " is being scanned and the controls are holding, P2"),
+    strcat("PROBED — background internet scanning against ", Service, ", P3"))
+| project FirstSeen, LastSeen, Target, Dport, Service, Verdict,
+          Accepted, Refused, Sources, PortsProbed, Packets, Bytes,
+          AcceptedFrom, RefusedFrom, Reputations, AnyDegraded
+| order by Accepted desc, PortsProbed desc
+//
+// ============================================================================
+// THE CONTROL PLANE — who opened it
+// ============================================================================
+// AWSCloudTrail
+// | where TimeGenerated > ago(30d)
+// | where EventSource == "ec2.amazonaws.com"
+// | where EventName in ("AuthorizeSecurityGroupIngress", "ModifySecurityGroupRules")
+// | where isempty(ErrorCode)
+// | extend Req = parse_json(RequestParameters)
+// | where tostring(Req) contains "0.0.0.0/0" or tostring(Req) contains "::/0"
+// | project TimeGenerated, UserIdentityArn, SourceIpAddress, group = tostring(Req.groupId), Req
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHETHER ANYONE AUTHENTICATED. A flow log is a 5-tuple counter. An accepted flow to 22 means TCP
+// was established; sshd's own logs say whether a key or password was accepted, and they are on
+// the host. Packet volume is the only proxy available here — a rejected login closes in a handful
+// of packets, an interactive session does not — and it is a proxy, labelled as one.
+//
+// WHETHER REPUTATION SAYS ANYTHING. An empty Reputations column means "not enriched", not "not
+// malicious". Reputation data also ages badly and a recycled residential address inherits
+// somebody else's history, which is why it prioritises rows here and gates nothing.
+//
+// WHETHER THE EXPOSURE IS STILL LIVE. This is a log. `describe-security-groups` is the answer and
+// Query 2 of ../PLAYBOOK.md runs it — an exposure closed an hour ago and one open right now
+// produce identical rows here.

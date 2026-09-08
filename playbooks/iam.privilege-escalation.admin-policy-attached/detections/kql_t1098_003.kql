@@ -1,0 +1,97 @@
+// Administrative managed policy attached to a principal (T1098.003)
+//
+// "Administrative" is not one policy name. The source rule substring-matches "AdministratorAccess"
+// on the ARN, which misses PowerUserAccess, IAMFullAccess and every customer-managed policy
+// granting Action:"*", while matching any policy merely NAMED something containing it.
+//
+// `contains` throughout, never `has` — policy ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+// POPULATE: the AWS-managed entries are a starting point. Add the customer-managed policies in this
+// account that grant Action:"*" — in a mature estate those are usually the ones that matter.
+let AdminPolicies = dynamic([
+    "arn:aws:iam::aws:policy/AdministratorAccess",
+    "arn:aws:iam::aws:policy/PowerUserAccess",
+    "arn:aws:iam::aws:policy/IAMFullAccess"]);
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "iam.amazonaws.com"
+| where EventName in ("AttachUserPolicy", "AttachRolePolicy", "AttachGroupPolicy",
+                      "DetachUserPolicy", "DetachRolePolicy", "DetachGroupPolicy",
+                      "CreatePolicy", "CreatePolicyVersion")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend PolicyArn = tostring(Req.policyArn)
+// The grantee field name differs per event, which is why a single rule matching all three must
+// read all three.
+| extend Grantee = tostring(coalesce(Req.userName, Req.roleName, Req.groupName))
+| extend GranteeType = case(isnotempty(tostring(Req.groupName)), "GROUP",
+                            isnotempty(tostring(Req.roleName)), "role",
+                            isnotempty(tostring(Req.userName)), "user", "unknown")
+| extend IsAdmin = PolicyArn in (AdminPolicies)
+// A customer-managed policy is not on the list and may still be administrative — the list cannot be
+// complete without reading policy documents, which this query does not do.
+| extend IsCustomerManaged = PolicyArn contains ":policy/" and not(PolicyArn startswith "arn:aws:iam::aws:")
+| extend Attaching = EventName startswith "Attach"
+| extend ServiceInvoked = isnotempty(tostring(parse_json(UserIdentity).invokedBy))
+| where not(ServiceInvoked)
+| summarize
+    AdminGrants     = countif(Attaching and IsAdmin),
+    GroupGrants     = countif(Attaching and GranteeType == "GROUP"),
+    CustomerManaged = countif(Attaching and IsCustomerManaged),
+    Attachments     = countif(Attaching),
+    Detachments     = countif(EventName startswith "Detach"),
+    PolicyAuthoring = countif(EventName in ("CreatePolicy", "CreatePolicyVersion")),
+    DistinctGrantees= dcountif(Grantee, Attaching),
+    Grantees        = make_set_if(strcat(GranteeType, ":", Grantee), Attaching, 15),
+    Policies        = make_set_if(PolicyArn, Attaching, 10),
+    SourceIps       = make_set(SourceIpAddress, 5),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where Attachments > 0
+// Self-grant is the highest-signal shape and it needs a field comparison Sigma cannot express:
+// the grantee name appearing inside the caller's own ARN.
+| extend SelfGrant = AdminGrants > 0 and array_length(set_intersect(
+        Grantees, pack_array(strcat("role:", tostring(split(UserIdentityArn, "/")[1])),
+                             strcat("user:", tostring(split(UserIdentityArn, "/")[1]))))) > 0
+| extend Verdict = case(
+    SelfGrant,
+        "PRINCIPAL GRANTED ITSELF AN ADMINISTRATIVE POLICY — the caller and the grantee are the same identity, P0",
+    AdminGrants > 0 and GroupGrants > 0,
+        "ADMINISTRATIVE POLICY ATTACHED TO A GROUP — every current and future member receives it, and the event names none of them. Run GetGroup, P0",
+    AdminGrants > 0,
+        "ADMINISTRATIVE POLICY ATTACHED to a principal, P0",
+    DistinctGrantees >= 3,
+        strcat("POLICIES ATTACHED TO ", tostring(DistinctGrantees),
+               " DISTINCT PRINCIPALS IN AN HOUR — a fan-out rather than an escalation, P0"),
+    PolicyAuthoring > 0 and Attachments > 0,
+        "POLICY AUTHORED AND ATTACHED by the same principal — read the document; the attach rule cannot tell whether a customer-managed policy is administrative, P1",
+    GroupGrants > 0,
+        "POLICY ATTACHED TO A GROUP — largest blast radius of the three attach operations, and unresolvable from the event alone, P1",
+    CustomerManaged > 0,
+        "CUSTOMER-MANAGED POLICY ATTACHED — not on the administrative list, which does not mean it is not administrative. Read the document, P2",
+    "managed policy attached")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, AdminGrants, GroupGrants, CustomerManaged,
+          Attachments, Detachments, DistinctGrantees, Grantees, Policies, SourceIps
+| order by AdminGrants desc, DistinctGrantees desc
+//
+// ============================================================================
+// THE ADMIN LIST CANNOT BE COMPLETE WITHOUT READING POLICY DOCUMENTS
+// ============================================================================
+// `AdminPolicies` names AWS-managed policies. A customer-managed policy granting Action:"*" is the
+// same escalation and will appear here only as `CUSTOMER-MANAGED`. Derive the real list once:
+//   for each policy in `aws iam list-policies --scope Local`, read its default version and check
+//   for an Allow on Action:"*" — the procedure is §4 of ../PLAYBOOK.md.
+// Until that is done, this query under-reports by exactly the number of home-grown admin policies
+// in the account, and that number is usually not zero.
+//
+// ============================================================================
+// GROUP ATTACHMENTS NAME NO MEMBERS
+// ============================================================================
+// AttachGroupPolicy grants to every current AND future member. The event carries only the group
+// name, so blast radius needs a second call:
+//   aws iam get-group --group-name <name>
+// Future members are not enumerable at all — anyone added to the group later inherits the grant
+// with no further event, which is why a group attachment is worth removing rather than monitoring.

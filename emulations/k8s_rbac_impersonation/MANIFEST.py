@@ -31,7 +31,7 @@ MANIFEST = {
         {
             "phase": 2,
             "name": "Privilege Escalation",
-            "techniques": [{"id": "T1548", "name": "Abuse Elevation Control"}],
+            "techniques": [{"id": "T1548", "name": "Abuse Elevation Control Mechanism"}],
         }
     ],
     "mitre_mappings": [
@@ -44,7 +44,7 @@ MANIFEST = {
         },
         {
             "id": "T1548",
-            "name": "Abuse Elevation Control",
+            "name": "Abuse Elevation Control Mechanism",
             "tactic": "Privilege Escalation",
             "platform": "Kubernetes",
             "description": "Using request-time impersonate headers to borrow admin permissions."

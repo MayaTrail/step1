@@ -1,0 +1,233 @@
+# Security group ingress opened to the internet (T1686.001)
+#
+# THE `0.0.0.0/0` RULE READS ONLY THE LEGACY REQUEST SHAPE, WHICH MOST TOOLING DOES NOT SEND.
+# `AuthorizeSecurityGroupIngress` accepts either top-level flat parameters (`CidrIp`, `FromPort`,
+# `IpProtocol` — all Required: No) or the structured `IpPermissions.N` array. The source rule
+# matches `requestParameters.cidrIp`, which exists ONLY in the flat form. AWS says four separate
+# times to "use IP permissions instead" for IPv6 or for multiple rules, and every example in the API
+# reference uses IpPermissions — which is what the console, the CLI and the SDKs emit. The rules
+# below read BOTH shapes, because reading one is not a partial detection, it is a detection that
+# misses whichever shape the estate happens to produce.
+#
+# AND THE FLAT FORM CANNOT CARRY IPv6 AT ALL. AWS: "To specify an IPv6 address range, use IP
+# permissions instead." So a rule keyed on `cidrIp` is IPv4-only by construction. `::/0` is exactly
+# as open as `0.0.0.0/0` and lives at ipPermissions.items[].ipv6Ranges.items[].cidrIpv6.
+#
+# `0.0.0.0/0` IS NOT THE ONLY WAY TO BE OPEN, AND A PORT LIST IS NOT THE ONLY WAY TO REACH SSH.
+#   * IpProtocol -1 means ALL protocols — port 22 is open with no `fromPort: 22` anywhere.
+#   * "If you specify a protocol other than one of the supported values, traffic is allowed on all
+#     ports, regardless of any ports that you specify." An unrecognised protocol opens everything
+#     while carrying port fields that look restrictive.
+#   * 0.0.0.0/1 plus 128.0.0.0/1 covers the internet in two rules, and neither string matches.
+# The all-protocols case is a sibling block below; the split-CIDR case is stated as a residual gap
+# in ../PLAYBOOK.md rather than pretended away.
+#
+# THE `items_str` FIELD THE P1 RULE REGEXES IS NOT A CLOUDTRAIL FIELD. It is a flattened
+# representation produced by an ingestion pipeline. A rule depending on it works where it was
+# authored and silently matches nothing elsewhere — the same portability failure as an
+# enrichment-only field.
+#
+# AND NOTHING IN THE PACK WATCHES `ModifySecurityGroupRules`, which changes an existing rule's CIDR
+# and ports with no Authorize call at all.
+title: Security group opened to the internet on a remote-management port
+id: 6a3f18d7-5b04-42e9-93c1-0d78e256af4b
+name: sg_remote_management_open_to_internet
+status: experimental
+description: >-
+  An ingress rule was added allowing the internet to reach a remote-management port. Matches both
+  request shapes — the flat cidrIp form and the structured ipPermissions form — and both address
+  families, because the flat form cannot express IPv6 and most tooling does not send it. The
+  all-protocols sibling block covers the case where port 22 is open with no port field present at all.
+references:
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_AuthorizeSecurityGroupIngress.html
+  - https://attack.mitre.org/techniques/T1686/001/
+  - https://attack.mitre.org/techniques/T1133/
+tags:
+  - attack.defense-evasion
+  - attack.initial-access
+  - attack.t1686.001
+  - attack.t1133
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'AuthorizeSecurityGroupIngress'
+  success:
+    errorCode: null
+  # Sibling blocks — each is a complete alternative shape of "open to the world".
+  # NOTE: `|contains` over the serialised ipPermissions subtree cannot scope a port and a CIDR to
+  # the SAME permission entry, so a request adding port 22 to a corporate CIDR alongside port 443 to
+  # 0.0.0.0/0 matches. That is a deliberate over-match; §2 Query 2 resolves it by parsing.
+  open_world_flat:
+    requestParameters.cidrIp:
+      - '0.0.0.0/0'
+      - '::/0'
+  open_world_structured:
+    requestParameters.ipPermissions|contains:
+      - '0.0.0.0/0'
+      - '::/0'
+  remote_ports_flat:
+    requestParameters.fromPort:
+      - 22
+      - 23
+      - 3389
+      - 5900
+      - 5985
+      - 5986
+  remote_ports_structured:
+    requestParameters.ipPermissions|contains:
+      - '"fromPort":22'
+      - '"fromPort":23'
+      - '"fromPort":3389'
+      - '"fromPort":5900'
+      - '"fromPort":5985'
+      - '"fromPort":5986'
+  # IpProtocol -1 is ALL protocols: every remote-management port is open and no port field says so.
+  all_protocols:
+    requestParameters.ipProtocol: '-1'
+  all_protocols_structured:
+    requestParameters.ipPermissions|contains: '"ipProtocol":"-1"'
+  condition: selection and success and (open_world_flat or open_world_structured)
+    and (remote_ports_flat or remote_ports_structured or all_protocols or all_protocols_structured)
+falsepositives:
+  - >-
+    A bastion or VPN concentrator deliberately reachable from the internet. It should be a short
+    recorded list; if it is not, the exposure inventory is the finding rather than the event.
+level: critical
+---
+title: Security group opened to the internet on any port
+id: b70c294e-8d61-4a35-bf08-31e5c7920da6
+name: sg_ingress_open_to_internet
+status: experimental
+description: >-
+  An ingress rule was added allowing 0.0.0.0/0 or ::/0 on any port. Shipped below the
+  remote-management rule because a public web tier legitimately looks like this, and above the base
+  rule because most workloads should be reached through a load balancer rather than directly.
+references:
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_AuthorizeSecurityGroupIngress.html
+  - https://attack.mitre.org/techniques/T1686/001/
+tags:
+  - attack.defense-evasion
+  - attack.t1686.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'AuthorizeSecurityGroupIngress'
+  success:
+    errorCode: null
+  open_world_flat:
+    requestParameters.cidrIp:
+      - '0.0.0.0/0'
+      - '::/0'
+  open_world_structured:
+    requestParameters.ipPermissions|contains:
+      - '0.0.0.0/0'
+      - '::/0'
+  # POPULATE BEFORE DEPLOYING with the roles that own network configuration.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and (open_world_flat or open_world_structured) and not known_provisioners
+falsepositives:
+  - >-
+    A public-facing web tier on 80 or 443. Common and usually correct; the security groups that
+    front the internet should be a known set, and one that is not on it is the finding.
+level: high
+---
+title: Existing security group rule modified
+id: 2f8b510a-c497-41d6-a03e-6b91d24e7c85
+name: sg_rule_modified
+status: experimental
+description: >-
+  ModifySecurityGroupRules succeeded. This changes an existing rule's CIDR, ports or protocol with
+  no Authorize call at all, so a rule set scoped to AuthorizeSecurityGroupIngress and
+  AuthorizeSecurityGroupEgress never sees it — and the source pack watches nowhere for it. Narrowing
+  a rule during a review and widening it back afterwards produces exactly one of these events and
+  nothing else.
+references:
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifySecurityGroupRules.html
+  - https://attack.mitre.org/techniques/T1686/001/
+tags:
+  - attack.defense-evasion
+  - attack.t1686.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'ModifySecurityGroupRules'
+  success:
+    errorCode: null
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    Rule description edits, which use the same API and are harmless. The request carries the updated
+    rule, so the triage step is reading whether the CIDR or the ports changed — not whether the
+    event occurred.
+level: high
+---
+title: Security group opened to the internet and then closed by the same principal
+id: 9c4e0b73-2a58-4f19-86d0-e5137ba296cf
+status: experimental
+description: >-
+  A principal opened an ingress rule to the internet and revoked it again. The end state is correct,
+  so every configuration review and every posture scan shows nothing — the exposure exists only as
+  an interval between two events. The revoke rule the source pack ships at P4 is the second half of
+  this pair and is the reason it is worth keeping at all.
+references:
+  - https://attack.mitre.org/techniques/T1686/001/
+  - https://attack.mitre.org/techniques/T1133/
+tags:
+  - attack.defense-evasion
+  - attack.initial-access
+  - attack.t1686.001
+  - attack.t1133
+correlation:
+  type: temporal_ordered
+  rules:
+    - sg_ingress_open_to_internet
+    - sg_ingress_revoked
+  group-by:
+    - userIdentity.arn
+  timespan: 24h
+falsepositives:
+  - >-
+    A deployment that opens a rule, completes a task and tidies up. Allowlist the provisioning role
+    on the base rules rather than shortening the timespan — a deliberate actor is the patient one.
+level: high
+---
+title: Security group ingress rule revoked
+id: 4d16a8f2-70be-4c53-91a7-b8032ed5f649
+name: sg_ingress_revoked
+status: experimental
+description: >-
+  Base rule — correlation component and change accounting, never for direct alerting. A successful
+  RevokeSecurityGroupIngress. On its own this is a firewall rule being removed, which is a good
+  thing happening; its value is as the closing half of an open-then-close pair.
+references:
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_RevokeSecurityGroupIngress.html
+tags:
+  - attack.defense-evasion
+  - attack.t1686.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'RevokeSecurityGroupIngress'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational

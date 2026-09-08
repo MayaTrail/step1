@@ -1,0 +1,92 @@
+// High-severity stateful firewall alerts (T1071 / T1190)
+//
+// Blocked and unblocked are separated in the output, not filtered. The source rule keeps only the
+// unblocked stream, which removes the ability to distinguish "nobody is attacking us" from
+// "everything is being blocked" — and hides the probing run-up before something passes.
+//
+// Suricata severity is INVERTED: 1 is the most severe. The source pack maps it correctly and this
+// query keeps that convention; reversing it silently inverts the whole hierarchy.
+//
+// `contains` throughout, never `has` — signatures, ARNs and addresses are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. Table name depends on ingestion.
+let LOOKBACK = 24h;
+let WINDOW = 1h;
+AWSNetworkFirewallLogs
+| where TimeGenerated > ago(LOOKBACK)
+| extend E = todynamic(event)
+| where tostring(E.event_type) == "alert"
+| extend Sev       = toint(E.alert.severity)
+| extend SigId     = tostring(E.alert.signature_id)
+| extend Signature = tostring(E.alert.signature)
+| extend Category  = tostring(E.alert.category)
+| extend AlertAction = tostring(E.alert.action)
+// verdict.action is the packet's fate; alert.action is the rule's report. AWS's examples carry
+// both, and where they disagree the verdict is what happened. Projected so a disagreement is
+// visible rather than inherited.
+| extend Verdict   = tostring(E.verdict.action)
+| extend SrcIp     = tostring(E.src_ip)
+| extend DestIp    = tostring(E.dest_ip)
+| extend DestPort  = toint(E.dest_port)
+| extend Proto     = tostring(E.proto)
+| extend AppProto  = tostring(E.app_proto)
+| extend Direction = tostring(E.direction)
+| extend RuleGroup = tostring(E.aws_metadata.resource_arn)
+| extend Sni       = tostring(E.tls.sni)
+| extend HttpHost  = tostring(E.http.hostname)
+| extend Url       = tostring(E.http.url)
+// tls_inspected is OMITTED when TLS inspection did not apply, not set to false. Absent means
+// "not inspected", which for an encrypted flow means the alert saw only the envelope.
+| extend TlsInspected = tostring(E.tls_inspected) == "true"
+| where Sev <= 2
+| summarize
+    Alerts       = count(),
+    Unblocked    = countif(AlertAction == "allowed"),
+    Blocked      = countif(AlertAction == "blocked"),
+    Dropped      = countif(Verdict == "drop"),
+    Disagree     = countif(AlertAction == "allowed" and Verdict == "drop"),
+    Signatures   = dcount(SigId),
+    SigNames     = make_set(Signature, 10),
+    Categories   = make_set(Category, 5),
+    Targets      = make_set(DestIp, 10),
+    Ports        = make_set(DestPort, 10),
+    AppProtos    = make_set(AppProto, 5),
+    Snis         = make_set(Sni, 10),
+    Hosts        = make_set(HttpHost, 10),
+    RuleGroups   = make_set(RuleGroup, 5),
+    Inspected    = countif(TlsInspected),
+    FirstSeen    = min(TimeGenerated),
+    LastSeen     = max(TimeGenerated)
+    by SrcIp, Severity = Sev, bin(TimeGenerated, WINDOW)
+| extend Verdict2 = case(
+    Severity == 1 and Unblocked > 0 and Signatures >= 5,
+        "SEVERITY-1 SIGNATURES PASSING, AND MANY OF THEM — a source tripping several distinct top-severity rules without being blocked. Read the rule group ARNs: something is in alert-only mode that should not be, P0",
+    Severity == 1 and Unblocked > 0,
+        "SEVERITY-1 SIGNATURE NOT BLOCKED — the rule fired and the packet proceeded. Either the action is ALERT rather than DROP, or a pass rule is ordered ahead of it, P0",
+    Disagree > 0,
+        "ALERT AND VERDICT DISAGREE — alert.action says allowed while verdict.action says drop. The verdict is the packet's fate; confirm which the policy intended, P1",
+    Severity == 1 and Signatures >= 5,
+        "MANY DISTINCT SEVERITY-1 SIGNATURES FROM ONE SOURCE, ALL BLOCKED — breadth separates a determined actor from a noisy rule. Almost always your own scanner; confirm the schedule, P1",
+    Severity == 1,
+        "SEVERITY-1 SIGNATURE BLOCKED — the control worked. Volume and its sudden absence are the signals here, not presence, P3",
+    "Severity-2 signature — read alongside the severity-1 stream for the same source, P2")
+| project FirstSeen, LastSeen, SrcIp, Severity, Verdict2, Alerts, Unblocked, Blocked, Dropped,
+          Disagree, Signatures, SigNames, Categories, Targets, Ports, AppProtos,
+          Snis, Hosts, RuleGroups, Inspected
+| order by Severity asc, Unblocked desc, Signatures desc
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHAT THE STATELESS ENGINE HANDLED. AWS: "Firewall logging is only available for traffic that you
+// forward to the stateful rules engine." Traffic a stateless rule dropped produces no log of any
+// kind — not an alert, not a flow record. The absence of an alert is not evidence the traffic did
+// not arrive; it may never have reached the engine that logs.
+//
+// WHAT PASSED CLEANLY. Only DROP, ALERT and REJECT produce alert entries. A PASS rule produces
+// none, so the alert log is a filtered view by design. Traffic that matched a pass rule is in the
+// flow log and nowhere here.
+//
+// WHAT WAS INSIDE AN ENCRYPTED SESSION. Where tls_inspected is absent, the stateful engine saw the
+// TLS envelope and not the payload — so an alert on such a flow is matching on SNI, JA3-style
+// characteristics or the addresses, and a clean result means only that the envelope looked clean.

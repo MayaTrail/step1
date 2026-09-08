@@ -1,0 +1,156 @@
+# Application Load Balancer access logging disabled (T1685.002)
+#
+# AN ABSENCE ALERT'S INPUT IS WHAT THE ATTACKER REMOVED, AND FOR THIS SERVICE AWS SAYS THE INPUT
+# WAS NEVER RELIABLE. The source rule counts records where the `elb` field exists, fewer than one
+# in two hours, grouped by nothing. Four properties of ALB access logs, each documented, make that
+# unusable:
+#
+#   1. group_by IS EMPTY. The count is account-wide, so disabling access logs on ONE load balancer
+#      in an account with several changes the total by a fraction and the rule never fires. The
+#      blind spot scales with everything else still logging.
+#   2. AWS STATES THE LOGS ARE A SAMPLE. "Elastic Load Balancing logs requests on a best-effort
+#      basis. We recommend that you use access logs to understand the nature of the requests, not
+#      as a complete accounting of all requests." A count over a best-effort sample is a lower
+#      bound with no published error, in either direction.
+#   3. ACCESS LOGS ARE DISABLED BY DEFAULT. "Access logs is an optional feature of Elastic Load
+#      Balancing that is disabled by default." So a load balancer that has NEVER logged is
+#      indistinguishable from one whose logging was just turned off — and only one of those is an
+#      incident.
+#   4. A QUIET LOAD BALANCER PRODUCES NOTHING AT ALL. Unlike VPC flow logs, which emit a NODATA
+#      record for an idle interface, an ALB with no requests writes no entries. Silence is the
+#      normal state of a load balancer nobody is using, so absence carries even less information
+#      here than it does there.
+#
+# THE AUTHORITATIVE SIGNAL IS ModifyLoadBalancerAttributes. Access logging is a load balancer
+# ATTRIBUTE, not a separate resource, so there is no DeleteAccessLog API to watch — turning it off
+# is a key/value pair inside an attributes list. That nesting is why a rule reading a flat field
+# matches nothing, and it is the shape the first rule below is built around.
+title: Load balancer access logging disabled
+id: 3d81f0a6-47c2-4b95-8e13-5a70cd29b64f
+name: elb_access_logging_disabled
+status: experimental
+description: >-
+  ModifyLoadBalancerAttributes set access_logs.s3.enabled to false. This is the event the absence
+  rule can only infer, recorded directly and attributed to a principal, and it fires whether or not
+  other load balancers in the account keep logging. Note the shape — attributes arrive as a list of
+  key/value pairs, so the key and the value are separate fields inside the same array element and a
+  rule reading requestParameters.enabled matches nothing.
+references:
+  - https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'elasticloadbalancing.amazonaws.com'
+    eventName: 'ModifyLoadBalancerAttributes'
+  success:
+    errorCode: null
+  logging_key:
+    requestParameters.attributes.key:
+      - 'access_logs.s3.enabled'
+      - 'connection_logs.s3.enabled'
+  disabled_value:
+    requestParameters.attributes.value: 'false'
+  # POPULATE BEFORE DEPLOYING with the infrastructure-as-code roles that own load balancer
+  # attributes. An empty list reports every change once, which is how the list is built.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and logging_key and disabled_value and not known_provisioners
+falsepositives:
+  - >-
+    A load balancer being decommissioned, or moved to the newer CloudWatch Logs delivery path.
+    Both are real and both should be visible — a disable with no corresponding enable elsewhere is
+    the finding.
+  - >-
+    The key and value are matched as two fields in one block, which means they are ANDed across
+    the whole attributes ARRAY rather than proven to belong to the same element. A request that
+    disables one attribute while setting another to false satisfies both. Deliberate superset;
+    triage reads which pair it was, and the KQL expands the array to prove it.
+level: high
+---
+title: Load balancer created or modified without access logging enabled
+id: c9270b4e-5183-4fa6-b0d7-268e91c3a750
+name: elb_created_without_logging
+status: experimental
+description: >-
+  A load balancer was created and no attribute call enabled access logging. Because logging is off
+  by default, a load balancer that was never configured for it looks exactly like one whose logging
+  was removed — and neither produces a log entry to be missed. This rule turns the default into an
+  event: it fires on creation, and the response is to confirm that a ModifyLoadBalancerAttributes
+  enabling logs followed within minutes. It ships at medium because creation is routine; the
+  finding is creation with no follow-up, which is a correlation a responder makes rather than a
+  match this rule can express.
+references:
+  - https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'elasticloadbalancing.amazonaws.com'
+    eventName: 'CreateLoadBalancer'
+  success:
+    errorCode: null
+  condition: selection and success
+falsepositives:
+  - >-
+    Every legitimate load balancer creation, until logging is enabled on it. This rule is a
+    coverage check rather than a threat detection, and it should be routed accordingly — a queue,
+    not a page.
+level: medium
+---
+title: Load balancer access log destination removed or blocked
+id: 71ea3c58-90d4-4b27-a6f1-4c0d8b52e937
+name: elb_log_destination_tampered
+status: experimental
+description: >-
+  The load balancer still has logging enabled and the bucket it writes to does not accept the
+  writes. Deleting the destination bucket, or replacing its policy so the ELB log-delivery
+  principal can no longer PutObject, stops delivery while ModifyLoadBalancerAttributes still shows
+  access_logs.s3.enabled true — so a configuration check that reads only the attribute is
+  satisfied. There is no ELB-side error event when delivery starts failing, which makes this the
+  quietest of the three paths and the one that needs a scheduled check rather than an alert.
+references:
+  - https://docs.aws.amazon.com/elasticloadbalancing/latest/application/enable-access-logging.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName:
+      - 'DeleteBucket'
+      - 'DeleteBucketPolicy'
+      - 'PutBucketPolicy'
+      - 'PutBucketAcl'
+      - 'PutLifecycleConfiguration'
+  success:
+    errorCode: null
+  # ADJUST to the bucket naming used for load balancer log destinations in this estate.
+  log_bucket:
+    requestParameters.bucketName|contains:
+      - 'elb-logs'
+      - 'alb-logs'
+      - 'lb-access-logs'
+  condition: selection and success and log_bucket
+falsepositives:
+  - >-
+    Ordinary lifecycle or policy maintenance on the log bucket. Worth reading every time: a
+    lifecycle rule expiring objects after a short period destroys history as effectively as
+    disabling logging, and it is the version of this that looks like cost control.
+level: medium

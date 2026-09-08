@@ -1,0 +1,262 @@
+# Domain registration hijack — transfer lock removed, then the domain leaves the account (T1584.001)
+#
+# THE EVENT NAMES ARE LOWER-CAMEL IN CLOUDTRAIL AND THAT IS NOT A STYLE NOTE. AWS documents it:
+# "In CloudTrail logs, the first letter is lowercase for domain registration actions even though
+# it's uppercase in the names of the actions. For example, UpdateDomainContact appears as
+# updateDomainContact in the logs." AWS's own published sample event carries
+# "eventName": "updateDomainContact". A rule matching 'DisableDomainTransferLock' exactly is
+# therefore at risk of never firing at all, which is the defect the source rule ships with.
+# Every eventName below lists BOTH forms. Whether the convention is still current has not been
+# re-confirmed against a recent event, so this is belt and braces on purpose.
+#
+# THE SECOND LEG OF THE SOURCE RULE'S FLOW IS THE WRONG TRANSFER. Its building blocks are
+# DisableDomainTransferLock -> TransferDomainToAnotherAwsAccount. The second is the
+# account-to-account move inside AWS (operation type INTERNAL_TRANSFER_OUT_DOMAIN). The
+# registrar transfer-out — the one that takes the domain out of AWS permanently — is executed
+# AT THE GAINING REGISTRAR. AWS's own transfer-out procedure ends: "Use the process that is
+# provided by the new registrar to request a transfer of the domain." That step produces no API
+# call and no CloudTrail event in this account. So a flow waiting for a transfer event waits
+# forever on the case that matters most. The only AWS-visible successor is RetrieveDomainAuthCode,
+# which is why it is a first-class rule here rather than an afterthought.
+#
+# SILENCE APPROVES. Route 53 emails the registrant a link to approve or reject, and AWS states:
+# "If you don't take action, the transfer will proceed automatically on the specified date."
+# The email is a veto, not a consent — and the address it goes to is itself changeable through
+# UpdateDomainContact, whose contact content CloudTrail explicitly does not log. An alert
+# triaged on Monday for a Friday-night lock removal may already be too late, which is why the
+# lock rule is high on its own and does not wait for a second leg.
+#
+# REGIONALITY. route53domains events are a separate service from route53 hosted zones. AWS's
+# one published domains sample carries "awsRegion": "us-west-2" while every hosted-zone event in
+# the same document carries "us-east-1", so the two halves of Route 53 do NOT share a Region
+# convention and no rule here filters on awsRegion. The investigation queries pin us-east-1 for
+# the hosted-zone side only.
+title: Route 53 domain transfer lock disabled
+id: 5b7e2a94-3c61-4f08-9d2e-8a41c7b6053f
+name: route53_domain_transfer_lock_disabled
+status: experimental
+description: >-
+  The clientTransferProhibited status was removed from a registered domain. AWS's own guidance is
+  "We recommend you refrain from performing this action unless you intend to transfer the domain
+  to a different registrar" — so the operation announces intent by existing. This is high on its
+  own and is not gated behind a second event, because the second event may never be written.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/APIReference/API_domains_DisableDomainTransferLock.html
+  - https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/domain-transfer-from-route-53.html
+  - https://attack.mitre.org/techniques/T1584/001/
+tags:
+  - attack.resource-development
+  - attack.t1584.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53domains.amazonaws.com'
+    eventName:
+      - 'DisableDomainTransferLock'
+      - 'disableDomainTransferLock'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING. Legitimate registrar migrations are planned, rare and performed by
+  # a known role. If this list is empty the rule still works — it just has no exclusions, which
+  # is the correct starting position for an operation AWS itself advises against performing.
+  known_registrars:
+    userIdentity.arn|contains:
+      - ':role/DomainAdministration'
+  condition: selection and success and not known_registrars
+falsepositives:
+  - >-
+    A planned migration to another registrar. Rare enough to confirm by hand every time, and the
+    confirmation costs a message; the alternative costs the domain.
+level: high
+---
+title: Route 53 domain authorization code retrieved
+id: c4a9e061-27bd-4b53-8f10-6d3e59a2c847
+name: route53_domain_auth_code_retrieved
+status: experimental
+description: >-
+  RetrieveDomainAuthCode returned the transfer authorization code for a registered domain. This
+  is step 3 of AWS's documented transfer-out procedure and it is the LAST AWS-visible step — the
+  request itself is then made at the gaining registrar, outside this account entirely. There is
+  no benign background use of this call: an auth code is retrieved to hand to another registrar.
+  UNVERIFIED and consequential — AWS publishes no statement about whether responseElements
+  carries the code in CloudTrail. The SDK service model marks DomainAuthCode `sensitive`, but
+  that trait governs SDK logging, not CloudTrail. Treat the trail as possibly holding a live
+  transfer credential and restrict read access to it accordingly; do not assert either way.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/APIReference/API_domains_RetrieveDomainAuthCode.html
+  - https://attack.mitre.org/techniques/T1584/001/
+tags:
+  - attack.resource-development
+  - attack.t1584.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53domains.amazonaws.com'
+    eventName:
+      - 'RetrieveDomainAuthCode'
+      - 'retrieveDomainAuthCode'
+  success:
+    errorCode: null
+  condition: selection and success
+falsepositives:
+  - >-
+    A migration already approved through change management. The same one as the lock rule, and
+    it should already be an open ticket by the time this fires.
+level: high
+---
+title: A registered domain was prepared for transfer out of AWS
+id: 9e0d3f57-6a24-41cb-b7e8-25c1084fd396
+status: experimental
+description: >-
+  The lock came off and the authorization code was taken. Those are steps 2 and 3 of AWS's
+  documented transfer-out procedure, in order, and step 4 happens at the gaining registrar where
+  this account cannot see it. Group-by is userIdentity.arn rather than the domain name
+  deliberately: AWS's one published domains event nests the parameter as
+  requestParameters.domainName.name rather than as a flat string, the generality of that shape is
+  unverified, and a correlation keyed on a field that may resolve to null joins nothing. An
+  account holds at most 20 registered domains (50 on accounts older than March 2021), so grouping
+  by principal is bounded and the domain is read off the events themselves. Timespan is 24h
+  because this is a deliberate multi-step procedure performed by a person, not a scripted burst.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/domain-transfer-from-route-53.html
+  - https://attack.mitre.org/techniques/T1584/001/
+tags:
+  - attack.resource-development
+  - attack.t1584.001
+correlation:
+  type: temporal_ordered
+  rules:
+    - route53_domain_transfer_lock_disabled
+    - route53_domain_auth_code_retrieved
+  group-by:
+    - userIdentity.arn
+  timespan: 24h
+level: critical
+---
+title: Route 53 domain transferred to another AWS account
+id: 3a86c1d2-58f4-4e97-a0b6-91d7e4530c8b
+name: route53_domain_transferred_to_another_account
+status: experimental
+description: >-
+  TransferDomainToAnotherAwsAccount moved the registration to a different AWS account. This is
+  operation type INTERNAL_TRANSFER_OUT_DOMAIN and it is a DIFFERENT event from a registrar
+  transfer — both lose the domain from this account, only one leaves AWS. It is shipped as its
+  own rule rather than as the second leg of a correlation because it does not require the
+  transfer lock to have been removed first, and pairing the two produced a rule that could only
+  fire on the less damaging path. The response elements of this call include a password used to
+  accept the transfer; the service model marks it sensitive, with the same CloudTrail caveat as
+  the auth code.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/APIReference/API_domains_TransferDomainToAnotherAwsAccount.html
+  - https://attack.mitre.org/techniques/T1584/001/
+tags:
+  - attack.resource-development
+  - attack.t1584.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53domains.amazonaws.com'
+    eventName:
+      - 'TransferDomainToAnotherAwsAccount'
+      - 'transferDomainToAnotherAwsAccount'
+  success:
+    errorCode: null
+  condition: selection and success
+falsepositives:
+  - >-
+    An account consolidation. Verifiable against the destination account ID in the request, and
+    that ID is the first thing to read.
+level: high
+---
+title: Route 53 domain contact or nameservers changed
+id: 71c5b8e4-0d39-4a26-95f7-c8e2306b1a4d
+name: route53_domain_registration_altered
+status: experimental
+description: >-
+  UpdateDomainContact changes where the transfer-approval email goes; UpdateDomainNameservers
+  changes which nameservers the TLD delegates to, which moves resolution for the entire domain
+  without touching a single hosted-zone record. The first is how an attacker captures the veto
+  before removing the lock; the second is a hijack that needs no transfer at all. CloudTrail
+  cannot show what a contact was changed TO — AWS redacts it at source with
+  "Personally-identifying contact information is not logged in the request" — so this rule can
+  tell you the redirection happened and never where to, which is precisely why it must fire.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/APIReference/API_domains_UpdateDomainContact.html
+  - https://docs.aws.amazon.com/Route53/latest/APIReference/API_domains_UpdateDomainNameservers.html
+  - https://attack.mitre.org/techniques/T1584/001/
+tags:
+  - attack.resource-development
+  - attack.t1584.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53domains.amazonaws.com'
+    eventName:
+      - 'UpdateDomainContact'
+      - 'updateDomainContact'
+      - 'UpdateDomainNameservers'
+      - 'updateDomainNameservers'
+  success:
+    errorCode: null
+  condition: selection and success
+falsepositives:
+  - >-
+    An annual contact refresh, or a genuine move to a third-party DNS provider. Both are planned;
+    neither happens in the same hour as a lock change.
+level: medium
+---
+title: Route 53 domain registration change refused
+id: 8d2f7095-4b1e-43ac-86d0-5e93a70c2b61
+name: route53_domain_change_refused
+status: experimental
+description: >-
+  A registrar-side change was refused. Base rule, and intent observed either way. AccessDenied
+  and AccessDeniedException are the IAM refusals and mean a principal without the permission
+  tried. TLDRulesViolation and UnsupportedTLD mean the registry refused the operation for that
+  TLD — the attacker still tried, and will try the next domain. DuplicateRequest means the
+  operation was already in progress, which is itself worth reading. Ships at medium because a
+  refused attempt on a registrar API has no benign explanation that an approved change would not
+  have made unnecessary.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/APIReference/API_domains_DisableDomainTransferLock.html
+  - https://attack.mitre.org/techniques/T1584/001/
+tags:
+  - attack.resource-development
+  - attack.t1584.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53domains.amazonaws.com'
+    eventName:
+      - 'DisableDomainTransferLock'
+      - 'disableDomainTransferLock'
+      - 'RetrieveDomainAuthCode'
+      - 'retrieveDomainAuthCode'
+      - 'TransferDomainToAnotherAwsAccount'
+      - 'transferDomainToAnotherAwsAccount'
+      - 'UpdateDomainNameservers'
+      - 'updateDomainNameservers'
+  refused:
+    errorCode:
+      - 'AccessDenied'
+      - 'AccessDeniedException'
+      - 'TLDRulesViolation'
+      - 'UnsupportedTLD'
+      - 'DuplicateRequest'
+      - 'OperationLimitExceeded'
+  condition: selection and refused
+falsepositives:
+  - >-
+    An automation holding stale permissions and retrying. Fix the automation — a service that
+    retries a forbidden registrar call is a defect whichever way the permission question lands.
+level: medium

@@ -1,0 +1,217 @@
+# DynamoDB table items modified or destroyed (T1485 / T1565.001)
+#
+# BOTH SOURCE RULES ARE DATA-PLANE AND NEITHER SAYS SO. AWS splits DynamoDB's CloudTrail coverage
+# explicitly: DeleteItem, BatchWriteItem, UpdateItem and TransactWriteItems are data-plane events,
+# and "to enable logging of the following API actions in CloudTrail files, you must enable logging of
+# data plane API activity". Data events are off by default and billable. So both rules are INERT in
+# a default account, and a responder reading no results cannot tell "it did not happen" from "it was
+# never recorded".
+#
+# THEREFORE THE ROUTABLE DETECTIONS HERE ARE THE CONTROL-PLANE PRECONDITIONS, which are logged by
+# default and which decide whether destruction is recoverable at all:
+#   UpdateContinuousBackups disabling PITR  -> no point-in-time restore
+#   UpdateTable disabling deletion protection -> the table itself can go
+#   UpdateTimeToLive                         -> bulk deletion on a schedule
+# Those fire in every account. The item rules ship alongside them and are honest about needing data
+# events.
+#
+# PARTIQL IS A COMPLETE BYPASS OF ANY ITEM-LEVEL RULE. The same writes are reachable as
+# ExecuteStatement, BatchExecuteStatement and ExecuteTransaction — AWS states CloudTrail captures
+# calls "using both PartiQL and the classic API". A `DELETE FROM` issued through ExecuteStatement
+# does exactly what DeleteItem does and matches neither source rule. All three names are included.
+#
+# AND TTL DELETIONS ARE INVISIBLE. AWS: "DynamoDB Time to Live data plane actions are not logged by
+# CloudTrail." An actor who sets a short TTL causes bulk deletion producing NO record of any
+# deletion — not a data event, not a management event. `UpdateTimeToLive` is logged, so the
+# configuration change is the only opportunity, and it ships at high for that reason.
+#
+# The source rules also filter on `NOT _exists_:errorMessage` rather than `errorCode`. CloudTrail's
+# canonical failure field is errorCode; errorMessage is not always present on a failure, so the
+# filter admits some failed calls as successes.
+title: DynamoDB point-in-time recovery or deletion protection disabled
+id: 5c1e7093-6ba4-42d8-97f0-31e802a5db64
+name: dynamodb_recovery_protection_disabled
+status: experimental
+description: >-
+  Continuous backups (PITR) turned off, or deletion protection removed. Both are control-plane and
+  logged by default, so unlike the item-level rules these fire in every account. They are the
+  precondition that turns item destruction from recoverable into permanent, and removing them
+  before destroying anything is the ordering that matters.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/logging-using-cloudtrail.html
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # Sibling blocks: two complete alternative shapes of "recovery was removed". Within each, the keys
+  # are ANDed and they do co-occur on a single event — the record carries eventSource, eventName and
+  # the submitted setting together.
+  pitr_off:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'UpdateContinuousBackups'
+    requestParameters.pointInTimeRecoverySpecification.pointInTimeRecoveryEnabled: false
+  protection_off:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'UpdateTable'
+    requestParameters.deletionProtectionEnabled: false
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the roles that own table lifecycle.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: (pitr_off or protection_off) and success and not known_provisioners
+falsepositives:
+  - >-
+    A table being decommissioned, where protection is removed before deletion. The deletion that
+    follows is the corroborating evidence, and its absence is what makes this worth reading.
+level: critical
+---
+title: DynamoDB time-to-live configured
+id: b704e2c8-3f19-4d56-a0b1-7e26c9834f5d
+name: dynamodb_ttl_configured
+status: experimental
+description: >-
+  UpdateTimeToLive succeeded. This is bulk deletion on a schedule, and AWS does not log the
+  deletions it causes — "DynamoDB Time to Live data plane actions are not logged by CloudTrail." So
+  items disappear afterwards with no record of any deletion at all, and this configuration event is
+  the only opportunity to see it coming. Control-plane, logged by default, and therefore visible even
+  where data events are not enabled.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/logging-using-cloudtrail.html
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'UpdateTimeToLive'
+  success:
+    errorCode: null
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    A genuine retention policy being applied, which is the common and correct use of TTL. The
+    attribute name and the table are what distinguish it — the playbook reads the item population
+    that would expire, because no event ever will.
+level: high
+---
+title: DynamoDB items deleted, including through PartiQL
+id: 9f38a06d-2c74-4b19-85e3-d0176ba4e298
+name: dynamodb_items_destroyed
+status: experimental
+description: >-
+  Items removed by DeleteItem, BatchWriteItem, or the PartiQL equivalents. REQUIRES DYNAMODB DATA
+  EVENTS — these are data-plane operations, off by default and billable, so this rule is inert
+  unless they were purchased. PartiQL is included because ExecuteStatement can issue a DELETE that
+  does exactly what DeleteItem does and matches neither source rule.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/logging-using-cloudtrail.html
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName:
+      - 'DeleteItem'
+      - 'BatchWriteItem'
+      - 'ExecuteStatement'
+      - 'BatchExecuteStatement'
+      - 'ExecuteTransaction'
+  # CloudTrail's canonical failure field is errorCode. The source rules filter on errorMessage,
+  # which is not always present on a failure and therefore admits some failed calls.
+  success:
+    errorCode: null
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    Ordinary application traffic, which is overwhelmingly what these events are. This rule is only
+    usable with a populated allowlist of application roles, and even then the volume correlation is
+    the routable output rather than the single event.
+level: medium
+---
+title: DynamoDB items modified, including through PartiQL
+id: 3a92c5e0-84fb-4d67-91a2-0c58e37b1d4f
+name: dynamodb_items_modified
+status: experimental
+description: >-
+  Items written or overwritten by PutItem, UpdateItem, TransactWriteItems, or the PartiQL
+  equivalents. REQUIRES DYNAMODB DATA EVENTS. Modification is separated from deletion because the
+  response differs: a deletion is restored from PITR, while a modification needs establishing what
+  changed — and DynamoDB Streams is frequently the only record of the previous values.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/logging-using-cloudtrail.html
+  - https://attack.mitre.org/techniques/T1565/001/
+tags:
+  - attack.impact
+  - attack.t1565.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName:
+      - 'PutItem'
+      - 'UpdateItem'
+      - 'TransactWriteItems'
+      - 'ExecuteStatement'
+      - 'BatchExecuteStatement'
+      - 'ExecuteTransaction'
+  success:
+    errorCode: null
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    Ordinary application traffic. As with the deletion rule, the allowlist is mandatory and the
+    correlation is what should be routed.
+level: medium
+---
+title: DynamoDB recovery removed and items then destroyed
+id: e10b76f4-95da-4c28-b3e7-6a2851f0c9db
+status: experimental
+description: >-
+  Point-in-time recovery or deletion protection was removed and items were destroyed afterwards by
+  the same principal. This is the ordering that turns a recoverable incident into a permanent one,
+  and the first half is control-plane — so it is visible even in accounts where the second half is
+  not recorded at all.
+references:
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: temporal_ordered
+  rules:
+    - dynamodb_recovery_protection_disabled
+    - dynamodb_items_destroyed
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+level: critical

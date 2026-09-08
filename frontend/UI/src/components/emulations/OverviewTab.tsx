@@ -4,6 +4,7 @@ import { useDetections } from '@/hooks/usePlatformData'
 import { Card } from '@/components/ui/Card'
 import { MetricCard } from '@/components/ui/MetricCard'
 import { Button } from '@/components/ui/Button'
+import { ConnectGate } from '@/components/common/ConnectGate'
 
 /**
  * Overview tab — the landing surface for an emulation's detail page.
@@ -251,9 +252,11 @@ export function OverviewTab({
       {/* ── Primary Actions ─────────────────────────────────────────── */}
       <Card className="p-5">
         <div className="flex flex-wrap items-center gap-3">
-          <Button variant="primary" size="lg" onClick={onRun}>
-            Run Emulation
-          </Button>
+          <ConnectGate>
+            <Button variant="primary" size="lg" onClick={onRun}>
+              Run Emulation
+            </Button>
+          </ConnectGate>
           <Button variant="secondary" onClick={onOpenAttackPath}>
             View Attack Path
           </Button>

@@ -1,0 +1,312 @@
+# Identity Pool Configured to Allow Unauthenticated Access (T1098 / T1078.004)
+#
+# WHAT THIS ACTUALLY IS. `AllowUnauthenticatedIdentities: true` plus an unauthenticated role means
+# any caller on the internet who knows the identity pool ID calls `GetId` and then
+# `GetCredentialsForIdentity` and receives real, signable AWS credentials. AWS states both halves
+# without hedging: "Anyone who knows your identity pool ID can request unauthenticated
+# credentials. Your identity pool ID isn't confidential information", and "Activate guest access
+# only when you are confident that you would grant the permissions in your IAM role to anyone on
+# the internet." Neither call needs AWS credentials - both API references carry "This is a public
+# API. You do not need any credentials to call this API" - and the response contains an ASIA
+# access key, a secret, a session token and an expiry, valid for one hour.
+#
+# WHAT THE ORIGINAL RULE GOT RIGHT, AND THE ONE THING IT MISSES. It matches
+# `CreateIdentityPool` OR `UpdateIdentityPool` with `allowUnauthenticatedIdentities: true` and a
+# success filter, which is correct, and its field casing is right: AWS publishes a real
+# CreateIdentityPool CloudTrail example carrying `requestParameters.allowUnauthenticatedIdentities`
+# in lower camel. What it misses is that THE FLAG ALONE VENDS NOTHING. `CreateIdentityPool` has no
+# Roles parameter at all - roles are attached by a separate `SetIdentityPoolRoles` call, and until
+# one lands a guest request fails with InvalidIdentityPoolConfigurationException ("the identity
+# pool has no unauthenticated role configured"). So the flag is the announcement and
+# `SetIdentityPoolRoles` is the weaponisation, the source rule watches only the announcement, and
+# the far more dangerous case - `SetIdentityPoolRoles` attaching an unauthenticated role to a pool
+# that was ALREADY guest-enabled - produces no event the rule matches at all.
+#
+# THE BLAST RADIUS IS NOT IN ANY OF THESE EVENTS. `SetIdentityPoolRoles` records role ARNs and
+# nothing else: its Roles map is documented as "String to string map", value length 20 to 2048 -
+# an ARN, not a policy document. No policy document appears anywhere in CreateIdentityPool,
+# UpdateIdentityPool, DescribeIdentityPool, SetIdentityPoolRoles or GetIdentityPoolRoles. What the
+# event says is "guests now get role X". What role X permits is a separate trip to IAM, and it is
+# the only thing that determines severity.
+#
+# BOTH WRITES ARE FULL REPLACEMENTS. `UpdateIdentityPool` requires IdentityPoolId,
+# IdentityPoolName AND AllowUnauthenticatedIdentities, and carries AWS's "If you don't provide a
+# value for a parameter, Amazon Cognito sets it to its default value". `SetIdentityPoolRoles`
+# requires its whole Roles map, capped at two entries, so a call sending only `authenticated`
+# removes the `unauthenticated` mapping and vice versa. Every event here is a whole-configuration
+# write, never a field edit - which matters for the response as much as for the detection.
+#
+# CLASSIC FLOW IS A SEVERITY MULTIPLIER. In the default enhanced flow AWS applies an inline
+# session policy plus the managed `AmazonCognitoUnAuthedIdentitiesSessionPolicy` to guest
+# sessions, so effective permissions are the INTERSECTION of the role's policies and that ceiling.
+# In the basic (classic) flow the client composes its own AssumeRoleWithWebIdentity and the
+# scope-down does not apply. `AllowClassicFlow: true` on a guest-enabled pool therefore removes
+# the safety net, and it is a separate field on the same UpdateIdentityPool event.
+#
+# ISSUANCE IS A DATA EVENT AND IS OFF BY DEFAULT. `GetId`, `GetCredentialsForIdentity`,
+# `GetOpenIdToken`, `GetOpenIdTokenForDeveloperIdentity` and `UnlinkIdentity` are logged by AWS as
+# DATA events, requiring an advanced event selector on resources.type =
+# AWS::Cognito::IdentityPool. And in the enhanced flow Cognito calls STS on your behalf, so there
+# is no `sts:AssumeRoleWithWebIdentity` event attributable to your caller either. In a
+# default-configured account, exploitation of this misconfiguration produces NO CloudTrail
+# evidence at all. Rules 5 and 6 below cover the two paths that DO leave evidence, and each says
+# what it depends on.
+title: Cognito identity pool configured to allow unauthenticated access
+id: ea8e0bf3-1e06-4023-9eb4-a63264fd59b6
+name: cognito_identitypool_guest_enabled
+status: experimental
+description: >-
+  An identity pool was created or updated with AllowUnauthenticatedIdentities set to true. Any
+  caller on the internet who knows the pool ID - which AWS documents as not confidential - can
+  then request AWS credentials for the pool's unauthenticated role. The flag alone vends nothing
+  until a role is attached; pair this with the SetIdentityPoolRoles rule below.
+references:
+  - https://attack.mitre.org/techniques/T1098/  # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1078/004/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/cognitoidentity/latest/APIReference/API_CreateIdentityPool.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/cognito/latest/developerguide/identity-pools-security-best-practices.html  # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1098
+  - attack.initial-access
+  - attack.t1078.004
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cognito-identity.amazonaws.com'
+    eventName:
+      - 'CreateIdentityPool'
+      - 'UpdateIdentityPool'
+  # Documented Type: Boolean, and AWS's published CloudTrail example shows it unquoted in
+  # requestParameters. A quoted 'true' matches nothing on a JSON-typed backend.
+  guest_enabled:
+    requestParameters.allowUnauthenticatedIdentities: true
+  success:
+    errorCode: null
+  condition: selection and guest_enabled and success
+falsepositives:
+  - >-
+    A deliberate guest-access application - anonymous analytics, an unauthenticated media player,
+    a pre-sign-in catalogue browse. These exist and are legitimate; what makes them safe is the
+    unauthenticated role's policy, which this event does not contain. Triage by fetching the role,
+    not by recognising the pool name.
+level: high
+---
+# The weaponisation, and the case the source rule cannot see. A guest-enabled pool with no
+# unauthenticated role issues nothing - AWS returns InvalidIdentityPoolConfigurationException:
+# "If you provided no authentication information in the request, the identity pool has no
+# unauthenticated role configured". Attaching one is what turns the flag into credentials, and it
+# is a DIFFERENT API on a DIFFERENT event that the source rule does not match.
+#
+# The match is on the Roles map key documented as literally "authenticated" or "unauthenticated"
+# (Key Pattern: (un)?authenticated). `|contains: ':role/'` is used rather than an existence test
+# because every value is a role ARN and the substring is portable across backends; it also fails
+# closed, matching nothing rather than everything, if the field is absent.
+title: Cognito unauthenticated role attached to an identity pool
+id: 5cda3f39-b5b0-4dc5-b94d-c001b87fe11c
+name: cognito_identitypool_unauth_role_set
+status: experimental
+description: >-
+  SetIdentityPoolRoles attached a role under the "unauthenticated" key. From this moment any
+  anonymous caller who knows the pool ID can obtain temporary AWS credentials for that role. The
+  event names the role ARN and nothing about what the role permits - that has to be fetched from
+  IAM, and it is the only thing that determines severity.
+references:
+  - https://docs.aws.amazon.com/cognitoidentity/latest/APIReference/API_SetIdentityPoolRoles.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/cognitoidentity/latest/APIReference/API_GetCredentialsForIdentity.html  # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1098
+  - attack.initial-access
+  - attack.t1078.004
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cognito-identity.amazonaws.com'
+    eventName: 'SetIdentityPoolRoles'
+  unauth_role_present:
+    requestParameters.roles.unauthenticated|contains: ':role/'
+  success:
+    errorCode: null
+  condition: selection and unauth_role_present and success
+falsepositives:
+  - >-
+    The provisioning pipeline attaching the intended guest role to a pool designed for guest
+    access. Distinguishable by principal; if the pipeline is the only caller and the role is on
+    the reviewed list, this is expected traffic.
+level: high
+---
+# Both halves inside a day is the complete weapon: the pool accepts anonymous identities AND a
+# role is attached for them to assume. `temporal` rather than `temporal_ordered` on purpose -
+# either call can come first. A pool can be created guest-enabled and have roles attached
+# afterwards, or a role can be attached to a pool that is later flipped to guest access, and both
+# orders produce the same live exposure.
+#
+# Grouped by the POOL, so a chain split across two principals still correlates. Twenty-four hours
+# because these are two provisioning steps, often in the same apply and sometimes a change window
+# apart.
+title: Cognito identity pool made guest-accessible with a role attached
+id: 4a29e0a2-6f13-4f0e-9a1c-2b7f5d3c8e41
+status: experimental
+description: >-
+  Within twenty-four hours the same identity pool was set to allow unauthenticated identities and
+  had a role attached under the unauthenticated key. That combination hands temporary AWS
+  credentials to any anonymous caller who knows the pool ID.
+references:
+  - https://docs.aws.amazon.com/cognito/latest/developerguide/identity-pools-security-best-practices.html  # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1098
+  - attack.initial-access
+  - attack.t1078.004
+correlation:
+  type: temporal
+  rules:
+    - cognito_identitypool_guest_enabled
+    - cognito_identitypool_unauth_role_set
+  group-by:
+    - requestParameters.identityPoolId
+  timespan: 24h
+level: critical
+---
+# Classic flow removes AWS's safety net, and it rides on the same event as the guest flag. In the
+# default ENHANCED flow AWS applies an inline session policy plus the managed
+# AmazonCognitoUnAuthedIdentitiesSessionPolicy to guest sessions, so effective permissions are the
+# intersection of the role's policies and that ceiling. In the BASIC (classic) flow the client
+# composes its own AssumeRoleWithWebIdentity and the scope-down does not apply - AWS: "In the
+# basic (classic) flow, you make your own AssumeRoleWithWebIdentity API request... As a best
+# security practice, don't assign any permissions above this scope-down policy to unauthenticated
+# users."
+#
+# Note the casing caveat: `allowClassicFlow` is INFERRED from the family convention. AWS's
+# published CloudTrail example is for CreateIdentityPool and does not carry this field, so
+# confirm it in your own trail before relying on it.
+title: Cognito identity pool classic authentication flow enabled
+id: 7d6b1f84-05ac-4a52-b3d9-6c0e9a417b52
+status: experimental
+description: >-
+  AllowClassicFlow was set to true on an identity pool. In the classic flow the client makes its
+  own AssumeRoleWithWebIdentity request and AWS's automatic scope-down session policy for guest
+  sessions does not apply, so an unauthenticated role's full permissions become reachable.
+references:
+  - https://docs.aws.amazon.com/cognito/latest/developerguide/authentication-flow.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/cognito/latest/developerguide/iam-roles.html  # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cognito-identity.amazonaws.com'
+    eventName:
+      - 'CreateIdentityPool'
+      - 'UpdateIdentityPool'
+  classic_flow:
+    requestParameters.allowClassicFlow: true
+  success:
+    errorCode: null
+  condition: selection and classic_flow and success
+falsepositives:
+  - >-
+    A legacy application that predates the enhanced flow and composes its own STS request. Real,
+    and worth migrating; on a pool that also allows unauthenticated identities it is not a
+    tolerable combination.
+level: medium
+---
+# "WAS IT USED", PATH ONE - and it exists only if you turned it on. GetId and
+# GetCredentialsForIdentity are CloudTrail DATA events, off by default and billable, requiring an
+# advanced event selector on resources.type = AWS::Cognito::IdentityPool. With that selector, an
+# anonymous guest call is unmistakable: AWS's own published examples for both operations show
+# `userIdentity` as {"type": "Unknown"} - there is no principal, because there is no
+# authentication. That is a high-signal primitive and it is the cleanest evidence of exploitation
+# available anywhere.
+#
+# WITHOUT the selector this rule matches nothing, forever, and its silence is not evidence.
+title: Cognito unauthenticated identity issued AWS credentials
+id: 9b3c7e15-48fd-4d26-8a0b-1e5c6f2a9d73
+status: experimental
+description: >-
+  GetCredentialsForIdentity or GetId was called by an unauthenticated caller - userIdentity type
+  Unknown - against an identity pool. This is credential vending to an anonymous internet client.
+  Requires CloudTrail data events on AWS::Cognito::IdentityPool; without them the rule cannot fire.
+references:
+  - https://docs.aws.amazon.com/cognito/latest/developerguide/logging-using-cloudtrail.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/cognito/latest/developerguide/understanding-amazon-cognito-entries.html  # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1098
+  - attack.initial-access
+  - attack.t1078.004
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cognito-identity.amazonaws.com'
+    eventName:
+      - 'GetId'
+      - 'GetCredentialsForIdentity'
+      - 'GetOpenIdToken'
+  anonymous_caller:
+    userIdentity.type: 'Unknown'
+  condition: selection and anonymous_caller
+falsepositives:
+  - >-
+    Every legitimate guest session on a pool that is deliberately guest-enabled. On such a pool
+    this rule is a volume baseline rather than an alert - deploy it scoped to pools that should
+    NOT have guest access, or feed it to a threshold on distinct source addresses.
+level: high
+---
+# "WAS IT USED", PATH TWO - and counter-intuitively the LESS secure flow is the MORE observable
+# one. In the basic (classic) flow the client makes its own AssumeRoleWithWebIdentity call, which
+# is an ordinary STS MANAGEMENT event, on by default. IAM documents that CloudTrail "also logs
+# non-authenticated requests to the AWS STS actions, AssumeRoleWithSAML and
+# AssumeRoleWithWebIdentity", so the unsigned guest exchange IS captured, with userIdentity.type
+# WebIdentityUser. In the ENHANCED flow Cognito makes that call on your behalf and no equivalent
+# event lands in your trail.
+#
+# POPULATE THE ROLE ARN BEFORE DEPLOYING. Unpopulated, `unauth_role` matches nothing and this rule
+# is inert - it fails closed, which is the right direction for a rule whose false positives would
+# be every federated sign-in in the account.
+title: Cognito unauthenticated role assumed directly through STS
+id: 2f8a4c60-9d71-4bb3-85e2-c4370a6b1d98
+status: experimental
+description: >-
+  A Cognito unauthenticated role was assumed through sts:AssumeRoleWithWebIdentity. This is the
+  basic (classic) flow, in which AWS's automatic scope-down session policy for guest sessions does
+  not apply, and it is the only credential-issuance path that is visible in a default-configured
+  trail.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/UserGuide/cloudtrail-integration.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/cognito/latest/developerguide/authentication-flow.html  # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1098
+  - attack.initial-access
+  - attack.t1078.004
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sts.amazonaws.com'
+    eventName: 'AssumeRoleWithWebIdentity'
+  unauth_role:
+    requestParameters.roleArn|contains:
+      - ':role/Cognito_'          # replace with this account's unauthenticated role ARNs
+      - ':role/GuestAccessRole'   # replace with this account's unauthenticated role ARNs
+  success:
+    errorCode: null
+  condition: selection and unauth_role and success
+falsepositives:
+  - >-
+    A legacy classic-flow application whose guest role is on the reviewed list. If that is the
+    only caller, this rule is a usage baseline; a new source address or user agent against the
+    same role is the signal.
+level: high

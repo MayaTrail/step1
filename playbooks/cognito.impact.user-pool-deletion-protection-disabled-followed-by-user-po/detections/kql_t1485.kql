@@ -1,0 +1,141 @@
+// User Pool Deletion Protection Disabled, Then the Pool Deleted (T1485 / T1531)
+//
+// Signal: the mandatory two- or three-call destruction chain against one user pool -
+// UpdateUserPool with deletionProtection INACTIVE, optionally DeleteUserPoolDomain, then
+// DeleteUserPool - reconstructed as a single row per pool with the elapsed time between stages.
+//
+// This query does what the Sigma correlations structurally cannot. It reports the GAP between the
+// disable and the delete, which is the strongest available discriminator between a scripted
+// destruction (seconds) and a planned decommission (minutes to hours, usually with a change
+// record). It carries the refused attempts alongside the successes, so an actor who probed and was
+// blocked before removing the obstacle appears in the same row rather than as unrelated noise. And
+// it flags the case a group-by on the principal would miss entirely: the two stages executed by
+// DIFFERENT identities.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// UNVERIFIED FIELD, READ THIS BEFORE DEPLOYING. AWS publishes no example CloudTrail event for any
+// cognito-idp management operation. `userPoolId` and `deletionProtection` below are the
+// lower-camel forms consistent with every published cognito-identity example and with the general
+// CloudTrail convention, but they are inferred. Both spellings are coalesced here so a PascalCase
+// trail still resolves; if both come back empty, this query cannot join the stages and says so.
+let Lookback = 30d;
+let ChainWindow = 30m;
+let Pool =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "cognito-idp.amazonaws.com"
+    | where EventName in ("UpdateUserPool", "DeleteUserPool", "DeleteUserPoolDomain",
+                          "CreateUserPool", "SetUserPoolMfaConfig")
+    // RequestParameters is typed `string` in this table, not dynamic - parse_json is required.
+    | extend Req = parse_json(RequestParameters)
+    | extend PoolId = coalesce(tostring(Req.userPoolId), tostring(Req.UserPoolId), "")
+    | extend DelProt = coalesce(tostring(Req.deletionProtection), tostring(Req.DeletionProtection), "")
+    | extend Domain = coalesce(tostring(Req.domain), tostring(Req.Domain), "")
+    | extend ErrMsg = tostring(column_ifexists("ErrorMessage", ""))
+    // `contains`, never a whole-term operator: the message is punctuated prose and an ARN is
+    // punctuated too (C1).
+    | extend BlockReason = case(
+        ErrMsg contains "domain configured",  "BLOCKED_BY_DOMAIN",
+        ErrMsg contains "deletion protection", "BLOCKED_BY_DELETION_PROTECTION",
+        isnotempty(ErrorCode),                 strcat("ERROR:", ErrorCode),
+                                               "");
+let ProtOff = Pool
+    | where EventName == "UpdateUserPool" and DelProt == "INACTIVE" and isempty(ErrorCode)
+    | summarize DisabledAt = min(TimeGenerated), DisabledBy = make_set(UserIdentityArn, 3),
+                DisableIps = make_set(SourceIpAddress, 3), DisableAgents = make_set(UserAgent, 3)
+      by PoolId;
+let DomainGone = Pool
+    | where EventName == "DeleteUserPoolDomain" and isempty(ErrorCode)
+    | summarize DomainDeletedAt = min(TimeGenerated), DomainNames = make_set(Domain, 3),
+                DomainDeletedBy = make_set(UserIdentityArn, 3)
+      by PoolId;
+// Refused attempts are kept in their own aggregate and never counted as destruction. A principal
+// that probed DeleteUserPool and was refused is intent without impact, and folding it into the
+// success path would make an unsuccessful attempt look like an outage.
+let Refused = Pool
+    | where EventName == "DeleteUserPool" and isnotempty(ErrorCode)
+    | summarize RefusedAttempts = count(), RefusedCodes = make_set(ErrorCode, 5),
+                RefusedReasons = make_set(BlockReason, 5), FirstRefusal = min(TimeGenerated),
+                RefusedBy = make_set(UserIdentityArn, 3)
+      by PoolId;
+// Every OTHER UpdateUserPool on the same pool, because UpdateUserPool is a full replacement:
+// "If you don't provide a value for an attribute, Amazon Cognito sets it to its default value."
+// One of these calls may have silently reset MFA, the Lambda triggers, the password policy and
+// threat protection - and none of that is separately visible in the trail.
+let OtherUpdates = Pool
+    | where EventName in ("UpdateUserPool", "SetUserPoolMfaConfig") and isempty(ErrorCode)
+    | summarize ConfigWrites = count(), ConfigWriters = make_set(UserIdentityArn, 5),
+                ConfigEvents = make_set(EventName, 3)
+      by PoolId;
+Pool
+| where EventName == "DeleteUserPool" and isempty(ErrorCode)
+| summarize DeletedAt = min(TimeGenerated), DeletedBy = make_set(UserIdentityArn, 3),
+            DeleteIps = make_set(SourceIpAddress, 3), DeleteAgents = make_set(UserAgent, 3),
+            Regions = make_set(AwsRegion, 3), Account = any(RecipientAccountId)
+  by PoolId
+| join kind=leftouter ProtOff on PoolId
+| join kind=leftouter DomainGone on PoolId
+| join kind=leftouter Refused on PoolId
+| join kind=leftouter OtherUpdates on PoolId
+| extend ProtectionWasDisabled = isnotempty(DisabledAt)
+                                 and DisabledAt <= DeletedAt
+                                 and DeletedAt - DisabledAt <= ChainWindow
+| extend DomainWasRemoved = isnotempty(DomainDeletedAt)
+                            and DomainDeletedAt <= DeletedAt
+                            and DeletedAt - DomainDeletedAt <= ChainWindow
+| extend GapSeconds = iff(ProtectionWasDisabled,
+                          datetime_diff('second', DeletedAt, DisabledAt), int(null))
+// The two stages run by different identities is the case a principal group-by cannot see, and it
+// is the more sophisticated one - a stolen pipeline credential removes the guardrail and a second
+// principal takes the destructive action.
+| extend SplitIdentity = ProtectionWasDisabled
+                         and array_length(set_difference(DeletedBy, DisabledBy)) > 0
+| extend RestoreDeadline = DeletedAt + 14d
+| extend Verdict = case(
+    ProtectionWasDisabled and SplitIdentity,
+        "DELIBERATE DESTRUCTION, SPLIT IDENTITY - protection was removed by one principal and the pool deleted by another inside the window. Treat both credentials as compromised",
+    ProtectionWasDisabled and GapSeconds <= 120,
+        "SCRIPTED DESTRUCTION - the guardrail was removed and the pool deleted within two minutes. There is no force flag on DeleteUserPool, so the disable had no other purpose",
+    ProtectionWasDisabled,
+        "DELIBERATE DESTRUCTION - deletion protection was deactivated and the pool deleted inside the window. Check for a change record before concluding malice, but the ordering is not accidental",
+    DomainWasRemoved,
+        "POOL DELETED AFTER ITS DOMAIN - the pool was not protected, but the domain removal was still a required step and took managed login offline first",
+    RefusedAttempts > 0,
+        "POOL DELETED AFTER REFUSED ATTEMPTS - the actor met a guardrail, removed the obstacle and returned. Read RefusedReasons for which one",
+        "USER POOL DELETED - no preceding disable inside the window. Either the pool was never protected, which is the API-created default, or the disable happened earlier than the window")
+| project DeletedAt, RestoreDeadline, Verdict, PoolId, Account, GapSeconds, DisabledAt, DisabledBy,
+          DomainDeletedAt, DomainNames, DeletedBy, RefusedAttempts, RefusedCodes, RefusedReasons,
+          RefusedBy, ConfigWrites, ConfigWriters, ConfigEvents, DisableIps, DeleteIps,
+          DisableAgents, DeleteAgents, Regions
+| order by DeletedAt desc
+
+//
+// RESTOREDEADLINE IS NOT DECORATION - IT IS THE MOST TIME-CRITICAL FIELD IN THIS OUTPUT.
+// AWS: "Amazon Cognito retains deleted user pools in an inactive state for 14 days, then begins a
+// cleanup process that fully removes them from AWS systems. In case of accidental deletion,
+// contact Support within 14 days for restoration assistance." There is no self-service undelete,
+// no console recycle bin and no API - it is a support-ticket path, and AWS words it as
+// "restoration assistance" rather than a guarantee. The pool is "no longer visible or operational"
+// immediately, so the outage is real from the first second even though the data is retained. Open
+// the case before doing anything else in the response.
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// What the pool contained, or what it was configured to do. DeleteUserPool carries only
+// UserPoolId. There is no responseElements, no user count, no app-client list, no domain name. The
+// configuration survives only in a pre-incident DescribeUserPool snapshot or in infrastructure
+// code - AWS Backup does not support Amazon Cognito at all, and there is no snapshot, PITR or
+// vault for a user pool.
+//
+// What ELSE the UpdateUserPool call reset. ConfigWrites counts the calls; it cannot show their
+// collateral, because a full-replacement write records only what was sent, not what was cleared. A
+// call that carried nothing but UserPoolId and DeletionProtection also reset MfaConfiguration,
+// LambdaConfig, the password and sign-in policies, UserPoolAddOns - where threat protection lives
+// - AccountRecoverySetting, the email and SMS configuration, UserAttributeUpdateSettings,
+// UserPoolTags and UserPoolTier. None of that appears as a separate event.
+//
+// The downstream breakage. A rebuilt pool gets a NEW pool ID - CreateUserPool has no parameter for
+// requesting one - and the old ID is embedded in every identity pool's provider name
+// (cognito-idp.<region>.amazonaws.com/<pool-id>), every OIDC issuer and JWKS URL, and every
+// shipped client build. Reconcile those by hand; nothing in CloudTrail enumerates them.

@@ -1,0 +1,114 @@
+# Secrets Manager access repeatedly denied (T1526)
+#
+# THE RULE IS MAPPED TO BRUTE FORCE UNDER INITIAL ACCESS. Brute force is guessing credentials. An
+# AccessDenied from Secrets Manager goes to a principal whose credential already AUTHENTICATED and
+# whose AUTHORIZATION failed — the actor is already inside, and this is discovery.
+#
+# IT GROUPS BY `sessionIssuer.userName`, WHICH IS THE ROLE NAME. Every concurrent session of a role
+# shares it, so twenty sessions with one denial each look identical to one session with twenty, and
+# the alert names the role instead of the actor. Regrouped on the session below. See
+# ../../_ground-truth/secretsmanager.md §8.
+#
+# ITS THRESHOLD IS TWENTY IN FIVE MINUTES — four a minute sustained, which is a workload retrying in
+# a loop rather than a person. Ten in fifteen minutes catches both.
+#
+# AND IT MATCHES `AccessDenied` EXACTLY. A call blocked by an SCP or a permissions boundary can
+# surface with a different code, so the exact filter under-counts wherever those are used.
+#
+# Every Secrets Manager call is a management event, so these documents work without data events.
+# Successful listing is a different use case: ../../secretsmanager.discovery.secrets-enumerated/.
+name: secretsmanager_call_denied
+title: Secrets Manager call denied
+id: f8d26c25-d03a-4f9f-8d5c-f8da58011abd
+status: experimental
+description: >-
+  Any Secrets Manager API call returning an authorization failure. Base rule — informational alone,
+  because least-privilege accounts produce a steady background of these. Not brute force: the
+  principal's credential authenticated and its authorization failed.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/userguide/monitoring-cloudtrail.html
+  - https://attack.mitre.org/techniques/T1526/
+tags:
+  - attack.discovery
+  - attack.t1526
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # Both keys are on the SAME event: CloudTrail writes eventSource and errorCode into one record, so
+  # a denied Secrets Manager call carries both. ANDing them is correct.
+  #
+  # `startswith` rather than an exact match: an SCP or permissions-boundary denial can surface as
+  # AccessDeniedException rather than AccessDenied, and an exact filter silently drops those.
+  selection:
+    eventSource: secretsmanager.amazonaws.com
+    errorCode|startswith: AccessDenied
+  selection_unauth:
+    eventSource: secretsmanager.amazonaws.com
+    errorCode: UnauthorizedOperation
+  filter_automation:
+    userIdentity.arn|contains: 'PlatformAutomation'
+  condition: (selection or selection_unauth) and not filter_automation
+falsepositives:
+  - Least-privilege environments produce a steady background of these
+  - Cross-account access that has not been granted on the secret's resource policy
+level: informational
+---
+# Ten in fifteen minutes, grouped on the SESSION rather than the role. The source uses twenty in
+# five, grouped on a field that collapses every session of a role into one counter.
+title: Secrets Manager denials repeated by one session
+id: 9043d25b-a5ee-47b1-9fca-279d4a3002f5
+status: experimental
+description: >-
+  One session was denied ten or more times by Secrets Manager within fifteen minutes. Grouped on the
+  session ARN so that concurrent sessions of a shared role are counted separately, which the source
+  rule's role-name grouping cannot do.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/userguide/monitoring-cloudtrail.html
+  - https://attack.mitre.org/techniques/T1526/
+tags:
+  - attack.discovery
+  - attack.t1526
+correlation:
+  type: event_count
+  rules:
+    - secretsmanager_call_denied
+  group-by:
+    - userIdentity.arn
+  timespan: 15m
+  condition:
+    gte: 10
+falsepositives:
+  - A misconfigured workload retrying a denied call in a tight loop — check whether the target secret
+    is a single ARN repeated, which is the signature of a loop rather than of probing
+level: high
+---
+# The distinction the source rule cannot express: many DISTINCT secrets denied is an inventory being
+# probed; one secret repeated is a workload missing a grant. This is the discriminating document.
+title: Secrets Manager denials spread across many distinct secrets
+id: bad541d1-fda2-4ba0-b54d-d7f260039f9b
+status: experimental
+description: >-
+  One session was denied against five or more distinct secret identifiers within fifteen minutes.
+  Unlike a retry loop, which repeats one identifier, this is a principal walking the inventory to
+  find what it can reach.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
+  - https://attack.mitre.org/techniques/T1526/
+tags:
+  - attack.discovery
+  - attack.t1526
+correlation:
+  type: value_count
+  rules:
+    - secretsmanager_call_denied
+  group-by:
+    - userIdentity.arn
+  timespan: 15m
+  condition:
+    gte: 5
+    field: requestParameters.secretId
+falsepositives:
+  - A newly deployed workload iterating over a list of secrets it has not been granted yet, which
+    resolves once and should then be allowlisted by role
+level: high

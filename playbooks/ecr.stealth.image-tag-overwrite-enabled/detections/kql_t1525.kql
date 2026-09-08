@@ -1,0 +1,119 @@
+// ECR Image Tag Overwrite Enabled (T1525 / T1685)
+//
+// Signals, in descending order of what they prove:
+//   1. `PutImage` refused with ImageTagAlreadyExistsException - somebody tried to repoint an
+//      existing tag and immutability stopped them. One cause only.
+//   2. `PutImageTagMutability` to MUTABLE, MUTABLE_WITH_EXCLUSION or IMMUTABLE_WITH_EXCLUSION,
+//      followed by a `PutImage` to the same repository - the weakening and its use.
+//   3. An exclusion filter naming a floating production tag (`latest`, `prod`, ...), which
+//      leaves the repository reporting itself IMMUTABLE while those tags stay writable.
+//   4. `CreateRepository` landing in an overwrite-permitting state, read from the RESPONSE -
+//      because MUTABLE is the documented default and the request parameter is then absent.
+//
+// This query does what the Sigma documents structurally cannot: it joins the configuration
+// change to the pushes that followed it on the same repository, and it reports the pushed
+// DIGEST from responseElements.image.imageId.imageDigest - the ground truth. A tag proves
+// nothing; two different digests carrying the same tag over time is the overwrite.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let Lookback = 30d;
+let PushWindow = 30m;
+let Ecr =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "ecr.amazonaws.com"
+    // RequestParameters and ResponseElements are dynamic JSON in this table and do need
+    // parse_json; UserIdentityArn, EventName, ErrorCode and SourceIpAddress are flattened
+    // columns and must not be parsed.
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    | extend Repo = tostring(coalesce(Req.repositoryName, Resp.repository.repositoryName));
+let Weakenings =
+    Ecr
+    | where EventName == "PutImageTagMutability" and isempty(ErrorCode)
+    | extend Setting = tostring(Req.imageTagMutability)
+    | where Setting in ("MUTABLE", "MUTABLE_WITH_EXCLUSION", "IMMUTABLE_WITH_EXCLUSION")
+    // `contains`, never `has`: the exclusion filters serialise to a punctuated JSON fragment
+    // ({"filter":"latest","filterType":"WILDCARD"}) and ARNs are punctuated too. Whole-term
+    // matching breaks on both - this is the trap this corpus has been caught by twice.
+    | extend Filters = tostring(Req.imageTagMutabilityExclusionFilters)
+    | extend CarvesOutFloatingTag =
+        Filters contains "latest" or Filters contains "prod" or Filters contains "stable"
+        or Filters contains "release" or Filters contains "main"
+    | project WeakenedAt = TimeGenerated, Repo, Setting, Filters, CarvesOutFloatingTag,
+              WeakenedBy = UserIdentityArn, WeakenedByType = UserIdentityType,
+              WeakenerRole = SessionIssuerUserName, WeakenerIp = SourceIpAddress,
+              AwsRegion, RecipientAccountId;
+let Pushes =
+    Ecr
+    | where EventName == "PutImage" and isempty(ErrorCode)
+    | project PushedAt = TimeGenerated, Repo,
+              PushedTag = tostring(Req.imageTag),
+              // GROUND TRUTH. The digest is nested two levels inside the response object;
+              // responseElements.imageDigest (flat) does not exist and yields null silently.
+              PushedDigest = tostring(Resp.image.imageId.imageDigest),
+              PushedBy = UserIdentityArn, PushIp = SourceIpAddress, PushAgent = UserAgent;
+let BlockedOverwrites =
+    Ecr
+    | where EventName == "PutImage" and ErrorCode contains "ImageTagAlreadyExistsException"
+    | summarize BlockedAttempts = count(),
+                BlockedTags = make_set(tostring(Req.imageTag), 10),
+                BlockedBy = make_set(UserIdentityArn, 5),
+                LastBlocked = max(TimeGenerated)
+      by Repo;
+Weakenings
+| join kind=leftouter (
+    Pushes | summarize PushEvents = count(), PushDigests = make_set(PushedDigest, 20),
+                       PushTags = make_set(PushedTag, 20), Pushers = make_set(PushedBy, 5),
+                       FirstPush = min(PushedAt), LastPush = max(PushedAt) by Repo
+  ) on Repo
+| join kind=leftouter BlockedOverwrites on Repo
+| extend PushedInsideWindow =
+    isnotempty(FirstPush) and FirstPush between (WeakenedAt .. (WeakenedAt + PushWindow))
+| extend Verdict = case(
+    PushedInsideWindow and CarvesOutFloatingTag,
+        "OVERWRITE PREPARED AND USED - a floating production tag was carved out of immutability and an image was pushed inside the window; compare PushDigests against the known-good digest for that tag",
+    PushedInsideWindow,
+        "OVERWRITE PREPARED AND USED - mutability relaxed and an image pushed to the same repository within the window; the configuration change and the push together are the overwrite",
+    CarvesOutFloatingTag,
+        "TARGETED CARVE-OUT - the repository still reports itself immutable while the named floating tag stays writable; no push yet, so this is the preparation",
+    Setting == "MUTABLE",
+        "REPOSITORY MADE FULLY MUTABLE - every tag in it can now be repointed at new content",
+    isnotempty(BlockedAttempts),
+        "WEAKENED AFTER REFUSAL - immutability had already refused a push here; the setting change is the workaround",
+        "MUTABILITY RELAXED - no push observed yet in this window; treat as preparation and pin the current digests now")
+| project WeakenedAt, Verdict, Repo, Setting, Filters, CarvesOutFloatingTag,
+          WeakenedBy, WeakenedByType, WeakenerRole, WeakenerIp,
+          FirstPush, LastPush, PushEvents, PushDigests, PushTags, Pushers,
+          BlockedAttempts, BlockedTags, BlockedBy, LastBlocked,
+          AwsRegion, RecipientAccountId
+| order by WeakenedAt desc
+
+//
+// THE DIGEST IS THE ASSERTION - THE TAG IS NOT
+//
+// PushDigests above is the list of digests written to the repository. Reconciling it against
+// the digest your build system recorded for that tag is the whole finding: a tag that still
+// exists proves nothing, because a tag is a pointer and the attack repoints it. If
+// PushDigests contains a value your pipeline never produced, the tag was overwritten.
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// Which workloads ran the replaced image. ECR has NO CloudTrail data-event category - it is
+// absent from CloudTrail's supported data-event resource types entirely - so pulls ARE
+// management events and ARE in this table. But AWS's published pull event carries
+// "responseElements": null and requestParameters.imageIds[].imageTag: the tag requested, not
+// the digest served. So a BatchGetImage row tells you something pulled `:latest` at a given
+// second; it does not tell you which digest that resolved to. Everything pulled between the
+// overwrite and the remediation must be assumed to have received the malicious digest, and
+// the consumer inventory (ECS task definitions, EKS pod specs, Lambda ImageUri, App Runner)
+// has to be built from those services, not from this table.
+//
+// Also invisible: a read-only trail configuration. A trail created with ReadWriteType =
+// WriteOnly drops BatchGetImage and GetDownloadUrlForLayer, and the absence then looks
+// exactly like "nothing pulled it". Check the trail's own configuration before reading a
+// zero as an all-clear.
+//
+// PREVENTION. IMMUTABLE with no exclusion filters is the control, and it is enforced at push
+// time by ECR itself rather than by an alert. Deny ecr:PutImageTagMutability outside the
+// pipeline that owns repository configuration, and treat any exclusion filter naming a
+// floating tag as a finding in its own right.

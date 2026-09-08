@@ -1,0 +1,249 @@
+// EC2 Instance Metadata Credential Theft (T1552.005 / T1190)
+//
+// The metadata fetch itself is invisible. A request to 169.254.169.254 is a link-local
+// HTTP call that never leaves the instance: it produces no CloudTrail event, and VPC Flow
+// Logs explicitly do not capture "Traffic to and from 169.254.169.254 for instance
+// metadata". There is no query, in any dialect, that sees the theft happen.
+//
+// What is observable is the credential being used somewhere it should not be. An EC2
+// instance-profile session carries the INSTANCE ID as its role session name, so the
+// session ARN names the one host that session is allowed to originate from. This query
+// reconstructs each instance-profile session, collapses it to the set of addresses it was
+// used from, and compares that set against the fleet's real egress addresses.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// WATCHLIST REQUIRED. `FleetEgress` must hold every address the fleet can originate from:
+// the VPC CIDRs instances hold private addresses in (calls routed through a VPC interface
+// endpoint carry the PRIVATE address) and every NAT gateway, NAT instance and egress
+// firewall Elastic IP (calls to a public regional endpoint carry the PUBLIC address).
+// Both sets, or the query alerts on ordinary traffic. Creating and maintaining it is a
+// §1 Preparation item in ../PLAYBOOK.md, not an afterthought.
+let FleetEgress = toscalar(
+    _GetWatchlist('FleetEgress')
+    | summarize make_set(SearchKey)
+);
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+//
+// `contains`, never `has`. `has` is whole-term and breaks on every operand here — an ARN,
+// a colon-separated principal ID and an instance ID are all punctuated, so `has` would
+// match nothing and the query would return an empty result set that reads as "clean".
+| where UserIdentityArn contains ":assumed-role/"
+//
+// The role session name is the last "/" segment. For an instance-profile session it is
+// the EC2 instance ID; for a human or pipeline session it is a chosen name. Extracting it
+// and requiring the instance-ID shape is what scopes this to instance-profile sessions.
+// SessionIssuerUserName is a FLATTENED top-level column carrying the role name — do not
+// reach for parse_json on a session-context column to get it.
+| extend ArnParts    = split(UserIdentityArn, "/")
+| extend SessionName = tostring(ArnParts[array_length(ArnParts) - 1])
+| extend RoleName    = coalesce(SessionIssuerUserName, tostring(ArnParts[1]))
+| where SessionName matches regex @"^i-[0-9a-f]{8,17}$"
+| extend InstanceId  = SessionName
+//
+// sourceIPAddress is not always an address: CloudTrail documents that for AWS services
+// only the DNS name is shown, and AWS-originated events usually carry "AWS Internal/<n>".
+// Neither can be compared against an egress allowlist, so they are separated out rather
+// than counted as off-net.
+| extend IsServicePrincipalCall = SourceIpAddress contains ".amazonaws.com"
+                               or SourceIpAddress contains "AWS Internal"
+// ipv4_is_in_any_range, NOT set_has_element: the latter is exact string equality, so a
+// watchlist holding "10.0.0.0/16" would never match "10.0.4.19" and every ordinary
+// endpoint-routed call would score as off-net. This function accepts CIDRs and bare
+// addresses alike, which is what the header above tells the deployer to load.
+| extend InEgress = coalesce(ipv4_is_in_any_range(SourceIpAddress, FleetEgress), false)
+| extend OffNet   = not(IsServicePrincipalCall) and not(InEgress)
+| summarize
+    Calls          = count(),
+    OffNetCalls    = countif(OffNet),
+    // dcountIF, not dcount. `sourceIPAddress` is not always an address, so a session with
+    // one real address plus one `ec2.amazonaws.com` scores 2 and trips the DistinctIPs > 1
+    // gate below without ever having left its own egress path. Same defect, same fix, as
+    // the `aws_internal` exclusion on the Sigma correlation's base rule.
+    DistinctIPs    = dcountif(SourceIpAddress, not(IsServicePrincipalCall)),
+    OffNetIPs      = make_set_if(SourceIpAddress, OffNet, 10),
+    AllIPs         = make_set(SourceIpAddress, 10),
+    Services       = make_set(EventSource, 10),
+    Events         = make_set(EventName, 15),
+    DeniedCalls    = countif(isnotempty(ErrorCode)),
+    ErrorCodes     = make_set_if(ErrorCode, isnotempty(ErrorCode), 5),
+    Agents         = make_set(UserAgent, 5),
+    Regions        = make_set(AWSRegion, 5),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated)
+    by UserIdentityArn, InstanceId, RoleName, bin(TimeGenerated, 1h)
+//
+// One instance egresses through one address at a time, so the uncompromised baseline is
+// DistinctIPs == 1 and OffNetCalls == 0. Either condition breaking is the finding.
+| where OffNetCalls > 0 or DistinctIPs > 1
+//
+// Denials are kept IN, not filtered out. This counts distinct source ADDRESSES for one
+// session, not distinct objects acted on — and a stolen credential probing its own reach
+// from the attacker's address collects AccessDenied, which is the earliest and cleanest
+// evidence that it left the instance. Filtering to success removes the signal.
+| extend Verdict = case(
+    OffNetCalls > 0 and DeniedCalls > 0 and OffNetCalls == DeniedCalls,
+        "INSTANCE CREDENTIAL USED OFF-INSTANCE, ALL CALLS DENIED — theft confirmed, exploitation not yet successful, P0",
+    OffNetCalls > 0,
+        "INSTANCE CREDENTIAL USED FROM OUTSIDE THE FLEET'S EGRESS — the credential has left the instance, P0",
+    "ONE INSTANCE SESSION USED FROM MULTIPLE ADDRESSES — confirm against the fleet's egress paths before dispositioning, P1")
+| project FirstSeen, LastSeen, Verdict, InstanceId, RoleName, UserIdentityArn,
+          OffNetIPs, AllIPs, DistinctIPs, OffNetCalls, Calls, DeniedCalls, ErrorCodes,
+          Services, Events, Agents, Regions
+| order by LastSeen desc
+//
+// ============================================================================
+// COMPANION 1 — credentials handed out over IMDSv1
+// ============================================================================
+// The one CloudTrail field that says anything about HOW the credential was obtained.
+// `ec2RoleDelivery` is documented as 1.0 when the credential came from IMDSv1 and 2.0
+// when it came from the newer scheme. The classic SSRF is an unadorned GET, and an
+// unadorned GET only yields a credential when IMDSv1 is available: IMDSv2 requires a PUT
+// to /latest/api/token carrying an X-aws-ec2-metadata-token-ttl-seconds header first, and
+// a forged GET cannot supply the resulting token. On a fleet that enforces IMDSv2 this
+// returns nothing; anything it returns is either an unenforced instance or a credential
+// minted before enforcement.
+//
+// FIELD SHAPE. The VALUE is settled: AWS's own sample event carries
+// "ec2RoleDelivery": "2.0" — a quoted STRING, and a direct child of sessionContext rather
+// than a member of attributes. The string comparison below is correct as written.
+// The COLUMN is not settled: `ec2RoleDelivery` is NOT one of Sentinel's flattened
+// AWSCloudTrail columns, there is no verified column name for it, and this note
+// deliberately does not invent one. Substitute whichever column or custom field your
+// pipeline maps the session-context object to.
+//
+// AWSCloudTrail
+// | where TimeGenerated > ago(7d)
+// | where UserIdentityArn contains ":assumed-role/"
+// | extend ArnParts    = split(UserIdentityArn, "/")
+// | extend SessionName = tostring(ArnParts[array_length(ArnParts) - 1])
+// | where SessionName matches regex @"^i-[0-9a-f]{8,17}$"
+// | extend RoleDelivery = tostring(<your-session-context-column>.ec2RoleDelivery)
+// | where RoleDelivery == "1.0"
+// | summarize Calls = count(), Roles = make_set(SessionIssuerUserName, 10),
+//             SourceIPs = make_set(SourceIpAddress, 5),
+//             FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated)
+//             by InstanceId = SessionName
+// | order by Calls desc
+//
+// ============================================================================
+// COMPANION 2 — the inbound attempt, in web-ACL logs
+// ============================================================================
+// A different table and a different question: not "was a credential stolen" but "did a
+// request carrying a metadata-SSRF signature reach the application". Attempt, not
+// compromise — whether it yielded anything is decided by the instance's IMDS
+// configuration, which this cannot see.
+//
+// The four Core-Rule-Set labels are CAMEL-CASE and labels are case-sensitive. The RULE
+// names are screaming-case (EC2MetaDataSSRF_BODY); copying a rule name into a label match
+// returns zero forever. `contains`, not `has` — the label is a colon-delimited namespace
+// and `has` would break on it.
+//
+// AWSWAFLogs                                  // substitute your web-ACL log table
+// | where TimeGenerated > ago(7d)
+// | mv-expand Label = labels
+// | extend LabelName = tostring(Label.name)
+// | where LabelName contains "EC2MetaDataSSRF_URIPath"
+//      or LabelName contains "EC2MetaDataSSRF_QueryArguments"
+//      or LabelName contains "EC2MetaDataSSRF_Body"
+//      or LabelName contains "EC2MetaDataSSRF_Cookie"
+// AWS: "The CAPTCHA and Challenge actions are terminating when the web request doesn't
+// contain a valid token." A terminated request did not reach the origin, so all three
+// terminating actions count as stopped; only a non-terminating outcome is "reached".
+//
+// | let Terminating = dynamic(["BLOCK", "CAPTCHA", "CHALLENGE"]);
+// | summarize Attempts = count(), Components = make_set(LabelName, 4),
+//             Actions = make_set(action, 4),
+//             Stopped = countif(set_has_element(Terminating, tostring(action))),
+//             Reached = countif(not(set_has_element(Terminating, tostring(action)))),
+//             URIs = make_set(httpRequest.uri, 10),
+//             FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated)
+//             by ClientIp = tostring(httpRequest.clientIp)
+// | extend Verdict = case(
+//     Reached > 0, "METADATA SSRF SIGNATURE REACHED THE APPLICATION — check the target instance's HttpTokens setting now, P1",
+//     "METADATA SSRF SIGNATURE TERMINATED (block, CAPTCHA or challenge) — attribution only, P3")
+// | order by LastSeen desc
+//
+// One actor probing the URI path, the query string and the body is ONE incident. Grouping
+// by client address rather than by request component is the correction: splitting the same
+// probe across four separate alerts, one per component, is what the source rules do.
+//
+// COVERAGE GAP, stated rather than papered over: the body variant only inspects the
+// request body up to the protection pack's body size limit and handles oversize content
+// with `Continue`. A payload placed beyond that limit is never labelled, so no query keyed
+// on the label — this one included — can see it. There is no label to alert on for that
+// case.
+//
+// ============================================================================
+// WHAT NONE OF THESE QUERIES CAN DO
+// ============================================================================
+// Separate a credential used from ELSEWHERE INSIDE THE FLEET'S OWN EGRESS SET. This is
+// the largest blind spot in the whole approach and it is structural, not a tuning gap.
+// A credential lifted onto a second compromised instance in the same VPC, or onto
+// anything that egresses through the same NAT gateway, presents a source address that is
+// in FleetEgress by construction: InEgress is true, OffNet is false, and DistinctIPs
+// stays at 1 because the fleet's shared egress address is the only value seen. Both
+// halves of the verdict are silent at once. GuardDuty does not backstop it either —
+// InstanceCredentialExfiltration.InsideAWS fires on an address or VPC endpoint "owned by
+// a different AWS account", so same-account lateral use raises nothing.
+// Only an IAM-side control closes it; see the PREVENTION block below.
+//
+// Establish that a credential was stolen but NOT YET USED. The fetch leaves no record and
+// the credential is indistinguishable from the instance's own until someone uses it from
+// somewhere else. A session that has been copied off the host and is sitting idle is
+// invisible to every query in this file. That is why the preventive control matters more
+// here than the detective one, and why the response treats the role as compromised on the
+// strength of the SSRF attempt alone rather than waiting for confirmed off-net use.
+//
+// ============================================================================
+// GUARDDUTY — a first-class signal here, unlike most techniques
+// ============================================================================
+// Two finding types detect exactly this, and they are among the few that map to a
+// technique rather than to generic anomaly:
+//   UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS
+//     — a host outside AWS ran API operations with credentials created on an EC2 instance.
+//       Default severity High.
+//   UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.InsideAWS
+//     — the credentials were used from an address or VPC endpoint owned by a DIFFERENT
+//       AWS account. Default severity High; Medium if the calling account is affiliated
+//       with your own. VPC-endpoint detection covers only services that support network
+//       activity events for VPC endpoints.
+// The resource equivalents are NOT symmetric, and the asymmetry is documented:
+//   ResourceCredentialExfiltration.OutsideAWS covers "an AWS resource (a Lambda function
+//     or Amazon ECS task)" — both.
+//   ResourceCredentialExfiltration.InsideAWS covers "an AWS Amazon ECS task" ONLY. There
+//     is no Lambda InsideAWS finding; a Lambda execution-role credential used from another
+//     account inside AWS raises nothing here.
+//
+// DO NOT TREAT THESE AS THE CONTROL. GuardDuty documents that once it observes continued
+// activity from a remote account or external source, its model learns the behaviour as
+// expected and STOPS GENERATING THE FINDING for that source. An attacker who uses stolen
+// credentials steadily from one address is exactly the pattern that gets learned. The
+// finding is high-value on first occurrence and unreliable on the hundredth, which is the
+// opposite of how a control should degrade — so the queries above are the durable
+// coverage and GuardDuty is the corroborating signal.
+//
+// Related but different: UnauthorizedAccess:EC2/MetadataDNSRebind fires on an instance
+// resolving a domain to 169.254.169.254, which is the DNS-rebinding route to the same
+// objective. There is NO GuardDuty finding type for IMDSv1 usage or IMDS configuration.
+//
+// ============================================================================
+// PREVENTION — the reason this technique is worth preventing rather than detecting
+// ============================================================================
+// aws ec2 modify-instance-metadata-options --instance-id <id> --http-tokens required
+//                                          --http-endpoint enabled
+// plus a hop limit of 1, plus the account-level default via
+// modify-instance-metadata-defaults, plus the two AWS-documented deny policies:
+// ec2:MetadataHttpTokens != "required" on RunInstances, and ec2:RoleDelivery < 2.0 on
+// everything. The last of those is the strongest single control in this file — it makes
+// any request signed with an IMDSv1-retrieved EC2 role credential fail outright.
+//
+// For the in-fleet blind spot above, the control is source pinning, and AWS documents an
+// SCP for exactly it: Deny unless aws:Ec2InstanceSourceVpc equals ${aws:SourceVpc} and
+// aws:Ec2InstanceSourcePrivateIPv4 equals ${aws:VpcSourceIp} — the VPC and the primary
+// ENI private address a credential was DELIVERED to, compared against where the request
+// arrived from. A credential moved to a second instance in the same VPC fails the second
+// comparison. Both keys are present whenever the requester signs with an EC2 role
+// credential. Cost: aws:VpcSourceIp exists only for VPC-endpoint-routed requests, so the
+// policy as AWS writes it denies everything routed through NAT. See ../PLAYBOOK.md §6.

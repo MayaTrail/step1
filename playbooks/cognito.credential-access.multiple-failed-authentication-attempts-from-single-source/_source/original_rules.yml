@@ -1,0 +1,21 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Multiple Failed Authentication Attempts From Single Source IP
+  priority: P3
+  type: logs_threshold
+  mitre: T1110/TA0006
+  query: |
+    event_name:"InitiateAuth" AND _exists_:errorCode AND errorCode:("NotAuthorizedException" OR "UserNotFoundException") AND requestParameters.authFlow:("USER_SRP_AUTH" OR "USER_PASSWORD_AUTH" OR "USER_AUTH" OR "CUSTOM_AUTH")
+  threshold: 15.0  window: 10m
+  group_by: ['source_ip']
+

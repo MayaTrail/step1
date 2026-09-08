@@ -1,0 +1,157 @@
+# S3 server access logging disabled or redirected (T1685.002)
+#
+# DISABLING IS ONLY THE LOUD HALF. AWS: "To disable logging, you use an empty BucketLoggingStatus
+# request element." The source rule tests exactly that and is right — but a call that KEEPS
+# LoggingEnabled and changes TargetBucket or TargetPrefix silences the pipeline just as completely
+# while still reading as enabled, and is invisible to it.
+#
+# Medium, not high, on AWS's own statement that these logs are best-effort and "not meant to be a
+# complete accounting of all requests". CloudTrail data events are the authoritative record and this
+# call does not touch them. Full rationale: detections/detection_note_t1685_002.md.
+title: S3 server access logging disabled on a bucket
+id: 4a1f3c62-9e8d-4b07-a5d1-7c206e94f81b
+name: s3_access_logging_disabled
+status: experimental
+description: >-
+  PutBucketLogging succeeded with an empty BucketLoggingStatus — AWS's documented way of turning
+  server access logging off. Nothing is exposed and no authoritative record is lost, but request-level
+  visibility on this bucket is now reduced, and the interesting question is what the same principal
+  does with the bucket next.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketLogging.html
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/ServerLogs.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketLogging'
+  success:
+    errorCode: null
+  # BucketLoggingStatus is Required: Yes and LoggingEnabled is Required: No, so an absent
+  # LoggingEnabled is the disable case and is the only thing that distinguishes it from a
+  # reconfiguration.
+  logging_off:
+    requestParameters.BucketLoggingStatus.LoggingEnabled: null
+  # POPULATE BEFORE DEPLOYING with the roles that own bucket lifecycle.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and logging_off and not known_provisioners
+falsepositives:
+  - >-
+    A bucket being decommissioned, where logging is turned off as part of teardown. The bucket
+    deletion that follows within the hour is the corroborating evidence.
+  - >-
+    A migration to CloudWatch Logs delivery, which is configured elsewhere and legitimately leaves
+    this call looking like a disable. Confirm against the CloudWatch Logs delivery configuration
+    rather than assuming either way.
+level: medium
+---
+title: S3 server access logging redirected to an unrecognised destination
+id: c8b504e7-2a36-4f91-8d0c-b3e75619af24
+name: s3_access_logging_redirected
+status: experimental
+description: >-
+  PutBucketLogging succeeded with LoggingEnabled still present but pointing at a TargetBucket that
+  is not a recorded log destination. Logging still reads as enabled, so a rule testing only for the
+  disable case sees nothing, while the log pipeline that anyone actually queries goes dry. AWS
+  constrains the destination to the same account and Region, so this is not an exfiltration path —
+  it is a way to make the logs land where nobody is looking.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/ServerLogs.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketLogging'
+  success:
+    errorCode: null
+  logging_on:
+    requestParameters.BucketLoggingStatus.LoggingEnabled|exists: true
+  # POPULATE BEFORE DEPLOYING with the buckets that legitimately receive access logs. Deployed
+  # empty this fires on every logging configuration in the account.
+  known_log_destinations:
+    requestParameters.BucketLoggingStatus.LoggingEnabled.TargetBucket:
+      - 'org-access-logs'
+      - 'org-access-logs-archive'
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and logging_on and not known_log_destinations and not known_provisioners
+falsepositives:
+  - >-
+    A new log destination bucket that has not been added to the list. That is the list being wrong
+    rather than the rule, and the fix is to add it — widening the rule removes the only thing it
+    checks.
+level: medium
+---
+title: S3 access logging silenced and the bucket then reconfigured
+id: 7d3e91b8-5c40-4a6f-b21e-08fa76d5c3e9
+status: experimental
+description: >-
+  Access logging was disabled or redirected on a bucket and the same principal then changed that
+  bucket's policy or ACL. Either half alone is ordinary; the order is the signal, because it is the
+  order in which someone reduces visibility before acting rather than after. The reverse order is a
+  bucket being tidied up post-change.
+references:
+  - https://attack.mitre.org/techniques/T1685/002/
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.defense-evasion
+  - attack.collection
+  - attack.t1685.002
+  - attack.t1530
+correlation:
+  type: temporal_ordered
+  rules:
+    - s3_access_logging_disabled
+    - s3_bucket_open_write
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+falsepositives:
+  - >-
+    An infrastructure apply that rebuilds a bucket from scratch and legitimately rewrites logging
+    and policy in one run. Allowlist the provisioning role on the base rules rather than widening
+    the timespan.
+level: high
+---
+title: S3 bucket policy or ACL written
+id: 1e6a48d3-70bf-4c25-9a83-df2015b7e64c
+name: s3_bucket_open_write
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. Any successful write to a
+  bucket's policy or ACL, including ordinary infrastructure applies.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketPolicy.html
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName:
+      - 'PutBucketPolicy'
+      - 'PutBucketAcl'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational

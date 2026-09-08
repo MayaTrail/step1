@@ -166,7 +166,7 @@ class ReportTests(SimpleTestCase):
         ]
         self.rules = [
             rule(t)
-            for t in ("t1087.004", "t1098", "t1190", "t1552.001", "t1552.005", "t1555.006", "t1562.008")
+            for t in ("t1087.004", "t1098", "t1190", "t1552.001", "t1552.005", "t1555.006", "t1685_002")
         ]
 
     def test_every_rule_gets_exactly_one_verdict(self):

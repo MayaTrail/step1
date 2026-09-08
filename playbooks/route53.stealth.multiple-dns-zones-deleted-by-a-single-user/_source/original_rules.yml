@@ -1,0 +1,26 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# RECONSTRUCTION NOTICE — read before auditing the quality-notes table against this file.
+# The source alert package was NOT available in the session that authored this directory,
+# so `tools/deid_extract.py` could not be run. Name, priority and the source MITRE label
+# are transcribed from the use-case catalogue. The `query`, `threshold`, `window` and
+# `unique_count_key` lines are RECONSTRUCTED in the source set's own Lucene dialect from
+# the rule's title and the shape every other volume extract in this corpus takes. They are
+# a faithful statement of what a rule of that title must match; they are NOT a
+# transcription, and every criticism in ../PLAYBOOK.md §2 holds for ANY rule of this title.
+
+- name: Amazon Route53 Audit - Multiple DNS Zones Deleted by a Single User
+  priority: P2
+  type: logs_unique_count
+  query: |
+    eventSource:"route53.amazonaws.com" AND eventName:"DeleteHostedZone" AND NOT _exists_:errorCode
+  threshold: 5  window: 10m
+  unique_count_key: requestParameters.id
+  group_by: ['userIdentity.arn']

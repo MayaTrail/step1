@@ -1,0 +1,169 @@
+# Multiple KMS Keys Scheduled for Deletion (T1485 / T1486)
+#
+# THIS IS A DIFFERENT USE CASE FROM ITS SINGULAR SIBLING, NOT A LOUDER ONE. The per-key
+# playbook at ../../kms.impact.kms-key-scheduled-deletion/ carries the same observable, and
+# the two are deliberately NOT merged: at volume the containment work-list cannot come from
+# the alerting events. The alert fires at its threshold while the actor's set is unbounded and
+# `lookup-events` pages at 50, so the first containment step is a live list-keys/describe-key
+# state sweep and containment cannot begin until it completes. The step order inverts too —
+# see below.
+#
+# THE RE-SCHEDULE RACE IS WHY THE PRINCIPAL IS SEVERED BEFORE THE CANCEL LOOP RUNS.
+# `CancelKeyDeletion` returns a key to the `Disabled` state, and AWS's key-state table permits
+# `ScheduleKeyDeletion` on a key that is `Disabled`. A responder cancelling in a loop against a
+# still-live scheduling loop can therefore lose keys it has already saved, silently, and the
+# only evidence is a second ScheduleKeyDeletion event on a key already worked. At one key that
+# race is a curiosity; at fifty it is the whole incident.
+#
+# THE DEADLINES ARE A QUEUE, NOT A DEADLINE. Each key carries its own PendingWindowInDays
+# between 7 and 30 — a caller can stagger them deliberately — so a mass event produces a spread
+# of expiry dates that must be worked in ascending DeletionDate order, taken from DescribeKey
+# rather than from the events, because AWS documents the real deletion as up to 24 hours later
+# than the one scheduled.
+#
+# DENIALS ARE COUNTED SEPARATELY AND ON PURPOSE (B6). An actor iterating `ListKeys` and calling
+# ScheduleKeyDeletion on everything produces a burst of AccessDenied around a handful of
+# successes. A success-only rule reports the handful and hides the intended blast radius, which
+# is the whole key estate.
+#
+# THE SOURCE RULE matches `eventName:"schedulekeydeletion"` in lower case — not the form
+# CloudTrail writes — with no success filter, no group-by and a threshold of 5 in 10 minutes at
+# P2. Corrected here: correct casing, a success filter, grouped by principal, and retuned to
+# three distinct keys with the basis stated below.
+title: Multiple KMS keys scheduled for deletion by one principal
+id: 0d826da8-b146-4d1e-a8ac-2d5b5c06b4dc
+status: experimental
+description: >-
+  One principal scheduled three or more distinct KMS keys for deletion inside ten minutes.
+  That is a key estate being destroyed on a timer, not a key being decommissioned. Every key
+  is already unusable and each is deleted permanently when its own waiting period expires.
+references:
+  - https://docs.aws.amazon.com/kms/latest/APIReference/API_ScheduleKeyDeletion.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/kms/latest/developerguide/deleting-keys.html  # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1485/  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+  - attack.t1486
+correlation:
+  type: value_count
+  rules:
+    - kms_key_scheduled_deletion_component
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  # Threshold basis — derived from documented behaviour, not an observed count. The technique's
+  # own baseline is ONE key, and the singular sibling already fires `high` on it, so this
+  # correlation is not a detection of last resort — it is the signal that changes the RESPONSE
+  # from "cancel one deletion" to "sever the principal, then sweep live state". Three distinct
+  # keys inside ten minutes is the point at which no single change action explains the burst;
+  # waiting for the source's five costs two more keys' worth of window for nothing. `gte`,
+  # never `gt`, so a sweep touching exactly three does not fall through (F6). Baseline against
+  # your own decommission runs before deploying.
+  #
+  # `field` belongs INSIDE `condition` for a value_count correlation — it is the field whose
+  # DISTINCT values are counted. The counted field is caller-typed (a bare key ID or a key
+  # ARN, whatever the caller passed), so a caller mixing the two forms inflates the count and
+  # can never deflate it. For a volume rule that failure direction is safe.
+  condition:
+    gte: 3
+    field: requestParameters.keyId
+level: critical
+---
+# Base rule — sequence component only, not for direct alerting. The per-key event is alerted on
+# in its own right, at its own priority, by
+# ../../kms.impact.kms-key-scheduled-deletion/detections/sigma_t1485.yml; this copy exists
+# because a Sigma correlation resolves its base rules by `name:` within the SAME file (B8).
+# Kept at informational so it cannot page twice, and carrying the success filter the
+# correlation needs (D-f) — without it a principal DENIED on twenty keys would fire a
+# `critical` mass-destruction alert having destroyed nothing.
+title: KMS key scheduled for deletion (volume component)
+id: 2cdb5386-c634-4aec-a799-775b2cbf2c06
+name: kms_key_scheduled_deletion_component
+status: experimental
+description: >-
+  Base rule — volume component only, not for direct alerting. A successful ScheduleKeyDeletion,
+  counted by the mass-destruction correlation above.
+references:
+  - https://docs.aws.amazon.com/kms/latest/APIReference/API_ScheduleKeyDeletion.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'kms.amazonaws.com'
+    eventName: 'ScheduleKeyDeletion'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+# The refusals are the shape of the sweep, and they are the reason the eradication work-list is
+# bigger than the detection's success count. An actor iterating ListKeys and calling
+# ScheduleKeyDeletion on everything it returns is refused on every key whose policy holds — so
+# the denials enumerate the INTENDED blast radius, which a success-only rule never sees.
+title: KMS key deletion attempt denied
+id: 58b4072f-9b19-4d94-94d5-7150bbc7cca4
+name: kms_key_deletion_denied
+status: experimental
+description: >-
+  A ScheduleKeyDeletion call was refused. AccessDenied means the key policy or IAM held;
+  KMSInvalidStateException means the key was already pending deletion or is otherwise in an
+  incompatible state.
+references:
+  - https://docs.aws.amazon.com/kms/latest/APIReference/API_ScheduleKeyDeletion.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/kms/latest/developerguide/key-state.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'kms.amazonaws.com'
+    eventName: 'ScheduleKeyDeletion'
+  # Prefix-tolerant on purpose (A7): IAM-evaluated denials surface as `AccessDenied`,
+  # service-evaluated ones as `AccessDeniedException`. Confirm which forms your trail carries.
+  denied:
+    errorCode|contains:
+      - 'AccessDenied'
+      - 'KMSInvalidStateException'
+      - 'NotFoundException'
+  condition: selection and denied
+falsepositives:
+  - >-
+    An automation iterating a stale key list, or one that owns keys in another account.
+    Baseline it — the same shape is what an estate sweep looks like.
+level: low
+---
+# Threshold basis. Five refusals from one principal in ten minutes is not a permission problem;
+# it is a loop. The count is of EVENTS rather than distinct keys because a retrying script hits
+# the same key repeatedly and that repetition is itself the signal, and because the key
+# identifier on a failed call is the caller-typed request parameter — the least reliable field
+# on the event. Set alongside the `critical` success correlation above, this is the rule that
+# fires when the key policies held and nothing was destroyed.
+title: Repeated KMS key deletion attempts refused for one principal
+id: cfc4e99a-3275-4fd2-9e1a-8f9878f161b9
+status: experimental
+description: >-
+  One principal was refused five or more ScheduleKeyDeletion calls inside ten minutes. Nothing
+  was destroyed; the key policies held. Treat the refused set as the intended blast radius.
+references:
+  - https://attack.mitre.org/techniques/T1485/  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: event_count
+  rules:
+    - kms_key_deletion_denied
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gte: 5
+level: high

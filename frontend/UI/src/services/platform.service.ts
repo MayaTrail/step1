@@ -44,7 +44,7 @@ function slugify(text: string): string {
  * playbook actually declares (graceful degradation across thin and rich
  * playbooks).
  */
-function parsePlaybookMarkdown(content: string): Playbook {
+export function parsePlaybookMarkdown(content: string): Playbook {
   // The leading H1 (if any) is the playbook's own title.
   const titleMatch = content.match(/^#\s+(.+)$/m)
   const title = titleMatch ? titleMatch[1]?.trim() : undefined
@@ -205,4 +205,49 @@ export async function fetchPlaybookById(
   _index: number,
 ): Promise<Playbook | null> {
   return null
+}
+
+/**
+ * A playbook from the standalone IR library (playbooks/), which is indexed by
+ * detection use case rather than by technique. Most have no emulation behind
+ * them, so they are documentation: useful to a SOC analyst on its own, but the
+ * detection rules they carry are unvalidated reference material.
+ */
+export interface LibraryPlaybook {
+  id: string
+  title: string
+  service: string
+  tactic: string
+  severity: string
+  incidentType: string
+  platform: string
+  techniques: string[]
+  tactics: string[]
+  services: string[]
+  detectionFiles: string[]
+  lineCount: number
+  markdown?: string
+}
+
+/** Fetch the standalone playbook library index. Empty when none is mounted. */
+export async function fetchLibraryPlaybooks(): Promise<LibraryPlaybook[]> {
+  try {
+    const { data } = await api.get<{ count: number; playbooks: LibraryPlaybook[] }>(
+      '/emulations/library/',
+    )
+    return data.playbooks ?? []
+  } catch {
+    return []
+  }
+}
+
+/** Fetch one standalone playbook, including its markdown body. */
+export async function fetchLibraryPlaybook(id: string): Promise<LibraryPlaybook | null> {
+  if (!id) return null
+  try {
+    const { data } = await api.get<LibraryPlaybook>(`/emulations/library/${id}/`)
+    return data
+  } catch {
+    return null
+  }
 }

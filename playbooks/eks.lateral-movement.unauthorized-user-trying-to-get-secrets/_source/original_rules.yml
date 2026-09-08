@@ -1,0 +1,21 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Unauthorized User Trying to Get Secrets
+  priority: P2
+  type: logs_threshold
+  mitre: T1021/TA0008
+  query: |
+    objectRef.resource :"secrets" AND verb: ( "list" OR  "watch" OR  "get") AND NOT user.username:system  AND responseStatus.code:"403"
+  threshold: 2.0  window: 15m
+  group_by: ['user.username']
+

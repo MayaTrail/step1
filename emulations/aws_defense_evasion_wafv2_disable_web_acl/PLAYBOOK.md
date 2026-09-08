@@ -9,7 +9,7 @@
 | Platform | aws |
 | Severity | Critical |
 | MITRE Tactics | Defense Evasion |
-| MITRE Techniques | T1562.007 — Impair Defenses: Disable or Modify Cloud Firewall |
+| MITRE Techniques | T1686.001 — Disable or Modify System Firewall: Cloud Firewall |
 | Affected Services | AWS WAFv2, AWS STS, AWS IAM |
 | Attack Surface | Control Plane (API) |
 
@@ -56,7 +56,7 @@
 |-------------|-------------|----------------------|
 | `ListWebACLs` | `wafv2.amazonaws.com` | Could be legitimate auditing; suspicious if from new principal or at unusual hour |
 | `GetWebACL` | `wafv2.amazonaws.com` | Read-only, but consecutive GetWebACL → UpdateWebACL sequence is a LockToken harvest pattern |
-| `AssumeRole` with `roleSessionName` matching an ad-hoc pattern (e.g. `atomic-t1562007-session`) | `sts.amazonaws.com` | Non-standard session names from automation tools |
+| `AssumeRole` with `roleSessionName` matching an ad-hoc pattern (e.g. `atomic-t1686001-session`) | `sts.amazonaws.com` | Non-standard session names from automation tools |
 | Spike in `4xx` WAF block decisions dropping in CloudWatch (`BlockedRequests` metric falls) | CloudWatch WAF metrics | Could indicate rules were softened |
 
 ---
@@ -109,10 +109,10 @@ for e in events:
 
 ```bash
 # Get all WAFv2 events by a specific principal
-PRINCIPAL="arn:aws:sts::123456789012:assumed-role/atomic-wafv2-disable-web-acl-attacker-role/atomic-t1562007-session"
+PRINCIPAL="arn:aws:sts::123456789012:assumed-role/atomic-wafv2-disable-web-acl-attacker-role/atomic-t1686001-session"
 
 aws cloudtrail lookup-events \
-  --lookup-attributes AttributeKey=Username,AttributeValue=atomic-t1562007-session \
+  --lookup-attributes AttributeKey=Username,AttributeValue=atomic-t1686001-session \
   --start-time "$(date -u -d '48 hours ago' '+%Y-%m-%dT%H:%M:%SZ')" \
   --region us-east-1 \
   --query 'Events[*].{Time:EventTime,Event:EventName,Detail:CloudTrailEvent}' \
@@ -379,7 +379,7 @@ done
 for REGION in us-east-1 us-west-2 eu-west-1; do
   echo "=== Region: $REGION ==="
   aws cloudtrail lookup-events \
-    --lookup-attributes AttributeKey=Username,AttributeValue=atomic-t1562007-session \
+    --lookup-attributes AttributeKey=Username,AttributeValue=atomic-t1686001-session \
     --start-time "$(date -u -d '7 days ago' '+%Y-%m-%dT%H:%M:%SZ')" \
     --region "$REGION" \
     --query 'Events[*].{Time:EventTime,Event:EventName,Region:EventSource}' \
@@ -534,7 +534,7 @@ aws configservice describe-compliance-by-config-rule \
 ```bash
 # Preserve the raw CloudTrail events for the attack chain before they age out
 aws cloudtrail lookup-events \
-  --lookup-attributes AttributeKey=Username,AttributeValue=atomic-t1562007-session \
+  --lookup-attributes AttributeKey=Username,AttributeValue=atomic-t1686001-session \
   --start-time "$(date -u -d '7 days ago' '+%Y-%m-%dT%H:%M:%SZ')" \
   --region us-east-1 \
   --output json > forensic_wafv2_attack_chain_$(date +%Y%m%d).json
@@ -550,7 +550,7 @@ aws guardduty list-findings \
 
 | Attack Step | D3FEND Countermeasure |
 |-------------|----------------------|
-| T1562.007 — AssumeRole to WAF operator | `D3-LAM` — Least-Privilege Access Management; `D3-MFA` — Multi-factor Authentication |
-| T1562.007 — ListWebACLs enumeration | `D3-PWID` — Per-User Identity Isolation (scoped role per service, not shared) |
-| T1562.007 — GetWebACL LockToken harvest | `D3-PA` — Privileged Account Management; read/write separation |
-| T1562.007 — UpdateWebACL rule injection | `D3-CCE` — Configuration Change Enforcement (enforce ACL baseline via Config rules) |
+| T1686.001 — AssumeRole to WAF operator | `D3-LAM` — Least-Privilege Access Management; `D3-MFA` — Multi-factor Authentication |
+| T1686.001 — ListWebACLs enumeration | `D3-PWID` — Per-User Identity Isolation (scoped role per service, not shared) |
+| T1686.001 — GetWebACL LockToken harvest | `D3-PA` — Privileged Account Management; read/write separation |
+| T1686.001 — UpdateWebACL rule injection | `D3-CCE` — Configuration Change Enforcement (enforce ACL baseline via Config rules) |

@@ -1,0 +1,163 @@
+# DynamoDB Table Destruction, single and at volume (T1485 / T1490)
+#
+# THE SOURCE RULE HAS NO ROW FOR ONE TABLE. It is a unique-count alert that fires when more
+# than five DISTINCT table names are deleted inside its window, and there is no per-event
+# companion anywhere in the set. So one production table destroyed — irreversibly, per AWS's
+# own "Deleting a table is an unrecoverable operation" — produces no alert at all, while six
+# ephemeral test tables torn down by a pipeline produce a P3. Irreversibility does not scale
+# with count: the difference between one table and fifty is the size of the recovery work-list,
+# not the severity of the loss. Rule 1 below is per-event and `high`; the volume case is the
+# correlation, at its own priority.
+#
+# TWO THRESHOLD DEFECTS, BOTH IN THE SAME DIRECTION. The alert's own description says "More
+# than 5 in 10 minutes"; the configured window is ONE minute. And the count is a maximum, so
+# it fires at six — an actor deleting exactly five tables falls through, and an actor pacing
+# five per minute never trips it at all. The correlation below uses `gte` at the baseline and a
+# 10-minute span, which is what the source's own prose describes.
+#
+# WHAT SURVIVES A DELETION. AWS: the table goes ACTIVE -> DELETING, "any indexes on that table
+# are also deleted", a stream on it "goes into the DISABLED state, and the stream is
+# automatically deleted after 24 hours", and "when the DeleteTable operation concludes, the
+# table no longer exists in DynamoDB". Recovery exists only if it was arranged beforehand:
+# if point-in-time recovery was enabled, DynamoDB "automatically creates a backup snapshot
+# called a system backup and retains it for 35 days", named <table>$DeletedTableBackup — a
+# single instant, not the continuous range PITR offered while the table lived. If PITR was off
+# and no on-demand backup exists, the data is gone. Deletion protection, the property that
+# would have refused the call, is OFF BY DEFAULT on every table.
+#
+# THE LOSS IS IN THE EVENT. DeleteTable returns responseElements.tableDescription (a wrapper
+# object, matching the API's TableDescription response element) carrying itemCount and
+# tableSizeBytes. That is the only surviving measure of what was destroyed, and the source rule
+# never reads it. itemCount is an approximate figure DynamoDB refreshes periodically rather
+# than a live count — report it as approximate, never as an exact loss.
+title: DynamoDB table deleted by a principal outside the table-lifecycle pipeline
+id: 6e2a94b7-58c1-4d3f-a71e-c05b8f9e2d13
+name: dynamodb_table_deleted_nonpipeline
+status: experimental
+description: >-
+  A table was deleted by a principal that does not own table lifecycle. Deletion is
+  unrecoverable unless point-in-time recovery or an on-demand backup existed at the moment of
+  the call; the table's indexes go with it and any stream is auto-deleted after 24 hours.
+references:
+  - https://attack.mitre.org/techniques/T1485/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_DeleteTable.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/WorkingWithTables.Basics.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'DeleteTable'
+  # POPULATE BEFORE DEPLOYING. Unpopulated, this fires on every stack teardown. The allowlist
+  # IS the discriminator - DeleteTable carries no field that separates destruction from
+  # decommissioning, so the caller is the whole signal.
+  table_lifecycle_pipeline:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'          # replace with this account's deployment role
+      - ':role/BreakGlassAdmin'     # replace with this account's break-glass role
+  success:
+    errorCode: null
+  condition: selection and success and not table_lifecycle_pipeline
+falsepositives:
+  - >-
+    An engineer tearing down a personal or ephemeral table outside the pipeline. Common in
+    development accounts and rare in production ones; if it is common in production, the
+    finding is that table lifecycle is not owned by the pipeline.
+level: high
+---
+# Base rule — sequence component only, not for direct alerting. Success-filtered so a DENIED
+# DeleteBackup cannot compose into the critical correlation below (D-f). Its own use case,
+# with the full response procedure, is ../../dynamodb.impact.backup-was-deleted/; it ships
+# here because a correlation can only resolve base rules that are in the same file.
+title: DynamoDB backup deleted
+id: 1a6f83c2-9e07-4b5d-8c24-3d7a1e6b90f5
+name: dynamodb_backup_deleted_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_DeleteBackup.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1490
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'DeleteBackup'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+# Threshold basis, stated so a deployer can change it knowingly. There is no emulation behind
+# this number. The source's own description names five in ten minutes and its configuration
+# says six in one minute; the ten-minute span here is the described intent, and `gte: 5` is the
+# baseline the description states rather than one past it (F6 - a threshold that does not fire
+# on the technique's own stated baseline contradicts the text next to it).
+#
+# Distinct TABLES, not events: DeleteTable on a table already in the DELETING state returns no
+# error and would otherwise inflate an event count. Grouped by userIdentity.arn - the PRINCIPAL,
+# not the account. The base rule already excludes the pipeline, so a legitimate multi-table
+# teardown does not reach this correlation. Re-baseline against your own account: if engineers
+# routinely destroy five-table dev stacks under their own identity, raise it rather than mute it.
+title: DynamoDB tables deleted at volume by one principal
+id: c48d1057-7b39-4e62-9f80-2a4c6d8e1b73
+status: experimental
+description: >-
+  One non-pipeline principal deleted five or more distinct tables inside ten minutes. That is
+  destruction at machine speed, and the recovery work-list is every table in the group.
+references:
+  - https://attack.mitre.org/techniques/T1485/  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: value_count
+  rules:
+    - dynamodb_table_deleted_nonpipeline
+  group-by:
+    - userIdentity.arn
+  field: requestParameters.tableName
+  timespan: 10m
+  condition:
+    gte: 5
+level: high
+---
+# DESTROY THE RECOVERY POINT, THEN THE DATA. This is the sequence that turns a recoverable
+# incident into an unrecoverable one, and neither half alerts above informational on its own in
+# the source set. Ordered, because the reverse order is ordinary housekeeping: deleting a
+# backup AFTER the table it belonged to is cleanup, while deleting it FIRST is preparation.
+#
+# 24h rather than minutes: there is no documented cooldown to anchor a short window on, and
+# both halves are already rare and success-filtered, so the span costs nothing in false
+# positives. Grouped by principal because a backup is named by BackupArn and a table by
+# tableName - Sigma cannot join those two field shapes.
+title: DynamoDB backup deleted and a table then deleted by the same principal
+id: 9b70e2f4-3c85-41a9-b6d2-8e15c07af934
+status: experimental
+description: >-
+  One principal deleted a backup and then deleted a table. If the backup belonged to that
+  table, the recovery point was removed before the data was destroyed and the loss is final
+  unless point-in-time recovery was independently enabled.
+references:
+  - https://attack.mitre.org/techniques/T1490/  # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1485/  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1490
+  - attack.t1485
+correlation:
+  type: temporal_ordered
+  rules:
+    - dynamodb_backup_deleted_bb
+    - dynamodb_table_deleted_nonpipeline
+  group-by:
+    - userIdentity.arn
+  timespan: 24h
+level: critical

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { ChatMessage, Conversation, Emulation, Reference } from '@/types'
 import { Markdown } from '@/components/common/Markdown'
+import { ConnectPrompt as AWSConnectPrompt, useAWSConnection } from '@/components/common/ConnectGate'
 import {
     getLLMConnector,
     listConversations,
@@ -30,6 +31,7 @@ const SUGGESTIONS = [
 ]
 
 export function ExplainPanel({ emulation }: { emulation: Emulation }) {
+    const { connected } = useAWSConnection()
     const [checkingConnector, setCheckingConnector] = useState(true)
     const [hasConnector, setHasConnector] = useState(false)
     const [provider, setProvider] = useState<string | null>(null)
@@ -172,6 +174,18 @@ export function ExplainPanel({ emulation }: { emulation: Emulation }) {
     }
 
     const empty = messages.length === 0 && !streaming
+
+    // Placed after every hook so the hook order stays stable between renders.
+    // The assistant's endpoints require a verified AWS connection, so without
+    // one the panel would load and then fail on its first request.
+    if (!connected) {
+        return (
+            <AWSConnectPrompt
+                title="No AWS account connected"
+                body="The AI assistant answers questions about an emulation using your own LLM key. It needs a verified AWS connection first. You can still read the emulation's overview, attack path, MITRE mapping and detections."
+            />
+        )
+    }
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-6 animate-fadeIn">

@@ -1,0 +1,83 @@
+// Application Load Balancer access logging disabled (T1685.002)
+//
+// Control-plane first, because it is the view that can attribute. The absence view is a
+// corroborator and is weaker here than in any other service — see the note at the bottom.
+//
+// `contains` throughout, never `has` — ARNs and bucket names are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where (EventSource == "elasticloadbalancing.amazonaws.com"
+         and EventName in ("ModifyLoadBalancerAttributes", "CreateLoadBalancer", "DeleteLoadBalancer"))
+     or (EventSource == "s3.amazonaws.com"
+         and EventName in ("DeleteBucket", "DeleteBucketPolicy", "PutBucketPolicy", "PutLifecycleConfiguration"))
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend LbArn = tostring(Req.loadBalancerArn)
+| extend Bucket = tostring(Req.bucketName)
+// Attributes arrive as a LIST of {key, value} pairs, so the key and the value must be read from
+// the SAME element. A rule that matches the key anywhere and the value anywhere is satisfied by a
+// request that disables one attribute and sets an unrelated one to false — which is exactly the
+// approximation the Sigma has to live with and this expansion removes.
+| mv-apply Attr = Req.attributes on (
+    summarize LoggingOff = countif(tostring(Attr.key) in ("access_logs.s3.enabled", "connection_logs.s3.enabled")
+                                   and tostring(Attr.value) == "false"),
+              LoggingOn  = countif(tostring(Attr.key) in ("access_logs.s3.enabled", "connection_logs.s3.enabled")
+                                   and tostring(Attr.value) == "true"),
+              Pairs      = make_list(strcat(tostring(Attr.key), "=", tostring(Attr.value)), 20)
+  )
+| extend Verdict = case(
+    EventName == "ModifyLoadBalancerAttributes" and LoggingOff > 0,
+        "ACCESS LOGGING DISABLED — the event the absence rule can only infer, with a principal on it. Every request through this load balancer from now on is unrecorded, P0",
+    EventName == "DeleteBucket" or EventName == "DeleteBucketPolicy",
+        "LOG DESTINATION REMOVED — the attribute still reads enabled and nothing lands. A configuration check that reads only access_logs.s3.enabled is satisfied by this, P0",
+    EventName == "PutBucketPolicy",
+        "LOG BUCKET POLICY REPLACED — confirm the ELB log-delivery principal can still PutObject. There is no ELB-side error event when delivery starts failing, P1",
+    EventName == "PutLifecycleConfiguration",
+        "LOG BUCKET LIFECYCLE CHANGED — an expiry rule destroys history as effectively as disabling logging, and looks like cost control, P1",
+    EventName == "CreateLoadBalancer",
+        "LOAD BALANCER CREATED — logging is OFF by default. Confirm a ModifyLoadBalancerAttributes enabling it follows within minutes, P2",
+    EventName == "DeleteLoadBalancer",
+        "LOAD BALANCER DELETED — expected to end its log stream; correlate with change management, P2",
+    "Load balancer attribute changed — read the pairs")
+| project TimeGenerated, EventName, Verdict, UserIdentityArn, SourceIpAddress,
+          LbArn, Bucket, Pairs, LoggingOff, LoggingOn, UserAgent
+| order by TimeGenerated desc
+//
+// ============================================================================
+// THE ABSENCE VIEW — and why it is weaker here than anywhere else in the corpus
+// ============================================================================
+// Group by LOAD BALANCER, never account-wide. An account-wide count changes by a fraction when one
+// load balancer stops logging, so the rule is weakest in the largest estates.
+//
+// ALBAccessLogs
+// | where TimeGenerated > ago(7d)
+// | summarize Requests = count(), LastSeen = max(TimeGenerated) by ElbResourceId = tostring(Elb)
+// | extend GapHours = datetime_diff('hour', now(), LastSeen)
+// | where GapHours >= 2
+//
+// FOUR THINGS PRODUCE AN EMPTY WINDOW AND ONLY ONE IS AN INCIDENT — and unlike VPC flow logs,
+// there is no NODATA record to separate them:
+//   1. Access logging was disabled          -> ModifyLoadBalancerAttributes above says so
+//   2. The destination stopped accepting    -> the S3 events above, and no ELB error event exists
+//   3. Logging was NEVER enabled            -> AWS: "disabled by default". A load balancer that
+//      never logged is indistinguishable from one just turned off, and only Query 2 separates them
+//   4. Nobody sent any requests             -> an idle ALB writes NOTHING. There is no equivalent
+//      of a NODATA record here, so silence is the normal state of an unused load balancer
+//
+// AND AWS SAYS THE COUNT ITSELF IS APPROXIMATE, in both directions: "Elastic Load Balancing logs
+// requests on a best-effort basis. We recommend that you use access logs to understand the nature
+// of the requests, not as a complete accounting of all requests." Delivery is every 5 minutes per
+// node, eventually consistent, and "the load balancer can deliver multiple logs for the same
+// period" — so records can be missing AND duplicated, with duplication likeliest under high
+// traffic. Treat any threshold on request volume in this service as indicative only.
+//
+// ============================================================================
+// THE STATE VIEW — which neither log carries
+// ============================================================================
+// `aws elbv2 describe-load-balancer-attributes` returns access_logs.s3.enabled and the bucket, per
+// load balancer. That is the only way to answer "is it on right now", and it is the only way to
+// find a load balancer that has never had it enabled. Query 2 of ../PLAYBOOK.md runs it across the
+// account; run it on a schedule, not only during an incident.

@@ -48,7 +48,7 @@ actually asked of the model.
 throttling as `ThrottlingException`. Not `Client.`-prefixed like EC2.
 
 **MITRE:** T1496 (*Resource Hijacking*) is the correct mapping, no caveat
-needed. The logging-disable rule carries T1562.008 separately.
+needed. The logging-disable rule carries T1685.002 separately.
 
 **Severity:** manifest MEDIUM; IR view **High**, a fast-accruing, directly
 monetary impact with a denial-of-service side effect when quotas are exhausted.

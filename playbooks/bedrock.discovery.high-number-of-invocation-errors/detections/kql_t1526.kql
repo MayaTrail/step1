@@ -1,0 +1,85 @@
+// Model access enumeration through invocation errors (T1526 / T1078.004)
+//
+// The error CODE is the information the attacker is buying, so this query keeps the codes apart
+// instead of counting "errors". An availability alarm merges them and loses every distinction:
+//   AccessDeniedException     -> the model exists and is enabled here; you are not permitted
+//   ValidationException       -> not enabled in this Region, or the request shape is wrong
+//   ThrottlingException       -> the call was PERMITTED and rate-limited. One of these among a
+//                                hundred refusals is more significant than all of them.
+//
+// CloudTrail only, by construction: a call that failed authorisation produced no invocation to log,
+// so the model invocation log has nothing. That also means this works in the common case where
+// invocation logging was never enabled.
+//
+// `contains` throughout, never `has` — ARNs and model IDs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL.
+let LOOKBACK = 7d;
+let WINDOW = 1h;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "bedrock-runtime.amazonaws.com"
+| where EventName in ("InvokeModel", "InvokeModelWithResponseStream", "Converse", "ConverseStream")
+| extend Req = parse_json(RequestParameters)
+| extend Model = tostring(Req.modelId)
+| extend Err = tostring(ErrorCode)
+| extend Key = tostring(UserIdentityAccessKeyId)
+| extend Arn = tostring(UserIdentityArn)
+| summarize
+    Calls        = count(),
+    Succeeded    = countif(isempty(Err)),
+    AccessDenied = countif(Err has_prefix "AccessDenied"),
+    Validation   = countif(Err == "ValidationException"),
+    NotFound     = countif(Err == "ResourceNotFoundException"),
+    Throttled    = countif(Err == "ThrottlingException"),
+    OtherErr     = countif(isnotempty(Err) and not(Err has_prefix "AccessDenied")
+                           and Err !in ("ValidationException", "ResourceNotFoundException", "ThrottlingException")),
+    ModelsTried  = dcount(Model),
+    DeniedModels = make_set_if(Model, Err has_prefix "AccessDenied", 15),
+    OkModels     = make_set_if(Model, isempty(Err), 10),
+    Regions      = make_set(AwsRegion, 5),
+    SourceIps    = make_set(SourceIpAddress, 10),
+    Agents       = make_set(UserAgent, 5),
+    Arns         = make_set(Arn, 5),
+    ErrCodes     = make_set(Err, 8),
+    FirstSeen    = min(TimeGenerated),
+    LastSeen     = max(TimeGenerated)
+    by Key, bin(TimeGenerated, WINDOW)
+| extend SuccessAfterSweep = Succeeded > 0 and ModelsTried >= 5
+| extend Verdict = case(
+    SuccessAfterSweep,
+        strcat("ENUMERATED THEN SUCCEEDED — this credential was refused across ", tostring(ModelsTried), " models and then one answered. The models in OkModels are what it can reach; treat those as in use, P0"),
+    Throttled > 0 and AccessDenied > 10,
+        "ONE MODEL ANSWERED AMONG MANY REFUSALS — a ThrottlingException means the call was PERMITTED and rate-limited. That single event outweighs every AccessDenied beside it, P0",
+    ModelsTried >= 5 and AccessDenied > 0,
+        strcat("PERMISSION MAP BEING DRAWN — refused across ", tostring(ModelsTried), " distinct models. Each AccessDenied confirms the model exists and is enabled here; the sweep costs nothing and produces no invocation-log record at all, P0"),
+    Validation > 0 and ModelsTried >= 5,
+        "MODEL AVAILABILITY BEING SURVEYED — ValidationException separates 'not enabled in this Region' from 'not allowed', which is precisely the distinction an attacker wants, P1",
+    Calls >= 100 and Succeeded == 0,
+        "SUSTAINED REFUSALS, ONE OR TWO MODELS — a script retrying without knowing it has failed, or waiting for an entitlement. Often a broken application and worth fixing either way, P2",
+    "Bedrock refusals — below threshold")
+| project FirstSeen, LastSeen, Key, Verdict, Calls, ModelsTried, Succeeded,
+          AccessDenied, Validation, NotFound, Throttled, OtherErr,
+          DeniedModels, OkModels, Regions, SourceIps, Agents, Arns, ErrCodes
+| order by ModelsTried desc, AccessDenied desc
+//
+// ============================================================================
+// THE ONE SUCCESS MATTERS MORE THAN THE HUNDRED FAILURES
+// ============================================================================
+// SuccessAfterSweep is the column to read first. A sweep that produced nothing tells you a
+// credential was explored and found wanting. A sweep with one success tells you which model the
+// attacker now has, and OkModels names it — which is the scope of everything that follows.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHAT WAS SENT TO THE MODEL THAT ANSWERED. Refusals leave no invocation log because there was no
+// invocation; and the success leaves one only if invocation logging was enabled, which is off by
+// default. See ../../bedrock.impact.high-invocation-count/ for that half.
+//
+// WHETHER THE ENUMERATION SUCCEEDED ELSEWHERE. Model access is per-Region. A sweep in one Region
+// that found nothing says nothing about another Region, and the Regions column is the check.
+//
+// WHETHER A GUARDRAIL REFUSED THE CONTENT. A guardrail intervention is not an API error — the call
+// succeeds and the response carries the intervention. It appears in the invocation log and not here,
+// so an absence of errors is not evidence that the content was acceptable.

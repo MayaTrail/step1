@@ -1,0 +1,305 @@
+# EC2 Instance Metadata Credential Theft (T1552.005)
+#
+# The source set is five alerts across two telemetry families, and the two fail
+# differently. The four web-ACL alerts match a Core-Rule-Set label for an EC2 metadata
+# SSRF signature in the URI path, query arguments, body or cookie of an inbound request.
+# They fire on an ATTEMPT, split one actor across four separate P2s keyed on client IP,
+# and gate on the request having been ALLOWED — but all four Core-Rule-Set rules carry
+# a default action of Block, so in the default configuration the alerts are silent and a
+# blocked attempt produces no record anywhere. The flow-log alert matches
+# `destination_ip:"169.254.169.254" AND action:"ACCEPT"`, and VPC Flow Logs document
+# "Traffic to and from 169.254.169.254 for instance metadata" as traffic they do not
+# capture. That alert cannot fire. It is not noisy or imprecise; it is inert.
+#
+# The deeper problem is that neither family observes the technique's outcome. The metadata
+# fetch is a link-local HTTP call inside one instance: it produces no CloudTrail event, no
+# flow-log record, and no AWS telemetry of any kind. What IS observable is what the stolen
+# credential does next. An EC2 instance-profile session carries the instance ID as its role
+# session name, so the ground truth for theft is a session whose ARN says `.../i-0abc...`
+# making calls from an address that instance cannot originate from. That is the rule below.
+#
+# Two further CloudTrail facts do work the source rules never attempt.
+# `userIdentity.sessionContext.ec2RoleDelivery` is `1.0` when the credential came from
+# IMDSv1 and `2.0` when it came from IMDSv2 — the classic SSRF GET only yields a credential
+# on the `1.0` path, so a `1.0` delivery on a fleet believed to enforce IMDSv2 is itself a
+# finding. And a legitimate instance session egresses from exactly one address, so the
+# count of distinct source addresses per session is a threshold with a real baseline.
+title: EC2 instance-profile credentials used from outside the fleet's egress addresses
+id: 916f13c1-1b08-4bfd-b6b5-3679c681fc14
+name: imds_role_session_offnet
+status: experimental
+description: >-
+  An EC2 instance-profile role session made an AWS API call from a source address the
+  fleet cannot originate from. The role session name of an instance-profile session is
+  the EC2 instance ID, so this identifies a credential that has left the instance it was
+  minted for and is being used elsewhere.
+references:
+  - https://attack.mitre.org/techniques/T1552/005/                                              # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-user-identity.html  # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_variables.html          # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-iam.html            # retrieved 2026-08-27
+tags:
+  - attack.credential-access
+  - attack.t1552.005
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # The role SESSION NAME of an instance-profile session is the instance ID. No
+  # eventName/eventSource filter: the stolen credential works against any service.
+  selection:
+    userIdentity.arn|re: ':assumed-role/[^/]+/i-[0-9a-f]{8,17}$'
+  # DEPLOYER MUST POPULATE — placeholders, not a working allowlist. Needs BOTH the VPC
+  # CIDRs instances hold private addresses in and every NAT / egress-firewall Elastic IP.
+  fleet_egress:
+    sourceIPAddress|cidr:
+      - '10.0.0.0/8'
+      - '172.16.0.0/12'
+      - '192.168.0.0/16'
+  # sourceIPAddress is not always an address — AWS services appear as a DNS name and
+  # AWS-originated events as `AWS Internal/<n>`, neither of which cidr can evaluate.
+  aws_internal:
+    sourceIPAddress|contains:
+      - '.amazonaws.com'
+      - 'AWS Internal'
+  condition: selection and not fleet_egress and not aws_internal
+falsepositives:
+  - An egress path missing from the allowlist — an added NAT gateway, a transit route, a
+    reassigned Elastic IP. The dominant false positive, and a maintenance problem.
+  - An operator debugging with credentials copied off a host. Indistinguishable here, and
+    an incident until proven otherwise.
+level: high
+---
+# Base rule for the distinct-source-address correlation below. Deliberately carries NO
+# errorCode filter, which is a considered departure from the usual "count only successes"
+# rule: this correlation counts distinct SOURCE ADDRESSES for one session, not distinct
+# objects acted on. A stolen credential probing its own reach from the attacker's address
+# collects AccessDenied, and those denials are the earliest and cleanest evidence the
+# credential left the instance. Filtering them out would remove the signal. The correlation
+# is levelled `medium` rather than `high` partly for that reason.
+#
+# It DOES carry the `aws_internal` exclusion, and that is load-bearing rather than
+# cosmetic. The correlation counts distinct values of `sourceIPAddress`, and that field
+# is not always an address: a call an AWS service makes onward with this same session
+# records the service's DNS name, and AWS-originated events record `AWS Internal/<n>`.
+# Without this block one real address plus one service form is two distinct values, which
+# reaches `gt: 1` on an instance that never left its own egress path.
+title: EC2 instance-profile role session activity
+id: 1062fec7-f8ba-4f23-89a6-6ae27e1d1306
+name: imds_role_session
+status: experimental
+description: Base rule — correlation component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_variables.html  # retrieved 2026-08-27
+tags:
+  - attack.credential-access
+  - attack.t1552.005
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    userIdentity.arn|re: ':assumed-role/[^/]+/i-[0-9a-f]{8,17}$'
+  aws_internal:
+    sourceIPAddress|contains:
+      - '.amazonaws.com'
+      - 'AWS Internal'
+  # justified: base rule feeding the value_count correlation below. There is no
+  # discriminator on a single event here — the signal is the distinct-address count
+  # computed across the window, which cannot be expressed on one event by construction.
+  condition: selection and not aws_internal
+level: low
+---
+# Threshold basis, stated so a deployer can adjust it knowingly. There is no emulation
+# behind this number. It comes from the technique's own baseline: one instance egresses to
+# AWS through one address at a time, so an uncompromised instance-profile session shows
+# exactly ONE distinct sourceIPAddress and `gt: 1` fires on the first off-instance use.
+# The number is deliberately at the baseline rather than above it — a threshold of `gt: 2`
+# would require the attacker to use the credential from two addresses before alerting.
+#
+# The known legitimate exception is a fleet that reaches some services through a VPC
+# interface endpoint (private address) and others through NAT (public address). That
+# session shows two addresses with nothing wrong. If that describes your fleet, do not
+# raise the threshold — that hides the attack too. Add the endpoint-routed addresses to
+# the first rule's `fleet_egress` allowlist and treat THAT rule as the alerting one, using
+# this correlation as a hunting query. Grouping additionally by `vpcEndpointId` separates
+# the two paths cleanly where your backend supports grouping on a field absent from some
+# events; that behaviour is backend-specific and is not assumed here.
+title: One EC2 instance-profile session used from more than one source address
+id: 7ca5b637-2479-4080-a72c-2426067d4114
+status: experimental
+description: >-
+  A single EC2 instance-profile role session made API calls from more than one distinct
+  source address within an hour. An instance egresses through one address, so a second
+  address on the same session means the credential is in use somewhere other than the
+  instance it was issued to.
+references:
+  - https://attack.mitre.org/techniques/T1552/005/  # retrieved 2026-08-27
+tags:
+  - attack.credential-access
+  - attack.t1552.005
+correlation:
+  type: value_count
+  rules:
+    - imds_role_session
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+  field: sourceIPAddress
+  condition:
+    gt: 1
+falsepositives:
+  - A fleet that reaches some AWS services over a VPC interface endpoint and others over
+    NAT. Both paths are legitimate and show different addresses. See the threshold note
+    above — the fix is the allowlist in the first rule, not a higher count here.
+  - An instance that changed egress path mid-window, such as a NAT gateway failover or an
+    Elastic IP reassociation.
+level: medium
+---
+# The IMDSv1-vs-IMDSv2 discriminator, which the source rules do not use and which is the
+# only CloudTrail field that says anything about HOW the credential was obtained.
+# `ec2RoleDelivery` is documented as `1.0` when the credential was provided by IMDSv1 and
+# `2.0` when provided by the newer scheme. The classic SSRF against the metadata service
+# is an unadorned GET, and an unadorned GET only returns a credential when IMDSv1 is
+# available — IMDSv2 requires a PUT to `/latest/api/token` carrying an
+# `X-aws-ec2-metadata-token-ttl-seconds` header first, and a forged GET cannot supply the
+# resulting token. So on a fleet believed to enforce IMDSv2, a `1.0` delivery is either an
+# instance that was missed by enforcement or a credential minted before it was applied,
+# and both are exposure regardless of whether this particular session is malicious.
+#
+# SERIALISATION IS A STRING, and the field is a DIRECT CHILD of `sessionContext` — a
+# sibling of `sessionIssuer` and `attributes`, not nested inside `attributes`. AWS's own
+# sample event for `RequestManagedInstanceRoleToken` carries `"ec2RoleDelivery": "2.0"`,
+# quoted. The string match below is therefore correct as written. (The IAM condition key
+# `ec2:RoleDelivery` is compared with `NumericLessThan` in AWS's example policies; that is
+# the policy-evaluation context and says nothing about the event's JSON type.)
+#
+# THIS RULE ALSO MATCHES THE INSTANCE IDENTITY ROLE, and that is a deliberate acceptance
+# rather than an oversight. Its session ARN is
+# `arn:aws:sts::<account>:assumed-role/aws:ec2-instance/<instance-id>` — AWS's own sample
+# event — so it fires this rule and the ARN regex in the rules above: `[^/]+` matches
+# `aws:ec2-instance` and the session name is a real instance ID. An instance with NO
+# instance profile attached can therefore appear here. That is still a true statement of
+# what the rule claims to detect — IMDSv1 handed a credential out on that host — so the
+# signal is kept rather than filtered. What it changes is triage: an
+# `aws:ec2-instance` session has no instance profile to replace, so Containment Step 1
+# has nothing to act on and the finding is an IMDSv2-enforcement work item, not a
+# credential-theft incident. Sort on the role name before dispositioning.
+title: EC2 role credentials delivered by IMDSv1
+id: e73dab62-a68c-404a-b1c6-042f12e3742c
+name: imds_v1_credential_delivery
+status: experimental
+description: >-
+  A request was signed with EC2 role credentials that the metadata service handed out over
+  IMDSv1 — an instance-profile session, or the instance identity role `aws:ec2-instance`.
+  On a fleet that enforces IMDSv2 this cannot happen, so it identifies either an unenforced
+  instance or a credential that predates enforcement — and IMDSv1 is the version a
+  server-side request forgery can actually reach.
+references:
+  - https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html  # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ExamplePolicies_EC2.html                    # retrieved 2026-08-27
+tags:
+  - attack.credential-access
+  - attack.t1552.005
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    userIdentity.sessionContext.ec2RoleDelivery: '1.0'
+  # justified: the field has exactly two documented values and one of them is the finding.
+  # There is nothing further to filter on — no principal, content or volume condition
+  # would sharpen it, and adding one would only narrow a signal that is already specific.
+  condition: selection
+falsepositives:
+  - A fleet that has not finished migrating to IMDSv2. Expect volume proportional to how
+    much of the estate is unenforced; use it as a migration work-list first and promote it
+    to an alert once `MetadataNoToken` reads zero fleet-wide.
+  - An SDK or agent too old to negotiate IMDSv2 running on an instance where IMDSv2 is
+    optional rather than required.
+level: medium
+---
+# The corrected inbound-attempt rule, replacing four separate alerts with one.
+#
+# Three corrections. First, the four source alerts split the same actor across four P2s
+# keyed on client IP — one per request component — so an actor probing the URI path, the
+# query string and the body appears as three unrelated alerts. They are one rule.
+# Second, the source alerts require the request to have been ALLOWED. All four
+# Core-Rule-Set rules carry a default action of Block, so in the default configuration the
+# alerts never fire, and a blocked attempt leaves no alert at all — the attacker is
+# invisible precisely when the control worked. This matches on the label and treats the
+# terminating action as the discriminator, so it fires only when the request reached the
+# application while a terminated attempt remains available in the logs for attribution.
+# Third, one of the four source alerts carries the parent technique where its siblings
+# carry the sub-technique; the mapping here is uniform and dual, because the observed
+# event is exploitation of a public-facing application whose objective is the metadata API.
+#
+# LABEL CASING IS NOT A DEFECT IN THE SOURCE RULES, and it is worth recording why, because
+# it looks like one. The Core-Rule-Set RULE names are screaming-case (`EC2MetaDataSSRF_BODY`)
+# while the LABELS those rules emit are camel-case
+# (`awswaf:managed:aws:core-rule-set:EC2MetaDataSSRF_Body`). Labels are documented as
+# case-sensitive. The source rules match the label form, which is correct. A deployer who
+# copies the rule name out of the managed-rule-group documentation into a label match gets
+# zero forever.
+#
+# INSPECTION LIMIT, the analogue of an oversized document defeating a content rule: the
+# body variant only inspects the request body up to the protection pack's body size limit
+# and handles oversize content with `Continue`, so a metadata SSRF payload placed beyond
+# that limit is never labelled and no rule keyed on the label can see it. There is no
+# label to alert on for that case; the coverage gap is real and is carried in the playbook
+# rather than papered over here.
+#
+# LOGSOURCE: web-ACL logs have no standard Sigma logsource. `product: aws, service: waf`
+# is this corpus's convention and needs a field mapping in your pipeline. `labels` is
+# documented as an array of objects carrying a `name`; `action` is the terminating action.
+title: Inbound request carrying an EC2 metadata SSRF signature reached the application
+id: a58b50a7-c61f-45f1-82d9-213ba9502afe
+name: waf_imds_ssrf_not_blocked
+status: experimental
+description: >-
+  A web request whose URI path, query arguments, body or cookie carried a signature for
+  reaching the EC2 instance metadata service was evaluated and not terminated by BLOCK,
+  CAPTCHA or CHALLENGE, so it reached the application. This is the attempt, not the compromise — whether a credential was
+  actually retrieved is decided by the instance's IMDS configuration and is not visible
+  here.
+references:
+  - https://attack.mitre.org/techniques/T1552/005/                                        # retrieved 2026-08-27
+  - https://attack.mitre.org/techniques/T1190/                                            # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/waf/latest/developerguide/aws-managed-rule-groups-baseline.html  # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/waf/latest/developerguide/waf-rule-label-requirements.html       # retrieved 2026-08-27
+tags:
+  - attack.credential-access
+  - attack.initial-access
+  - attack.t1552.005
+  - attack.t1190
+logsource:
+  product: aws
+  service: waf
+detection:
+  # Camel-case suffixes: these are LABEL names, not rule names, and labels are
+  # case-sensitive. Matched as substrings so the full managed-rule-group namespace prefix
+  # does not have to be reproduced.
+  selection:
+    labels.name|contains:
+      - 'EC2MetaDataSSRF_URIPath'
+      - 'EC2MetaDataSSRF_QueryArguments'
+      - 'EC2MetaDataSSRF_Body'
+      - 'EC2MetaDataSSRF_Cookie'
+  # AWS: "The CAPTCHA and Challenge actions are terminating when the web request doesn't
+  # contain a valid token." A terminated request did NOT reach the application, so all
+  # three belong in the same exclusion; treating only BLOCK as terminating reports a
+  # challenged request as having reached the origin.
+  terminated:
+    action:
+      - 'BLOCK'
+      - 'CAPTCHA'
+      - 'CHALLENGE'
+  condition: selection and not terminated
+falsepositives:
+  - A security scanner or an authorised penetration test. Both produce genuine signatures
+    and are separated by source address and schedule, not by rule logic.
+  - An application that legitimately carries a link-local address in a parameter — rare,
+    but it exists in network-management tooling. Confirm against the request itself.
+  - The managed rule group running in Count mode during tuning, which makes every
+    signature reach the application by design. Fix the mode; do not tune out the rule.
+level: medium

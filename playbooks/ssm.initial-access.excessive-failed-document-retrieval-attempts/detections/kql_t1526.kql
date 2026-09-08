@@ -1,0 +1,106 @@
+// Excessive Failed Document Retrieval Attempts (T1526 — Cloud Service Discovery)
+//
+// The original rule filters GetDocument failures to errorCode == "AccessDenied".
+// That is the wrong error. AWS documents GetDocument's InvalidDocument as "The SSM
+// document doesn't exist or the document isn't available to the user" — it is what
+// a principal guessing names receives, for names that do not exist AND for
+// documents that exist but are not shared with it. Filtering to AccessDenied keeps
+// the misconfigured-client case and discards the enumeration.
+//
+// Count DISTINCT NAMES, not attempts. Ten retries against one document is a broken
+// script; ten distinct names is a principal mapping what exists.
+//
+// And the enumerator who HAS ssm:GetDocument produces no errors at all, so no
+// error-based rule can see them. The second query below covers that case by
+// counting distinct names read successfully.
+//
+// `contains`, not `has`: error codes and document names are punctuated
+// (AccessDeniedException, AWS-RunShellScript, SSM-SessionManagerRunShell) and
+// whole-term matching does not reach inside them.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "ssm.amazonaws.com"
+| where EventName in ("GetDocument", "DescribeDocument")
+| extend Req = parse_json(RequestParameters)
+| extend DocName = tostring(coalesce(Req.name, Req.Name, ""))
+| where isnotempty(DocName)
+| extend Outcome = case(
+    isempty(ErrorCode),                          "success",
+    ErrorCode contains "InvalidDocument",        "not-found-or-not-shared",
+    ErrorCode contains "AccessDenied",           "iam-denied",
+    "other-error")
+| summarize
+    Attempts        = count(),
+    DistinctNames   = dcount(DocName),
+    NotFound        = dcountif(DocName, Outcome == "not-found-or-not-shared"),
+    IamDenied       = dcountif(DocName, Outcome == "iam-denied"),
+    Succeeded       = dcountif(DocName, Outcome == "success"),
+    FoundNames      = make_set_if(DocName, Outcome == "success", 25),
+    ProbedNames     = make_set_if(DocName, Outcome != "success", 40),
+    Errors          = make_set_if(ErrorCode, isnotempty(ErrorCode), 10),
+    SourceIPs       = make_set(SourceIpAddress, 5),
+    Agents          = make_set(UserAgent, 3),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 5m)
+| where (NotFound + IamDenied) >= 10 or Succeeded >= 25
+| extend HitRate = todouble(Succeeded) / todouble(DistinctNames)
+| extend Verdict = case(
+    (NotFound + IamDenied) >= 10 and Succeeded > 0,
+        strcat("ENUMERATION THAT FOUND SOMETHING — read the documents in FoundNames now, P0"),
+    NotFound >= 10,
+        "DOCUMENT NAME ENUMERATION — names probed do not exist or are not shared, P1",
+    IamDenied >= 10,
+        "REPEATED IAM DENIAL ON GetDocument — a principal without the permission, P2",
+    "BULK DOCUMENT READ BY A PERMITTED PRINCIPAL — no errors, error rules are blind here, P2")
+| project FirstSeen, LastSeen, UserIdentityArn, Attempts, DistinctNames, NotFound,
+          IamDenied, Succeeded, HitRate, FoundNames, ProbedNames, Errors,
+          SourceIPs, Agents, Verdict
+| order by DistinctNames desc
+//
+// HitRate is the shape signal. A deployment tool reading documents it owns is close
+// to 1.0. A principal guessing names is close to 0.0 and its ProbedNames read like a
+// wordlist rather than a naming scheme. A principal with permission enumerating
+// everything is 1.0 with a very large DistinctNames — which is why the query keeps
+// the Succeeded >= 25 arm.
+//
+// ============================================================================
+// WHAT THE ENUMERATION WAS LOOKING FOR
+// ============================================================================
+// SSM documents are not secret by design, and people put things in them that are:
+// bootstrap scripts with embedded tokens, hard-coded internal endpoints, the
+// parameter names an application reads ({{ssm:/app/prod/db/password}}), and the
+// automation assumeRole ARNs. A document that was read successfully has disclosed
+// all of that. Fetch it and look:
+//
+//   aws ssm get-document --name <FoundName> --document-version '$LATEST' \
+//     --query 'Content' --output text
+//
+// ============================================================================
+// THE NEXT STEP, IF THEY FOUND ONE
+// ============================================================================
+// Enumeration is reconnaissance for execution. Pivot the same UserIdentityArn onto
+// SendCommand, StartAutomationExecution, StartSession and CreateAssociation — all
+// management events naming the document — and onto CreateDocument, which is the
+// same actor authoring their own instead of borrowing yours. See
+// ../../ssm.discovery.excessive-document-creation-detected/.
+//
+// ============================================================================
+// ERROR CODES
+// ============================================================================
+// GetDocument: InvalidDocument ("The SSM document doesn't exist or the document
+// isn't available to the user"), InvalidDocumentVersion, InternalServerError.
+// IAM denials surface as AccessDenied, service-evaluated denials as
+// AccessDeniedException — the contains match above catches both pairs. Confirm the
+// exact strings against a real denied event in your own trail before narrowing.
+//
+// ============================================================================
+// PREVENTION
+// ============================================================================
+// ssm:GetDocument and ssm:DescribeDocument support resource-level permissions on
+// arn:aws:ssm:<region>:<account>:document/<name>. Scope reads to the documents a
+// principal actually runs. Removing ssm:ListDocuments does NOT stop enumeration —
+// it only forces it through GetDocument, where it becomes noisy and visible, which
+// is the trade this rule set is built around.
