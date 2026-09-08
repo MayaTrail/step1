@@ -1,6 +1,5 @@
 import { Link } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import { Card } from '@/components/ui/Card'
 import { IconCloud } from '@/components/ui/Icons'
 
 /**
@@ -12,7 +11,7 @@ import { IconCloud } from '@/components/ui/Icons'
  */
 export function useAWSConnection(): { connected: boolean } {
   const { user } = useAuth()
-  return { connected: Boolean(user?.isVerified || user?.isDemo) }
+  return { connected: Boolean(user?.isVerified) }
 }
 
 /**
@@ -21,6 +20,12 @@ export function useAWSConnection(): { connected: boolean } {
  * Shown instead of an error or an unexplained empty grid. An unconnected user
  * reaching Stacks has done nothing wrong, so the page states what is missing and
  * links to the fix rather than looking broken.
+ *
+ * Laid out like EmptyState rather than as a card: this is the only thing on the
+ * page, and a bordered surface floating in an otherwise empty column reads as a
+ * box around nothing. Without a container to hold them, a red glyph and a red
+ * button would also carry more alarm than the situation deserves, so the mark is
+ * neutral and the action is an invitation.
  */
 export function ConnectPrompt({
   title,
@@ -30,9 +35,9 @@ export function ConnectPrompt({
   body: string
 }) {
   return (
-    <Card accent="red" className="p-8 text-center">
-      <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-btn border border-danger/20 bg-danger/10 text-danger">
-        <IconCloud size={24} />
+    <div className="px-5 py-16 text-center">
+      <span className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-card border border-border bg-surface-card text-content-dim">
+        <IconCloud size={26} />
       </span>
       <div className="font-display text-lg font-semibold text-content-primary">{title}</div>
       <p className="mx-auto mt-2 max-w-md text-[0.9rem] leading-relaxed text-content-secondary">
@@ -40,11 +45,12 @@ export function ConnectPrompt({
       </p>
       <Link
         to="/me"
-        className="mt-5 inline-block rounded-btn border border-danger/30 bg-danger/10 px-4 py-2 text-[13px] font-semibold text-danger no-underline transition-opacity hover:opacity-60"
+        className="mt-5 inline-block rounded-btn border border-border px-4 py-2 text-[13px] font-semibold
+          text-accent-blue no-underline transition-opacity hover:opacity-60"
       >
         Connect AWS account
       </Link>
-    </Card>
+    </div>
   )
 }
 

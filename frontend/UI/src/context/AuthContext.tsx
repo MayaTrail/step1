@@ -30,7 +30,6 @@ interface AuthContextValue {
   clearError: () => void
   verifyConnector: (req: ConnectorRequest) => Promise<void>
   disconnectConnector: () => Promise<void>
-  activateDemo: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -51,8 +50,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
      * On mount, hydrate user state from the server via /auth/me/.
      *
      * The JWT stored in localStorage is used solely as a bearer token.
-     * User profile fields (isVerified, isDemo, etc.) may have changed
-     * server-side after the token was issued (e.g. demo activation,
+     * User profile fields (isVerified, etc.) may have changed
+     * server-side after the token was issued (e.g.
      * connector verification), so we always fetch fresh state from the
      * /auth/me/ endpoint rather than trusting the JWT claims.
      *
@@ -183,21 +182,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const activateDemo = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      await authService.activateDemo()
-      const refreshed = await authService.refreshUser()
-      setUser(refreshed)
-    } catch (err: any) {
-      setError(err.message ?? 'Demo activation failed')
-      throw err
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
   const logout = useCallback(async () => {
     setUser(null)
     await authService.logout()
@@ -209,7 +193,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider value={{
       user, loading, initializing, error,
       login, googleSSO, signup, verifyOTP, resendOTP, logout, clearError,
-      verifyConnector, disconnectConnector, activateDemo,
+      verifyConnector, disconnectConnector,
     }}>
       {children}
     </AuthContext.Provider>

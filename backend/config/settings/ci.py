@@ -36,9 +36,10 @@ ROOT_URLCONF = "config.ci_urls"
 # Only the apps whose models or code the suite actually loads. apps.users owns
 # AUTH_USER_MODEL, and apps.infrastructure is required because
 # emulations.EmulationRun.stack is a foreign key to infrastructure.Stack;
-# omitting it fails the system check with fields.E300. apps.guardrails has no
-# models and is listed only so its test label resolves. The remaining apps
-# (connectors, logs, ai) are not referenced by any test or by these models.
+# omitting it fails the system check with fields.E300. apps.guardrails and
+# apps.threatintel have no models and are listed only so their test labels
+# resolve. The remaining apps (connectors, logs, ai) are not referenced by any
+# test or by these models.
 INSTALLED_APPS = [
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -47,4 +48,5 @@ INSTALLED_APPS = [
     "apps.emulations",
     "apps.metrics",
     "apps.guardrails",
+    "apps.threatintel",
 ]

@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import { useDemoCountdown, formatCountdown } from '@/hooks/useDemoCountdown'
 import { fetchProfile, type UserProfile } from '@/services/auth.service'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -14,9 +13,6 @@ import {
     IconCloud,
     IconCopy,
     IconLogout,
-    IconFlask,
-    IconClock,
-    IconInfo,
     IconAlert,
 } from '@/components/ui/Icons'
 
@@ -26,7 +22,7 @@ import {
  * A prominent identity header (avatar, name, status badges) sits above
  * a vertical stack of information cards: Account Overview, AWS Connection,
  * Security & Access, and a sign-out danger zone. Presentation only:
- * data comes from fetchProfile + useAuth, demo expiry from useDemoCountdown.
+ * data comes from fetchProfile + useAuth.
  */
 export function ProfilePage() {
     const { user, logout } = useAuth()
@@ -213,9 +209,6 @@ function ProfileHeader({
         if (user.isVerified) {
             return { label: 'AWS Connected', tone: 'green' as const }
         }
-        if (user.isDemo) {
-            return { label: 'Demo Active', tone: 'yellow' as const }
-        }
         return { label: 'Unverified', tone: 'red' as const }
     })()
 
@@ -355,10 +348,6 @@ function ConnectionModeCard({
 }) {
     if (!user) return null
 
-    if (user.isDemo) {
-        return <DemoModeCard user={user} onUpgrade={onConnect} />
-    }
-
     if (!user.isVerified) {
         return <ConnectAWSCard onConnect={onConnect} />
     }
@@ -456,70 +445,3 @@ function ConnectAWSCard({ onConnect }: { onConnect: () => void }) {
     )
 }
 
-/* ── Demo Mode hero with live countdown ── */
-function DemoModeCard({
-    user,
-    onUpgrade,
-}: {
-    user: NonNullable<ReturnType<typeof useAuth>['user']>
-    onUpgrade: () => void
-}) {
-    const { remaining, isExpired } = useDemoCountdown(user.demoExpiresAt)
-
-    return (
-        <Card accent={isExpired ? 'red' : 'amber'} className="p-6">
-            <div className="flex items-center justify-between gap-4 mb-4">
-                <div className="flex items-center gap-3">
-                    <span
-                        className={`w-10 h-10 rounded-btn flex items-center justify-center border ${
-                            isExpired
-                                ? 'bg-danger-dim border-danger/20 text-danger'
-                                : 'bg-warning-dim border-warning/20 text-warning'
-                        }`}
-                    >
-                        {isExpired ? <IconClock size={20} /> : <IconFlask size={20} />}
-                    </span>
-                    <div>
-                        <div className="font-mono text-2xs uppercase tracking-label text-content-dim mb-0.5">
-                            Connection mode
-                        </div>
-                        <div className="font-display text-sm font-semibold text-content-primary">
-                            Demo Sandbox
-                        </div>
-                    </div>
-                </div>
-                <Badge tone={isExpired ? 'red' : 'yellow'} mono dot pulse={!isExpired}>
-                    {isExpired ? 'Expired' : remaining !== null ? formatCountdown(remaining) : 'Active'}
-                </Badge>
-            </div>
-
-            {isExpired && (
-                <div className="bg-danger-dim border border-danger/20 rounded-btn px-4 py-3 mb-4">
-                    <p className="font-mono text-xs text-danger leading-relaxed">
-                        Your demo session has ended. Connect your AWS account to continue using MayaTrail.
-                    </p>
-                </div>
-            )}
-
-            <div className="flex items-start gap-2 mb-4 bg-surface-elevated rounded-btn px-3.5 py-2.5 border border-border">
-                <span className="text-content-dim mt-0.5 shrink-0">
-                    <IconInfo size={14} />
-                </span>
-                <p className="font-mono text-2xs text-content-dim leading-relaxed">
-                    Demo mode can only be activated once. Connect your AWS account for full, unlimited
-                    access to all emulations and detections.
-                </p>
-            </div>
-
-            <Button
-                variant="cta"
-                size="lg"
-                onClick={onUpgrade}
-                icon={<IconCloud size={16} />}
-                className="w-full"
-            >
-                Connect AWS Account
-            </Button>
-        </Card>
-    )
-}

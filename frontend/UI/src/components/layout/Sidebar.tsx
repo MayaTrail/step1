@@ -14,6 +14,7 @@ import {
   IconBarChart,
   IconGear,
   IconBook,
+  IconBroadcast,
 } from '@/components/ui/Icons'
 
 interface SidebarProps {
@@ -41,6 +42,7 @@ export function Sidebar({ isOpen }: SidebarProps) {
       {/* ── Dashboard ── */}
       <SectionLabel>Dashboard</SectionLabel>
       <NavItem to="/" exact icon={<IconHome size={17} />} label="Dashboard" />
+      <NavItem to="/threat-feed" icon={<IconBroadcast size={17} />} label="Threat Feed" />
       <NavItem to="/stacks" icon={<IconLayers size={17} />} label="Stacks" />
 
       <Spacer />

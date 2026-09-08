@@ -6,6 +6,7 @@ import { ProtectedRoute } from './components/auth/ProtectedRoute'
 import { AppLayout } from './components/layout/AppLayout'
 import { LoginPage } from './components/auth/LoginPage'
 import { DashboardPage } from './components/dashboard/DashboardPage'
+import { ThreatFeedPage } from './components/threatfeed/ThreatFeedPage'
 import { ProfilePage } from './components/profile/ProfilePage'
 import { SettingsPage } from './components/settings/SettingsPage'
 import { StacksPage } from './components/stacks/StacksPage'
@@ -39,6 +40,7 @@ export default function App() {
                 <Route index element={<DashboardPage />} />
                 <Route path="me" element={<ProfilePage />} />
                 <Route path="settings" element={<SettingsPage />} />
+                <Route path="threat-feed" element={<ThreatFeedPage />} />
                 <Route path="stacks" element={<StacksPage />} />
 
                 {/* Operations */}

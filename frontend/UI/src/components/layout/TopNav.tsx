@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import { useDemoCountdown, formatCountdown } from '@/hooks/useDemoCountdown'
 import mayatrailLogo from '@/assets/mayatrail-logo.svg'
+import { ThreatFeedBell } from './ThreatFeedBell'
 
 interface TopNavProps {
   onOpenSearch: () => void
@@ -11,9 +11,10 @@ interface TopNavProps {
 
 export function TopNav({ onOpenSearch, onToggleSidebar }: TopNavProps) {
   const { user, logout } = useAuth()
-  const { remaining, isExpired, isActive } = useDemoCountdown(
-    user?.isDemo ? user.demoExpiresAt : null,
-  )
+  // The single fact the avatar reports. is_verified is set only when an STS
+  // AssumeRole against the user's role ARN succeeds, and cleared on disconnect,
+  // so it means exactly "a cloud account is connected".
+  const connected = Boolean(user?.isVerified)
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
@@ -34,34 +35,43 @@ export function TopNav({ onOpenSearch, onToggleSidebar }: TopNavProps) {
   return (
     <nav className="h-[58px] backdrop-blur-[20px] bg-[rgba(7,8,12,0.8)] border-b border-border flex items-center px-5 gap-3 shrink-0 relative z-[100]">
 
-      {/* Logo — danger gradient matching frontend */}
-      <Link to="/" className="flex items-center gap-2.5 no-underline group shrink-0">
-        <img
-          src={mayatrailLogo}
-          alt="MayaTrail"
-          className="w-9 h-9 rounded-lg object-cover transition-all group-hover:shadow-[0_0_20px_rgba(255,34,68,0.3)]"
-        />
-        <span className="font-display text-[1.3rem] font-extrabold text-content-primary tracking-[-0.5px]">
-          MayaTrail
-        </span>
-      </Link>
+      {/* Left group. Shares free space equally with the right group, which is
+          what actually centres the search between them: the two have different
+          content widths (a logo against a bell plus an account chip), so
+          centring the search inside the gap left it noticeably off-centre. */}
+      <div className="flex items-center gap-3 flex-1">
 
-      {/* Hamburger — mobile only, toggles the sidebar overlay */}
-      <button
-        onClick={onToggleSidebar}
-        className="lg:hidden flex items-center justify-center w-8 h-8 shrink-0 text-content-dim hover:text-content-primary rounded-btn hover:bg-surface-elevated transition-colors"
-        aria-label="Toggle navigation"
-      >
-        <svg width="16" height="12" viewBox="0 0 16 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-          <line x1="0" y1="1" x2="16" y2="1" />
-          <line x1="0" y1="6" x2="16" y2="6" />
-          <line x1="0" y1="11" x2="16" y2="11" />
-        </svg>
-      </button>
+        {/* Logo — danger gradient matching frontend */}
+        <Link to="/" className="flex items-center gap-2.5 no-underline group shrink-0">
+          <img
+            src={mayatrailLogo}
+            alt="MayaTrail"
+            className="w-9 h-9 rounded-lg object-cover transition-all group-hover:shadow-[0_0_20px_rgba(255,34,68,0.3)]"
+          />
+          <span className="font-display text-[1.3rem] font-extrabold text-content-primary tracking-[-0.5px]">
+            MayaTrail
+          </span>
+        </Link>
 
-      {/* Search trigger — hidden on small screens to preserve space */}
+        {/* Hamburger — mobile only, toggles the sidebar overlay */}
+        <button
+          onClick={onToggleSidebar}
+          className="lg:hidden flex items-center justify-center w-8 h-8 shrink-0 text-content-dim hover:text-content-primary rounded-btn hover:bg-surface-elevated transition-colors"
+          aria-label="Toggle navigation"
+        >
+          <svg width="16" height="12" viewBox="0 0 16 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+            <line x1="0" y1="1" x2="16" y2="1" />
+            <line x1="0" y1="6" x2="16" y2="6" />
+            <line x1="0" y1="11" x2="16" y2="11" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Search trigger — hidden on small screens to preserve space.
+          min-w-0 lets it give way first on a narrow window, so the logo and the
+          account chip keep their full width instead of being clipped. */}
       <div
-        className="hidden md:flex flex-1 max-w-[400px] mx-auto relative items-center cursor-pointer group"
+        className="hidden md:flex w-full max-w-[400px] min-w-0 relative items-center cursor-pointer group"
         onClick={onOpenSearch}
       >
         <svg
@@ -75,7 +85,7 @@ export function TopNav({ onOpenSearch, onToggleSidebar }: TopNavProps) {
           type="text"
           readOnly
           placeholder="Search..."
-          className="w-full bg-surface-elevated border border-border rounded-full py-2 pl-10 pr-14 text-content-primary font-mono text-xs outline-none cursor-pointer
+          className="w-full bg-surface-elevated border border-border rounded-btn py-2 pl-10 pr-14 text-content-primary font-mono text-xs outline-none cursor-pointer
             transition-colors group-hover:border-border-active
             placeholder:text-content-dim"
         />
@@ -90,62 +100,46 @@ export function TopNav({ onOpenSearch, onToggleSidebar }: TopNavProps) {
         </kbd>
       </div>
 
-      {/* Right section */}
-      <div className="flex items-center gap-2.5 ml-auto">
+      {/* Right group. flex-1 with justify-end rather than ml-auto: an auto
+          margin would eat the free space and push the search off centre again. */}
+      <div className="flex items-center gap-2.5 flex-1 justify-end">
 
-        {/* Demo countdown — only rendered for demo users with an active timer; hidden on small screens */}
-        {isActive && (
-          <div
-            className={`hidden sm:flex items-center gap-2 border rounded-full px-3.5 py-1.5 font-mono text-xs transition-all ${
-              isExpired
-                ? 'bg-danger/[0.08] border-danger/30 text-danger'
-                : 'bg-[#ff8c00]/[0.08] border-[#ff8c00]/30 text-[#ff8c00]'
-            }`}
-          >
-            <span
-              className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                isExpired ? 'bg-danger' : 'bg-[#ff8c00] animate-pulse'
-              }`}
-            />
-            {isExpired
-              ? 'Demo expired'
-              : `${formatCountdown(remaining!)} left`}
-          </div>
-        )}
+        {/* Threat Feed notifications */}
+        <ThreatFeedBell />
 
         {/* Account dropdown */}
         <div className="relative" ref={dropdownRef}>
+          {/* Squared to the 8px button radius rather than a pill. DESIGN.md
+              reserves the pill shape for primary CTAs; this is a secondary
+              control, and 6px to 8px is the scale it belongs on. */}
           <button
             onClick={() => setDropdownOpen((v) => !v)}
-            className="bg-surface-elevated border border-border rounded-full pl-1 pr-3 py-1 text-content-primary font-display text-sm font-medium
+            className="bg-surface-elevated border border-border rounded-btn pl-1 pr-3 py-1 text-content-primary font-display text-sm font-medium
               flex items-center gap-2 cursor-pointer transition-all hover:border-border-active"
           >
-            {/* Avatar ring encodes connection state: green for an AWS-verified
-                identity, amber for demo, red when no account is connected. */}
+            {/* Avatar ring encodes one fact: whether a cloud account is
+                connected. Not connected is a normal starting state rather than
+                an error, so it reads as a neutral ring, not a red one. */}
             <div
               className={`w-[26px] h-[26px] rounded-full bg-surface-card flex items-center justify-center text-[11px] font-bold text-content-primary
-                ${user?.isVerified ? 'ring-2 ring-safe/70' : user?.isDemo ? 'ring-2 ring-warning/70' : 'ring-2 ring-danger/70'}`}
+                ring-2 ${connected ? 'ring-safe/70' : 'ring-border-active'}`}
             >
               {user?.initials ?? 'U'}
             </div>
             <span className="hidden sm:inline">{user?.name?.split(' ')[0] ?? 'User'}</span>
-            {user?.isVerified && (
-              <span className="hidden md:inline font-mono text-[9px] font-semibold tracking-wider text-safe border border-safe/30 rounded px-1.5 py-0.5">
-                IAM
-              </span>
-            )}
-            {user?.isDemo && (
-              <span className="hidden md:inline font-mono text-[9px] font-semibold tracking-wider text-warning border border-warning/30 rounded px-1.5 py-0.5">
-                DEMO
-              </span>
-            )}
-            {/* No AWS connection. Stated plainly and permanently rather than as a
-                dismissable banner, because it changes what the product can do. */}
-            {!user?.isVerified && !user?.isDemo && (
-              <span className="hidden md:inline font-mono text-[9px] font-semibold tracking-wider text-danger border border-danger/30 rounded px-1.5 py-0.5">
-                UNVERIFIED
-              </span>
-            )}
+            {/* Stated plainly and permanently rather than as a dismissable
+                banner, because whether an account is connected changes what the
+                product can do. The chip is deliberately terse; the dropdown
+                spells out which kind of status this is. */}
+            <span
+              className={`hidden md:inline-flex items-center gap-1.5 font-mono text-[9px] font-semibold tracking-wider rounded px-1.5 py-0.5 border
+                ${connected
+                  ? 'text-safe border-safe/30'
+                  : 'text-content-dim border-border'}`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-safe' : 'bg-content-dim'}`} />
+              {connected ? 'ACTIVE' : 'INACTIVE'}
+            </span>
             <svg className="w-2.5 h-2.5 text-content-dim" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M6 9l6 6 6-6" />
             </svg>
@@ -157,13 +151,19 @@ export function TopNav({ onOpenSearch, onToggleSidebar }: TopNavProps) {
               <div className="px-4 py-3.5 border-b border-border">
                 <div className="text-sm font-bold text-content-primary">{user?.name ?? 'User'}</div>
                 <div className="font-mono text-[10px] text-content-dim mt-0.5">{user?.username ?? ''}</div>
+                {/* The chip above has room for one word, which on its own could
+                    be read as whether the login is enabled. This says which
+                    status it is. */}
+                <div className={`text-[11px] mt-1.5 ${connected ? 'text-safe' : 'text-content-dim'}`}>
+                  {connected ? 'Cloud account connected' : 'No cloud account connected'}
+                </div>
               </div>
               <div className="py-1">
-                {!user?.isVerified && !user?.isDemo && (
+                {!connected && (
                   <DropdownItem
                     icon={<IconCloud />}
                     label="Connect AWS"
-                    className="text-danger"
+                    className="text-accent-blue"
                     onClick={() => { setDropdownOpen(false); navigate('/me') }}
                   />
                 )}

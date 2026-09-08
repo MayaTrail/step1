@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useEmulations, useLibraryPlaybooks } from '@/hooks/usePlatformData'
 import { LibraryCard } from '@/components/common/LibraryCard'
 import { LibraryToolbar } from '@/components/common/LibraryToolbar'
+import { SearchInput } from '@/components/ui/SearchInput'
 import { useLibraryFilter, emulationTactics } from '@/components/common/useLibraryFilter'
 import { LibraryEmpty } from '@/components/emulations/EmulationsHub'
 import { IconClipboard, IconSearch } from '@/components/ui/Icons'
@@ -134,20 +135,19 @@ export function PlaybooksHub() {
         </>
       ) : (
         <>
-          <div className="mb-4 rounded-[10px] border border-white/[0.06] bg-surface-100 px-4 py-3 text-[13px] leading-[1.6] text-content-secondary">
+          <div className="mb-4 rounded-[10px] border border-border bg-surface-card px-4 py-3 text-[13px] leading-[1.6] text-content-secondary">
             Response procedures for AWS detection use cases, written for SOC analysts and detection
             engineers. These are documentation: they are not tied to a runnable emulation, and the
             detection rules they reference have not been proven to fire.
           </div>
 
-          <input
-            type="search"
-            value={libSearch}
-            onChange={(e) => setLibSearch(e.target.value)}
-            placeholder="Search the reference library..."
-            aria-label="Search reference playbooks"
-            className="mb-5 w-full rounded-lg border border-white/[0.08] bg-bg-deep px-3.5 py-2.5 text-[15px] font-medium tracking-[0.2px] text-content-primary placeholder:text-content-dim focus:border-accent-blue/50 focus:outline-none"
-          />
+          <div className="flex flex-wrap items-center gap-3 mb-5">
+            <SearchInput
+              value={libSearch}
+              onChange={setLibSearch}
+              placeholder="Search the reference library..."
+            />
+          </div>
 
           {libLoading ? (
             <div className="py-16 text-center font-mono text-sm text-content-dim">
