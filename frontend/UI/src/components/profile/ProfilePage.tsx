@@ -6,6 +6,7 @@ import { fetchProfile, type UserProfile } from '@/services/auth.service'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
+import { ConnectCloudDialog } from './ConnectCloudDialog'
 import {
     IconChevron,
     IconGear,
@@ -33,6 +34,7 @@ export function ProfilePage() {
     const [profile, setProfile] = useState<UserProfile | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
+    const [connectOpen, setConnectOpen] = useState(false)
 
     const loadProfile = useCallback(async () => {
         setLoading(true)
@@ -105,8 +107,9 @@ export function ProfilePage() {
     const authMethod = profile?.auth_method === 'google_sso' ? 'Google SSO' : 'Credentials'
 
     return (
-        <div className="max-w-3xl mx-auto py-8 px-4 animate-fadeIn">
-            <div className="flex flex-col gap-6">
+        <>
+            <div className="max-w-3xl mx-auto py-8 px-4 animate-fadeIn">
+                <div className="flex flex-col gap-6">
                 {/* ── Profile header hero ── */}
                 <ProfileHeader
                     initials={initials}
@@ -137,7 +140,7 @@ export function ProfilePage() {
                 <ConnectionModeCard
                     user={user}
                     profile={profile}
-                    onUpgrade={() => navigate('/connector?upgrade=1')}
+                    onConnect={() => setConnectOpen(true)}
                 />
 
                 {/* ── Security & access ── */}
@@ -172,8 +175,19 @@ export function ProfilePage() {
                         Sign out
                     </Button>
                 </Card>
+                </div>
             </div>
-        </div>
+
+            {/* Reloading on close picks up a newly verified ARN without a page refresh. */}
+            {connectOpen && (
+                <ConnectCloudDialog
+                    onClose={() => {
+                        setConnectOpen(false)
+                        loadProfile()
+                    }}
+                />
+            )}
+        </>
     )
 }
 
@@ -333,20 +347,20 @@ function AccessRow({
 function ConnectionModeCard({
     user,
     profile,
-    onUpgrade,
+    onConnect,
 }: {
     user: ReturnType<typeof useAuth>['user']
     profile: UserProfile | null
-    onUpgrade: () => void
+    onConnect: () => void
 }) {
     if (!user) return null
 
     if (user.isDemo) {
-        return <DemoModeCard user={user} onUpgrade={onUpgrade} />
+        return <DemoModeCard user={user} onUpgrade={onConnect} />
     }
 
-    if (!user.isVerified && !user.isDemo) {
-        return <ConnectAWSCard />
+    if (!user.isVerified) {
+        return <ConnectAWSCard onConnect={onConnect} />
     }
 
     if (user.isVerified) {
@@ -382,6 +396,11 @@ function ConnectionModeCard({
                         <div className="font-mono text-xs text-accent-blue break-all">{maskedArn}</div>
                     </div>
                 )}
+                <div className="mt-4">
+                    <Button variant="secondary" onClick={onConnect}>
+                        Manage connection
+                    </Button>
+                </div>
             </Card>
         )
     }
@@ -394,39 +413,15 @@ function ConnectionModeCard({
    they have decided to connect. The just-in-time prompt on a blocked action
    links here rather than duplicating the form. ------------------------------ */
 
-const ARN_RE = /^arn:aws:iam::\d{12}:role\/[\w+=,.@-]+$/
-
-function ConnectAWSCard() {
-    const { verifyConnector, error, clearError } = useAuth()
-    const [roleArn, setRoleArn] = useState('')
-    const [localError, setLocalError] = useState('')
-    const [verifying, setVerifying] = useState(false)
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault()
-        clearError()
-        setLocalError('')
-        const trimmed = roleArn.trim()
-        if (!trimmed) {
-            setLocalError('Please enter a Role ARN.')
-            return
-        }
-        if (!ARN_RE.test(trimmed)) {
-            setLocalError('Invalid ARN format. Expected: arn:aws:iam::<account-id>:role/<role-name>')
-            return
-        }
-        setVerifying(true)
-        try {
-            await verifyConnector({ role_arn: trimmed })
-        } catch {
-            // surfaced through AuthContext
-        } finally {
-            setVerifying(false)
-        }
-    }
-
-    const displayError = localError || error
-
+/**
+ * Shown when no cloud account is connected.
+ *
+ * Deliberately a launcher rather than a form. Connecting means creating an IAM
+ * role and choosing a policy, which needs the explanation and the policy JSON
+ * the dialog carries; a bare ARN field here would ask for the answer without
+ * showing the question.
+ */
+function ConnectAWSCard({ onConnect }: { onConnect: () => void }) {
     return (
         <Card accent="red" className="p-6">
             <div className="flex items-center justify-between gap-4 mb-4">
@@ -454,34 +449,9 @@ function ConnectAWSCard() {
                 those actions change resources in your own AWS account.
             </p>
 
-            <form onSubmit={handleSubmit}>
-                <label
-                    htmlFor="profile-role-arn"
-                    className="font-mono text-2xs uppercase tracking-label text-content-dim block mb-1.5"
-                >
-                    IAM Role ARN
-                </label>
-                <input
-                    id="profile-role-arn"
-                    type="text"
-                    value={roleArn}
-                    onChange={(e) => setRoleArn(e.target.value)}
-                    placeholder="arn:aws:iam::123456789012:role/MayaTrailRole"
-                    autoComplete="off"
-                    spellCheck={false}
-                    className="w-full rounded-btn border border-border bg-surface-deep px-3.5 py-2.5 font-mono text-[13px]
-                        text-content-primary placeholder:text-content-dim focus:border-accent-blue/50 focus:outline-none"
-                />
-                {displayError && (
-                    <div className="mt-2.5 flex items-start gap-2 text-[13px] text-danger">
-                        <IconAlert size={15} />
-                        <span>{displayError}</span>
-                    </div>
-                )}
-                <Button type="submit" className="mt-4" disabled={verifying}>
-                    {verifying ? 'Verifying…' : 'Verify & connect'}
-                </Button>
-            </form>
+            <Button icon={<IconCloud size={14} />} onClick={onConnect}>
+                Connect cloud account
+            </Button>
         </Card>
     )
 }

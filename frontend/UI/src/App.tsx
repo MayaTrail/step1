@@ -1,11 +1,10 @@
-import { Routes, Route } from 'react-router-dom'
+import { Navigate, Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import { ThemeProvider } from './context/ThemeContext'
 import { PlatformProvider } from './context/PlatformContext'
 import { ProtectedRoute } from './components/auth/ProtectedRoute'
 import { AppLayout } from './components/layout/AppLayout'
 import { LoginPage } from './components/auth/LoginPage'
-import { ConnectorPage } from './components/auth/ConnectorPage'
 import { DashboardPage } from './components/dashboard/DashboardPage'
 import { ProfilePage } from './components/profile/ProfilePage'
 import { SettingsPage } from './components/settings/SettingsPage'
@@ -35,7 +34,6 @@ export default function App() {
         <PlatformProvider>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/connector" element={<ConnectorPage />} />
             <Route element={<ProtectedRoute />}>
               <Route element={<AppLayout />}>
                 <Route index element={<DashboardPage />} />
@@ -82,6 +80,10 @@ export default function App() {
                 <Route path=":platformId/emulations/:emulationId/logging/:runId" element={<DetectionCoveragePage />} />
                 <Route path=":platformId/guardrails" element={<GuardrailsPage />} />
                 <Route path=":platformId/guardrails/:guardrailId" element={<GuardrailsPage />} />
+                {/* Unknown paths fall back to the dashboard. Without this a removed
+                    route such as the old /connector renders the shell with an empty
+                    content area, which reads as a broken page rather than a dead link. */}
+                <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Route>
           </Routes>

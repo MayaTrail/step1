@@ -16,9 +16,23 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.infrastructure.models import Stack
+
 from .serializers import AWSConnectorSerializer
 
 logger = logging.getLogger(__name__)
+
+# Stack statuses that mean a Pulumi operation or an attack is still running.
+# Disconnecting during any of these pulls the role ARN out from under a task
+# that resolves credentials from it at run time.
+IN_FLIGHT_STACK_STATUSES = (
+    Stack.Status.PENDING,
+    Stack.Status.DEPLOYING,
+    Stack.Status.EC2_BOOTING,
+    Stack.Status.ATTACKING,
+    Stack.Status.DESTROYING,
+    Stack.Status.REFRESHING,
+)
 
 
 class AWSConnectorView(APIView):
@@ -31,6 +45,11 @@ class AWSConnectorView(APIView):
       200 — { status: "verified", account_id: "..." }
       400 — validation errors (bad ARN format)
       422 — STS call failed (role not assumable)
+
+    DELETE /api/connectors/aws/verify/
+    Returns:
+      200 — { status: "disconnected" }
+      409 — a stack is mid-operation; the response names the blocking stacks
     """
 
     permission_classes = [IsAuthenticated]
@@ -87,6 +106,60 @@ class AWSConnectorView(APIView):
                 "account_id": account_id,
             }
         )
+
+    def delete(self, request: Request) -> Response:
+        """
+        Disconnect the AWS account by clearing the stored role ARN.
+
+        Refused while any of the user's stacks is mid-operation. Those statuses
+        mean Pulumi is partway through creating or removing resources, or an
+        attack is running, and every one of those tasks resolves credentials by
+        reading aws_role_arn at task time. Clearing it underneath a running task
+        makes the task fail against a half-built stack.
+
+        Settled stacks do not block. A user may disconnect while stacks are
+        still deployed, which leaves those resources running in their account
+        with no way for MayaTrail to destroy them, including the TTL sweep. The
+        UI states this before asking for confirmation.
+
+        Nothing is changed in AWS. MayaTrail only ever assumes a role the user
+        created, so revoking access properly means deleting that role in their
+        own account.
+
+        Args:
+            request: DRF request from the authenticated user.
+
+        Returns:
+            200 with {"status": "disconnected"}, or 409 naming the stacks that
+            must settle first.
+        """
+        user = request.user
+
+        blocking = list(
+            Stack.objects.filter(owner=user, status__in=IN_FLIGHT_STACK_STATUSES)
+            .values_list("name", "status")
+        )
+        if blocking:
+            return Response(
+                {
+                    "detail": (
+                        "Cannot disconnect while a stack operation is in progress. "
+                        "Wait for it to finish, then try again."
+                    ),
+                    "blocking_stacks": [
+                        {"name": name, "status": stack_status} for name, stack_status in blocking
+                    ],
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        user.aws_role_arn = ""
+        user.is_verified = False
+        user.save(update_fields=["aws_role_arn", "is_verified"])
+
+        logger.info("AWS connector disconnected for user %s", user.id)
+
+        return Response({"status": "disconnected"})
 
 
 class DemoActivateView(APIView):

@@ -1,5 +1,5 @@
 /**
- * Shared full-page background effects used on both LoginPage and ConnectorPage.
+ * Full-page background effects for the auth screens.
  *
  * AsciiArtBackground  — MITRE ATT&CK threat-feed text that scrolls upward
  *                       continuously at low opacity, acting as ambient texture.

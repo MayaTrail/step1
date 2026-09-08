@@ -32,10 +32,10 @@ export function ProtectedRoute() {
   // lives on the action rather than on the page. See
   // product-design-requirements/connector-access-design/.
 
-  // Demo users whose session has expired — redirect to connector to reconnect.
-  // This fires in real-time via useDemoCountdown (no navigation needed).
+  // Demo users whose session has expired land on the profile, which is where the
+  // cloud connector now lives. Fires in real time via useDemoCountdown.
   if (user.isDemo && demoExpired) {
-    return <Navigate to="/connector" replace />
+    return <Navigate to="/me" replace />
   }
 
   return <Outlet />
