@@ -23,6 +23,13 @@ from typing import Any
 
 from .correlate import FIRED, NOT_INTEGRATED, SILENT
 
+# Unattributed alerts are kept as a sample, not in full. A busy SIEM can raise
+# hundreds during a thirty minute window, and the report is stored as JSON on the
+# run: keeping every one would grow a row without bound to show a reader rows
+# they will not read. The true total is reported separately, so the count stays
+# honest even when the list is trimmed.
+MAX_UNATTRIBUTED_STORED = 25
+
 
 def _percent(numerator: int, denominator: int) -> int | None:
     """
@@ -97,8 +104,9 @@ def build_score(
         "detectionCoverage": _percent(counts[FIRED], exercised),
         "integrationHealth": integrated,
         "unattributedCount": len(unattributed),
+        "unattributedTruncated": len(unattributed) > MAX_UNATTRIBUTED_STORED,
         "rules": rules,
-        "unattributed": unattributed,
+        "unattributed": unattributed[:MAX_UNATTRIBUTED_STORED],
     }
 
 

@@ -58,19 +58,27 @@ def _wait_minutes() -> int:
     return int(getattr(settings, "WORKFLOW_ALERT_WAIT_MINUTES", DEFAULT_ALERT_WAIT_MINUTES))
 
 
-def _fail(workflow: WorkflowRun, detail: str) -> None:
+def _fail(workflow: WorkflowRun, detail: str, step: str) -> None:
     """
-    Mark a workflow failed with a reason a reader can act on.
+    Mark a workflow failed, recording which step gave up.
+
+    The step is passed in rather than derived, because only the branch that
+    abandoned the run knows it. A previous version left the frontend to infer it
+    from timestamps, which marked a failed deploy as done and blamed the attack
+    step that had never started.
 
     Args:
         workflow: The run to close.
         detail: Human-readable cause.
+        step: One of the STEPS keys the frontend renders: deploy, attack,
+            alerts or score.
     """
     workflow.status = WorkflowRun.Status.FAILED
     workflow.detail = detail
+    workflow.failed_step = step
     workflow.completed_at = timezone.now()
-    workflow.save(update_fields=["status", "detail", "completed_at"])
-    logger.warning("Workflow %s failed: %s", workflow.id, detail)
+    workflow.save(update_fields=["status", "detail", "failed_step", "completed_at"])
+    logger.warning("Workflow %s failed at %s: %s", workflow.id, step, detail)
 
 
 def _start_deploy(workflow: WorkflowRun) -> None:
@@ -84,7 +92,7 @@ def _start_deploy(workflow: WorkflowRun) -> None:
 
     entry = get_emulation(workflow.emulation_type)
     if entry is None:
-        _fail(workflow, f"Unknown emulation: {workflow.emulation_type}")
+        _fail(workflow, f"Unknown emulation: {workflow.emulation_type}", "deploy")
         return
 
     stack = Stack.objects.create(
@@ -231,6 +239,27 @@ def settle(workflow: WorkflowRun) -> dict[str, Any]:
     return score
 
 
+def _step_for(status: str) -> str:
+    """
+    Map an open status to the pipeline step it is sitting on.
+
+    Used only when an unexpected exception ends a run, where the branch that
+    raised did not name a step itself.
+
+    Args:
+        status: The workflow's status at the moment it failed.
+
+    Returns:
+        A STEPS key, defaulting to deploy for a run that had not started.
+    """
+    return {
+        WorkflowRun.Status.PENDING: "deploy",
+        WorkflowRun.Status.DEPLOYING: "deploy",
+        WorkflowRun.Status.ATTACKING: "attack",
+        WorkflowRun.Status.AWAITING_ALERTS: "alerts",
+    }.get(status, "deploy")
+
+
 def _timed_out(workflow: WorkflowRun) -> bool:
     """
     Report whether a workflow has sat in one step past the timeout.
@@ -279,19 +308,19 @@ def advance_workflows() -> dict[str, int]:
             elif workflow.status == WorkflowRun.Status.DEPLOYING:
                 stack = workflow.stack
                 if stack is None or stack.status == Stack.Status.FAILED:
-                    _fail(workflow, "Infrastructure deployment failed.")
+                    _fail(workflow, "Infrastructure deployment failed.", "deploy")
                     moved["failed"] += 1
                 elif stack.status == Stack.Status.READY_FOR_ATTACK:
                     _start_attack(workflow)
                     moved["attacked"] += 1
                 elif _timed_out(workflow):
-                    _fail(workflow, "Deployment did not become ready in time.")
+                    _fail(workflow, "Deployment did not become ready in time.", "deploy")
                     moved["failed"] += 1
 
             elif workflow.status == WorkflowRun.Status.ATTACKING:
                 run = workflow.emulation_run
                 if run is None:
-                    _fail(workflow, "Emulation run is missing.")
+                    _fail(workflow, "Emulation run is missing.", "attack")
                     moved["failed"] += 1
                 elif run.status in (
                     EmulationRun.Status.COMPLETED,
@@ -300,7 +329,7 @@ def advance_workflows() -> dict[str, int]:
                     _open_alert_window(workflow)
                     moved["awaiting"] += 1
                 elif _timed_out(workflow):
-                    _fail(workflow, "Emulation did not finish in time.")
+                    _fail(workflow, "Emulation did not finish in time.", "attack")
                     moved["failed"] += 1
 
             elif workflow.status == WorkflowRun.Status.AWAITING_ALERTS:
@@ -310,7 +339,7 @@ def advance_workflows() -> dict[str, int]:
 
         except Exception as exc:  # noqa: BLE001 - one bad workflow must not stall the rest
             logger.exception("Workflow %s could not be advanced", workflow.id)
-            _fail(workflow, f"{type(exc).__name__}: {exc}")
+            _fail(workflow, f"{type(exc).__name__}: {exc}", _step_for(workflow.status))
             moved["failed"] += 1
 
     if any(moved.values()):

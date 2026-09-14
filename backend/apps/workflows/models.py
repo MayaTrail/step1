@@ -196,6 +196,16 @@ class WorkflowRun(models.Model):
         blank=True,
         help_text="Human-readable reason for the current status, set when a step fails.",
     )
+    failed_step = models.CharField(
+        max_length=20,
+        blank=True,
+        help_text=(
+            "Which step abandoned the run: deploy, attack, alerts or score. Recorded "
+            "because only the code that gave up knows this. Inferring it afterwards "
+            "from timestamps marked a failed deploy as successful and blamed the "
+            "attack step, which had never run."
+        ),
+    )
     window_start = models.DateTimeField(
         null=True,
         blank=True,

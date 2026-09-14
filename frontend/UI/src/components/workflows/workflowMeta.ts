@@ -38,18 +38,19 @@ export function isOpen(status: WorkflowStatus): boolean {
  *
  * A failed run marks the step it died on rather than showing everything as
  * pending, because "it failed" is far less useful than "it failed deploying".
- * The failed step is inferred from how far the run got, since the status itself
- * only says that it stopped.
+ * Which step that was comes from the run itself, not from this function.
  *
  * @param run - The workflow being rendered.
  * @returns One state per entry in STEPS.
  */
 export function stepStates(run: WorkflowRun): StepState[] {
   if (run.status === 'failed') {
-    // A failed run has no step index of its own. Infer it from the timestamps:
-    // no start means it never deployed, and a start with no score means it
-    // stopped somewhere in the middle.
-    const reached = run.startedAt ? 1 : 0
+    // The backend records which step gave up, because only the code that gave
+    // up knows. An earlier version inferred it from startedAt, which is set
+    // when deploying begins rather than when it succeeds, so a failed deploy
+    // rendered green and the blame landed on a step that never ran.
+    const failedIndex = STEPS.findIndex((step) => step.key === run.failedStep)
+    const reached = failedIndex >= 0 ? failedIndex : 0
     return STEPS.map((_, index) =>
       index < reached ? 'done' : index === reached ? 'failed' : 'pending',
     )

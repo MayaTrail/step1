@@ -1,43 +1,40 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { useEmulations } from '@/hooks/usePlatformData'
 import { useAlertEndpoints, useWorkflowRuns } from '@/hooks/useWorkflows'
 import { startWorkflowRun } from '@/services/workflow.service'
-import type { WorkflowRun } from '@/types/workflow'
 import { Card } from '@/components/ui/Card'
-import { Badge } from '@/components/ui/Badge'
-import { EmptyState } from '@/components/ui/EmptyState'
-import { IconActivity } from '@/components/ui/Icons'
-import { formatWhen } from '@/components/threatfeed/feedMeta'
-import { AlertEndpointPanel } from './AlertEndpointPanel'
-import {
-  STATUS_LABEL,
-  STATUS_TONE,
-  formatCoverage,
-  isOpen,
-  untilDeadline,
-} from './workflowMeta'
+import { Combobox } from '@/components/ui/Combobox'
+import { EndpointsSection } from './EndpointsSection'
+import { RunsSection } from './RunsSection'
 
 /**
  * Workflows, the detection-validation pipeline.
  *
- * A workflow runs an emulation in the client's account and then reports which
- * of that emulation's expected detections their own SIEM actually caught.
- * Running the attack alone tells a client nothing; their SIEM's response to it
- * is the finding.
+ * A workflow runs an emulation in the customer's account and reports which of
+ * that emulation's expected detections their own SIEM actually caught. Running
+ * the attack alone tells them nothing; their SIEM's response to it is the
+ * finding.
  *
- * The list polls while any run is open, because a workflow advances on a
- * scheduled job rather than in response to anything the browser does, and a run
- * can take the better part of an hour.
+ * Split into two tabs because the surfaces have different lifetimes. Endpoints
+ * are configuration, set once and rarely revisited; runs are the working
+ * history. Sharing one scroll meant a team with several SIEMs pushed their own
+ * results off the page.
  */
 
 /** Refresh cadence while at least one run is still moving. */
 const LIST_POLL_MS = 20_000
 
+type Tab = 'runs' | 'endpoints'
+
 export function WorkflowsPage() {
-  const { data: endpoints, loading: endpointsLoading } = useAlertEndpoints()
-  const [refreshKey, setRefreshKey] = useState(0)
-  const { data: runs, loading } = useWorkflowRuns(LIST_POLL_MS)
+  const [tab, setTab] = useState<Tab>('runs')
+  // Bumped after a mutation. It forms part of each hook's cache key, so the
+  // data refetches without remounting anything, which is what an earlier
+  // version did and why a newly created secret vanished before it rendered.
+  const [version, setVersion] = useState(0)
+
+  const { data: runs, loading } = useWorkflowRuns(LIST_POLL_MS, version)
+  const { data: endpoints, loading: endpointsLoading } = useAlertEndpoints(version)
   const { data: emulations } = useEmulations('aws')
 
   const [selected, setSelected] = useState('')
@@ -53,7 +50,7 @@ export function WorkflowsPage() {
     setError(null)
     try {
       await startWorkflowRun(selected)
-      setRefreshKey((key) => key + 1)
+      setVersion((current) => current + 1)
     } catch {
       setError('Could not start the workflow.')
     } finally {
@@ -62,7 +59,7 @@ export function WorkflowsPage() {
   }
 
   return (
-    <div className="animate-fadeIn flex flex-col gap-6" key={refreshKey}>
+    <div className="animate-fadeIn flex flex-col gap-5">
       <div>
         <div className="font-mono text-2xs uppercase tracking-label text-accent-blue font-medium mb-2">
           Operations
@@ -75,118 +72,104 @@ export function WorkflowsPage() {
         </p>
       </div>
 
-      <AlertEndpointPanel endpoints={endpoints} onCreated={() => setRefreshKey((k) => k + 1)} />
+      <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="Workflows view">
+        <TabButton id="runs" active={tab} count={list.length} onSelect={setTab}>
+          Runs
+        </TabButton>
+        <TabButton
+          id="endpoints"
+          active={tab}
+          count={endpoints?.length ?? 0}
+          onSelect={setTab}
+        >
+          Endpoints
+        </TabButton>
+      </div>
 
-      <Card className="p-5">
-        <h2 className="font-mono text-2xs uppercase tracking-label text-content-dim mb-3">
-          Start a workflow
-        </h2>
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={selected}
-            onChange={(event) => setSelected(event.target.value)}
-            className="flex-1 min-w-[240px] bg-surface-base border border-border rounded-btn px-3 py-2
-              text-sm text-content-primary outline-none transition-colors focus:border-border-active"
-          >
-            <option value="">Choose an emulation…</option>
-            {(emulations ?? []).map((emulation) => (
-              <option key={emulation.id} value={emulation.id}>
-                {emulation.name}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={start}
-            disabled={!selected || starting}
-            className="px-4 py-2 rounded-btn text-sm font-medium tracking-btn border border-border
-              text-content-primary shadow-button transition-opacity hover:opacity-60
-              disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            {starting ? 'Starting…' : 'Start workflow'}
-          </button>
-        </div>
-        {/* Stated before the run, not after it fails to report anything. */}
-        {!endpointsLoading && !hasEndpoint && (
-          <p className="text-xs text-warning mt-2">
-            No alert endpoint is configured yet. A workflow will still run, but it cannot
-            report which detections your SIEM caught until one exists.
-          </p>
-        )}
-        <p className="text-xs text-content-dim mt-2">
-          This deploys real infrastructure into your connected account and runs a real attack
-          against it.
-        </p>
-        {error && <p className="text-xs text-danger mt-2">{error}</p>}
-      </Card>
+      {tab === 'runs' ? (
+        <>
+          <Card className="p-5">
+            <h2 className="font-mono text-2xs uppercase tracking-label text-content-dim mb-3">
+              Start a workflow
+            </h2>
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Fifty emulations is too many to recognise in a dropdown, so
+                  this filters as you type. The hint line carries the registry
+                  id, which is what distinguishes the several near-identical
+                  IAM techniques from one another. */}
+              <Combobox
+                options={(emulations ?? []).map((emulation) => ({
+                  value: emulation.id,
+                  label: emulation.name,
+                  hint: emulation.id,
+                }))}
+                value={selected}
+                onChange={setSelected}
+                placeholder="Search emulations…"
+                ariaLabel="Choose an emulation to validate"
+              />
+              <button
+                type="button"
+                onClick={start}
+                disabled={!selected || starting}
+                className="px-4 py-2 rounded-btn text-sm font-medium tracking-btn border border-border
+                  text-content-primary shadow-button transition-opacity hover:opacity-60
+                  disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                {starting ? 'Starting…' : 'Start workflow'}
+              </button>
+            </div>
+            {/* Said before the run, not after it reports nothing. */}
+            {!endpointsLoading && !hasEndpoint && (
+              <p className="text-xs text-warning mt-2">
+                No alert endpoint is configured yet. A workflow will still run, but it cannot
+                report which detections your SIEM caught until one exists.
+              </p>
+            )}
+            <p className="text-xs text-content-dim mt-2">
+              This deploys real infrastructure into your connected account and runs a real attack
+              against it.
+            </p>
+            {error && <p className="text-xs text-danger mt-2">{error}</p>}
+          </Card>
 
-      {loading && list.length === 0 ? (
-        <div className="text-center py-12 text-content-dim font-mono text-sm">Loading workflows…</div>
-      ) : list.length === 0 ? (
-        <EmptyState
-          icon={<IconActivity size={32} />}
-          title="No workflows yet"
-          body="Start one above to validate an emulation against the detections you already run."
-        />
+          <RunsSection runs={list} loading={loading} />
+        </>
       ) : (
-        <div className="flex flex-col gap-3">
-          {list.map((run) => (
-            <RunRow key={run.id} run={run} />
-          ))}
-        </div>
+        <EndpointsSection
+          endpoints={endpoints}
+          loading={endpointsLoading}
+          onCreated={() => setVersion((current) => current + 1)}
+        />
       )}
     </div>
   )
 }
 
-/** One workflow as a row: what it validated, where it is, and what it found. */
-function RunRow({ run }: { run: WorkflowRun }) {
-  const waiting = run.status === 'awaiting_alerts' ? untilDeadline(run.alertDeadline) : ''
-
-  return (
-    <Link
-      to={`/workflows/${run.id}`}
-      className="block no-underline transition-opacity hover:opacity-60"
-    >
-      <Card className="p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-display text-sm font-semibold text-content-primary tracking-body">
-            {run.emulationType}
-          </span>
-          <Badge tone={STATUS_TONE[run.status]} mono dot pulse={isOpen(run.status)}>
-            {STATUS_LABEL[run.status]}
-          </Badge>
-          {waiting && (
-            <span className="font-mono text-2xs text-content-dim">{waiting}</span>
-          )}
-          <span className="ml-auto font-mono text-2xs text-content-muted">
-            {formatWhen(run.createdAt)}
-          </span>
-        </div>
-
-        <p className="text-xs text-content-secondary leading-relaxed mt-2">
-          {run.summary || run.detail || 'Running…'}
-        </p>
-
-        {run.score && (
-          <div className="flex flex-wrap items-center gap-4 mt-3 pt-3 border-t border-border">
-            <Figure label="Coverage" value={formatCoverage(run.score.detectionCoverage)} />
-            <Figure label="Caught" value={String(run.score.counts.fired ?? 0)} />
-            <Figure label="Missed" value={String(run.score.counts.silent ?? 0)} />
-            <Figure label="Alerts received" value={String(run.score.alertsReceived)} />
-          </div>
-        )}
-      </Card>
-    </Link>
-  )
+interface TabButtonProps {
+  id: Tab
+  active: Tab
+  count: number
+  onSelect: (tab: Tab) => void
+  children: React.ReactNode
 }
 
-/** One labelled figure in a row's result strip. */
-function Figure({ label, value }: { label: string; value: string }) {
+function TabButton({ id, active, count, onSelect, children }: TabButtonProps) {
+  const selected = active === id
   return (
-    <span className="flex flex-col">
-      <span className="font-mono text-2xs uppercase tracking-caps text-content-dim">{label}</span>
-      <span className="font-display text-sm font-semibold text-content-primary">{value}</span>
-    </span>
+    <button
+      type="button"
+      role="tab"
+      aria-selected={selected}
+      onClick={() => onSelect(id)}
+      className={`px-3 py-1.5 rounded-btn text-xs font-medium tracking-btn border
+        transition-opacity hover:opacity-60
+        ${selected
+          ? 'border-border-active bg-surface-card text-content-primary'
+          : 'border-border bg-transparent text-content-secondary'}`}
+    >
+      {children}
+      <span className="ml-1.5 font-mono text-content-dim">{count}</span>
+    </button>
   )
 }

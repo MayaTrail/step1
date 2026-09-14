@@ -10,7 +10,7 @@ wrong and unfixable by the people it accuses.
 from django.test import SimpleTestCase
 
 from apps.workflows.correlate import FIRED, NOT_INTEGRATED, SILENT
-from apps.workflows.scoring import build_score, headline
+from apps.workflows.scoring import MAX_UNATTRIBUTED_STORED, build_score, headline
 
 MATCHED = {
     "rules": [
@@ -93,6 +93,54 @@ class NotIntegratedTests(SimpleTestCase):
         score = build_score(MATCHED, endpoint_configured=False, alerts_received=0)
         self.assertTrue(all(r["verdict"] == NOT_INTEGRATED for r in score["rules"]))
         self.assertTrue(all(r["evidence"] is None for r in score["rules"]))
+
+
+class NoisySiemTests(SimpleTestCase):
+    """A SIEM raising far more alerts than the run expected."""
+
+    def _flood(self, count):
+        """Build a match result carrying `count` unattributed alerts."""
+        return {
+            "rules": MATCHED["rules"],
+            "unmatched": [{"alertId": str(n), "ruleName": f"Noise {n}"} for n in range(count)],
+        }
+
+    def test_the_stored_list_is_capped(self):
+        """
+        The report is JSON on a row, so it cannot grow without bound.
+
+        A busy SIEM can raise hundreds of alerts in a thirty minute window, and
+        keeping every one would grow the row to show rows nobody reads.
+        """
+        score = build_score(self._flood(300), endpoint_configured=True, alerts_received=300)
+        self.assertEqual(len(score["unattributed"]), MAX_UNATTRIBUTED_STORED)
+
+    def test_the_count_stays_the_true_total(self):
+        """
+        Trimming the list must not shrink the number.
+
+        A count that followed the sample would under-report how noisy the window
+        was, which is the one thing this section exists to convey.
+        """
+        score = build_score(self._flood(300), endpoint_configured=True, alerts_received=300)
+        self.assertEqual(score["unattributedCount"], 300)
+        self.assertTrue(score["unattributedTruncated"])
+
+    def test_a_short_list_is_not_marked_truncated(self):
+        """The notice must not appear when nothing was dropped."""
+        score = build_score(self._flood(3), endpoint_configured=True, alerts_received=3)
+        self.assertEqual(len(score["unattributed"]), 3)
+        self.assertFalse(score["unattributedTruncated"])
+
+    def test_coverage_is_unaffected_by_noise(self):
+        """
+        Unattributed alerts never touch the score, however many arrive.
+
+        Three hundred pieces of unrelated noise must not change the verdict on
+        the detections the emulation actually expected.
+        """
+        score = build_score(self._flood(300), endpoint_configured=True, alerts_received=300)
+        self.assertEqual(score["detectionCoverage"], 50)
 
 
 class EmulationWithoutRulesTests(SimpleTestCase):
