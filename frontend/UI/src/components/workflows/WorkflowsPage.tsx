@@ -3,7 +3,9 @@ import { useEmulations } from '@/hooks/usePlatformData'
 import { useAlertEndpoints, useWorkflowRuns } from '@/hooks/useWorkflows'
 import { startWorkflowRun } from '@/services/workflow.service'
 import { Card } from '@/components/ui/Card'
-import { Combobox } from '@/components/ui/Combobox'
+import { Combobox, type ComboboxOption } from '@/components/ui/Combobox'
+import { severityColorClass } from '@/components/ui/SeverityBadge'
+import type { Emulation } from '@/types'
 import { EndpointsSection } from './EndpointsSection'
 import { RunsSection } from './RunsSection'
 
@@ -23,6 +25,66 @@ import { RunsSection } from './RunsSection'
 
 /** Refresh cadence while at least one run is still moving. */
 const LIST_POLL_MS = 20_000
+
+/*
+ * Catalogue headings, most consequential first. A campaign deploys a multi
+ * stage attack and is the run a detection engineer wants; the forty atomic
+ * techniques are one API call each and would otherwise bury the four campaigns
+ * in an alphabetical list. The values are the MANIFEST origin_label verbatim,
+ * so an emulation whose label is not listed here simply sorts to the end
+ * rather than disappearing.
+ */
+const GROUP_LABELS: Record<string, string> = {
+  'APT EMULATION': 'Campaign emulations',
+  'RESEARCH POC': 'Research proof of concept',
+  'K8S EMULATION': 'Kubernetes emulations',
+  'ATOMIC TECHNIQUE': 'Atomic techniques',
+}
+
+const GROUP_ORDER = Object.values(GROUP_LABELS)
+
+/** Services listed in full would wrap the row; AMBERSQUID names twelve. */
+const MAX_SERVICES_SHOWN = 3
+
+/**
+ * Describe one emulation as a row in the search dropdown.
+ *
+ * Everything here is already on the catalogue response, so the richer row costs
+ * no extra request. The facts chosen are the ones that separate rows a reader
+ * cannot otherwise tell apart: six emulations are named some variant of
+ * "Backdoor IAM ...", and only the severity and technique count say which is
+ * worth a run.
+ *
+ * @param emulation - A catalogue entry from GET /api/emulations/.
+ * @returns The option, grouped by its origin label.
+ */
+function toOption(emulation: Emulation): ComboboxOption {
+  const services = emulation.services ?? []
+  const shown = services.slice(0, MAX_SERVICES_SHOWN).join(' ')
+  const hidden = services.length - MAX_SERVICES_SHOWN
+
+  const meta: string[] = []
+  if (emulation.tags[0]) meta.push(emulation.tags[0])
+  if (shown) meta.push(hidden > 0 ? `${shown} +${hidden}` : shown)
+  meta.push(emulation.techniqueCount === 1 ? '1 technique' : `${emulation.techniqueCount} techniques`)
+
+  return {
+    value: emulation.id,
+    label: emulation.name,
+    hint: emulation.id,
+    group: GROUP_LABELS[emulation.originLabel] ?? emulation.originLabel,
+    meta,
+    // An emulation whose MANIFEST omits a severity serialises as an empty
+    // string, and an empty chip reads as a missing value rather than a low one.
+    badge: emulation.severity ? (
+      <span
+        className={`font-mono text-2xs uppercase tracking-caps ${severityColorClass(emulation.severity)}`}
+      >
+        {emulation.severity}
+      </span>
+    ) : undefined,
+  }
+}
 
 type Tab = 'runs' | 'endpoints'
 
@@ -94,19 +156,19 @@ export function WorkflowsPage() {
             </h2>
             <div className="flex flex-wrap items-center gap-2">
               {/* Fifty emulations is too many to recognise in a dropdown, so
-                  this filters as you type. The hint line carries the registry
-                  id, which is what distinguishes the several near-identical
-                  IAM techniques from one another. */}
+                  this filters as you type. The registry id distinguishes the
+                  several near-identical IAM techniques from one another, and
+                  the severity and technique count say which of them is worth
+                  the run. All of it is already on the catalogue response. */}
               <Combobox
-                options={(emulations ?? []).map((emulation) => ({
-                  value: emulation.id,
-                  label: emulation.name,
-                  hint: emulation.id,
-                }))}
+                options={(emulations ?? []).map(toOption)}
                 value={selected}
                 onChange={setSelected}
                 placeholder="Search emulations…"
                 ariaLabel="Choose an emulation to validate"
+                groupOrder={GROUP_ORDER}
+                noun="emulations"
+                emptyHint="Names and registry ids are searched, not services or tactics."
               />
               <button
                 type="button"
