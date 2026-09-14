@@ -783,10 +783,13 @@ def run_emulation_attack(self, run_id: str) -> dict:
         ])
         stack.save(update_fields=["status", "updated_at"])
 
-    # Queued only for a run that finished: a failed attack has no meaningful
-    # window to correlate. Delayed rather than chained immediately because the
-    # notifier needs a few seconds to archive the events this run just produced.
-    if run.status == EmulationRun.Status.COMPLETED:
+    # Queued for a failed attack as well as a completed one. A failed attack is
+    # not an empty window: several attack modules raise rather than catch an
+    # AccessDenied, so an account whose guardrails actually blocked the attack
+    # lands here, and skipping the check hid exactly the accounts whose controls
+    # were working. Delayed rather than chained immediately because the events
+    # this run produced take a few seconds to reach the archive.
+    if run.status in (EmulationRun.Status.COMPLETED, EmulationRun.Status.FAILED):
         check_detection_coverage.apply_async(
             args=[run_id],
             countdown=getattr(settings, "DETECTION_CHECK_DELAY_SECONDS", 60),

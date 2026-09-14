@@ -56,6 +56,7 @@ LOCAL_APPS = [
     "apps.metrics",
     "apps.ai",
     "apps.threatintel",
+    "apps.workflows",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -151,6 +152,10 @@ REST_FRAMEWORK = {
     # it cannot be used to probe provider key validity at volume; 'ai_chat'
     # bounds how often a user can spend their provider key on chat turns.
     "DEFAULT_THROTTLE_RATES": {
+        # 'alert_webhook' bounds the only unauthenticated route in the platform.
+        # A busy SIEM sends a handful of alerts per emulation, so this is
+        # generous for real use and still caps what an unsigned flood can cost.
+        "alert_webhook": "120/min",
         "ai_test": "20/min",
         "ai_chat": "60/min",
     },
@@ -213,6 +218,14 @@ CELERY_BEAT_SCHEDULE = {
     "refresh-threat-feed": {
         "task": "threatintel.refresh_threat_feeds",
         "schedule": crontab(hour="6", minute="0"),
+    },
+    # Drives every workflow transition. A workflow spends almost all of its
+    # life waiting, on Pulumi, on the attack, then on a SIEM that evaluates on
+    # its own schedule, so the state lives in the database and a tick advances
+    # it rather than a task holding a worker slot for the duration.
+    "advance-workflows": {
+        "task": "workflows.advance_workflows",
+        "schedule": crontab(minute="*/2"),
     },
 }
 
@@ -282,6 +295,18 @@ GUARDRAILS_BASE_DIR = config("GUARDRAILS_BASE_DIR", default="")
 # deployment without the volume still works.
 
 THREATINTEL_DIR = config("THREATINTEL_DIR", default="")
+
+# Workflows.
+# How long a workflow keeps collecting SIEM alerts after its attack ends.
+# SIEMs evaluate on a schedule, commonly every 5 to 15 minutes, so a window of
+# seconds would score a working detection as silent. The default spans at least
+# two evaluation cycles for the slowest common cadence.
+WORKFLOW_ALERT_WAIT_MINUTES = config("WORKFLOW_ALERT_WAIT_MINUTES", default=30, cast=int)
+
+# Fernet key encrypting the HMAC secrets a client's SIEM signs alerts with.
+# Separate from LLM_FERNET_KEY: the two secrets have different owners and
+# lifecycles, and accepting alerts must not require the AI feature to be set up.
+WORKFLOW_FERNET_KEY = config("WORKFLOW_FERNET_KEY", default="")
 
 # ---------------------------------------------------------------------------
 # Email

@@ -27,6 +27,12 @@ from .window import build_payload
 
 logger = logging.getLogger(__name__)
 
+# A run that reaches no feed at all is retried rather than left until the next
+# day. Delays double from this base, so four attempts span roughly two and a
+# half hours, which covers a short outage or a machine that was briefly asleep.
+RETRY_BASE_SECONDS = 10 * 60
+MAX_RETRIES = 4
+
 
 def _failure(feed: dict[str, Any], detail: str) -> dict[str, Any]:
     """
@@ -159,18 +165,73 @@ def refresh_feed() -> dict[str, Any]:
     }
 
 
-@shared_task(name="threatintel.refresh_threat_feeds", queue="enterprise")
-def refresh_threat_feeds() -> dict[str, Any]:
+def is_total_failure(result: dict[str, Any]) -> bool:
+    """
+    Decide whether a run failed for a local reason rather than a remote one.
+
+    Nine of the forty subscriptions are permanently dead, so a run with some
+    failures is the normal case and must not trigger anything. Every feed
+    failing at once is different: forty independent publishers do not go down
+    together, so the cause is on this side, usually no network at all.
+
+    Args:
+        result: The summary returned by refresh_feed().
+
+    Returns:
+        True when nothing succeeded and something actively failed. A run where
+        every feed merely returned no items is not counted, since that is the
+        publishers being quiet rather than an outage.
+    """
+    return result.get("feedsOk", 0) == 0 and result.get("feedsFailed", 0) > 0
+
+
+@shared_task(
+    name="threatintel.refresh_threat_feeds",
+    queue="enterprise",
+    bind=True,
+    max_retries=MAX_RETRIES,
+)
+def refresh_threat_feeds(self) -> dict[str, Any]:
     """
     Celery entry point for the daily refresh.
 
     Scheduled by CELERY_BEAT_SCHEDULE in settings/base.py.
 
+    A run where every feed failed is retried rather than left until tomorrow.
+    This matters for a laptop or a self-hosted box, where the machine can be
+    asleep or off the network at the scheduled minute: without a retry, one
+    missed moment costs a full day of freshness, and the page goes on serving
+    the previous window with no sign that anything went wrong.
+
     Returns:
         The summary from refresh_feed(), minus the per-feed report, which is
         too large to keep in the Celery result backend and is already stored in
         the written document.
+
+    Raises:
+        Retry: When the run failed wholesale and attempts remain.
     """
     result = refresh_feed()
     result.pop("report", None)
+
+    if is_total_failure(result):
+        attempt = self.request.retries
+        if attempt >= MAX_RETRIES:
+            logger.error(
+                "Threat feed refresh failed on every feed %d times; leaving it until the next "
+                "scheduled run. Check outbound DNS and network from the worker.",
+                attempt + 1,
+            )
+            return result
+
+        # Backs off so a brief blip is caught quickly while a longer outage,
+        # a sleeping machine being the usual one, is still covered without
+        # hammering forty publishers every few minutes.
+        countdown = RETRY_BASE_SECONDS * (2 ** attempt)
+        logger.warning(
+            "Threat feed refresh reached no feeds at all (%d failed); retrying in %d minute(s).",
+            result.get("feedsFailed", 0), countdown // 60,
+        )
+        raise self.retry(countdown=countdown)
+
     return result

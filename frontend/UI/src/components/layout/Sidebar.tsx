@@ -15,6 +15,7 @@ import {
   IconGear,
   IconBook,
   IconBroadcast,
+  IconLaunch,
 } from '@/components/ui/Icons'
 
 interface SidebarProps {
@@ -49,6 +50,7 @@ export function Sidebar({ isOpen }: SidebarProps) {
 
       {/* ── Operations ── */}
       <SectionLabel>Operations</SectionLabel>
+      <NavItem to="/workflows" icon={<IconLaunch size={17} />} label="Workflows" />
       <NavItem to="/runs" icon={<IconActivity size={17} />} label="Active Runs" />
       <NavItem to="/results" icon={<IconClock size={17} />} label="Results" />
 
