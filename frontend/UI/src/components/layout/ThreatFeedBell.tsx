@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useThreatFeed } from '@/hooks/useThreatFeed'
-import type { ThreatFeedItem } from '@/types/threatintel'
+import type { ThreatFeed, ThreatFeedItem } from '@/types/threatintel'
 import { IconBell } from '@/components/ui/Icons'
 import { FeedMark } from '@/components/threatfeed/FeedMark'
 import { formatWhen } from '@/components/threatfeed/feedMeta'
@@ -96,7 +96,7 @@ export function ThreatFeedBell() {
     ? items.filter((item) => item.publishedAt !== null && item.publishedAt > lastSeen)
     : []
 
-  const stale = isStale(feed?.fetchedAt ?? null)
+  const stale = isStale(feed)
 
   /*
    * Opening the panel marks everything seen, but the list rendered is the one
@@ -148,9 +148,11 @@ export function ThreatFeedBell() {
           <div className="px-4 py-3 border-b border-border">
             <div className="font-mono text-2xs uppercase tracking-label text-content-dim">Threat Feed</div>
             <div className={`text-xs mt-1 ${stale ? 'text-warning' : 'text-content-secondary'}`}>
-              {feed?.fetchedAt
-                ? `Updated ${formatWhen(feed.fetchedAt)}${stale ? ', longer ago than expected' : ''}`
-                : 'Not refreshed yet'}
+              {!feed
+                ? 'Checking…'
+                : feed.fetchedAt
+                  ? `Updated ${formatWhen(feed.fetchedAt)}${stale ? ', longer ago than expected' : ''}`
+                  : 'Not refreshed yet'}
             </div>
             <div className="text-xs text-content-dim mt-0.5">
               {snapshot.length > 0
@@ -188,12 +190,20 @@ export function ThreatFeedBell() {
 /**
  * Decide whether the ingest has gone quiet.
  *
- * @param fetchedAt - When the last run completed, or null if it never has.
- * @returns True once more than STALE_AFTER_HOURS have passed.
+ * Takes the whole feed rather than its timestamp so that "not loaded yet" and
+ * "loaded, and it has never run" stay distinguishable. Collapsing the two is
+ * what made the warning dot flash on every page load: the first render has no
+ * response yet, and treating that absence as staleness lit the dot until the
+ * fetch came back a moment later.
+ *
+ * @param feed - The loaded feed, or undefined before the first response.
+ * @returns True only when a response has arrived and it shows the ingest has
+ *   either never run or not run within STALE_AFTER_HOURS.
  */
-function isStale(fetchedAt: string | null): boolean {
-  if (!fetchedAt) return true
-  const then = new Date(fetchedAt).getTime()
+function isStale(feed: ThreatFeed | undefined): boolean {
+  if (!feed) return false
+  if (!feed.fetchedAt) return true
+  const then = new Date(feed.fetchedAt).getTime()
   if (Number.isNaN(then)) return false
   return Date.now() - then > STALE_AFTER_HOURS * 3_600_000
 }

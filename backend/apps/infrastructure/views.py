@@ -25,6 +25,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import lifecycle
 from .models import Stack
 from .permissions import IsDemoUser, IsEnterpriseUser
 from .serializers import StackSerializer
@@ -56,6 +57,48 @@ class StackViewSet(viewsets.ModelViewSet):
 
     serializer_class = StackSerializer
     http_method_names = ["get", "post", "head", "options"]
+
+    def get_serializer_context(self):
+        """
+        Add the per-emulation phase baselines the lifecycle track compares to.
+
+        Computed once for the whole response rather than per stack. The list
+        endpoint returns every stack the user owns, and deriving a baseline
+        inside the serializer would run one query per card.
+
+        The samples come from the user's own finished stacks of the same
+        emulation, so "slow" means slow for this emulation in this account
+        rather than against a figure someone once wrote in a MANIFEST.
+
+        Returns:
+            The default context plus `phase_baselines`, keyed by emulation type.
+        """
+        context = super().get_serializer_context()
+        context["phase_baselines"] = self._phase_baselines()
+        return context
+
+    def _phase_baselines(self) -> dict:
+        """
+        Build median phase durations per emulation type, for this owner.
+
+        Returns:
+            {emulation_type: {status: median_seconds}}. An emulation with too
+            few finished runs is absent, and the UI then shows elapsed time
+            without calling anything slow.
+        """
+        histories: dict[str, list] = {}
+        rows = (
+            Stack.objects.filter(owner=self.request.user)
+            .exclude(status_history=[])
+            .values_list("emulation_type", "status_history")
+        )
+        for emulation_type, history in rows:
+            histories.setdefault(emulation_type, []).append(history)
+
+        return {
+            emulation_type: lifecycle.baselines(entries)
+            for emulation_type, entries in histories.items()
+        }
 
     def get_queryset(self):
         """
@@ -166,8 +209,7 @@ class StackViewSet(viewsets.ModelViewSet):
         if conflict:
             return conflict
 
-        stack.status = Stack.Status.DEPLOYING
-        stack.save(update_fields=["status", "updated_at"])
+        stack.transition_to(Stack.Status.DEPLOYING)
 
         task = deploy_stack.delay(str(stack.id))
 
@@ -197,8 +239,7 @@ class StackViewSet(viewsets.ModelViewSet):
         if conflict:
             return conflict
 
-        stack.status = Stack.Status.DESTROYING
-        stack.save(update_fields=["status", "updated_at"])
+        stack.transition_to(Stack.Status.DESTROYING)
 
         task = destroy_stack.delay(str(stack.id))
 
@@ -238,8 +279,7 @@ class StackViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        stack.status = Stack.Status.DESTROYING
-        stack.save(update_fields=["status", "updated_at"])
+        stack.transition_to(Stack.Status.DESTROYING)
 
         task = destroy_stack.delay(str(stack.id))
 
@@ -272,8 +312,7 @@ class StackViewSet(viewsets.ModelViewSet):
         if conflict:
             return conflict
 
-        stack.status = Stack.Status.REFRESHING
-        stack.save(update_fields=["status", "updated_at"])
+        stack.transition_to(Stack.Status.REFRESHING)
 
         task = refresh_stack.delay(str(stack.id))
 

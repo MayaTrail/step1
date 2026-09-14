@@ -7,6 +7,7 @@ import { AppLayout } from './components/layout/AppLayout'
 import { LoginPage } from './components/auth/LoginPage'
 import { DashboardPage } from './components/dashboard/DashboardPage'
 import { ThreatFeedPage } from './components/threatfeed/ThreatFeedPage'
+import { WorkflowsPage } from './components/workflows/WorkflowsPage'
 import { ProfilePage } from './components/profile/ProfilePage'
 import { SettingsPage } from './components/settings/SettingsPage'
 import { StacksPage } from './components/stacks/StacksPage'
@@ -44,6 +45,7 @@ export default function App() {
                 <Route path="stacks" element={<StacksPage />} />
 
                 {/* Operations */}
+                <Route path="workflows" element={<WorkflowsPage />} />
                 <Route path="runs" element={<ActiveRunsPage />} />
                 <Route path="results" element={<ResultsPage />} />
 

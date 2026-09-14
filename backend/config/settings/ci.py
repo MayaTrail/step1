@@ -38,8 +38,10 @@ ROOT_URLCONF = "config.ci_urls"
 # emulations.EmulationRun.stack is a foreign key to infrastructure.Stack;
 # omitting it fails the system check with fields.E300. apps.guardrails and
 # apps.threatintel have no models and are listed only so their test labels
-# resolve. The remaining apps (connectors, logs, ai) are not referenced by any
-# test or by these models.
+# resolve. apps.workflows does own models, and they carry foreign keys to
+# infrastructure.Stack and emulations.EmulationRun, both already present. The
+# remaining apps (connectors, logs, ai) are not referenced by any test or by
+# these models.
 INSTALLED_APPS = [
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -49,4 +51,5 @@ INSTALLED_APPS = [
     "apps.metrics",
     "apps.guardrails",
     "apps.threatintel",
+    "apps.workflows",
 ]
