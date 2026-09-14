@@ -13,10 +13,18 @@ import type { AlertEndpoint, WorkflowRun, WorkflowRunDetail } from '@/types/work
 /** How often to re-read a run that is still moving. */
 const OPEN_RUN_POLL_MS = 15_000
 
-/** Fetch the caller's workflows. */
-export function useWorkflowRuns(pollMs?: number) {
+/**
+ * Fetch the caller's workflows.
+ *
+ * @param pollMs - Poll interval while runs are still moving.
+ * @param version - Bump to force a fresh read after a mutation. The version is
+ *   part of the cache key, which refetches without remounting anything. An
+ *   earlier version remounted the page instead, which discarded component state
+ *   that had just been set.
+ */
+export function useWorkflowRuns(pollMs?: number, version = 0) {
   return useCachedResource<WorkflowRun[]>(
-    'workflow-runs',
+    `workflow-runs:${version}`,
     workflowService.listWorkflowRuns,
     pollMs ? { pollMs } : undefined,
   )
@@ -36,10 +44,14 @@ export function useWorkflowRun(workflowId: string | null, open: boolean) {
   )
 }
 
-/** Fetch the caller's alert endpoints. */
-export function useAlertEndpoints() {
+/**
+ * Fetch the caller's alert endpoints.
+ *
+ * @param version - Bump after creating one to refetch without a remount.
+ */
+export function useAlertEndpoints(version = 0) {
   return useCachedResource<AlertEndpoint[]>(
-    'workflow-endpoints',
+    `workflow-endpoints:${version}`,
     workflowService.listAlertEndpoints,
   )
 }

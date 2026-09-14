@@ -527,15 +527,15 @@ def deploy_emulation_stack(self, stack_id: str) -> dict:
             }
             readiness = resolve_readiness(manifest)
             if requires_http_probe(readiness):
-                stack.status = Stack.Status.EC2_BOOTING
+                stack.transition_to(Stack.Status.EC2_BOOTING, save=False)
             else:
                 # No vulnerable web service — ready for attack immediately.
-                stack.status = Stack.Status.READY_FOR_ATTACK
+                stack.transition_to(Stack.Status.READY_FOR_ATTACK, save=False)
             stack.resource_summary = _summarize_resources(pulumi_stack)
             stack.last_logs = _trim_logs(entries)
             stack.last_error = ""
             stack.save(update_fields=[
-                "status", "outputs", "resource_summary",
+                "status", "status_history", "outputs", "resource_summary",
                 "last_logs", "last_error", "updated_at",
             ])
         finally:
@@ -591,8 +591,7 @@ def poll_ec2_readiness(self, stack_id: str) -> None:
             "poll_ec2_readiness: no %s in outputs for stack=%s",
             readiness["ip_output"], stack_id,
         )
-        stack.status = Stack.Status.FAILED
-        stack.save(update_fields=["status", "updated_at"])
+        stack.transition_to(Stack.Status.FAILED)
         return
 
     try:
@@ -600,8 +599,7 @@ def poll_ec2_readiness(self, stack_id: str) -> None:
             f"http://{ip}:{readiness['port']}{readiness['path']}", timeout=5,
         )
         if resp.status_code == 200:
-            stack.status = Stack.Status.READY_FOR_ATTACK
-            stack.save(update_fields=["status", "updated_at"])
+            stack.transition_to(Stack.Status.READY_FOR_ATTACK)
             logger.info("EC2 ready for attack: stack=%s ip=%s", stack_id, ip)
             return
     except http_requests.RequestException:
@@ -614,8 +612,7 @@ def poll_ec2_readiness(self, stack_id: str) -> None:
             "poll_ec2_readiness: EC2 not ready after 15 minutes — marking FAILED: stack=%s",
             stack_id,
         )
-        stack.status = Stack.Status.FAILED
-        stack.save(update_fields=["status", "updated_at"])
+        stack.transition_to(Stack.Status.FAILED)
 
 
 _PHASE_MARKER = re.compile(r"\bPHASE\s+(\d+)", re.IGNORECASE)
@@ -719,8 +716,7 @@ def run_emulation_attack(self, run_id: str) -> dict:
     run.started_at = timezone.now()
     run.save(update_fields=["status", "started_at"])
 
-    stack.status = Stack.Status.ATTACKING
-    stack.save(update_fields=["status", "updated_at"])
+    stack.transition_to(Stack.Status.ATTACKING)
 
     stderr_buf = io.StringIO()
     # Placeholder so the finally block is safe if setup fails before the real
@@ -764,14 +760,14 @@ def run_emulation_attack(self, run_id: str) -> dict:
             mod.run(attack_outputs, region=stack.region)
 
         run.status = EmulationRun.Status.COMPLETED
-        stack.status = Stack.Status.ATTACK_COMPLETE
+        stack.transition_to(Stack.Status.ATTACK_COMPLETE, save=False)
         # A completed run has walked every phase; mark the kill chain full.
         run.phase_current = phase_total
 
     except Exception as exc:
         stderr_buf.write(f"\nTask exception: {exc}\n")
         run.status = EmulationRun.Status.FAILED
-        stack.status = Stack.Status.FAILED
+        stack.transition_to(Stack.Status.FAILED, save=False)
         logger.error("run_emulation_attack failed for run=%s: %s", run_id, exc)
 
     finally:
@@ -781,7 +777,7 @@ def run_emulation_attack(self, run_id: str) -> dict:
         run.save(update_fields=[
             "status", "stdout", "stderr", "completed_at", "phase_total", "phase_current",
         ])
-        stack.save(update_fields=["status", "updated_at"])
+        stack.save(update_fields=["status", "status_history", "updated_at"])
 
     # Queued for a failed attack as well as a completed one. A failed attack is
     # not an empty window: several attack modules raise rather than catch an
@@ -913,10 +909,10 @@ def destroy_emulation_stack(self, stack_id: str) -> dict:
     entries: list[dict] = []
     try:
         stack = _get_stack(stack_id)
-        stack.status = Stack.Status.DESTROYING
+        stack.transition_to(Stack.Status.DESTROYING, save=False)
         # Store the destroy task id so /progress/ can stream live teardown logs.
         stack.task_id = self.request.id
-        stack.save(update_fields=["status", "task_id", "updated_at"])
+        stack.save(update_fields=["status", "status_history", "task_id", "updated_at"])
 
         aws_creds = _assume_user_role(stack.owner)
         source_dir = _emulation_work_dir(stack.emulation_type)

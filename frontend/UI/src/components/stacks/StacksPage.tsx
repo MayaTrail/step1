@@ -18,6 +18,7 @@
  * delegates presentation to StackCard, StackFilters, and DeploymentLogsModal.
  */
 
+import { useSearchParams } from 'react-router-dom'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import type { Stack, StackStatus } from '@/types'
 import { StackCard, type StackDetailView } from './StackCard'
@@ -62,6 +63,20 @@ export function StacksPage() {
     const [expandedId, setExpandedId] = useState<string | null>(null)
     const [detailView, setDetailView] = useState<StackDetailView>('details')
     useEffect(() => { setDetailView('details') }, [expandedId])
+
+    /*
+     * Deep link support: /stacks?stack=<id> opens that stack's detail.
+     * A workflow's deploy step links here, and sending the reader to an
+     * undifferentiated list of stacks would leave them to find the right one
+     * by eye. Applied once the list has loaded, and only when nothing is
+     * already open, so it cannot fight a click the reader has since made.
+     */
+    const [searchParams] = useSearchParams()
+    const requestedStack = searchParams.get('stack')
+    useEffect(() => {
+        if (!requestedStack || loading) return
+        setExpandedId((current) => current ?? requestedStack)
+    }, [requestedStack, loading])
 
     // Logs modal
     const [logsStack, setLogsStack] = useState<Stack | null>(null)

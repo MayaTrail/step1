@@ -183,3 +183,15 @@ export const IconBell = (p: IconProps) => (
         <path d="M13.7 20a2 2 0 0 1-3.4 0" />
     </Icon>
 )
+
+export const IconCheck = (p: IconProps) => (
+    <Icon {...p}>
+        <path d="m4 12 5 5L20 6" />
+    </Icon>
+)
+
+export const IconClose = (p: IconProps) => (
+    <Icon {...p}>
+        <path d="M6 6 18 18M18 6 6 18" />
+    </Icon>
+)

@@ -67,6 +67,8 @@ export interface WorkflowScore {
   detectionCoverage: number | null
   integrationHealth: boolean
   unattributedCount: number
+  /** True when more alerts arrived than the report stores. */
+  unattributedTruncated: boolean
   rules: RuleOutcome[]
   unattributed: AlertEvidence[]
 }
@@ -75,8 +77,12 @@ export interface WorkflowScore {
 export interface WorkflowRun {
   id: string
   emulationType: string
+  /** Platform of the emulation, for links into its pages. */
+  platform: string
   status: WorkflowStatus
   detail: string
+  /** Which step abandoned a failed run, recorded rather than inferred. */
+  failedStep: string
   score: WorkflowScore | null
   /** One-sentence result, empty while the run is still open. */
   summary: string
@@ -92,7 +98,9 @@ export interface WorkflowRunDetail extends WorkflowRun {
   windowStart: string | null
   windowEnd: string | null
   stackId: string | null
+  stackStatus: string
   emulationRunId: string | null
+  emulationRunStatus: string
 }
 
 /** A webhook a client's SIEM posts alerts to. Never carries the secret. */
@@ -104,6 +112,8 @@ export interface AlertEndpoint {
   secretHint: string
   lastAlertAt: string | null
   createdAt: string
+  /** Username of whoever created it, so a team can tell endpoints apart. */
+  createdBy: string
   /** Alerts accepted so far, which is how a client confirms setup works. */
   alertCount: number
 }
