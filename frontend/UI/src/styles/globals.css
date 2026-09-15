@@ -5,6 +5,13 @@
 @layer base {
   html {
     scroll-behavior: smooth;
+    /*
+     * Tells the browser to paint its own controls dark: date and time pickers,
+     * scrollbars, select popups, autofill. Without it a native widget arrives
+     * white on the near-black canvas, which is the same failure a search input
+     * hit when its background class did not exist.
+     */
+    color-scheme: dark;
   }
 
   /*

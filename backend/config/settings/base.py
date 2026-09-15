@@ -156,6 +156,9 @@ REST_FRAMEWORK = {
         # A busy SIEM sends a handful of alerts per emulation, so this is
         # generous for real use and still caps what an unsigned flood can cost.
         "alert_webhook": "120/min",
+        # Revealing or rotating a webhook secret is a deliberate, occasional
+        # act. This is generous for a person and narrow for a stolen session.
+        "endpoint_secret": "10/min",
         "ai_test": "20/min",
         "ai_chat": "60/min",
     },

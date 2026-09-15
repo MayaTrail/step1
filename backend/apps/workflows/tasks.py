@@ -81,6 +81,59 @@ def _fail(workflow: WorkflowRun, detail: str, step: str) -> None:
     logger.warning("Workflow %s failed at %s: %s", workflow.id, step, detail)
 
 
+# Fallback lifetime when an emulation's MANIFEST does not declare one. Matches
+# the default the manual deploy path applies.
+DEFAULT_TTL_HOURS = 4
+
+
+def _active_stack_statuses(Stack: Any) -> list[str]:
+    """
+    Statuses in which a stack still owns, or is about to own, AWS resources.
+
+    Two stacks of one emulation would provision identically named resources and
+    fight over them, and the alert window could not say which run an alert
+    belonged to.
+
+    Wider than the list the manual deploy path applies, which omits pending,
+    ready and refreshing. A pending stack is about to deploy and a ready one is
+    live, so both block a second run here.
+
+    Args:
+        Stack: The infrastructure Stack model, resolved by the caller.
+
+    Returns:
+        The blocking statuses.
+    """
+    return [
+        Stack.Status.PENDING,
+        Stack.Status.DEPLOYING,
+        Stack.Status.EC2_BOOTING,
+        Stack.Status.READY,
+        Stack.Status.READY_FOR_ATTACK,
+        Stack.Status.ATTACKING,
+        Stack.Status.ATTACK_COMPLETE,
+        Stack.Status.REFRESHING,
+    ]
+
+
+def _stack_name(workflow: WorkflowRun) -> str:
+    """
+    Build a unique Pulumi stack name for a workflow's deployment.
+
+    Stack.name is unique across the table and is the name Pulumi provisions
+    under, so it cannot be left unset. The workflow id suffix keeps concurrent
+    runs of the same emulation apart and makes the stack traceable back to the
+    workflow that created it.
+
+    Args:
+        workflow: The workflow being deployed.
+
+    Returns:
+        A name such as "scarleteel-wf-58fb2415".
+    """
+    return f"{workflow.emulation_type}-wf-{str(workflow.id)[:8]}"
+
+
 def _start_deploy(workflow: WorkflowRun) -> None:
     """
     Provision the emulation's infrastructure and move to DEPLOYING.
@@ -95,18 +148,58 @@ def _start_deploy(workflow: WorkflowRun) -> None:
         _fail(workflow, f"Unknown emulation: {workflow.emulation_type}", "deploy")
         return
 
+    # The manual deploy path refuses a second stack for the same emulation, and
+    # a workflow has to refuse it too. Two Pulumi stacks provisioning the same
+    # resource names collide in AWS, and the alert window could not say which
+    # of them an alert belonged to.
+    active = Stack.objects.filter(
+        owner=workflow.owner,
+        emulation_type=workflow.emulation_type,
+        status__in=_active_stack_statuses(Stack),
+    ).first()
+    if active:
+        _fail(
+            workflow,
+            f"An active stack for this emulation already exists ({active.name}, "
+            f"status: {active.status}). Destroy it before starting this workflow.",
+            "deploy",
+        )
+        return
+
+    manifest = entry.get("manifest", entry)
+    ttl_hours = manifest.get("default_ttl_hours", DEFAULT_TTL_HOURS)
+
     stack = Stack.objects.create(
+        name=_stack_name(workflow),
         owner=workflow.owner,
         emulation_type=workflow.emulation_type,
         status=Stack.Status.PENDING,
+        expires_at=timezone.now() + timedelta(hours=ttl_hours),
     )
+    # Opens the stack's measured lifecycle. Without it a workflow's stack shows
+    # no phase history at all on the Stacks page.
+    stack.transition_to(Stack.Status.PENDING)
+
     workflow.stack = stack
     workflow.status = WorkflowRun.Status.DEPLOYING
     workflow.started_at = timezone.now()
     workflow.save(update_fields=["stack", "status", "started_at"])
 
-    deploy_emulation_stack.apply_async(args=[str(stack.id)], queue="enterprise")
-    logger.info("Workflow %s: deploying stack %s", workflow.id, stack.id)
+    task = deploy_emulation_stack.apply_async(args=[str(stack.id)], queue="enterprise")
+
+    # deploy_emulation_stack never sets DEPLOYING itself: it jumps to
+    # EC2_BOOTING, READY_FOR_ATTACK or FAILED, and the manual deploy path
+    # creates its stack already in DEPLOYING. Leaving this one in PENDING meant
+    # the card read "pending" for the whole Pulumi run and the lifecycle track
+    # had no deploy phase to measure.
+    stack.task_id = task.id
+    stack.transition_to(Stack.Status.DEPLOYING, save=False)
+    stack.save(update_fields=["task_id", "status", "status_history", "updated_at"])
+
+    logger.info(
+        "Workflow %s: deploying stack %s (%s) task=%s",
+        workflow.id, stack.id, stack.name, task.id,
+    )
 
 
 def _start_attack(workflow: WorkflowRun) -> None:
@@ -253,6 +346,7 @@ def _step_for(status: str) -> str:
         A STEPS key, defaulting to deploy for a run that had not started.
     """
     return {
+        WorkflowRun.Status.SCHEDULED: "deploy",
         WorkflowRun.Status.PENDING: "deploy",
         WorkflowRun.Status.DEPLOYING: "deploy",
         WorkflowRun.Status.ATTACKING: "attack",
@@ -291,6 +385,7 @@ def advance_workflows() -> dict[str, int]:
 
     moved = {"deployed": 0, "attacked": 0, "awaiting": 0, "settled": 0, "failed": 0}
     open_states = [
+        WorkflowRun.Status.SCHEDULED,
         WorkflowRun.Status.PENDING,
         WorkflowRun.Status.DEPLOYING,
         WorkflowRun.Status.ATTACKING,
@@ -301,7 +396,16 @@ def advance_workflows() -> dict[str, int]:
         "stack", "emulation_run"
     ):
         try:
-            if workflow.status == WorkflowRun.Status.PENDING:
+            if workflow.status == WorkflowRun.Status.SCHEDULED:
+                # Held until its time arrives. The tick that finds the time
+                # passed starts it, so a scheduled run is late by at most one
+                # beat interval and costs nothing while it waits.
+                if workflow.scheduled_for and workflow.scheduled_for > timezone.now():
+                    continue
+                _start_deploy(workflow)
+                moved["deployed"] += 1
+
+            elif workflow.status == WorkflowRun.Status.PENDING:
                 _start_deploy(workflow)
                 moved["deployed"] += 1
 

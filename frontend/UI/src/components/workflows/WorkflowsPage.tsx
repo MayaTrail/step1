@@ -43,6 +43,20 @@ const GROUP_LABELS: Record<string, string> = {
 
 const GROUP_ORDER = Object.values(GROUP_LABELS)
 
+/**
+ * The current local time, formatted for a datetime-local input's `min`.
+ *
+ * The input takes and returns wall-clock time with no zone, so the bound has to
+ * be built from the reader's own clock rather than from an ISO string.
+ *
+ * @returns A value such as "2026-09-15T13:45".
+ */
+function localNow(): string {
+  const now = new Date()
+  const offset = now.getTimezoneOffset() * 60_000
+  return new Date(now.getTime() - offset).toISOString().slice(0, 16)
+}
+
 /** Services listed in full would wrap the row; AMBERSQUID names twelve. */
 const MAX_SERVICES_SHOWN = 3
 
@@ -102,19 +116,36 @@ export function WorkflowsPage() {
   const [selected, setSelected] = useState('')
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Empty means start now. A datetime-local value carries no timezone, so it is
+  // read as the reader's own clock and converted on submit.
+  const [scheduledFor, setScheduledFor] = useState('')
+  const [scheduling, setScheduling] = useState(false)
 
   const list = useMemo(() => runs ?? [], [runs])
   const hasEndpoint = (endpoints?.length ?? 0) > 0
 
   async function start() {
     if (!selected || starting) return
+    if (scheduling && !scheduledFor) {
+      setError('Choose a date and time, or switch back to starting now.')
+      return
+    }
     setStarting(true)
     setError(null)
     try {
-      await startWorkflowRun(selected)
+      // new Date() on a datetime-local string reads it in the reader's timezone,
+      // and toISOString converts to UTC, which is what the API stores.
+      const when = scheduling && scheduledFor
+        ? new Date(scheduledFor).toISOString()
+        : undefined
+      await startWorkflowRun(selected, when)
+      setScheduledFor('')
+      setScheduling(false)
       setVersion((current) => current + 1)
-    } catch {
-      setError('Could not start the workflow.')
+    } catch (caught) {
+      const detail = (caught as { response?: { data?: { detail?: string } } })
+        .response?.data?.detail
+      setError(detail ?? 'Could not start the workflow.')
     } finally {
       setStarting(false)
     }
@@ -170,6 +201,19 @@ export function WorkflowsPage() {
                 noun="emulations"
                 emptyHint="Names and registry ids are searched, not services or tactics."
               />
+              {scheduling && (
+                <input
+                  type="datetime-local"
+                  value={scheduledFor}
+                  min={localNow()}
+                  onChange={(event) => setScheduledFor(event.target.value)}
+                  aria-label="Date and time to start the workflow"
+                  className="bg-surface-base border border-border rounded-btn px-3 py-2
+                    text-sm text-content-primary outline-none transition-colors
+                    focus:border-border-active"
+                />
+              )}
+
               <button
                 type="button"
                 onClick={start}
@@ -178,7 +222,26 @@ export function WorkflowsPage() {
                   text-content-primary shadow-button transition-opacity hover:opacity-60
                   disabled:opacity-30 disabled:cursor-not-allowed"
               >
-                {starting ? 'Starting…' : 'Start workflow'}
+                {starting
+                  ? 'Starting…'
+                  : scheduling
+                    ? 'Schedule workflow'
+                    : 'Start workflow'}
+              </button>
+
+              {/* A secondary action, so it reads as the alternative to the
+                  primary button rather than competing with it. */}
+              <button
+                type="button"
+                onClick={() => {
+                  setScheduling((current) => !current)
+                  setScheduledFor('')
+                  setError(null)
+                }}
+                className="px-3 py-2 rounded-btn text-xs tracking-btn text-content-dim
+                  transition-opacity hover:opacity-60"
+              >
+                {scheduling ? 'Start now instead' : 'Schedule for later'}
               </button>
             </div>
             {/* Said before the run, not after it reports nothing. */}
@@ -195,7 +258,11 @@ export function WorkflowsPage() {
             {error && <p className="text-xs text-danger mt-2">{error}</p>}
           </Card>
 
-          <RunsSection runs={list} loading={loading} />
+          <RunsSection
+            runs={list}
+            loading={loading}
+            onChanged={() => setVersion((current) => current + 1)}
+          />
         </>
       ) : (
         <EndpointsSection

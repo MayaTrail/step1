@@ -20,6 +20,7 @@ export const STEPS = [
 
 /** Which step each status is sitting on. -1 means not started. */
 const STATUS_STEP: Record<WorkflowStatus, number> = {
+  scheduled: -1,
   pending: -1,
   deploying: 0,
   attacking: 1,
@@ -67,6 +68,7 @@ export function stepStates(run: WorkflowRun): StepState[] {
 
 /** Label for each status, phrased for a reader rather than as a field value. */
 export const STATUS_LABEL: Record<WorkflowStatus, string> = {
+  scheduled: 'Scheduled',
   pending: 'Queued',
   deploying: 'Deploying infrastructure',
   attacking: 'Running emulation',
@@ -77,6 +79,7 @@ export const STATUS_LABEL: Record<WorkflowStatus, string> = {
 
 /** Tone per status. Waiting is informational, not a warning. */
 export const STATUS_TONE: Record<WorkflowStatus, 'neutral' | 'blue' | 'green' | 'red'> = {
+  scheduled: 'neutral',
   pending: 'neutral',
   deploying: 'blue',
   attacking: 'blue',
@@ -144,4 +147,26 @@ export function untilDeadline(deadline: string | null): string {
   if (Number.isNaN(remaining) || remaining <= 0) return ''
   const minutes = Math.ceil(remaining / 60_000)
   return minutes < 60 ? `about ${minutes} min left` : `about ${Math.ceil(minutes / 60)} h left`
+}
+
+/**
+ * Describe how long until a scheduled run starts.
+ *
+ * A scheduled run looks identical to a stuck one in a table, so the row has to
+ * say when it is due or the reader assumes it has hung.
+ *
+ * @param scheduledFor - ISO timestamp the run is due to start.
+ * @returns A short phrase, or "starting now" once the time has passed and the
+ *   next beat tick has yet to pick it up.
+ */
+export function untilScheduled(scheduledFor: string | null): string {
+  if (!scheduledFor) return ''
+  const remaining = new Date(scheduledFor).getTime() - Date.now()
+  if (Number.isNaN(remaining)) return ''
+  if (remaining <= 0) return 'starting now'
+  const minutes = Math.ceil(remaining / 60_000)
+  if (minutes < 60) return `starts in ${minutes} min`
+  const hours = Math.round(remaining / 3_600_000)
+  if (hours < 24) return `starts in ${hours} h`
+  return `starts in ${Math.round(hours / 24)} d`
 }

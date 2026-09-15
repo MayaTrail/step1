@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useWorkflowRun } from '@/hooks/useWorkflows'
+import { deleteWorkflowRun } from '@/services/workflow.service'
 import { Badge } from '@/components/ui/Badge'
 import { IconClose } from '@/components/ui/Icons'
 import { formatWhen } from '@/components/threatfeed/feedMeta'
@@ -25,10 +26,37 @@ const PANEL_WIDTH = 'w-full sm:w-[min(720px,50vw)] sm:min-w-[460px]'
 interface WorkflowDrawerProps {
   workflowId: string
   onClose: () => void
+  /** Called once the run has been removed, so the list can refetch. */
+  onDeleted: () => void
 }
 
-export function WorkflowDrawer({ workflowId, onClose }: WorkflowDrawerProps) {
+export function WorkflowDrawer({ workflowId, onClose, onDeleted }: WorkflowDrawerProps) {
   const { data: run, loading } = useWorkflowRun(workflowId, true)
+  const [confirming, setConfirming] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  const [removeError, setRemoveError] = useState<string | null>(null)
+
+  // Failed runs pile up while an integration is being set up, and a scheduled
+  // run needs a way out before its time arrives. Neither owns anything: the
+  // stack reference is SET_NULL, so any infrastructure stays on the Stacks page.
+  const deletable = run?.status === 'failed' || run?.status === 'scheduled'
+
+  async function remove() {
+    if (removing) return
+    setRemoving(true)
+    setRemoveError(null)
+    try {
+      await deleteWorkflowRun(workflowId)
+      onDeleted()
+    } catch (caught) {
+      const detail = (caught as { response?: { data?: { detail?: string } } })
+        .response?.data?.detail
+      setRemoveError(detail ?? 'Could not remove this run.')
+      setConfirming(false)
+    } finally {
+      setRemoving(false)
+    }
+  }
 
   /*
    * Mount off-screen, then slide in on the next frame. Animating with a
@@ -114,6 +142,53 @@ export function WorkflowDrawer({ workflowId, onClose }: WorkflowDrawerProps) {
             </div>
           )}
         </div>
+
+        {deletable && (
+          <footer className="shrink-0 px-5 py-3.5 border-t border-border flex flex-wrap
+            items-center gap-2.5">
+            {confirming ? (
+              <>
+                <button
+                  type="button"
+                  onClick={remove}
+                  disabled={removing}
+                  className="px-3 py-1.5 rounded-btn text-xs font-medium tracking-btn border
+                    border-danger/30 text-danger transition-opacity hover:opacity-60
+                    disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  {removing ? 'Removing…' : 'Confirm remove'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirming(false)}
+                  className="px-3 py-1.5 rounded-btn text-xs tracking-btn text-content-dim
+                    transition-opacity hover:opacity-60"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirming(true)}
+                className="px-3 py-1.5 rounded-btn text-xs font-medium tracking-btn border
+                  border-danger/30 text-danger transition-opacity hover:opacity-60"
+              >
+                {run?.status === 'scheduled' ? 'Cancel this run' : 'Remove this run'}
+              </button>
+            )}
+
+            <span className="text-2xs text-content-muted">
+              {run?.stackId
+                ? 'Any infrastructure it created stays on the Stacks page.'
+                : 'Nothing was deployed by this run.'}
+            </span>
+
+            {removeError && (
+              <span className="w-full text-xs text-danger">{removeError}</span>
+            )}
+          </footer>
+        )}
       </aside>
     </div>
   )

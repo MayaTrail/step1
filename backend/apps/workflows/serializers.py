@@ -60,6 +60,7 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
     emulationType = serializers.CharField(source="emulation_type", read_only=True)
     failedStep = serializers.CharField(source="failed_step", read_only=True)
     alertDeadline = serializers.DateTimeField(source="alert_deadline", read_only=True)
+    scheduledFor = serializers.DateTimeField(source="scheduled_for", read_only=True)
     createdAt = serializers.DateTimeField(source="created_at", read_only=True)
     startedAt = serializers.DateTimeField(source="started_at", read_only=True)
     completedAt = serializers.DateTimeField(source="completed_at", read_only=True)
@@ -70,7 +71,8 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
         model = WorkflowRun
         fields = [
             "id", "emulationType", "platform", "status", "detail", "failedStep", "score",
-            "summary", "alertDeadline", "createdAt", "startedAt", "completedAt",
+            "summary", "alertDeadline", "scheduledFor", "createdAt", "startedAt",
+            "completedAt",
         ]
 
     def get_platform(self, obj) -> str:

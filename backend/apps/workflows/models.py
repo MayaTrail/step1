@@ -155,6 +155,7 @@ class WorkflowRun(models.Model):
     class Status(models.TextChoices):
         """Lifecycle of a workflow, in the order a run passes through it."""
 
+        SCHEDULED = "scheduled", "Scheduled"
         PENDING = "pending", "Pending"
         DEPLOYING = "deploying", "Deploying infrastructure"
         ATTACKING = "attacking", "Running emulation"
@@ -204,6 +205,14 @@ class WorkflowRun(models.Model):
             "because only the code that gave up knows this. Inferring it afterwards "
             "from timestamps marked a failed deploy as successful and blamed the "
             "attack step, which had never run."
+        ),
+    )
+    scheduled_for = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=(
+            "When the run should start. Null means immediately. A scheduled run "
+            "holds at SCHEDULED until the beat tick that finds this time passed."
         ),
     )
     window_start = models.DateTimeField(
