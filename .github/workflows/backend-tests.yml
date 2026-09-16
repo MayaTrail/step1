@@ -43,9 +43,10 @@ jobs:
       - name: Install test dependencies
         run: pip install -r requirements-test.txt
 
-      - name: Run the emulation, metrics, guardrail and playbook test suites
-        # apps.playbooks is the one suite with database-backed tests; they run
-        # against the in-memory sqlite in config.settings.ci. Its view and
-        # serializer tests import DRF, which requirements-test.txt omits, so
-        # they skip here the way the pySigma-dependent detection test does.
-        run: python manage.py test apps.emulations apps.metrics apps.guardrails apps.playbooks apps.authored_detections
+      - name: Run the emulation, metrics, guardrail, threat feed, workflow, infrastructure, playbook and authored-detection suites
+        # apps.playbooks and apps.authored_detections are the suites with
+        # database-backed tests; they run against the in-memory sqlite in
+        # config.settings.ci. Their view and serializer tests import DRF, which
+        # requirements-test.txt omits, so they skip here the way the
+        # pySigma-dependent detection test does.
+        run: python manage.py test apps.emulations apps.metrics apps.guardrails apps.threatintel apps.workflows apps.infrastructure apps.playbooks apps.authored_detections

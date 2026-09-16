@@ -1,0 +1,161 @@
+# SNS topic opened for public publish (T1098 / T1565.002)
+#
+# The original rule matched `eventName:"createtopic"` — lower case, against a field
+# CloudTrail writes as `CreateTopic` — then phrase-matched the policy against the literal
+# `Principal:{AWS:*},Action:SNS:Publish`. That literal occurs in no real event: CloudTrail
+# carries `requestParameters.attributes.Policy` as a RAW JSON string, so the bytes are
+# `"Principal":{"AWS":"*"}` with quotes, in whatever key order and whitespace the client
+# sent. It also covered only CreateTopic, so a topic created clean and opened a minute
+# later by SetTopicAttributes was invisible.
+#
+# The discriminator is NOT the wildcard principal. AWS's own default topic policy is
+# `Principal {"AWS":"*"}` over eight SNS actions including Publish — every console-created
+# topic carries it — and what makes it safe is the confining Condition (`AWS:SourceOwner`,
+# `aws:SourceArn`, `aws:SourceAccount`, `aws:PrincipalOrgID`, `aws:sourceVpce`,
+# `sns:Protocol`, `sns:Endpoint`). A rule keyed on `Principal:*` alone fires on every topic
+# in the account and is muted inside a week.
+#
+# `|re` rather than `|contains`, for three reasons that are all correctness, not style:
+#   * the real request-side hazard is WHITESPACE, not encoding — a policy sent with
+#     `--policy-document file://` is pretty-printed, and `\s*` absorbs that where a
+#     fixed-spacing substring does not;
+#   * `(?i)` handles the action-prefix case, which is genuinely unstable — AWS's default
+#     policy writes `SNS:Publish`, AddPermission generates `sns:Publish`;
+#   * it closes the array forms. `"Action": ["*"]` and `"Principal": {"AWS": ["1","*"]}`
+#     have no substring that is not also inside an innocuous policy.
+title: SNS topic created with an unconditioned public publish grant
+id: 79571f1f-c865-4d1c-8e0f-d2c27dfbf5b7
+name: sns_public_publish_at_create
+status: experimental
+description: >-
+  CreateTopic storing a policy that allows a publish-granting action to Principal "*" with
+  no principal-scoping Condition. Any internet caller can inject messages into the topic.
+references:
+  - https://docs.aws.amazon.com/sns/latest/dg/sns-access-policy-use-cases.html
+  - https://attack.mitre.org/techniques/T1098/
+tags:
+  - attack.persistence
+  - attack.impact
+  - attack.t1098
+  - attack.t1565.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sns.amazonaws.com'
+    eventName: 'CreateTopic'
+  public_principal:
+    requestParameters.attributes.Policy|re: '"(AWS|Principal)"\s*:\s*(\[[^\]]{0,400})?"\*"'
+  publish_action:
+    requestParameters.attributes.Policy|re: '(?i)("NotAction"|"[^"]{0,40}:publish"|"sns:\*"|"action"\s*:\s*(\[[^\]]{0,400})?"\*")'
+  confined:
+    requestParameters.attributes.Policy|re: '(?i)(source(owner|account|arn|vpce?|ip)|principal(orgid|orgpaths|account|arn)|aws:userid|sns:(protocol|endpoint))'
+  success:
+    errorCode: null
+  condition: selection and public_principal and publish_action and success and not confined
+falsepositives:
+  - A deliberately open ingest topic — allowlist by name, never mute the rule.
+level: high
+---
+title: SNS topic policy replaced with an unconditioned public publish grant
+id: b4d57555-54ea-4126-ba55-ba605aeeb7ea
+name: sns_public_publish_via_set_attributes
+status: experimental
+description: >-
+  SetTopicAttributes rewriting the Policy attribute of an existing topic to allow a
+  publish-granting action to Principal "*" with no confining Condition. This is the path
+  the original rule missed entirely — the topic was created correctly and opened
+  afterwards, so no CreateTopic event carries the exposure.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_SetTopicAttributes.html
+  - https://docs.aws.amazon.com/sns/latest/dg/sns-access-policy-use-cases.html
+  - https://attack.mitre.org/techniques/T1098/
+tags:
+  - attack.persistence
+  - attack.impact
+  - attack.t1098
+  - attack.t1565.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sns.amazonaws.com'
+    eventName: 'SetTopicAttributes'
+  policy_attribute:
+    requestParameters.attributeName: 'Policy'
+  public_principal:
+    requestParameters.attributeValue|re: '"(AWS|Principal)"\s*:\s*(\[[^\]]{0,400})?"\*"'
+  publish_action:
+    requestParameters.attributeValue|re: '(?i)("NotAction"|"[^"]{0,40}:publish"|"sns:\*"|"action"\s*:\s*(\[[^\]]{0,400})?"\*")'
+  confined:
+    requestParameters.attributeValue|re: '(?i)(source(owner|account|arn|vpce?|ip)|principal(orgid|orgpaths|account|arn)|aws:userid|sns:(protocol|endpoint))'
+  success:
+    errorCode: null
+  condition: selection and policy_attribute and public_principal and publish_action and success and not confined
+falsepositives:
+  - Infrastructure-as-code re-applying an intentionally open ingest topic's policy.
+    Allowlist by topic ARN, not by principal.
+level: high
+---
+title: SNS topic policy rewritten by a principal outside the topic-administration set
+id: 51a63854-6ab9-45ad-b451-c9f98b434072
+name: sns_topic_policy_write_unexpected_principal
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. Any successful write to a
+  topic's Policy attribute by a principal outside the deployment and administration
+  allowlist. Carries the success filter so a DENIED first step plus a legitimate second
+  step cannot raise the correlation below.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_SetTopicAttributes.html
+  - https://attack.mitre.org/techniques/T1098/
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sns.amazonaws.com'
+    eventName: 'SetTopicAttributes'
+  policy_attribute:
+    requestParameters.attributeName: 'Policy'
+  known_admins:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'
+      - ':role/ci-cd'
+      - ':role/BreakGlassAdmin'
+  success:
+    errorCode: null
+  condition: selection and policy_attribute and success and not known_admins
+level: low
+---
+title: Repeated SNS topic policy rewrites by one principal
+id: 612a7a8e-a153-4949-a221-629e39df602d
+status: experimental
+description: >-
+  Three or more DISTINCT topics' policies rewritten by the same non-administrative
+  principal inside an hour. Threshold basis — a human editing a policy edits one topic;
+  a fan-out across three or more distinct topics in an hour is a scripted sweep, which is
+  how a public grant gets applied account-wide rather than to a single topic. Tune the
+  count to the number of topics one legitimate deploy re-applies.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_SetTopicAttributes.html
+  - https://attack.mitre.org/techniques/T1098/
+tags:
+  - attack.persistence
+  - attack.t1098
+correlation:
+  type: value_count
+  rules:
+    - sns_topic_policy_write_unexpected_principal
+  group-by:
+    - userIdentity.arn
+  field: requestParameters.topicArn
+  timespan: 1h
+  condition:
+    gte: 3
+level: medium

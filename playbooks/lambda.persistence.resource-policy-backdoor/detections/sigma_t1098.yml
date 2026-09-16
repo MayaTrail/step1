@@ -1,0 +1,260 @@
+# Lambda Resource-Policy Backdoor (T1098)
+#
+# EVENT NAME. AWS documents the CloudTrail event name for this API as
+# `AddPermission20150331v2`, not `AddPermission` — the Lambda CloudTrail reference lists
+# the versioned form explicitly, alongside `RemovePermission20150331v2`,
+# `UpdateFunctionCode20150331v2` and `UpdateFunctionConfiguration20150331v2`. Both source
+# rules on this technique match the event name in a way that cannot survive that suffix:
+# one regexes `/addpermission.*/` against a case-sensitive keyword field, the other
+# regexes `/AddPermission|RemovePermission/` where Lucene anchors the pattern to the whole
+# term. Neither returns a single event. Every rule below uses `|startswith`, which matches
+# the bare and the versioned form alike.
+#
+# DISCRIMINATOR. `AddPermission` is what every S3 trigger, EventBridge rule and API
+# Gateway integration does at deploy time, so the event name carries no signal. What
+# separates a backdoor from a wiring change is whether anything CONFINES the granted
+# principal: a bare `*` with no `principalOrgID` is public; an AWS service principal with
+# neither `sourceArn` nor `sourceAccount` lets ANY account's bucket, rule or API invoke
+# the function — the confused-deputy shape AWS warns about in the AddPermission reference.
+# Neither source rule reads `requestParameters.principal` at all.
+#
+# The grant lives on the RESOURCE. It survives access-key rotation, session revocation,
+# role-trust repair and code redeployment, and it is invisible to every identity-side
+# audit. That is why the severity here is high and the source rules' P4/P3 is not.
+title: Lambda resource policy grants invoke to an unconfined principal
+id: 774df8de-170d-4a09-ab1a-86ce33e82bb4
+name: lambda_resource_policy_unconfined_grant
+status: experimental
+description: >-
+  A statement was added to a Lambda function's resource-based policy naming a principal
+  that nothing confines — a bare wildcard with no organisation condition, or an AWS
+  service principal carrying neither a source ARN nor a source account. Any outside
+  caller, or any account's bucket, rule or API, can then invoke the function under its
+  execution role.
+references:
+  - https://attack.mitre.org/techniques/T1098/                                       # retrieved 2026-08-28
+  - https://docs.aws.amazon.com/lambda/latest/api/API_AddPermission.html              # retrieved 2026-08-28
+  - https://docs.aws.amazon.com/lambda/latest/dg/access-control-resource-based.html   # retrieved 2026-08-28
+  - https://docs.aws.amazon.com/lambda/latest/dg/logging-using-cloudtrail.html        # retrieved 2026-08-28
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # `|startswith`, never equality — see the event-name note in the header.
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName|startswith: 'AddPermission'
+  # The backslash is REQUIRED. An unescaped `*` is a Sigma wildcard: written as '*' this
+  # block matches every principal and the rule fires on every deploy.
+  wildcard_principal:
+    requestParameters.principal: '\*'
+  # Every AWS service principal is a domain-style identifier ending .amazonaws.com
+  # (s3.amazonaws.com, events.amazonaws.com, apigateway.amazonaws.com, and the regional
+  # forms such as logs.us-east-1.amazonaws.com). No account ID or IAM ARN ends that way.
+  service_principal:
+    requestParameters.principal|endswith: '.amazonaws.com'
+  # `field: null` matches when the field is ABSENT. `principal: "*"` WITH principalOrgID
+  # is AWS's own documented organisation-wide grant and must not fire; without it the
+  # function is public. CloudTrail lower-cases the first character of the API parameter
+  # name, so `PrincipalOrgID` should arrive as `principalOrgID` — both plausible casings
+  # are required absent, which costs nothing and makes the rule casing-proof.
+  no_org_id:
+    requestParameters.principalOrgID: null
+  no_org_id_alt:
+    requestParameters.principalOrgId: null
+  # sourceArn and sourceAccount are the ONLY confinements AddPermission accepts for a
+  # service principal. Either one present makes the statement bounded; both absent is the
+  # confused deputy. Kept as separate blocks so each stays single-keyed.
+  no_source_arn:
+    requestParameters.sourceArn: null
+  no_source_account:
+    requestParameters.sourceAccount: null
+  success:
+    errorCode: null
+  condition: selection and success and ((wildcard_principal and no_org_id and no_org_id_alt) or (service_principal and no_source_arn and no_source_account))
+falsepositives:
+  - >-
+    A function URL with auth type NONE created through the CLI, CloudFormation or the
+    API. Since October 2025 that path requires TWO statements, both with `principal *`:
+    action `lambda:InvokeFunctionUrl` with `lambda:FunctionUrlAuthType = NONE`, and
+    action `lambda:InvokeFunction` with `lambda:InvokedViaFunctionUrl = true`. Expect two
+    hits seconds apart on one function — that is the shape, not a duplicate. Either way
+    it is a true positive about an unauthenticated HTTPS endpoint, not a false one.
+    Confirm the URL was intended; if it was not, treat it as this technique.
+  - A single-account S3 or EventBridge wiring where the operator omitted `--source-arn`
+    out of habit. The grant is still unconfined and still lets another account's bucket
+    invoke the function; fix the wiring rather than filtering the rule.
+level: high
+---
+# Cross-account grants cannot be judged without knowing which accounts are yours. This
+# rule therefore ships with a placeholder allowlist and MUST be populated before deploy:
+# every account ID in your organisation, plus your own. Left unpopulated it fires on every
+# cross-account grant including legitimate in-organisation ones — noisy, but failing in
+# the direction that surfaces the grant rather than hiding it.
+title: Lambda resource policy grants invoke to an account outside the organisation
+id: ef60045d-36e8-4324-9ecd-45e6504a46c4
+name: lambda_resource_policy_external_account_grant
+status: experimental
+description: >-
+  A Lambda function's resource-based policy was extended to an AWS account ID or IAM ARN
+  that is not on the organisation allowlist. The grant persists on the resource and is
+  unaffected by rotating credentials in either account.
+references:
+  - https://attack.mitre.org/techniques/T1098/                                       # retrieved 2026-08-28
+  - https://docs.aws.amazon.com/lambda/latest/api/API_AddPermission.html              # retrieved 2026-08-28
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName|startswith: 'AddPermission'
+  account_id_principal:
+    requestParameters.principal|re: '^[0-9]{12}$'
+  arn_principal:
+    requestParameters.principal|startswith: 'arn:aws'
+  # POPULATE BEFORE DEPLOYING. Include your OWN account ID: a same-account grant is
+  # ordinary and belongs here. `|contains` so that both the bare account ID and an IAM ARN
+  # embedding it are covered by one entry.
+  organisation_accounts:
+    requestParameters.principal|contains:
+      - '000000000000'   # replace with this account's ID
+      - '111111111111'   # replace with each sibling account in the organisation
+  success:
+    errorCode: null
+  condition: selection and success and (account_id_principal or arn_principal) and not organisation_accounts
+falsepositives:
+  - A newly onboarded organisation account not yet added to `organisation_accounts`.
+    Reconcile against AWS Organizations rather than muting the rule.
+  - A deliberate third-party integration. Record it in the §1 baseline and add the
+    account, so that the next unrecorded account remains signal.
+level: high
+---
+# `PutResourcePolicy` REPLACES the function's entire resource policy — AWS states it
+# outright: "This operation replaces any existing policy on the Lambda resource. If you
+# previously added permissions using the AddPermission operation, the new policy
+# overwrites those permissions." There is no version history, so the prior document
+# survives only in this event. It also accepts the full IAM condition-key grammar and
+# multiple principals in one call, where AddPermission accepts one principal and only
+# aws:SourceArn / aws:SourceAccount / aws:PrincipalOrgID.
+#
+# justified: the condition is not a bare event-name match — it is filtered to successful
+# calls — and this API is genuinely rare. Nothing in ordinary operation replaces a
+# function's whole resource policy; console, CLI and IaC wiring all use AddPermission.
+# Matching on the call itself is correct here, and the alternative — matching the document
+# body for a wildcard principal — is a substring test on a field whose meaning is
+# structural, which is exactly the defect the sibling IAM playbooks document.
+title: Lambda function resource policy replaced wholesale
+id: 1fb7568d-e728-492b-9974-1c954bb67054
+name: lambda_resource_policy_wholesale_replacement
+status: experimental
+description: >-
+  A Lambda function's entire resource-based policy was replaced in one call. The previous
+  document is not versioned and exists nowhere else, so this event is the only record of
+  what the function's policy used to permit.
+references:
+  - https://docs.aws.amazon.com/lambda/latest/api/API_PutResourcePolicy.html          # retrieved 2026-08-28
+  - https://docs.aws.amazon.com/lambda/latest/dg/access-control-resource-based.html   # retrieved 2026-08-28
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName|startswith: 'PutResourcePolicy'
+  success:
+    errorCode: null
+  condition: selection and success
+falsepositives:
+  - An IaC provider that has adopted the whole-document API for managing function
+    permissions. Baseline which pipeline roles use it; anything else is unexplained.
+level: medium
+---
+# Lambda's account-level public-access block rejects a resource-based policy that would
+# make the function public, with `PublicPolicyException` (HTTP 400) — documented on both
+# AddPermission and PutResourcePolicy. The error is therefore a record of an ATTEMPT to
+# publish a function that the platform stopped. It is not a denial: an actor without
+# lambda:AddPermission gets AccessDenied instead, so this code means the caller HAD the
+# permission and the content was the problem.
+title: Lambda public resource policy blocked by public-access block
+id: c749181d-58f2-4fb8-898a-01245ad14e93
+name: lambda_public_policy_blocked
+status: experimental
+description: >-
+  A call to add a Lambda resource-policy statement was rejected because the statement
+  would have granted public access. The caller held the permission; only the account's
+  public-access block stopped the function from becoming internet-reachable.
+references:
+  - https://docs.aws.amazon.com/lambda/latest/api/API_AddPermission.html              # retrieved 2026-08-28
+  - https://docs.aws.amazon.com/lambda/latest/api/API_PutResourcePolicy.html          # retrieved 2026-08-28
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName|startswith:
+      - 'AddPermission'
+      - 'PutResourcePolicy'
+  blocked:
+    errorCode: 'PublicPolicyException'
+  condition: selection and blocked
+falsepositives:
+  - >-
+    A deployment that creates a function URL with auth type NONE in an account where the
+    public-access block is on. This is a recurring, legitimate collision — the deployment
+    must set the block's BlockPublicPolicy to false for that function, or stop publishing
+    it. Correlate with `CreateFunctionUrlConfig` from the same principal in the same
+    minute before dispositioning.
+level: medium
+---
+# Threshold basis — derived from documented technique behaviour, not an observed count.
+# The technique's own baseline is ONE function: a single backdoor is the whole attack, and
+# `lambda_resource_policy_unconfined_grant` above already fires high on it. This
+# correlation is not the detector; it is a severity escalator that separates one wiring
+# mistake from a sweep. An actor who holds lambda:AddPermission and has run ListFunctions
+# grants across everything it can reach, and does it in one sitting. Three distinct
+# functions in fifteen minutes by one principal, each carrying an unconfined grant, sits
+# above any single legitimate change and below a full IaC redeploy of a large stack —
+# which is why the pipeline roles belong in the allowlist of the base rule's environment.
+# Baseline against your own account before deploying: `gte` at the count you actually see
+# a pipeline touch, never `gt` at it.
+title: Lambda resource-policy backdoor planted across multiple functions
+id: efaa7777-7bcc-4254-9d30-1fc46892b1fb
+status: experimental
+description: >-
+  One principal added an unconfined invoke grant to three or more distinct Lambda
+  functions inside fifteen minutes. That is an enumeration sweep converting every
+  reachable function into a re-entry point, not a configuration change.
+references:
+  - https://attack.mitre.org/techniques/T1098/                                       # retrieved 2026-08-28
+tags:
+  - attack.persistence
+  - attack.t1098
+correlation:
+  type: value_count
+  rules:
+    - lambda_resource_policy_unconfined_grant
+  group-by:
+    - userIdentity.arn
+  timespan: 15m
+  # `field` belongs INSIDE `condition` for a value_count correlation — it is the field
+  # whose DISTINCT values are counted. A top-level `field:` under `correlation:` is not
+  # in the specification and leaves the rule with no field to count, which fails
+  # conversion rather than firing wrongly.
+  condition:
+    gte: 3
+    field: requestParameters.functionName
+level: high

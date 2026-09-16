@@ -18,7 +18,7 @@ Phase 2 — Credential Access: IMDSv1 metadata theft of the instance role's
 Phase 3 — Discovery:         IAM / S3 / Secrets Manager enumeration with the
                              stolen credentials (T1087.004, T1580).
 Phase 4 — Defense Evasion:   CloudTrail StopLogging to blind detections
-                             (T1562.008).
+                             (T1685.002).
 Phase 5 — Lateral Movement:  Retrieve the Secrets Manager bait secret — the
                              lateral-movement credential target (T1550.001).
 Phase 6 — Persistence:       Deploy a Lambda backdoor using the over-privileged
@@ -358,7 +358,7 @@ def _phase_4_defense_evasion(session: boto3.Session, outputs: dict) -> None:
         session: boto3 session from the stolen credentials.
         outputs: Stack outputs dict (cloudtrail_arn key).
     """
-    _banner("Phase 4 — Defense Evasion: CloudTrail StopLogging (T1562.008)")
+    _banner("Phase 4 — Defense Evasion: CloudTrail StopLogging (T1685.002)")
 
     ct = session.client("cloudtrail")
     trail_arn = outputs.get("cloudtrail_arn", "")

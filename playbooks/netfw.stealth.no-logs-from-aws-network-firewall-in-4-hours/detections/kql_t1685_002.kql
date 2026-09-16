@@ -1,0 +1,75 @@
+// Network Firewall logging stopped (T1685.002)
+//
+// Two paths, and the second leaves every dashboard showing logging enabled:
+//   UpdateLoggingConfiguration  -> the logging configuration itself
+//   UpdateFirewallPolicy        -> stateless defaults stop forwarding to the stateful engine, and
+//                                  AWS logs only traffic that reaches it
+//
+// `contains` throughout, never `has` — ARNs and action names are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "network-firewall.amazonaws.com"
+| where EventName in ("UpdateLoggingConfiguration", "UpdateFirewallPolicy", "CreateFirewallPolicy",
+                      "DeleteFirewall", "AssociateFirewallPolicy", "UpdateFirewallDeleteProtection")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend FirewallName = coalesce(tostring(Req.firewallName), tostring(Req.firewallArn), "")
+| extend PolicyName = coalesce(tostring(Req.firewallPolicyName), tostring(Req.firewallPolicyArn), "")
+// The call REPLACES the whole configuration and the request carries what SURVIVES, never what was
+// removed. So the log types present here are the remaining ones — a partial removal looks like an
+// ordinary change and can only be resolved by comparing against the previous state.
+| extend LogTypes = tostring(Req.loggingConfiguration.logDestinationConfigs)
+| extend LogTypeCount = array_length(Req.loggingConfiguration.logDestinationConfigs)
+| extend StatelessDefaults = tostring(Req.firewallPolicy.statelessDefaultActions)
+| extend ForwardsToStateful = StatelessDefaults contains "aws:forward_to_sfe"
+| extend Verdict = case(
+    EventName == "UpdateLoggingConfiguration" and (isempty(LogTypes) or LogTypeCount == 0),
+        "ALL LOGGING REMOVED — an empty destination list is the removal; there is no delete verb for this. Names the firewall and the principal, P0",
+    EventName == "UpdateLoggingConfiguration",
+        strcat("LOGGING CONFIGURATION REPLACED — ", tostring(LogTypeCount), " log type(s) SURVIVE. The event cannot show what was removed, so compare against the previous state before concluding this was routine, P1"),
+    (EventName == "UpdateFirewallPolicy" or EventName == "CreateFirewallPolicy") and not(ForwardsToStateful),
+        "STATELESS DEFAULTS NO LONGER FORWARD TO THE STATEFUL ENGINE — the same result as disabling logging, and quieter: every dashboard still shows logging enabled while nothing is inspected or recorded, P0",
+    EventName == "DeleteFirewall",
+        "FIREWALL DELETED — expected to end its log stream; correlate with change management, P1",
+    EventName == "UpdateFirewallDeleteProtection",
+        "DELETE PROTECTION CHANGED — often precedes a deletion, P2",
+    "Firewall configuration changed — read the parameters")
+| project TimeGenerated, EventName, Verdict, UserIdentityArn, SourceIpAddress,
+          FirewallName, PolicyName, LogTypeCount, LogTypes, StatelessDefaults, ForwardsToStateful, UserAgent
+| order by TimeGenerated desc
+//
+// ============================================================================
+// THE ABSENCE VIEW — and the reason it is weakest in this service
+// ============================================================================
+// AWSNetworkFirewallLogs
+// | where TimeGenerated > ago(7d)
+// | summarize Events = count(), LastSeen = max(TimeGenerated)
+//           by Firewall = tostring(firewall_name), Az = tostring(availability_zone), bin(TimeGenerated, 1h)
+// | extend GapHours = datetime_diff('hour', now(), LastSeen)
+// | where GapHours >= 4
+//
+// FIVE THINGS PRODUCE AN EMPTY WINDOW AND ONLY TWO ARE INCIDENTS:
+//   1. Logging configuration emptied            -> UpdateLoggingConfiguration above
+//   2. Stateless defaults stopped forwarding    -> UpdateFirewallPolicy above
+//   3. The POLICY LEGITIMATELY HANDLES TRAFFIC STATELESSLY. AWS: "Firewall logging is only
+//      available for traffic that you forward to the stateful rules engine." A policy whose
+//      stateless default is aws:drop or aws:pass produces no logs, correctly and permanently. An
+//      absence rule fires on that configuration forever.
+//   4. Only PASS rules matched. Alert logs exist only for DROP, ALERT and REJECT, so a quiet alert
+//      log with a busy flow log is a normal state.
+//   5. There genuinely was no traffic through that firewall endpoint.
+//
+// Point 3 is what makes an absence rule unusable here rather than merely weak: the false positive
+// is a permanent property of a valid configuration, not a transient condition.
+//
+// ============================================================================
+// THE STATE VIEW — which neither log carries
+// ============================================================================
+// `aws network-firewall describe-logging-configuration --firewall-name <name>` returns the current
+// log types and destinations. It is the only way to answer "which types are on right now", and
+// therefore the only way to resolve a partial removal — because the CloudTrail event records the
+// survivors and never the casualty. Query 2 of ../PLAYBOOK.md runs it; run it on a schedule and
+// keep the history, or the comparison has nothing to compare against.

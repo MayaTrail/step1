@@ -1,0 +1,76 @@
+// KMS key created (T1486)
+//
+// Both source rules match `createkey` — lowercase, against a case-sensitive field, so neither can
+// fire. Both also map to Data Encrypted for Impact, which is what the key is later USED for: a new
+// key encrypts nothing and costs a dollar a month.
+//
+// The request body is where this use case lives. `Origin: EXTERNAL` produces a key whose material AWS
+// never holds, and DeleteImportedKeyMaterial then makes every ciphertext under it unreadable
+// IMMEDIATELY — no window, and no recovery except re-importing material the importer holds.
+//
+// bypassPolicyLockoutSafetyCheck is OPTIONAL and therefore ABSENT on an ordinary call, so this tests
+// for the value `true` being present rather than for the absence of `false`.
+//
+// `contains` throughout, never `has` — key ARNs and aliases are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+let WINDOW = 10m;
+let Provisioners = dynamic(["PlatformAutomation", "iac-deploy"]);
+let ThisAccount = "111122223333";   // POPULATE with this account id — the external-principal test needs it.
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "kms.amazonaws.com"
+| where EventName in ("CreateKey", "ImportKeyMaterial", "GetParametersForImport",
+                      "DeleteImportedKeyMaterial", "ReplicateKey", "PutKeyPolicy")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend IsProvisioner = UserIdentityArn contains "PlatformAutomation"
+                      or UserIdentityArn contains "iac-deploy"
+| extend Created     = EventName == "CreateKey"
+| extend Origin      = tostring(Req.origin)
+| extend MultiRegion = tostring(Req.multiRegion) == "true"
+| extend Bypass      = tostring(Req.bypassPolicyLockoutSafetyCheck) == "true"
+// CreateKey's Policy parameter is a RAW JSON string on the request side — not percent-encoded, which
+// is the response-side convention. Read it directly.
+| extend PolicyDoc   = tostring(Req.policy)
+| extend PolicyNamesExternalAccount =
+      isnotempty(PolicyDoc)
+      and PolicyDoc contains "arn:aws:iam::"
+      and not(PolicyDoc contains strcat("arn:aws:iam::", ThisAccount))
+// Material imported and then deleted is the in-account ransomware sequence.
+| extend MaterialImported = EventName == "ImportKeyMaterial"
+| extend MaterialDeleted  = EventName == "DeleteImportedKeyMaterial"
+| summarize
+    Creates          = countif(Created),
+    ExternalOrigin   = countif(Created and Origin == "EXTERNAL"),
+    BypassedLockout  = countif(Created and Bypass),
+    MultiRegionKeys  = countif(Created and MultiRegion),
+    ExternalPolicy   = countif(Created and PolicyNamesExternalAccount),
+    Imports          = countif(MaterialImported),
+    MaterialDeletes  = countif(MaterialDeleted),
+    Actions          = make_set(EventName, 10),
+    FirstSeen        = min(TimeGenerated),
+    LastSeen         = max(TimeGenerated)
+    by bin(TimeGenerated, WINDOW), UserIdentityArn, SourceIpAddress, IsProvisioner
+| where Creates > 0 or MaterialDeletes > 0
+| extend Verdict = case(
+    MaterialDeletes > 0,
+        "CRITICAL - imported key material deleted; ciphertext is unreadable NOW, no window, recovery needs the original material",
+    ExternalOrigin > 0 and Imports > 0,
+        "CRITICAL - external-origin key created and material imported; one call from unrecoverable",
+    ExternalOrigin > 0,
+        "HIGH - external-origin key created; AWS holds no material for it",
+    BypassedLockout > 0,
+        "HIGH - key created unmanageable from birth",
+    ExternalPolicy > 0,
+        "HIGH - key policy at creation names a principal outside this account",
+    Creates >= 5 and not(IsProvisioner),
+        "MEDIUM - keys created in volume outside the provisioning path",
+    MultiRegionKeys > 0,
+        "LOW - multi-Region key; a later policy or material change is not confined to one region",
+    "LOW - key created")
+| project TimeGenerated, Verdict, UserIdentityArn, SourceIpAddress, IsProvisioner,
+          Creates, ExternalOrigin, BypassedLockout, ExternalPolicy, MultiRegionKeys,
+          Imports, MaterialDeletes, Actions, FirstSeen, LastSeen
+| order by MaterialDeletes desc, ExternalOrigin desc, TimeGenerated desc

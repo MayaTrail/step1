@@ -1,0 +1,159 @@
+# GuardDuty disabled or suppressed (T1685)
+#
+# THE SOURCE RULE ALERTS WHEN THE ACCOUNT IS SECURE. It fires when fewer than one GuardDuty finding
+# arrives in 36 hours. But GuardDuty produces a finding only when it detects something — and an
+# account with nothing wrong produces none, for days at a time, correctly. AWS defines even the
+# lowest band as "attempted suspicious activity that did not compromise your environment", which is
+# something that happens to internet-facing estates and not to quiet internal ones.
+#
+# So the rule's firing condition is the desired state. This is not "absence is ambiguous", which is
+# the usual objection to a no-logs rule; it is that the rule is inverted. A team running it learns
+# that the GuardDuty alert means nothing, which is exactly the state they are in on the day the
+# detector is actually turned off.
+#
+# THE DETECTOR'S STATUS IS THE SIGNAL, AND IT IS A STATE READ. GuardDuty exposes whether it is
+# enabled through the API, not through the finding stream. Everything below detects the ACT of
+# disabling or suppressing, in CloudTrail, and §2 of ../PLAYBOOK.md carries the state sweep.
+#
+# THERE ARE THREE WAYS TO GO BLIND AND ONLY ONE IS LOUD:
+#   DeleteDetector / UpdateDetector(enable=false)  -> the whole service, obvious
+#   CreateFilter with action ARCHIVE               -> findings are created and auto-archived, so the
+#                                                     console shows a detector working while the
+#                                                     matching findings never reach anyone
+#   CreateIPSet (trusted IP list)                  -> findings for those addresses are NEVER
+#                                                     GENERATED. Not archived, not suppressed after
+#                                                     the fact — never created. Nothing in the
+#                                                     finding stream can reveal this, and it is a
+#                                                     legitimate documented feature.
+# The third is the quietest and the rules below treat it at the same level as the first.
+#
+# AND A FOURTH THAT IS NOT A GUARDDUTY ACTION AT ALL. GuardDuty's DNS findings depend on Route 53
+# Resolver query logging for the VPC, and its EKS findings on EKS audit log monitoring. Disabling
+# those degrades GuardDuty without touching it — covered in
+# ../../route53dns.stealth.no-logs-from-amazon-route53-dns-query/ and ../../eks.stealth.user-deleted-log-events/,
+# and noted here so the dependency is not rediscovered during an incident.
+title: GuardDuty detector deleted or disabled
+id: 9e4b7a12-0c85-4d36-bf70-28a15c93e604
+name: guardduty_detector_disabled
+status: experimental
+description: >-
+  DeleteDetector removed the detector, or UpdateDetector turned it off. The loudest of the three
+  paths and the one an absence rule would eventually catch — after up to 36 hours, and only if the
+  account was otherwise producing findings. Detected here at the moment it happens, attributed to a
+  principal, and naming the Region: GuardDuty is regional, so disabling it in one Region leaves
+  every other Region reporting normally.
+references:
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_settingup.html
+  - https://attack.mitre.org/techniques/T1685/001/
+tags:
+  - attack.defense-impairment
+  - attack.t1685
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'guardduty.amazonaws.com'
+    eventName:
+      - 'DeleteDetector'
+      - 'UpdateDetector'
+      - 'UpdateMemberDetectors'
+      - 'DisassociateFromMasterAccount'
+      - 'DeleteMembers'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the security function's roles. This should be a very short list,
+  # and an empty one is a defensible start.
+  known_security_roles:
+    userIdentity.arn|contains:
+      - ':role/SecurityOperations'
+      - ':role/PlatformAutomation'
+  condition: selection and success and not known_security_roles
+falsepositives:
+  - >-
+    Enabling a feature through UpdateDetector, which uses the same event name as disabling one.
+    Read the request parameters: the finding is enable=false or a features list with a feature set
+    to DISABLED, and the rule is deliberately broad because both arrive as the same call.
+level: high
+---
+title: GuardDuty suppression rule created
+id: 46c0f983-71ea-4b25-90d8-5e73b1a4c82f
+name: guardduty_suppression_filter_created
+status: experimental
+description: >-
+  A filter was created or updated with an ARCHIVE action — a suppression rule. Matching findings are
+  still generated and then archived automatically, so the detector looks healthy, the finding count
+  in the console looks normal, and the suppressed class never reaches anyone. This is a legitimate
+  and necessary feature for tuning out known-benign activity, which is exactly why it is worth
+  alerting on: the same mechanism tunes out an attacker. Read the FindingCriteria in the request,
+  not just the fact of the call.
+references:
+  - https://docs.aws.amazon.com/guardduty/latest/ug/findings_suppression-rule.html
+  - https://attack.mitre.org/techniques/T1685/001/
+tags:
+  - attack.defense-impairment
+  - attack.t1685
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'guardduty.amazonaws.com'
+    eventName:
+      - 'CreateFilter'
+      - 'UpdateFilter'
+  success:
+    errorCode: null
+  archiving:
+    requestParameters.action: 'ARCHIVE'
+  known_security_roles:
+    userIdentity.arn|contains:
+      - ':role/SecurityOperations'
+      - ':role/PlatformAutomation'
+  condition: selection and success and archiving and not known_security_roles
+falsepositives:
+  - >-
+    Ordinary tuning, which is what suppression rules exist for. The alert is not that a rule was
+    created but that one was created outside the security function — and the criteria are in the
+    same event for triage.
+level: high
+---
+title: GuardDuty trusted IP list created or updated
+id: d78e2504-3a91-46cb-b0f7-16295de3c840
+name: guardduty_trusted_ip_set_changed
+status: experimental
+description: >-
+  A trusted IP set was created or updated. This is the quietest way to blind GuardDuty and it
+  deserves the same level as deleting the detector: findings for addresses on the list are NEVER
+  GENERATED — not created and archived, never created at all. No finding-stream monitoring can
+  reveal it, no finding count changes, and the console shows a healthy detector with a normal
+  history. The list contents live in an S3 object referenced by Location, so the event names the
+  list and not its members; reading the object is part of triage rather than optional.
+references:
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_upload-lists.html
+  - https://attack.mitre.org/techniques/T1685/001/
+tags:
+  - attack.defense-impairment
+  - attack.t1685
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'guardduty.amazonaws.com'
+    eventName:
+      - 'CreateIPSet'
+      - 'UpdateIPSet'
+  success:
+    errorCode: null
+  known_security_roles:
+    userIdentity.arn|contains:
+      - ':role/SecurityOperations'
+      - ':role/PlatformAutomation'
+  condition: selection and success and not known_security_roles
+falsepositives:
+  - >-
+    Adding the corporate egress range, which is the normal use. Legitimate and still worth reading
+    every time — the difference between a corporate range and an attacker's range is which one you
+    can name, and the event does not contain the addresses.
+level: high

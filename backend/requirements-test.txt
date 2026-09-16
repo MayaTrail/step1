@@ -13,3 +13,8 @@ Django==5.0.6
 python-decouple==3.8
 PyYAML==6.0.2
 celery==5.4.0
+
+# apps.threatintel: the parser tests run feedparser over fixture XML, and
+# parser.py imports requests at module scope for the fetch half.
+feedparser==6.0.11
+requests==2.32.3

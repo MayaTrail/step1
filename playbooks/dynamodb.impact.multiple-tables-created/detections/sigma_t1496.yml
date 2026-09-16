@@ -1,0 +1,112 @@
+# DynamoDB tables created at volume (T1496)
+#
+# THE RULE CANNOT FIRE. It matches `eventName:"createtable"`; CloudTrail emits `CreateTable`, and on
+# a case-sensitive field the lowercase form matches nothing. This is the ninth instance of that
+# defect class across the source set — see ../../_ground-truth/dynamodb.md §5.
+#
+# ITS THRESHOLD IS FIVE IN SIXTY SECONDS, WHICH IS A DEPLOYMENT. An infrastructure apply that stands
+# up a new environment creates tables in a burst; a human creating tables by hand does not reach five
+# in a minute. So the rule as written is tuned to catch exactly the traffic it should ignore, and to
+# miss a slower actor entirely. Widened to ten minutes here, with the provisioning allowlist doing
+# the actual work.
+#
+# AND IT MAPS TO DATA MANIPULATION. `T1565` is about altering stored or transmitted data. Creating an
+# empty table alters nothing — the resource is new and contains no data at all. What mass table
+# creation actually costs is capacity and money: `T1496 — Resource Hijacking`. Where the tables are
+# being created to stage data for extraction, the extraction is the finding and lives in
+# ../../dynamodb.collection.table-scanned/
+#
+# `CreateTable` IS CONTROL-PLANE AND LOGGED BY DEFAULT, which makes this one of the few DynamoDB
+# rules that works without buying data events — worth saying, because three of the five rules in this
+# source set do not.
+title: DynamoDB tables created at volume by one principal
+id: 0d5a83f1-4e72-4b96-8c10-a37e6b25d0f9
+status: experimental
+description: >-
+  One principal created five or more tables within ten minutes. The source rule uses sixty seconds,
+  which is a deployment burst rather than a human, so the window is widened and the provisioning
+  allowlist carries the discrimination. Control-plane and logged by default, so this fires without
+  DynamoDB data events.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/logging-using-cloudtrail.html
+  - https://attack.mitre.org/techniques/T1496/
+tags:
+  - attack.impact
+  - attack.t1496
+correlation:
+  type: value_count
+  rules:
+    - dynamodb_table_created
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gte: 5
+    field: requestParameters.tableName
+falsepositives:
+  - >-
+    An environment build creating a table set in one run, which is exactly this shape. Allowlist the
+    pipeline role on the base rule rather than shortening the window — a sixty-second window
+    excludes the deployment and the actor alike.
+level: medium
+---
+title: DynamoDB table created by a principal outside the provisioning path
+id: 6c14e7ab-92d0-4f38-b571-8e0a3c62df45
+name: dynamodb_table_created_unexpected
+status: experimental
+description: >-
+  A successful CreateTable from a principal that is not a recorded provisioning identity. A single
+  new table is not itself harmful — it is empty — so this ships at low and exists to make an
+  unexpected creator visible and to give the volume correlation something to build on. A table
+  created to stage data for extraction becomes a finding when something reads into it.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_CreateTable.html
+  - https://attack.mitre.org/techniques/T1496/
+tags:
+  - attack.impact
+  - attack.t1496
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'CreateTable'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the roles that own table lifecycle.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    An engineer creating a table for development work, which is common and legitimate. Low severity
+    for that reason — routed to a log rather than to a human, with the volume correlation carrying
+    the alert.
+level: low
+---
+title: DynamoDB table created
+id: 8f7c02d5-63be-41a9-95e0-1d4b78e3ca62
+name: dynamodb_table_created
+status: experimental
+description: >-
+  Base rule — correlation component and change accounting, never for direct alerting. A successful
+  CreateTable. Control-plane, so it is logged by default in every account.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_CreateTable.html
+tags:
+  - attack.impact
+  - attack.t1496
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'CreateTable'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational

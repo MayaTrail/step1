@@ -1,0 +1,108 @@
+// Excessive SQS Queue Creation (T1496)
+//
+// Signal: queues created at volume by a principal outside the lifecycle pipeline, queues
+// created already public, and - the sharpest of the three - a queue created by one principal
+// that is then named as another queue's RedrivePolicy target, which is message diversion
+// staged across two individually unremarkable events.
+//
+// This query does what the Sigma rules structurally cannot: it JOINS each newly created queue
+// to any later SetQueueAttributes whose RedrivePolicy names it, matching the created NAME
+// against the ARN embedded in deadLetterTargetArn. A Sigma correlation can only group by
+// principal - and in the interesting case the two principals differ.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE the pipeline ARNs below BEFORE DEPLOYING. Unpopulated, every stack deployment reads
+// as a creation burst.
+let Lookback = 30d;
+let Sqs =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "sqs.amazonaws.com"
+    | where EventName in ("CreateQueue", "SetQueueAttributes")
+    | where isempty(ErrorCode)
+    // RequestParameters and ResponseElements are typed `string` in this table, not dynamic -
+    // parse_json is required before any field access. CreateQueue returns queueUrl FLAT, per
+    // the API's bare {"QueueUrl": "..."} Response Syntax.
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    | extend Attrs = Req.attributes
+    | extend QueueUrl  = coalesce(tostring(Req.queueUrl), tostring(Resp.queueUrl))
+    | extend QueueName = coalesce(tostring(Req.queueName), tostring(split(QueueUrl, "/")[-1]))
+    // `contains` throughout, never `has`: role paths, ARNs and JSON fragments are all
+    // punctuated, and whole-term matching breaks on every one of them.
+    | extend IsPipeline = (UserIdentityArn contains ":role/iac-deploy")
+                       or (UserIdentityArn contains ":role/BreakGlassAdmin");
+let Created = Sqs
+    | where EventName == "CreateQueue" and not(IsPipeline)
+    | extend PolicyText = tostring(Attrs.Policy)
+    | extend BornPublic = isnotempty(PolicyText)
+             and PolicyText matches regex @'\\?"Principal\\?"\s*:\s*(\{\s*\\?"AWS\\?"\s*:\s*)?(\[\s*)?\\?"\*\\?"'
+    | extend BornUnencrypted = tostring(Attrs.SqsManagedSseEnabled) == "false"
+    | project CreatedAt = TimeGenerated, QueueName, Creator = UserIdentityArn,
+              CreateIp = SourceIpAddress, CreateAgent = UserAgent, BornPublic, BornUnencrypted;
+// Every redrive target named anywhere in the window, reduced to the target queue's NAME so it
+// can be compared with the created name. The ARN's last colon-separated field is the name.
+let RedriveTargets = Sqs
+    | where EventName == "SetQueueAttributes"
+    | extend RedriveText = tostring(Attrs.RedrivePolicy)
+    | where isnotempty(RedriveText)
+    | extend TargetArn  = tostring(parse_json(RedriveText).deadLetterTargetArn)
+    | extend QueueName  = tostring(split(TargetArn, ":")[-1])
+    | project PointedAt = TimeGenerated, QueueName, SourceQueue = tostring(Req.queueUrl),
+              Pointer = UserIdentityArn;
+Created
+| join kind=leftouter RedriveTargets on QueueName
+| extend BecameRedriveTarget = isnotempty(PointedAt) and PointedAt > CreatedAt
+| extend PointedAtByOther    = BecameRedriveTarget and Pointer != Creator
+| summarize
+    Created            = count(),
+    FirstCreated       = min(CreatedAt),
+    LastCreated        = max(CreatedAt),
+    Queues             = make_set(QueueName, 20),
+    QueueCount         = dcount(QueueName),
+    PublicAtBirth      = make_set_if(QueueName, BornPublic, 10),
+    UnencryptedAtBirth = make_set_if(QueueName, BornUnencrypted, 10),
+    DiversionTargets   = make_set_if(QueueName, BecameRedriveTarget, 10),
+    AnyPublic          = max(BornPublic),
+    AnyDiversion       = max(BecameRedriveTarget),
+    AnyForeignPointer  = max(PointedAtByOther),
+    SourceIPs          = make_set(CreateIp, 5),
+    Agents             = make_set(CreateAgent, 3)
+    by Creator, RecipientAccountId
+| extend SpanMinutes = max_of(1.0, datetime_diff('second', LastCreated, FirstCreated) / 60.0)
+| extend CreationsPerFiveMinutes = round(Created / SpanMinutes * 5.0, 1)
+| extend Verdict = case(
+    AnyForeignPointer == true,
+        "MESSAGE DIVERSION - a queue this principal created was named as another queue's dead-letter target by a DIFFERENT principal",
+    AnyDiversion == true,
+        "DIVERSION CHANNEL - a queue this principal created was later named as a dead-letter target; failed messages are being routed into it",
+    AnyPublic == true,
+        "PUBLIC AT BIRTH - a queue was created with a wildcard-principal policy, so no SetQueueAttributes event exists and the policy rules never fire",
+    CreationsPerFiveMinutes >= 5.0,
+        "CREATION BURST - five or more queues per five minutes by one non-pipeline principal; unsanctioned resource consumption",
+        "QUEUE CREATED OUTSIDE THE PIPELINE - low value on its own; check the joins above")
+| project FirstCreated, LastCreated, Verdict, Creator, RecipientAccountId, QueueCount, Queues,
+          Created, CreationsPerFiveMinutes, PublicAtBirth, UnencryptedAtBirth, DiversionTargets,
+          SourceIPs, Agents
+| order by LastCreated desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// Whether anything was ever written to or read from the new queues. SendMessage and
+// ReceiveMessage are SQS DATA events, off by default; so are ListQueues, GetQueueUrl and
+// GetQueueAttributes, which means the enumeration that usually precedes a creation burst
+// produces no management event at all. Use the AWS/SQS CloudWatch metrics
+// NumberOfMessagesSent and NumberOfMessagesReceived per QueueName to tell a queue that is
+// merely present from one that is in use - a created queue with traffic is a channel, a
+// created queue with none is clutter. AWS emits SQS metrics only while a queue is active, so
+// a queue with no datapoints has genuinely never been used.
+//
+// Cost. Unsanctioned resource consumption is the T1496 reading of this behaviour, and SQS
+// billing is per request rather than per queue, so an idle queue costs effectively nothing.
+// Cost Explorer, not CloudTrail, is where a resource-abuse case is actually made.
+//
+// PREVENTION. sqs:CreateQueue outside the deployment pipeline is deniable by SCP - AWS states
+// cross-account permissions do not apply to CreateQueue, so the caller is always an
+// in-organisation principal. That single denial also removes the "public at birth" path, which
+// is otherwise invisible to every policy-change rule in the sibling directory.

@@ -39,7 +39,7 @@ TAGS = {
     "MayaTrail":   "true",
     "Purpose":     "adversary-emulation",
     "ThreatActor": "ATOMIC-wafv2-disable-web-acl",
-    "Technique":   "T1562.007",
+    "Technique":   "T1686.001",
 }
 
 # =========================================================================== #

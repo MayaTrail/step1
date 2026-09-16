@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PlatformId, PlatformData, Emulation, DetectionData, DetectionDetail, GuardrailLibrary, GuardrailDetail, Playbook } from '@/types'
+import type { LibraryPlaybook } from '@/services/platform.service'
 import * as platformService from '@/services/platform.service'
 
 interface AsyncState<T> {
@@ -175,4 +176,18 @@ export function usePlaybooks(_platformId: PlatformId | undefined): AsyncState<Pl
 /** @deprecated Use usePlaybook(emulationType) instead. */
 export function usePlaybookById(_platformId: PlatformId | undefined, _index: number): AsyncState<Playbook> {
   return { data: null, loading: false, error: null }
+}
+
+/** Index of the standalone IR playbook library (documentation, not emulations). */
+export function useLibraryPlaybooks(): AsyncState<LibraryPlaybook[]> {
+  return useCachedAsync('library:playbooks', () => platformService.fetchLibraryPlaybooks(), null)
+}
+
+/** One standalone playbook, with its markdown body. */
+export function useLibraryPlaybook(id: string | undefined): AsyncState<LibraryPlaybook> {
+  return useCachedAsync(
+    id ? `library:playbook:${id}` : null,
+    () => platformService.fetchLibraryPlaybook(id as string),
+    'Playbook not found',
+  )
 }

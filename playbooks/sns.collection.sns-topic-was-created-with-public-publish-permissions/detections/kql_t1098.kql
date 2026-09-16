@@ -1,0 +1,108 @@
+// SNS topic opened for public publish (T1098 / T1565.002)
+//
+// Signal: an SNS access policy that allows a publish-granting action to Principal "*"
+// with no principal-scoping Condition IN THE SAME STATEMENT. Covers both write paths —
+// CreateTopic carrying an Attributes.Policy, and SetTopicAttributes rewriting Policy.
+//
+// This query does what the Sigma rules structurally cannot. Sigma `|contains` operates
+// on the raw event text, so its "no confining Condition" test is document-wide: a policy
+// whose FIRST statement is confined and whose second is wide open is suppressed. Here the
+// document is parsed and each statement is judged on its own Condition, which is how IAM
+// actually evaluates it. Run this as the authoritative version and treat the Sigma rules
+// as the streaming tripwire.
+//
+// Shape guards, all three of them, because IAM accepts every one of these forms:
+//   Statement  — a single object OR an array
+//   Principal  — an object OR the bare string "*"
+//   Action     — a string OR an array (set_has_element, never strcat_array + equality,
+//                which strips quotes and misses ["sns:Publish","*"])
+//
+// The action-prefix case is NOT stable: AWS's own default topic policy writes
+// "SNS:Publish" while AddPermission generates "sns:Publish". Every action test below is
+// case-folded.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "sns.amazonaws.com"
+| where EventName in ("CreateTopic", "SetTopicAttributes")
+| where isempty(ErrorCode)
+| extend Req  = parse_json(RequestParameters)
+| extend Resp = parse_json(ResponseElements)
+| extend AttrName = tostring(Req.attributeName)
+| where EventName == "CreateTopic" or AttrName == "Policy"
+| extend PolicyStr = tostring(coalesce(Req.attributes.Policy, Req.attributeValue))
+| where isnotempty(PolicyStr)
+| extend TopicArn = tostring(coalesce(Resp.topicArn, Req.topicArn))
+| extend Pol = parse_json(PolicyStr)
+| extend Stmts = iff(gettype(Pol.Statement) == "array", Pol.Statement, pack_array(Pol.Statement))
+| mv-expand St = Stmts
+| extend Effect = tolower(tostring(St.Effect))
+| where Effect == "allow"
+// Principal: object -> .AWS (string or array); bare string -> itself.
+| extend PrincRaw = iff(gettype(St.Principal) == "string", pack_array(tostring(St.Principal)),
+                    iff(gettype(St.Principal.AWS) == "array", St.Principal.AWS,
+                        pack_array(tostring(St.Principal.AWS))))
+| extend IsPublic = set_has_element(PrincRaw, "*")
+| where IsPublic
+// Action / NotAction: string or array. An Allow + NotAction grants everything except.
+| extend Actions = iff(gettype(St.Action) == "array", St.Action, pack_array(tostring(St.Action)))
+| extend ActionsLower = tolower(tostring(Actions))
+| extend HasNotAction = isnotempty(tostring(St.NotAction)) and tostring(St.NotAction) != ""
+| extend GrantsPublish = HasNotAction
+      or set_has_element(Actions, "*")
+      or ActionsLower contains ":publish"
+      or ActionsLower contains "sns:*"
+// Per-statement Condition test — the whole point of parsing rather than substring matching.
+| extend CondStr = tolower(tostring(St.Condition))
+| extend IsConfined =
+       CondStr contains "sourceowner"
+    or CondStr contains "sourceaccount"
+    or CondStr contains "sourcearn"
+    or CondStr contains "principalorgid"
+    or CondStr contains "principalorgpaths"
+    or CondStr contains "principalaccount"
+    or CondStr contains "principalarn"
+    or CondStr contains "sourcevpce"
+    or CondStr contains "sns:protocol"
+    or CondStr contains "sns:endpoint"
+| where GrantsPublish
+| extend Verdict = case(
+    IsConfined and HasNotAction,
+        "PUBLIC + NotAction but Condition-bound — read the Condition VALUES by hand, P2",
+    IsConfined,
+        "Wildcard principal, Condition-bound — matches the AWS default topic policy; confirm the value is YOUR account, P3",
+    HasNotAction,
+        "PUBLIC NotAction GRANT — the internet may perform every SNS action except those listed, P0",
+    set_has_element(Actions, "*"),
+        "PUBLIC FULL GRANT — the internet may publish, subscribe and rewrite this policy, P0",
+    "PUBLIC PUBLISH — the internet may inject messages into this topic, P0")
+| project TimeGenerated, EventName, TopicArn, UserIdentityArn, SourceIpAddress,
+          AwsRegion, RecipientAccountId, ErrorCode, Actions, HasNotAction,
+          IsConfined, CondStr, Verdict
+| order by TimeGenerated desc
+//
+// ============================================================================
+// WHAT THIS QUERY CANNOT SEE
+// ============================================================================
+// 1. Whether the grant was USED. `sns:Publish` is a CloudTrail DATA event
+//    (eventCategory "Data", managementEvent false) on resource type AWS::SNS::Topic,
+//    and data events are OFF by default. With no data-event trail, `Publish` produces
+//    zero CloudTrail records forever — a zero here is "not logged", never "not abused".
+//    Route to the CloudWatch metric AWS/SNS NumberOfMessagesPublished, dimension
+//    TopicName, and compare the window before and after the grant.
+// 2. Message content. Even with data events on, CloudTrail records
+//    requestParameters.message, .subject and .messageAttributes as the literal string
+//    HIDDEN_DUE_TO_SECURITY_REASONS. What was injected is never recoverable from
+//    CloudTrail.
+// 3. A policy applied through AddPermission. That API generates the statement
+//    server-side, so the document never appears in requestParameters. Detect the call
+//    by name and fetch the resulting document with GetTopicAttributes — see
+//    ../../sns.persistence.sns-access-policy-has-changed/.
+// 4. The Condition VALUE. A statement confined to `aws:SourceAccount` = an account you
+//    do not own reads as IsConfined here. Every IsConfined row still needs the account
+//    ID compared against your own org.
+//
+// PREVENTION: an SNS topic policy is a resource-based policy, so the org-level control
+// is a Resource control policy, not an SCP — an SCP cannot reach a principal outside
+// your organisation. See the guardrail in ../PLAYBOOK.md §6.

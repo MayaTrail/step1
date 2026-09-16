@@ -1,0 +1,75 @@
+// S3 Block Public Access enabled or strengthened — change accounting, and the cover-up half (T1070)
+//
+// A hardening event is not a finding. This query exists to answer a different question: was the
+// guardrail put BACK by the same hand that took it away, and how long was it down in between? The
+// end state is correct in that case, so a configuration review shows nothing — only the event
+// history holds the window.
+//
+// `contains` throughout, never `has` — ARNs and bucket names are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "s3.amazonaws.com"
+| where EventName in ("PutBucketPublicAccessBlock", "PutAccountPublicAccessBlock",
+                      "DeleteBucketPublicAccessBlock", "DeleteAccountPublicAccessBlock",
+                      "PutBucketPolicy", "PutBucketAcl")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Pab = Req.PublicAccessBlockConfiguration
+| extend Bucket = tostring(Req.bucketName)
+| extend Flags = pack_array(tostring(Pab.RestrictPublicBuckets), tostring(Pab.IgnorePublicAcls),
+                            tostring(Pab.BlockPublicPolicy), tostring(Pab.BlockPublicAcls))
+| extend FlagsPresent = array_length(array_iff(Flags != "", Flags, dynamic([]))) 
+| extend AnyFalse = array_index_of(Flags, "false") >= 0
+// A Delete removes the whole configuration and is a weakening even though it carries no flags.
+| extend Weakened = (EventName contains "Delete") or AnyFalse
+| extend Hardened = (EventName contains "Put") and EventName contains "PublicAccessBlock" and not(AnyFalse)
+| summarize
+    Weakenings   = countif(Weakened),
+    Hardenings   = countif(Hardened),
+    // AWS does not document whether a flag absent from the request is cleared or preserved, so a
+    // request carrying fewer than four flags leaves the result underivable from the event. It
+    // still reads as a hardening to any rule testing only "no flag is false".
+    PartialHardenings = countif(Hardened and FlagsPresent < 4),
+    ActsBetween  = countif(EventName in ("PutBucketPolicy", "PutBucketAcl")),
+    FirstWeaken  = minif(TimeGenerated, Weakened),
+    LastHarden   = maxif(TimeGenerated, Hardened),
+    Buckets      = make_set(Bucket, 20),
+    SourceIps    = make_set(SourceIpAddress, 5)
+    by UserIdentityArn, bin(TimeGenerated, 1d)
+| where Hardenings > 0
+| extend WindowMinutes = iff(Weakenings > 0 and isnotempty(FirstWeaken) and LastHarden > FirstWeaken,
+                             datetime_diff('minute', LastHarden, FirstWeaken), int(null))
+| extend Verdict = case(
+    Weakenings > 0 and isnotnull(WindowMinutes) and ActsBetween > 0,
+        strcat("GUARDRAIL LOWERED, THE BUCKET CHANGED, AND THE GUARDRAIL PUT BACK by the same principal over ",
+               tostring(WindowMinutes), " min — the end state is clean and only the history shows the window, P0"),
+    Weakenings > 0 and isnotnull(WindowMinutes),
+        strcat("GUARDRAIL LOWERED AND RESTORED by the same principal over ", tostring(WindowMinutes),
+               " min — no bucket change recorded in between, but a state-based review would show nothing at all, P1"),
+    PartialHardenings > 0,
+        "PARTIAL HARDENING REPORTED AS HARDENING — fewer than four flags submitted, so the omitted flags are in an undocumented state and the control may not be applied, P2",
+    "Block Public Access applied — change accounting only, no finding")
+| project FirstWeaken, LastHarden, UserIdentityArn, Verdict, WindowMinutes,
+          Weakenings, Hardenings, PartialHardenings, ActsBetween, Buckets, SourceIps
+| order by WindowMinutes asc
+//
+// ============================================================================
+// WHY THE SOURCE RULE'S EVENT NAME MATTERS BEYOND THIS RULE
+// ============================================================================
+// The source matches `PutPublicAccessBlock`, which is the SDK operation name; CloudTrail emits
+// `PutBucketPublicAccessBlock`. It cannot fire. What makes it worth recording is that a DIFFERENT
+// rule in the SAME pack uses the correct form — so the pack names one operation two ways, and
+// neither form generalises. Check every event name against AWS's list individually.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHETHER THE BUCKET WAS PUBLIC DURING THE WINDOW. A lowered flag only matters if a public policy
+// or ACL existed at the time, and that state is not in these events. get-bucket-policy-status
+// gives the answer for NOW, not for then — reconstructing "then" needs the policy write history.
+//
+// WHETHER ANYTHING WAS READ. Object operations are data events, off by default and billable, and
+// cannot be enabled retroactively.

@@ -1,0 +1,148 @@
+# Plaintext HTTP served by a load balancer (T1557 / T1040)
+#
+# THE FIELD THAT SEPARATES A DEFECT FROM THE CORRECT PATTERN IS THE ONE THE SOURCE RULE IGNORES.
+# An HTTP listener whose only job is to redirect to HTTPS is the RECOMMENDED configuration —
+# clients that arrive on port 80 are told to come back over TLS, and nothing sensitive crosses the
+# wire. An HTTP listener that FORWARDS to a target group is the defect: the request body, the
+# cookies and the Authorization header all traversed the internet in clear text.
+#
+# Both produce `type: http` access log entries. They are distinguished by actions_executed:
+#   "redirect" -> the load balancer answered with a 301/302 to the HTTPS URL. Correct.
+#   "forward"  -> the application received the plaintext request. This is the finding.
+# The source rule reads neither, so it cannot tell a correctly configured estate from an exposed
+# one, and in a correctly configured estate it fires constantly on the redirects.
+#
+# ONE REQUEST IS THE FINDING, NOT NINETY-NINE. The source rule requires 99 matches in an hour.
+# Reachability over plaintext is a configuration fact: a single forwarded HTTP request from the
+# internet proves the listener exists and serves. A low-traffic internal admin endpoint — the most
+# likely thing to be left on port 80 and the most valuable to intercept — never reaches 99 in an
+# hour and never alerts. Thresholds are appropriate for volume-based attacks; this is not one.
+#
+# RESTRICTING TO 2xx MISSES THE CREDENTIAL. The source rule matches elb_status_code 200-299 only.
+# A plaintext request that received a 401 still carried its credential over the wire before being
+# rejected — the interception already happened. Response status is irrelevant to whether the
+# secret was exposed, and it is not filtered on below.
+#
+# `ws` IS ALSO PLAINTEXT. The type field takes http | https | h2 | grpcs | ws | wss. The unencrypted
+# values are `http` AND `ws`; `wss` is the TLS form. A rule listing only `http` misses every
+# plaintext WebSocket, which is the transport most likely to carry a session token in its first
+# frame.
+#
+# ssl_protocol IS CORROBORATION, NOT THE TEST. AWS documents it as "-" when the listener is not an
+# HTTPS listener, so it agrees with `type` by construction. It is matched as an alternative rather
+# than a conjunction so a pipeline that drops one field still leaves the rule working.
+title: Plaintext HTTP request forwarded to a target
+id: a37e5f10-84b6-4c29-9d05-6e28c1704b93
+name: alb_plaintext_request_served
+status: experimental
+description: >-
+  A request arrived over unencrypted HTTP or WebSocket and the load balancer FORWARDED it to a
+  target rather than redirecting it to TLS. Everything in that request crossed the network in clear
+  text — cookies, Authorization headers, form bodies, query parameters. This is a configuration
+  defect that one matching request proves, so it carries no threshold. The redirect case, which is
+  the recommended pattern for a port 80 listener, is excluded by the actions filter rather than by
+  a status code.
+references:
+  - https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html
+  - https://attack.mitre.org/techniques/T1040/
+tags:
+  - attack.credential-access
+  - attack.collection
+  - attack.t1557
+  - attack.t1040
+logsource:
+  product: aws
+  service: elb
+detection:
+  plaintext_type:
+    type:
+      - 'http'
+      - 'ws'
+  served:
+    actions_executed|contains: 'forward'
+  redirected:
+    actions_executed|contains: 'redirect'
+  condition: plaintext_type and served and not redirected
+falsepositives:
+  - >-
+    A health check or monitoring probe deliberately hitting port 80 to confirm the redirect works.
+    Those are answered by the redirect action and are already excluded; one that is forwarded is
+    the finding regardless of who sent it.
+  - >-
+    An internal-only load balancer where plaintext is an accepted risk. Legitimate as a recorded
+    exception; note that the ground truth for this service treats the load balancer's scheme as
+    the thing to check, and an internal scheme is verifiable directly rather than inferred here.
+level: high
+---
+title: Plaintext listener created or modified on a load balancer
+id: 5c0b9d42-1e78-4a35-b6f9-30d7248ce15a
+name: elb_plaintext_listener_configured
+status: experimental
+description: >-
+  CreateListener or ModifyListener with Protocol HTTP. This is the control-plane cause and it fires
+  at the moment the exposure is created rather than when traffic finds it — which matters
+  particularly here, because a low-traffic endpoint may serve plaintext for months without
+  generating enough log volume to notice. The rule deliberately matches every HTTP listener,
+  including redirect-only ones, because the default action is in the same request and triage reads
+  it: a defaultActions entry of type `redirect` is the correct pattern and `forward` is not.
+references:
+  - https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_CreateListener.html
+  - https://attack.mitre.org/techniques/T1557/
+tags:
+  - attack.credential-access
+  - attack.t1557
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'elasticloadbalancing.amazonaws.com'
+    eventName:
+      - 'CreateListener'
+      - 'ModifyListener'
+  success:
+    errorCode: null
+  plaintext_protocol:
+    requestParameters.protocol:
+      - 'HTTP'
+      - 'TCP'
+  condition: selection and success and plaintext_protocol
+falsepositives:
+  - >-
+    The redirect-only listener that every well-configured public load balancer has on port 80.
+    Common and correct — read defaultActions in the same event, and confirm it is a redirect to
+    HTTPS rather than a forward.
+level: medium
+---
+title: Load balancer negotiated a deprecated TLS version
+id: e64c8a17-72d3-4be0-95c1-08b46f2e37d9
+name: alb_weak_tls_negotiated
+status: experimental
+description: >-
+  A request completed over TLS 1.0 or TLS 1.1. The connection was encrypted, so this is a weaker
+  finding than plaintext — but both versions are deprecated, both permit cipher suites with known
+  weaknesses, and a listener that still negotiates them is one an attacker can downgrade a client
+  onto. It is included here rather than as a separate use case because it is the same question the
+  source rule was reaching for — is this traffic actually protected — and the answer has three
+  states rather than two: plaintext, weak TLS, and current TLS.
+references:
+  - https://docs.aws.amazon.com/elasticloadbalancing/latest/application/describe-ssl-policies.html
+  - https://attack.mitre.org/techniques/T1557/
+tags:
+  - attack.credential-access
+  - attack.t1557
+logsource:
+  product: aws
+  service: elb
+detection:
+  weak_tls:
+    ssl_protocol:
+      - 'TLSv1'
+      - 'TLSv1.1'
+  condition: weak_tls
+falsepositives:
+  - >-
+    A legacy client that genuinely cannot negotiate anything newer. Real in some estates, and the
+    correct handling is a recorded exception with an end date rather than removing the rule — the
+    exception is the risk being accepted, and it should be visible.
+level: medium

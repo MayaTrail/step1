@@ -1,0 +1,175 @@
+# High Number of SSM Parameters Retrieval (T1555.006)
+#
+# The original rule counted `GetParameter OR GetParameters` events, 50 in five
+# minutes, grouped by userIdentity.arn, with no other condition. Three defects.
+# It never inspects `WithDecryption`, although its own description says
+# "retrieves and decrypts" — so it counts an application reading fifty plaintext
+# `String` parameters at boot exactly the same as an actor decrypting fifty
+# `SecureString` values. It omits `GetParametersByPath`, the one call that drains
+# an entire hierarchy per request, so the highest-yield path is invisible. And it
+# has no success filter, so a principal denied fifty times fires the identical
+# alert as one that succeeded fifty times.
+#
+# Counting EVENTS also under-counts the blast radius by up to 10x: GetParameters
+# takes up to 10 names per call and GetParametersByPath returns up to 10
+# parameters per page (AWS SSM API Reference, MaxResults max 10). The correlation
+# below counts KMS Decrypt operations instead — Parameter Store passes the
+# encryption context {"PARAMETER_ARN": "<parameter ARN>"} on every SecureString
+# decrypt and AWS documents that the encryption context "appears in plaintext in
+# logs, such as AWS CloudTrail logs". That yields one countable, individually
+# named parameter per decrypt rather than one per API call.
+#
+# FIELD CASING: the SSM API Reference documents the wire format (`WithDecryption`,
+# `Recursive`). AWS's own published ssm.amazonaws.com CloudTrail examples render
+# request keys with a lower-case initial (`requestParameters.name` on
+# DeleteDocument), so the rules below key on `withDecryption` / `recursive`.
+# Confirm against one real event from your own trail before deploying.
+title: SSM parameter hierarchy drained with decryption in a single call
+id: f9629b0e-ca03-499e-8e93-2cdeb82cd55c
+name: ssm_path_drain_decrypted
+status: experimental
+description: >-
+  A successful GetParametersByPath with Recursive and WithDecryption both set
+  returns every SecureString value beneath a path in one request. The parameter
+  names are not in the CloudTrail event, so the set retrieved must be
+  reconstructed from the path.
+references:
+  - https://attack.mitre.org/techniques/T1555/006/
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetParametersByPath.html
+  - https://docs.aws.amazon.com/kms/latest/developerguide/services-parameter-store.html
+tags:
+  - attack.credential-access
+  - attack.t1555.006
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName: 'GetParametersByPath'
+  decrypt:
+    requestParameters.withDecryption: true
+  recursive:
+    requestParameters.recursive: true
+  success:
+    errorCode: null
+  config_loaders:                      # tune: principals that legitimately bulk-read a path
+    userIdentity.arn|contains:
+      - ':role/app-config-loader'
+      - ':role/ecs-task-'
+      - ':role/eks-node-'
+  condition: selection and decrypt and recursive and success and not config_loaders
+falsepositives:
+  - Application bootstrap that reads its whole configuration path with decryption — allowlist the specific task or node role, never the whole account
+  - A deployment tool exporting an environment's parameters for a migration — should be time-boxed and traceable to a change record
+level: high
+---
+title: Many distinct SSM SecureString parameters decrypted by one principal
+id: bc3639fd-a0fd-4bbf-9e84-141723e0e5f4
+status: experimental
+description: >-
+  Counts distinct parameters actually decrypted, using the PARAMETER_ARN
+  encryption context on each KMS Decrypt, rather than counting SSM API calls.
+  One GetParametersByPath call can decrypt ten parameters, so an event count
+  under-reports the number of secrets exposed.
+references:
+  - https://attack.mitre.org/techniques/T1555/006/
+  - https://docs.aws.amazon.com/kms/latest/developerguide/services-parameter-store.html
+tags:
+  - attack.credential-access
+  - attack.t1555.006
+correlation:
+  type: value_count
+  rules:
+    - kms_decrypt_parameter_store
+  group-by:
+    - userIdentity.arn
+  timespan: 5m
+  field: requestParameters.encryptionContext.PARAMETER_ARN
+  condition:
+    gte: 30
+falsepositives:
+  - A fleet-wide application restart decrypting its own configuration set — allowlist by role, and size the threshold above the largest legitimate configuration path
+level: high
+---
+title: KMS Decrypt carrying a Parameter Store encryption context
+id: 70cba2c2-8c50-48ac-bac3-65870c199826
+name: kms_decrypt_parameter_store
+status: experimental
+description: >-
+  Base rule — count component only, not for direct alerting. Every SecureString
+  decrypt names its parameter in requestParameters.encryptionContext.PARAMETER_ARN.
+references:
+  - https://docs.aws.amazon.com/kms/latest/developerguide/services-parameter-store.html
+tags:
+  - attack.credential-access
+  - attack.t1555.006
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'kms.amazonaws.com'
+    eventName: 'Decrypt'
+  parameter_context:
+    requestParameters.encryptionContext.PARAMETER_ARN|contains: ':parameter/'
+  success:
+    errorCode: null
+  condition: selection and parameter_context and success
+level: low
+---
+title: High volume of decrypted SSM parameter reads by one principal
+id: 6c4393fe-dd81-42e7-b602-92b2f30f7c2a
+status: experimental
+description: >-
+  The corrected form of the original volume rule — restricted to reads that
+  requested decryption, restricted to successful calls, and extended to
+  GetParametersByPath. Retained alongside the KMS count because it still fires
+  when the parameters read are plaintext String values holding credentials.
+references:
+  - https://attack.mitre.org/techniques/T1555/006/
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetParameters.html
+tags:
+  - attack.credential-access
+  - attack.t1555.006
+correlation:
+  type: event_count
+  rules:
+    - ssm_decrypted_parameter_read
+  group-by:
+    - userIdentity.arn
+  timespan: 5m
+  condition:
+    gte: 30
+falsepositives:
+  - An application polling its configuration on a short interval — the group-by is the caller ARN, so a single misbehaving service is allowlistable
+level: medium
+---
+title: SSM parameter read requesting decryption
+id: 8511dfa1-3e41-4125-a6c5-3342c28a12b6
+name: ssm_decrypted_parameter_read
+status: experimental
+description: >-
+  Base rule — count component only, not for direct alerting. A successful read
+  of one or more parameters with WithDecryption set.
+references:
+  - https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetParameter.html
+tags:
+  - attack.credential-access
+  - attack.t1555.006
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ssm.amazonaws.com'
+    eventName:
+      - 'GetParameter'
+      - 'GetParameters'
+      - 'GetParametersByPath'
+  decrypt:
+    requestParameters.withDecryption: true
+  success:
+    errorCode: null
+  condition: selection and decrypt and success
+level: low

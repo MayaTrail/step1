@@ -1,0 +1,242 @@
+# RDS Snapshot Shared Publicly or Cross-Account (T1537 / T1578.001)
+#
+# WHAT THE SOURCE RULE DOES. It matches ModifyDBSnapshotAttribute or
+# ModifyDBClusterSnapshotAttribute, requires `attributeName: restore` from EITHER
+# requestParameters OR responseElements, requires a parser-derived field to equal `all`, and
+# filters to successes. The intent is exactly right and three of its four mechanics are wrong.
+#
+#   1. IT DEPENDS ON A FIELD CLOUDTRAIL DOES NOT PRODUCE. The share-value clause names a
+#      parser-extracted field, not a CloudTrail path. Wherever that extraction is not
+#      configured the clause matches nothing and the rule is silently dead - and it is dead in
+#      the direction that hides a public database snapshot. The real path is
+#      `requestParameters.valuesToAdd`, an array of strings.
+#   2. `responseElements.attributeName` IS NOT A PATH. The API returns
+#      DBSnapshotAttributesResult { DBSnapshotIdentifier, DBSnapshotAttributes[] { AttributeName,
+#      AttributeValues[] } }, so `attributeName` lives inside an array element and never at the
+#      top of responseElements. A flat path yields null silently. The response is still worth
+#      reading - it carries the FULL post-change share list, including accounts added by earlier
+#      calls that have aged out of your retention - but it must be read at its real depth.
+#   3. `all` AND A 12-DIGIT ACCOUNT ID ARE DIFFERENT INCIDENTS. The source rates both P2 and
+#      matches only `all`. Public means every AWS account on earth can restore it; a named
+#      account means one identified party can. They are split below at different levels, and
+#      the cross-account case is covered at all - the source rule does not see it.
+#
+# WHAT MAKES THIS TECHNIQUE DIFFERENT FROM EVERY OTHER EXPOSURE IN THIS SET. A shared snapshot
+# is a COPY. Once another account restores or copies it, the data is theirs permanently: AWS
+# states "You can delete only the public snapshots that you own", and a copy taken by someone
+# else is outside your account, your billing and your logs. Worse, AWS raises no event and
+# sends no notification when a foreign account consumes the snapshot - the RDS event catalogue
+# has entries for snapshot creation, deletion, copy, export and restore, and NONE for an
+# attribute change or for third-party consumption. The consumer's RestoreDBInstanceFromDBSnapshot
+# lands in THEIR trail.
+#
+# AND THE ONE CROSS-ACCOUNT BREADCRUMB DOES NOT EXIST IN THE PUBLIC CASE. For an ENCRYPTED
+# snapshot shared with a named account, the consumer must use the owner's KMS key, which
+# produces a kms.amazonaws.com event in the OWNER's trail. But AWS refuses `all` on an encrypted
+# snapshot - "If the manual DB snapshot is encrypted, it can be shared, but only by specifying a
+# list of authorized AWS account IDs for the ValuesToAdd parameter. You can't use `all` as a
+# value for that parameter in this case." A public snapshot is therefore necessarily
+# unencrypted, there is no KMS call, and there is no breadcrumb of any kind. The configuration
+# that maximises exposure is the one that removes the only cross-account telemetry AWS offers.
+#
+# TWO MORE CONSTRAINTS THAT SHAPE TRIAGE. Automated system snapshots cannot be shared at all -
+# "To share an automated DB snapshot, create a manual DB snapshot by copying the automated
+# snapshot, and then share that copy" - so a share is always preceded by a create or a copy,
+# which is what the temporal_ordered correlation below looks for. And a snapshot encrypted with
+# the default aws/rds key "can't be shared" in any form, so an actor who wants to share an
+# encrypted database must first CopyDBSnapshot it under a customer-managed key.
+#
+# FIELD SHAPE. eventSource `rds.amazonaws.com`, management plane, regional. Instance variant:
+# `requestParameters.dBSnapshotIdentifier`; cluster variant:
+# `requestParameters.dBClusterSnapshotIdentifier`. Both carry `attributeName`, `valuesToAdd`
+# and `valuesToRemove`. `valuesToAdd` is declared as an array of strings and should render as a
+# bare JSON list; AWS publishes no CloudTrail sample event for this API, so the rules below
+# match on the VALUE rather than on a fixed index path, which is correct under either rendering.
+title: RDS snapshot shared with all AWS accounts
+id: a86f846a-1ed6-480c-a974-234ed87d3766
+name: rds_snapshot_shared_public
+status: experimental
+description: >-
+  A manual DB or DB cluster snapshot had its restore attribute set to `all` - every AWS account
+  can now copy or restore a full offline copy of the database. Consumption produces no event in
+  this account and no notification, and copies already taken cannot be recalled.
+references:
+  - https://attack.mitre.org/techniques/T1537/                                                          # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_ModifyDBSnapshotAttribute.html         # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ShareSnapshot.html                       # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.Encryption.html                      # retrieved 2026-08-29
+tags:
+  - attack.exfiltration
+  - attack.defense-impairment
+  - attack.t1537
+  - attack.t1578.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'rds.amazonaws.com'
+    eventName:
+      - 'ModifyDBSnapshotAttribute'
+      - 'ModifyDBClusterSnapshotAttribute'
+  share_attribute:
+    requestParameters.attributeName: 'restore'
+  # `|contains` rather than an exact match because the field is a LIST and backends flatten
+  # lists differently. It is safe here: the only legal values are `all` and 12-digit account
+  # IDs, and no account ID contains letters.
+  public_value:
+    requestParameters.valuesToAdd|contains: 'all'
+  success:
+    errorCode: null
+  condition: selection and share_attribute and public_value and success
+falsepositives:
+  - >-
+    A deliberately published dataset - a public sample or benchmark database. Genuinely exists,
+    and is always a decision somebody can name. If nobody can name it, it is an incident.
+level: critical
+---
+# Sharing with a NAMED account is a different incident from sharing with the world, and the
+# source rule sees neither of them as distinct. `not values_absent` uses Sigma's documented
+# null semantics - `field: null` matches when the field is ABSENT - so this fires only when
+# valuesToAdd is present, which excludes the UNSHARE call (valuesToRemove) that is the
+# remediation for this very rule. Matching the remediation alongside the exposure is how an
+# alert buries itself in its own cleanup.
+title: RDS snapshot shared with a named AWS account
+id: e2e6bd1e-ebcf-4db5-8653-13e7c5298a43
+name: rds_snapshot_shared_cross_account
+status: experimental
+description: >-
+  A manual DB or DB cluster snapshot was shared with one or more specific AWS accounts. Lower
+  than the public case only because the recipient is identified; the data has still left the
+  account and cannot be recalled once copied.
+references:
+  - https://attack.mitre.org/techniques/T1537/                                                   # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ShareSnapshot.html                # retrieved 2026-08-29
+tags:
+  - attack.exfiltration
+  - attack.t1537
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'rds.amazonaws.com'
+    eventName:
+      - 'ModifyDBSnapshotAttribute'
+      - 'ModifyDBClusterSnapshotAttribute'
+  share_attribute:
+    requestParameters.attributeName: 'restore'
+  values_absent:
+    requestParameters.valuesToAdd: null
+  public_value:
+    requestParameters.valuesToAdd|contains: 'all'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the account IDs of legitimate partners, if any exist.
+  known_partner_accounts:
+    requestParameters.valuesToAdd|contains:
+      - '000000000000'          # replace with a real partner account, or delete this block
+  condition: selection and share_attribute and success and not values_absent and not public_value and not known_partner_accounts
+falsepositives:
+  - >-
+    A sanctioned cross-account restore for a partner or a sibling account in the same
+    organisation. Allowlist the account ID above rather than muting the rule - the ID is the
+    whole signal.
+level: high
+---
+# Base rule — sequence component only, not for direct alerting. Carries the success filter so a
+# failed create cannot compose into the correlation below.
+#
+# CopyDBSnapshot is here for two reasons beyond completeness. It is the documented way to make a
+# shareable copy of an AUTOMATED snapshot, which cannot be shared directly, and it is the
+# documented way to re-encrypt a snapshot under a customer-managed key so that it can be shared
+# at all. Both are the first move of a deliberate exfiltration.
+title: RDS manual snapshot created or copied
+id: 8ab61527-e2d0-45da-b67f-723ecb4222fb
+name: rds_manual_snapshot_created_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_CopySnapshot.html   # retrieved 2026-08-29
+tags:
+  - attack.defense-impairment
+  - attack.t1578.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'rds.amazonaws.com'
+    eventName:
+      - 'CreateDBSnapshot'
+      - 'CreateDBClusterSnapshot'
+      - 'CopyDBSnapshot'
+      - 'CopyDBClusterSnapshot'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+# CREATE-THEN-SHARE IS THE DELIBERATE SHAPE, and AWS's own constraints force it. An automated
+# system snapshot cannot be shared, so an actor working from backups must copy it to a manual
+# snapshot first; a snapshot encrypted with the default aws/rds key cannot be shared at all, so
+# an actor must copy it under a customer-managed key first; and `all` is refused on any
+# encrypted snapshot, so an actor who wants it PUBLIC must produce an unencrypted copy. Every
+# path to a shared snapshot that started from a protected database runs through a create or a
+# copy, and this correlation is that path.
+#
+# One hour spans a snapshot creation on a large database plus the share; a legitimate backup
+# job creates snapshots and never touches their attributes, so it does not compose.
+title: RDS snapshot created and then shared out of the account by one principal
+id: a12c6739-66d7-4512-baf5-eaef4b67124e
+status: experimental
+description: >-
+  One principal created or copied a manual snapshot and then shared it - publicly or with a
+  named account - inside an hour. That sequence is the documented way around every AWS
+  constraint on sharing protected data, and no backup process performs it.
+references:
+  - https://attack.mitre.org/techniques/T1537/   # retrieved 2026-08-29
+tags:
+  - attack.exfiltration
+  - attack.defense-impairment
+  - attack.t1537
+  - attack.t1578.001
+correlation:
+  type: temporal_ordered
+  rules:
+    - rds_manual_snapshot_created_bb
+    - rds_snapshot_shared_public
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+level: critical
+---
+# THRESHOLD BASIS, since there is no observed baseline to derive one from. AWS caps a single
+# snapshot at 20 recipient accounts, so an actor wanting breadth works across SNAPSHOTS rather
+# than across accounts - which is what this counts. Three distinct snapshots shared by one
+# principal inside an hour is not a person restoring a backup; it is a sweep. `gte` at the
+# baseline, never `gt`, so a run that touches exactly three does not fall through. Re-baseline
+# before deploying: in an account that genuinely publishes datasets, raise it rather than
+# muting the rule.
+title: Multiple RDS snapshots shared out of the account by one principal
+id: 42e72162-875f-4945-b35c-dca57b4e5bec
+status: experimental
+description: >-
+  One principal shared three or more distinct snapshots inside an hour. The work-list for
+  recovery is every snapshot in the group, and the exposure window starts at the first.
+references:
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ShareSnapshot.html   # retrieved 2026-08-29
+tags:
+  - attack.exfiltration
+  - attack.t1537
+correlation:
+  type: value_count
+  rules:
+    - rds_snapshot_shared_cross_account
+  group-by:
+    - userIdentity.arn
+  field: requestParameters.dBSnapshotIdentifier
+  timespan: 1h
+  condition:
+    gte: 3
+level: critical

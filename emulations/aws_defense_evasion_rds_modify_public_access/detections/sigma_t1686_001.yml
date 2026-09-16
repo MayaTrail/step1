@@ -1,0 +1,175 @@
+title: Attacker Role Assumed via STS Before RDS Firewall Modification
+id: 7c3a8f21-4b9e-4d1c-8f5a-2e6b0d9c3741
+status: experimental
+description: |
+    Detects STS AssumeRole calls that precede RDS or EC2 firewall manipulation.
+    In the ATOMIC-rds-modify-public-access emulation, the attacker IAM role is assumed
+    via the pipeline admin session before ModifyDBInstance and AuthorizeSecurityGroupIngress.
+    A suspicious role assumption here is an early indicator of follow-on RDS exposure actions.
+    The RoleSessionName "atomic-rds-public-access-session" is the emulation-specific IOC;
+    broaden the condition (remove filter_legitimate) when hunting in production environments.
+references:
+    - https://attack.mitre.org/techniques/T1686/001/
+    - https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.defense_impairment
+    - attack.t1686.001
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: AssumeRole
+        eventSource: sts.amazonaws.com
+    filter_legitimate:
+        # Suppress automated CI/CD role assumptions; tune to your environment
+        userAgent|contains:
+            - 'aws-sdk-java'
+            - 'Terraform'
+            - 'pulumi'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - Legitimate developer or automation role assumptions using the default boto3 session
+    - CI/CD pipelines assuming cross-account roles for deployment
+level: medium
+
+# Supplemental: narrow to the emulation IOC (RoleSessionName) for high-fidelity alerting
+# Add to detection.selection:
+#   requestParameters.roleSessionName: 'atomic-rds-public-access-session'
+# and set level: high
+---
+title: Security Group Inbound Rule Added for MySQL Port 3306
+id: b8e4f2a9-6c3d-4b7e-a1f5-9d2c8e0b4376
+status: experimental
+description: |
+    Detects AuthorizeSecurityGroupIngress that opens TCP port 3306 (MySQL/MariaDB/Aurora)
+    from any external CIDR. In the ATOMIC-rds-modify-public-access emulation, this is step 4:
+    the attacker punches a hole in the RDS security group after making the instance publicly
+    accessible. The emulation uses a non-routable CIDR (10.99.254.0/24) for safety, but the
+    detection logic is CIDR-agnostic so it catches real attacks using 0.0.0.0/0.
+    AWS Config rule restricted-common-ports also fires but at config evaluation cadence;
+    this CloudTrail rule provides event-time detection.
+references:
+    - https://attack.mitre.org/techniques/T1686/001/
+    - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_AuthorizeSecurityGroupIngress.html
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.defense_impairment
+    - attack.t1686.001
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_event:
+        eventName: AuthorizeSecurityGroupIngress
+        eventSource: ec2.amazonaws.com
+    selection_port_3306:
+        requestParameters.ipPermissions.items.fromPort: 3306
+    selection_port_3306_to:
+        requestParameters.ipPermissions.items.toPort: 3306
+    filter_internal_only:
+        # Suppress rules scoped to RFC-1918 management ranges already whitelisted
+        requestParameters.ipPermissions.items.ipRanges.items.cidrIp|startswith:
+            - '10.0.'
+            - '10.1.'
+            - '172.16.'
+            - '192.168.'
+    condition: selection_event and (selection_port_3306 or selection_port_3306_to) and not filter_internal_only
+falsepositives:
+    - Authorized DBA or application access from known IP ranges
+    - Database migration tooling that temporarily opens port 3306
+level: high
+
+# Escalation: correlate with ModifyDBInstance publiclyAccessible=true from same session
+# within 10 minutes -> critical severity. See kql_T1686.001_correlated_rds_exposure.kql.
+---
+title: Production Secret Accessed or Denied Before RDS Exposure
+id: 9f1e2b4a-7c5d-4e8b-a3f9-1d6c0e8b2543
+status: experimental
+description: |
+    Detects GetSecretValue calls against production-named secrets, including
+    AccessDenied outcomes. In the ATOMIC-rds-modify-public-access chain, the attacker
+    enumerates credentials (step 2) before exposing the RDS instance. An AccessDenied
+    result is still a high-value detection signal - it shows the attacker probing the
+    secret even without read access. This rule fires on both allowed and denied outcomes.
+references:
+    - https://attack.mitre.org/techniques/T1686/001/
+    - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.defense_impairment
+    - attack.t1686.001
+    - attack.credential_access
+    - attack.t1555
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_allowed:
+        eventName: GetSecretValue
+        eventSource: secretsmanager.amazonaws.com
+    selection_denied:
+        eventName: GetSecretValue
+        eventSource: secretsmanager.amazonaws.com
+        errorCode: AccessDenied
+    filter_legitimate_roles:
+        # Suppress application service roles that routinely read their own secrets
+        userIdentity.arn|contains:
+            - 'app-service-role'
+            - 'lambda-execution-role'
+    condition: (selection_allowed or selection_denied) and not filter_legitimate_roles
+falsepositives:
+    - Application services reading their own SecretsManager secrets at startup
+    - Developers testing secret retrieval in non-production accounts
+    - Automated rotation Lambda functions
+level: high
+
+# Emulation IOC: target secret ARN contains "prod-rds-master-secret"
+# Add to selection_allowed / selection_denied:
+#   requestParameters.secretId|contains: 'prod-rds-master-secret'
+# This narrows to the exact emulation decoy secret.
+---
+title: RDS Instance Made Publicly Accessible via ModifyDBInstance
+id: 3d5a9c7b-2f1e-4a8d-b6c4-0e9f3d7a1b85
+status: experimental
+description: |
+    Detects ModifyDBInstance API calls that set publiclyAccessible to true,
+    exposing the RDS database endpoint to the internet. This is the primary
+    T1686.001 (Disable or Modify System Firewall: Cloud Firewall) action in
+    the ATOMIC-rds-modify-public-access emulation. The change takes effect
+    immediately when ApplyImmediately=true is set. AWS Security Hub RDS.2
+    also fires on this change, but with up to 12-hour delay; CloudTrail-based
+    detection provides near-real-time alerting.
+references:
+    - https://attack.mitre.org/techniques/T1686/001/
+    - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_ModifyDBInstance.html
+    - https://docs.aws.amazon.com/securityhub/latest/userguide/rds-controls.html#rds-2
+author: MayaTrail
+date: 2026/08/26
+tags:
+    - attack.defense_impairment
+    - attack.t1686.001
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: ModifyDBInstance
+        eventSource: rds.amazonaws.com
+        requestParameters.publiclyAccessible: 'true'
+    filter_legitimate:
+        # Suppress known-safe change management roles; update ARN prefix to match your env
+        userIdentity.arn|contains:
+            - 'db-admin-automation-role'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - Intentional public RDS exposure for dev/test internet-accessible read replicas
+    - Database migration workflows that temporarily expose endpoints
+level: high
+
+# Correlation hint: pair with AuthorizeSecurityGroupIngress on port 3306 (sigma_T1686.001_authorize_sg_ingress.yml)
+# within a 5-minute window from the same userIdentity.arn to escalate to critical.

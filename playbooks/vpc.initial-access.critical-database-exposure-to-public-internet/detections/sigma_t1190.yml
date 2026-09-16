@@ -1,0 +1,238 @@
+# A database port reachable from the public internet (T1190)
+#
+# THE FINDING IS THE REACHABILITY, NOT THE TRAFFIC. One accepted inbound flow from a public
+# address to a database port proves the security group and the network ACL both permit it. That
+# is a configuration fact, verifiable directly and fixable permanently — and it stays true between
+# alerts. Every rule here is therefore written to fire once per exposure and route to a
+# configuration fix, not to page per packet. The source rule groups by source AND destination
+# address with a threshold of zero, which pages once per client on an exposed database; a
+# genuinely internet-reachable production database produces thousands of alerts an hour and the
+# rule is muted the same day.
+#
+# `action` IS UPPERCASE. AWS documents exactly two values: ACCEPT and REJECT. The source rule
+# excludes the lowercase string "reject", which on a case-sensitive backend excludes nothing —
+# so the rule matches REJECTed connections too and reports blocked scanning as a live P1
+# exposure. Written positively below as action: 'ACCEPT', which cannot fail that way.
+#
+# `protocol` IS AN IANA NUMBER. 6 is TCP. A rule written as protocol: 'TCP' matches nothing.
+#
+# FIELD VERSIONS. `flow-direction` is version 5 and `pkt-srcaddr`/`pkt-dstaddr` are version 3;
+# the default flow-log format is version 2 and carries none of them, and AWS states the format
+# cannot be changed after the subscription is created. Without flow-direction, an OUTBOUND
+# connection from a host in the VPC to an external database on 3306 matches identically to an
+# inbound exposure — a different event with a different response. Without pkt-dstaddr, ingress
+# through a Network Load Balancer shows "the primary private IPv4 address" of the interface
+# rather than the database, so the alert names the wrong host. See ../PLAYBOOK.md §1.
+#
+# THE PORT LIST. The source rule lists 3306, 5432, 1521, 1433, 3303, 3309 and 5429. Three of those
+# are not database ports in any common deployment, and 5429 is one digit from 5439 — Redshift —
+# which suggests a transposition. Meanwhile MongoDB (27017), Redis (6379), OpenSearch (9200),
+# Memcached (11211), Cassandra (9042) and CouchDB (5984) are absent, and those are the engines
+# most often exposed because they historically shipped with no authentication at all. The list
+# below is rebuilt from what is actually deployed rather than corrected in place.
+title: Database port accepted a connection from a public address
+id: c60d92f4-1b78-4e35-a9c2-5f807d3e6b41
+name: vpc_db_exposed_to_internet
+status: experimental
+description: >-
+  An inbound TCP flow from a non-private address to a database port was ACCEPTED. Accepted is the
+  whole signal: it means the security group, the network ACL and the route all permit the public
+  internet to reach a datastore. Databases are not internet-facing services — there is no
+  architecture in which this is the intended state, which is why this rule needs no baseline and
+  no threshold. One matching flow is the finding.
+references:
+  - https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html
+  - https://attack.mitre.org/techniques/T1190/
+tags:
+  - attack.initial-access
+  - attack.t1190
+logsource:
+  product: aws
+  service: vpcflowlogs
+detection:
+  inbound_accepted:
+    flow-direction: 'ingress'
+    action: 'ACCEPT'
+    protocol: 6
+  database_port:
+    dstport:
+      - 3306      # MySQL / MariaDB / Aurora MySQL
+      - 33060     # MySQL X protocol
+      - 5432      # PostgreSQL / Aurora PostgreSQL
+      - 1433      # SQL Server
+      - 1521      # Oracle
+      - 5439      # Redshift
+      - 27017     # MongoDB / DocumentDB
+      - 27018     # MongoDB shard
+      - 6379      # Redis / ElastiCache
+      - 11211     # Memcached
+      - 9200      # OpenSearch / Elasticsearch HTTP
+      - 9300      # Elasticsearch transport
+      - 9042      # Cassandra / Keyspaces
+      - 5984      # CouchDB
+      - 8529      # ArangoDB
+      - 7000      # Cassandra internode
+  # Private space is excluded rather than public space enumerated, because the complement is
+  # finite and the set is not. Prefix matching is used because Sigma has no CIDR operator every
+  # backend implements; '172.2' over-matches into 172.2.x public space, which errs toward
+  # treating a public address as private and therefore toward MISSING an exposure. A backend
+  # supporting CIDR should use 10.0.0.0/8, 172.16.0.0/12 and 192.168.0.0/16 instead. Stated here
+  # because a silent over-match on the safe-listing side of a rule is the dangerous direction.
+  private_source:
+    pkt-srcaddr|startswith:
+      - '10.'
+      - '192.168.'
+      - '172.16.'
+      - '172.17.'
+      - '172.18.'
+      - '172.19.'
+      - '172.2'
+      - '172.30.'
+      - '172.31.'
+      - '100.64.'    # carrier-grade NAT, used by some AWS managed services
+      - '127.'
+  condition: inbound_accepted and database_port and not private_source
+falsepositives:
+  - >-
+    A database deliberately published for a third party. Rare, always a documented exception, and
+    the correct response is still to read this alert every time — the exception should be an
+    address allowlist in the security group, not a permanently muted rule.
+  - >-
+    A non-database service that happens to listen on one of these ports. Real; confirm against
+    the instance's role once, and exclude by pkt-dstaddr rather than by port.
+level: critical
+---
+title: Database port refused a connection from a public address
+id: 7ea3b158-40cf-4d92-b607-1c95e28fa063
+name: vpc_db_probed_from_internet
+status: experimental
+description: >-
+  The same shape as above, refused. Base rule and a signal in its own right at low: the internet
+  scans every address continuously, so a handful of these is background and means the controls
+  are working. It matters as a rate, and as the thing that precedes an exposure — a spike against
+  one host, or the same source moving across many database ports, is somebody choosing your
+  estate rather than scanning the internet. Note that AWS documents REJECT as covering security
+  group and network ACL denials AND "packets arrived after the connection was closed", so a
+  count of these is not purely a count of blocked attacks.
+references:
+  - https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html
+  - https://attack.mitre.org/techniques/T1595/
+tags:
+  - attack.reconnaissance
+  - attack.t1595
+logsource:
+  product: aws
+  service: vpcflowlogs
+detection:
+  inbound_refused:
+    flow-direction: 'ingress'
+    action: 'REJECT'
+    protocol: 6
+  database_port:
+    dstport:
+      - 3306
+      - 33060
+      - 5432
+      - 1433
+      - 1521
+      - 5439
+      - 27017
+      - 27018
+      - 6379
+      - 11211
+      - 9200
+      - 9300
+      - 9042
+      - 5984
+      - 8529
+      - 7000
+  private_source:
+    pkt-srcaddr|startswith:
+      - '10.'
+      - '192.168.'
+      - '172.16.'
+      - '172.17.'
+      - '172.18.'
+      - '172.19.'
+      - '172.2'
+      - '172.30.'
+      - '172.31.'
+      - '100.64.'
+      - '127.'
+  condition: inbound_refused and database_port and not private_source
+falsepositives:
+  - >-
+    Internet background scanning, continuously. This rule is shipped at low precisely because it
+    is mostly that; route it to a dashboard, not to a person.
+level: low
+---
+title: One external source probed many database ports across the estate
+id: 92b7c04e-6d31-4a58-83f0-e517d9a2b46c
+status: experimental
+description: >-
+  A single external address was refused across an unusual number of distinct database ports or
+  hosts. Undirected internet scanning hits one port across many addresses; this is the inverse —
+  many ports against your addresses, which is somebody enumerating what you run. It is the
+  earliest warning this technique offers, and it arrives before the exposure is found rather than
+  after. group-by is pkt-srcaddr because that is the actor; timespan is 1h against the default
+  10-minute aggregation interval plus AWS's typical delivery latency.
+references:
+  - https://attack.mitre.org/techniques/T1595/
+tags:
+  - attack.reconnaissance
+  - attack.t1595
+correlation:
+  type: value_count
+  rules:
+    - vpc_db_probed_from_internet
+  group-by:
+    - pkt-srcaddr
+  timespan: 1h
+  condition:
+    field: dstport
+    gte: 6
+falsepositives:
+  - >-
+    Commercial internet-wide scanning services, which are numerous and persistent. Their address
+    ranges are published; exclude them by source address and keep the rule.
+level: medium
+---
+title: Security group opened a database port to the internet
+id: 4f18e5a7-92c0-4b63-a15d-70268bc3f9e2
+name: ec2_sg_database_port_opened_publicly
+status: experimental
+description: >-
+  AuthorizeSecurityGroupIngress permitted 0.0.0.0/0 or ::/0. This is the control-plane cause of
+  everything above, it is in CloudTrail rather than in flow logs, and it fires at the moment the
+  exposure is created rather than when somebody finds it. The two planes are shipped together on
+  purpose: flow logs prove reachability was exercised, CloudTrail proves who created it, and
+  neither answers the other's question. Note that the CIDR is nested inside a list of permissions,
+  each of which carries its own list of ranges, so a rule reading a single flat field matches
+  nothing.
+references:
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_AuthorizeSecurityGroupIngress.html
+  - https://attack.mitre.org/techniques/T1190/
+tags:
+  - attack.initial-access
+  - attack.t1190
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'AuthorizeSecurityGroupIngress'
+  success:
+    errorCode: null
+  world_open:
+    requestParameters.ipPermissions.items.ipRanges.items.cidrIp: '0.0.0.0/0'
+  world_open_v6:
+    requestParameters.ipPermissions.items.ipv6Ranges.items.cidrIpv6: '::/0'
+  condition: selection and success and (world_open or world_open_v6)
+falsepositives:
+  - >-
+    Opening 80 or 443 to the world on a load balancer's security group, which is ordinary. This
+    rule matches any world-open ingress and is deliberately broader than the database port list —
+    the port is in the same request and triage reads it. Narrowing the rule to database ports
+    would miss the case where a wide range covering them is opened.
+level: high

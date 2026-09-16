@@ -1,0 +1,116 @@
+// ECS Service Deleted (T1489 / T1070)
+//
+// Signal: DeleteService succeeding for a principal that neither deploys nor responds to
+// incidents; the same at volume; a force delete of a service still maintaining tasks; and the
+// scale-to-zero-then-delete pair that is a deliberate teardown.
+//
+// This query answers the question the DeleteService event cannot: WAS THE DELETED SERVICE
+// OURS, OR THE ACTOR'S? Deleting a service is both the destructive act and the standard
+// remediation for ecs.stealth.service-is-created, so the same event name covers an outage and
+// a containment step. Here each deletion is joined back to the CreateService that produced
+// the service, which gives the analyst three things the deletion event does not carry: who
+// created it, how long it existed, and what task definition it ran. A service created by the
+// same principal an hour ago and deleted now is CLEANUP; a service created by the pipeline two
+// years ago and deleted now is DESTRUCTION.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE AllowedRoles BELOW BEFORE DEPLOYING - and include the break-glass RESPONDER role,
+// not just the deployment role, or this rule pages the SOC on its own containment work.
+let Lookback = 90d;
+let Ecs =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "ecs.amazonaws.com"
+    // RequestParameters and ResponseElements are typed `string` in this table, not dynamic.
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    // `contains`, never `has`: a role path and an ARN are punctuated, and `has` is whole-term.
+    | extend IsAllowed = (UserIdentityArn contains ":role/iac-deploy")
+                      or (UserIdentityArn contains ":role/BreakGlassAdmin")
+    // `cluster` is caller-typed (short name or full ARN) on every one of these events.
+    | extend ClusterName = tostring(split(tostring(Req.cluster), "/")[-1]);
+let Creations = Ecs
+    | where EventName == "CreateService" and isempty(ErrorCode)
+    | summarize CreatedAt = min(TimeGenerated), Creator = any(UserIdentityArn),
+                CreatedTaskDef = any(tostring(Req.taskDefinition))
+             by ClusterName, ServiceName = tostring(Req.serviceName);
+let ScaleDowns = Ecs
+    | where EventName == "UpdateService" and isempty(ErrorCode) and toint(Req.desiredCount) == 0
+    | project ScaledAt = TimeGenerated, ClusterName,
+              ServiceName = tostring(split(tostring(Req.service), "/")[-1]),
+              Scaler = UserIdentityArn;
+// Denied attempts are counted separately: a principal refused across twenty services produces
+// the same event volume as a real destruction of twenty, and they are different incidents.
+let Denials = Ecs
+    | where EventName == "DeleteService" and isnotempty(ErrorCode)
+    | summarize DeniedAttempts = count(), DeniedCodes = make_set(ErrorCode, 6)
+             by Actor = UserIdentityArn;
+Ecs
+| where EventName == "DeleteService" and isempty(ErrorCode)
+// `service` is also caller-typed. responseElements.service.status is DRAINING on a normal
+// deletion, not INACTIVE - AWS documents ACTIVE -> DRAINING -> INACTIVE, and DRAINING lasts
+// until every task reaches STOPPING or STOPPED.
+| extend ServiceName = tostring(split(tostring(Req.service), "/")[-1])
+| extend Forced = tostring(Req.force)
+| extend PostStatus = tostring(Resp.service.status),
+         DesiredAtDelete = toint(Resp.service.desiredCount),
+         RunningAtDelete = toint(Resp.service.runningCount),
+         DeletedTaskDef = tostring(Resp.service.taskDefinition)
+| project DeletedAt = TimeGenerated, ClusterName, ServiceName, Actor = UserIdentityArn,
+          ActorKey = UserIdentityAccessKeyId, Forced, PostStatus, DesiredAtDelete,
+          RunningAtDelete, DeletedTaskDef, IsAllowed,
+          DeleteIp = SourceIpAddress, DeleteAgent = UserAgent
+| join kind=leftouter Creations on ClusterName, ServiceName
+| join kind=leftouter (
+    ScaleDowns | summarize LastScaledAt = max(ScaledAt), Scaler = any(Scaler)
+              by ClusterName, ServiceName
+  ) on ClusterName, ServiceName
+| extend ServiceLifetimeHours = iff(isnotempty(CreatedAt),
+             todouble(datetime_diff('minute', DeletedAt, CreatedAt)) / 60.0, real(null))
+| extend SelfCleanup = isnotempty(Creator) and Creator == Actor and ServiceLifetimeHours < 24
+| extend OrderlyTeardown = isnotempty(LastScaledAt) and LastScaledAt <= DeletedAt
+                           and Scaler == Actor
+| join kind=leftouter Denials on Actor
+| extend Verdict = case(
+    SelfCleanup,
+        "CLEANUP, NOT DESTRUCTION - this principal created the service itself less than a day ago and has now removed it. Treat as the actor tidying up after ecs.stealth.service-is-created, and preserve the task definition before it is deregistered",
+    IsAllowed and Forced == "true",
+        "FORCED DELETE BY AN ALLOWED PRINCIPAL - a pipeline or responder removed a service that was still maintaining tasks. Legitimate during containment; a finding if it is routine",
+    IsAllowed,
+        "ALLOWED DELETION - deployment or incident response. Confirm against the incident record rather than escalating",
+    Forced == "true",
+        "FORCED DELETE BY AN UNAUTHORISED PRINCIPAL - the service was removed while still serving, using the documented shortcut around the scale-to-zero requirement",
+    OrderlyTeardown,
+        "DELIBERATE SEQUENCED TEARDOWN - the same principal scaled the service to zero first, which is the documented way around ECS refusing to delete a service that is maintaining tasks",
+    isnotempty(DeniedCodes),
+        "DELETION WITH DENIED ATTEMPTS ELSEWHERE - treat the denials as boundary mapping, not as deletions",
+        "UNAUTHORISED SERVICE DELETION - a production workload was removed by a principal outside the deployment and response allowlist")
+| project DeletedAt, Verdict, Actor, ClusterName, ServiceName, Forced, PostStatus,
+          DesiredAtDelete, RunningAtDelete, DeletedTaskDef, Creator, CreatedAt,
+          ServiceLifetimeHours, CreatedTaskDef, OrderlyTeardown, LastScaledAt,
+          DeniedAttempts, DeniedCodes, DeleteIp, DeleteAgent, ActorKey
+| order by DeletedAt desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// Whether the deletion was authorised in the human sense. The CreateService join gives you
+// provenance, not intent. An incident responder deleting an attacker's service and an attacker
+// deleting a production service produce the same event with a different ARN in it, and the
+// only reliable separator is your own incident record.
+//
+// What was in the tasks. ECS logs control-plane calls as management events; the only ECS data
+// events AWS documents are ecs:Poll, ecs:StartTelemetrySession and ecs:PutSystemLogEvents
+// under resources.type AWS::ECS::ContainerInstance. There is no AWS::ECS::Task data event
+// type. Container output lives wherever the log driver sent it.
+//
+// The service's configuration after the fact. responseElements.service.* is captured above and
+// is the LAST full description that will ever exist: AWS warns that "INACTIVE services may be
+// cleaned up and purged from Amazon ECS record keeping, and DescribeServices calls on those
+// services return a ServiceNotFoundException error." Snapshot it from this table rather than
+// planning to re-read it from the API.
+//
+// PREVENTION. ecs:DeleteService belongs to the deployment pipeline and to incident response.
+// Deny it elsewhere, and hold service definitions in infrastructure code - after a deletion
+// the load balancer wiring, network configuration and task definition reference exist nowhere
+// else.

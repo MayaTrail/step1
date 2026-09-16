@@ -1,0 +1,176 @@
+# KMS Key Scheduled for Deletion (T1485 / T1486)
+#
+# THIS IS THE ONE KMS EVENT WITH A DEADLINE. `ScheduleKeyDeletion` moves the key to
+# `PendingDeletion` and starts a waiting period of 7-30 days, default 30. During the window
+# the key cannot be used in any cryptographic operation, and when the window expires AWS
+# deletes the key, its key material, all of its metadata and every alias that refers to it.
+# AWS: "After a KMS key is deleted, you can no longer decrypt the data that was encrypted
+# under that KMS key, which means that data becomes unrecoverable." Re-importing the same
+# key material does NOT recover a symmetric key's ciphertexts - AWS binds metadata unique to
+# each KMS key into every ciphertext precisely so that it cannot be done.
+#
+# THE WINDOW IS THE ENTIRE RESPONSE OPPORTUNITY, AND `CancelKeyDeletion` IS THE WHOLE OF
+# CONTAINMENT. It works at any point during the window and not one second after it. So the
+# only thing this rule has to achieve is reaching a human while the window is open - which is
+# why it fires on EVERY successful ScheduleKeyDeletion with no allowlist. A planned
+# decommission firing this rule and being closed against a change record is the intended
+# behaviour, not a false positive to tune away.
+#
+# THE SHORT-WINDOW RULE IS THE HIGH-CONFIDENCE ONE. 30 days is the default and is what every
+# client that omits the parameter gets. A caller that explicitly passes 7 has chosen to give
+# the defender the least time the API permits. That is a deliberate act with no operational
+# benefit, and it is visible in `requestParameters.pendingWindowInDays`.
+#
+# ONLY CUSTOMER MANAGED KEYS REACH THIS EVENT. AWS: "You can only schedule the deletion of a
+# customer managed key. You cannot delete AWS managed keys or AWS owned keys."
+#
+# THE SOURCE RULE matches `eventName:"schedulekeydeletion"` in lower case - not the form
+# CloudTrail writes - with no success filter and nothing else, at P3. It has no view of the
+# waiting period, which is the one field on the event that carries intent, and P3 for an
+# event whose response window can be as short as seven days is a scheduling error.
+title: KMS key scheduled for deletion
+id: beec5d0e-bc09-4f65-abc9-7a8592293eac
+name: kms_key_scheduled_deletion
+status: experimental
+description: >-
+  A customer managed KMS key was scheduled for deletion. The key is unusable from this moment
+  and is permanently destroyed when the waiting period expires, taking with it the ability to
+  decrypt everything ever encrypted under it. CancelKeyDeletion reverses this during the
+  window and not afterwards.
+references:
+  - https://docs.aws.amazon.com/kms/latest/APIReference/API_ScheduleKeyDeletion.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/kms/latest/developerguide/deleting-keys.html  # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1485/  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+  - attack.t1486
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'kms.amazonaws.com'
+    eventName: 'ScheduleKeyDeletion'
+  success:
+    errorCode: null
+  # No principal allowlist, deliberately, and this is the one rule in the KMS set that does
+  # not carry one. The response window can be as short as seven days and CancelKeyDeletion is
+  # the only remedy; a rule that suppresses the alert for an allowlisted role trades the
+  # entire response opportunity for a quieter channel. Reconcile against the change record
+  # instead of filtering in the rule.
+  condition: selection and success
+falsepositives:
+  - >-
+    A planned key decommission. Expected to fire, and expected to be closed against a change
+    record naming the key ARN — that reconciliation is the control, not the rule.
+level: high
+---
+# The waiting period is the only field on this event that carries intent. AWS accepts 7-30
+# days and defaults to 30 when the parameter is omitted, so a caller that explicitly asks for
+# 7 has chosen to leave the defender the shortest window the API allows. No allowlist and no
+# success filter interaction: this fires alongside the rule above rather than instead of it.
+#
+# COVERAGE LIMIT, stated so it is not mistaken for a gap in the technique: pendingWindowInDays
+# is an OPTIONAL request parameter. A caller that omits it gets 30 days and produces an event
+# with no such field, so this rule sees explicit short windows only. The authoritative
+# deadline is never this field — it is KeyMetadata.DeletionDate from DescribeKey, which AWS
+# documents as being up to 24 hours later than the scheduled time.
+title: KMS key scheduled for deletion with the shortest permitted waiting period
+id: d0ffb086-be6e-4d93-aa6c-65a22bc15993
+name: kms_key_scheduled_deletion_short_window
+status: experimental
+description: >-
+  A KMS key was scheduled for deletion with an explicit waiting period at or near the 7-day
+  minimum, against a documented default of 30. The caller chose to minimise the time available
+  to notice and cancel.
+references:
+  - https://docs.aws.amazon.com/kms/latest/APIReference/API_ScheduleKeyDeletion.html  # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1485/  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'kms.amazonaws.com'
+    eventName: 'ScheduleKeyDeletion'
+  short_window:
+    requestParameters.pendingWindowInDays:
+      - 7
+      - 8
+      - 9
+      - 10
+  success:
+    errorCode: null
+  condition: selection and short_window and success
+falsepositives:
+  - >-
+    A decommission pipeline that hard-codes the minimum window to release the key-count quota
+    sooner. Real, and worth finding on its own merits — the pipeline should be using 30.
+level: high
+---
+# Base rule — sequence component only, not for direct alerting. The disable is alerted on in
+# its own right by ../../kms.impact.kms-key-disabled/detections/sigma_t1489.yml; this copy
+# exists because a Sigma correlation resolves its base rules by `name:` within the SAME file
+# (B8), so a rule referenced here must ship here. Kept at informational so it cannot page on
+# its own, and carrying the same success filter as the correlation it feeds (D-f) — otherwise
+# a DENIED disable followed by a legitimate deletion would fire the correlation `high`.
+title: KMS key disabled (sequence component)
+id: bfbbad1e-45b1-4bfa-8968-d44681088bf6
+name: kms_key_disabled_component
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. A successful DisableKey, used
+  as the first half of the disable-then-destroy sequence.
+references:
+  - https://docs.aws.amazon.com/kms/latest/APIReference/API_DisableKey.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'kms.amazonaws.com'
+    eventName: 'DisableKey'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+# Disable, then destroy. An operator retiring a key does one or the other; an actor working
+# through a key estate does both, because disabling first confirms that nothing screams before
+# the irreversible call is made. One hour is generous on purpose — the pair is diagnostic
+# whether it is seconds apart in a script or a working day apart in a deliberate campaign, and
+# a longer timespan costs nothing because the second event is already `high` on its own.
+#
+# `temporal_ordered` conveys ordering by its type name. Do NOT add `ordered: true` (B7).
+# Grouped by principal rather than by key: the same actor disabling key A and destroying key B
+# is the same finding, and the key identifier on the request side is caller-typed anyway.
+title: KMS key disabled and then scheduled for deletion by the same principal
+id: 1eb3d632-f12c-4a28-affe-0b2051360e29
+status: experimental
+description: >-
+  One principal disabled a KMS key and then scheduled a KMS key for deletion inside an hour.
+  That is the destruction sequence — the reversible step used to confirm the ground before the
+  irreversible one.
+references:
+  - https://docs.aws.amazon.com/kms/latest/developerguide/deleting-keys.html  # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1485/  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+  - attack.t1486
+correlation:
+  type: temporal_ordered
+  rules:
+    - kms_key_disabled_component
+    - kms_key_scheduled_deletion
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+level: high

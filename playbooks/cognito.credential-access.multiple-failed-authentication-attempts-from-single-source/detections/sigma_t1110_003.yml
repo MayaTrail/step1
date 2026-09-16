@@ -1,0 +1,255 @@
+# Failed User Authentication From a Single Source IP (T1110.003 / T1110.004)
+#
+# WHAT THE ORIGINAL RULE GOT WRONG, IN THREE PLACES.
+#
+# 1. IT WATCHES THE WRONG EVENT FOR THE FLOWS THAT ACTUALLY EXIST. The source rule matches
+#    `InitiateAuth` with an errorCode of NotAuthorizedException or UserNotFoundException and an
+#    authFlow in (USER_SRP_AUTH, USER_PASSWORD_AUTH, USER_AUTH, CUSTOM_AUTH). In USER_SRP_AUTH
+#    the initial call only exchanges SRP_A for a salt and SRP_B - it SUCCEEDS - and AWS documents
+#    the password verdict as a "generic NotAuthorizedException" at `RespondToAuthChallenge`.
+#    CUSTOM_AUTH and the PASSWORD challenge of USER_AUTH have the same shape. Only
+#    USER_PASSWORD_AUTH carries the password in the initial call. AWS: an app client with no
+#    ExplicitAuthFlows supports ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_SRP_AUTH and
+#    ALLOW_CUSTOM_AUTH - so on a DEFAULT app client the only reachable flows are exactly the ones
+#    whose failure lands on the Respond call, and the rule is structurally dead. Every rule below
+#    matches BOTH `InitiateAuth` and `RespondToAuthChallenge`.
+#
+# 2. ITS THRESHOLD IS UNREACHABLE FOR THE ATTACK IT NAMES. AWS locks a user out after five failed
+#    password attempts for 2^(n-5) seconds, and "attempts made during a lockout period generate a
+#    `Password attempts exceeded` exception" which the source rule does not match. Reaching
+#    fifteen COUNTED failures against ONE account inside ten minutes would require waiting out
+#    2^0+2^1+...+2^9 = 1,023 seconds of cumulative lockout - over seventeen minutes. So a
+#    sustained single-account brute force can never fire the rule: the first five attempts count,
+#    and every attempt after that returns a form the rule ignores. Fifteen is therefore an
+#    implicit MULTI-ACCOUNT threshold that the rule never states and never verifies, because it
+#    does not count accounts. The base rule below OR-s the lockout form in, which makes the
+#    single-account case reachable, and a second correlation treats sustained lockouts as the
+#    availability attack they are.
+#
+# 3. ITS ENUMERATION HALF DEPENDS ON AN APP-CLIENT SETTING IT NEVER CHECKS.
+#    `PreventUserExistenceErrors` is set per app client. AWS: when it is active, the password
+#    flows "return a NotAuthorizedException with the message Incorrect username or password"
+#    where they would otherwise have returned UserNotFoundException - and under SRP a nonexistent
+#    user gets a SIMULATED salt, so the two are indistinguishable. The console selects it by
+#    default; the API leaves it LEGACY. The clause is therefore live on IaC-created clients and
+#    dead on console-created ones, with nothing in the rule to say which.
+#
+# THERE IS NO PRINCIPAL HERE, AND THAT IS THE WHOLE POINT. AWS on `InitiateAuth`: "Amazon Cognito
+# doesn't evaluate AWS Identity and Access Management (IAM) policies in requests for this API
+# operation. For this operation, you can't use IAM credentials to authorize requests, and you
+# can't grant IAM permissions in policies." The events are still CloudTrail MANAGEMENT events,
+# logged by default with eventType AwsApiCall - but `userIdentity` degrades to an accountId or
+# `{"type": "Unknown"}`, so `sourceIPAddress` is the only actor identifier that exists. An IAM
+# deny is a no-op against this technique; AWS WAF is the control, and its documented scope is
+# "public API operations - requests from your app to the Amazon Cognito API that don't use AWS
+# credentials to authorize", naming InitiateAuth, RespondToAuthChallenge and GetUser. The
+# IAM-authorized sibling in
+# ../../cognito.credential-access.multiple-failed-administrative-authentication-attempts/ is the
+# exact inverse on both counts, which is why the two are separate use cases.
+#
+# THE BLIND SPOT THAT SWALLOWS MOST REAL TRAFFIC. Managed login and the classic hosted UI do not
+# produce InitiateAuth. They produce their own event names with eventType AwsServiceEvent -
+# login_POST, login_continue_POST, selectChallenge_POST, mfa_totp_POST; Login_GET,
+# CognitoAuthentication, Token_POST - and nothing in this file or in the source rule sees them.
+# For a consumer-facing pool that is where the users are. Cover it with a rule keyed on those
+# event names and with AWS WAF, which does inspect the managed-login endpoints.
+title: Cognito user authentication failing repeatedly from one source address
+id: 31633bf9-a467-4d9b-9930-5f1002be233e
+name: cognito_user_auth_failure_burst
+status: experimental
+description: >-
+  Fifteen or more failed user-pool authentications inside ten minutes from a single source
+  address, counted across both halves of every authentication flow and including the lockout
+  form. There is no calling principal on this API, so the address is the only actor identifier
+  the event carries.
+references:
+  - https://attack.mitre.org/techniques/T1110/003/  # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1110/004/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_InitiateAuth.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/cognito/latest/developerguide/authentication.html  # retrieved 2026-08-29
+tags:
+  - attack.credential-access
+  - attack.t1110.003
+  - attack.t1110.004
+correlation:
+  type: event_count
+  rules:
+    - cognito_user_auth_failure_bb
+  group-by:
+    - sourceIPAddress
+  timespan: 10m
+  condition:
+    gte: 15
+falsepositives:
+  - >-
+    A corporate NAT gateway or mobile carrier CGNAT egress, behind which hundreds of unrelated
+    users share one address. This is the dominant false positive for any source-IP threshold on a
+    consumer-facing pool, and it cannot be tuned away by raising the number - allowlist the known
+    egress ranges, or the rule will be muted within a week.
+  - >-
+    A mobile client with a stale refresh token retrying in a tight loop after a password change.
+level: high
+---
+# Threshold basis - fifteen in ten minutes, inherited from the source and now REACHABLE, which it
+# was not before. The base rule below counts the lockout form as a failure, so a sustained attack
+# on one account no longer stalls at five counted events. `gte`, never `gt` (F6).
+#
+# Re-baseline before deploying. On a consumer-facing pool fronted by carrier NAT, fifteen
+# failures from one address in ten minutes is ordinary and the rule will drown; raise the number
+# AND allowlist known egress, rather than muting it. On an internal pool with a few hundred users
+# it is already high. The number is a tuning parameter with no observed baseline behind it -
+# derive yours from your own SignInSuccesses SampleCount-minus-Sum series.
+title: Cognito user authentication failed
+id: 360534cc-ba5e-4aa9-a268-e458d3e077b9
+name: cognito_user_auth_failure_bb
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. Matches both halves of every
+  authentication flow, because the password is verified on InitiateAuth only for
+  USER_PASSWORD_AUTH and on RespondToAuthChallenge for USER_SRP_AUTH, CUSTOM_AUTH and the
+  PASSWORD challenge of USER_AUTH.
+references:
+  - https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_RespondToAuthChallenge.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pool-managing-errors.html  # retrieved 2026-08-29
+tags:
+  - attack.credential-access
+  - attack.t1110.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cognito-idp.amazonaws.com'
+    eventName:
+      - 'InitiateAuth'
+      - 'RespondToAuthChallenge'
+  # UserNotConfirmedException is a failed authentication that also proves the account EXISTS.
+  # UserNotFoundException survives only where PreventUserExistenceErrors is LEGACY.
+  auth_failure:
+    errorCode:
+      - 'NotAuthorizedException'
+      - 'UserNotFoundException'
+      - 'UserNotConfirmedException'
+  # A sibling block, OR-ed - never a second key inside auth_failure, which would AND it against
+  # errorCode and match nothing (B4). AWS documents the lockout by its message, not by a code.
+  lockout:
+    errorMessage|contains: 'Password attempts exceeded'
+  condition: selection and (auth_failure or lockout)
+level: low
+---
+title: Cognito user authentication succeeded
+id: 341aa563-4696-45cd-816c-5359d69af49c
+name: cognito_user_auth_success_bb
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. Carries the success filter so a
+  failed call cannot compose into the critical correlation below (D-f).
+references:
+  - https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_InitiateAuth.html  # retrieved 2026-08-29
+tags:
+  - attack.credential-access
+  - attack.t1110.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cognito-idp.amazonaws.com'
+    eventName:
+      - 'InitiateAuth'
+      - 'RespondToAuthChallenge'
+  success:
+    errorCode: null
+  condition: selection and success
+level: low
+---
+# Failures then a success from the same address is the only shape here that says the attack
+# WORKED. Fifteen minutes spans the documented lockout ceiling of "approximately 15 minutes", so
+# a success arriving inside it is the same run resuming after waiting out a doubling interval.
+#
+# TWO LIMITATIONS, stated so a hit is not over-read. First, this cannot require the success to be
+# on the same ACCOUNT as the failures: CloudTrail records the target as `sub` and Sigma cannot
+# join across events on a field value. Second, and specific to this use case, `sourceIPAddress`
+# is a weak grouping key - behind a NAT egress the failures and the success may be entirely
+# unrelated people. Confirm the sub before treating a hit as a compromise; the KQL reports the
+# sub sets so the analyst can intersect them.
+title: Cognito user authentication failures followed by a success from the same address
+id: 50fffaf0-2554-4061-99be-433619236049
+status: experimental
+description: >-
+  A source address that was failing user-pool authentication then succeeded within fifteen
+  minutes. If the successful call names a sub the run was failing against, a password has been
+  guessed or replayed and ID, access and refresh tokens are already issued for that account.
+references:
+  - https://attack.mitre.org/techniques/T1110/004/  # retrieved 2026-08-29
+tags:
+  - attack.credential-access
+  - attack.t1110.004
+correlation:
+  type: temporal_ordered
+  rules:
+    - cognito_user_auth_failure_bb
+    - cognito_user_auth_success_bb
+  group-by:
+    - sourceIPAddress
+  timespan: 15m
+level: critical
+---
+title: Cognito account lockout reached
+id: fb65657b-2ad9-4bae-aef9-f4a5e8bf2d2b
+name: cognito_user_auth_lockout_bb
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. AWS documents the exception by
+  its message rather than by a distinct errorCode, so this matches errorMessage.
+references:
+  - https://docs.aws.amazon.com/cognito/latest/developerguide/authentication.html  # retrieved 2026-08-29
+tags:
+  - attack.credential-access
+  - attack.t1110.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cognito-idp.amazonaws.com'
+    eventName:
+      - 'InitiateAuth'
+      - 'RespondToAuthChallenge'
+  lockout:
+    errorMessage|contains: 'Password attempts exceeded'
+  condition: selection and lockout
+level: low
+---
+# The availability attack the source rule cannot express at all. Because AWS's lockout counter is
+# shared - "regardless of whether those are requested with unauthenticated or IAM-authorized API
+# operations" - an actor who simply fails five times against each of a list of usernames holds
+# every one of those accounts in a doubling lockout without ever guessing a password. There is no
+# successful sign-in to detect, no data touched, and the symptom reaching the business is a
+# support queue full of people who cannot log in.
+#
+# Ten in ten minutes is set at twice the lockout entry count, deliberately low: a legitimate user
+# reaching this state produces a handful of lockout events, not ten, and the events only exist at
+# all once someone has already crossed five failures.
+title: Cognito accounts held in lockout from one source address
+id: f171540f-8580-4ffb-a2fe-29d5ba7487e3
+status: experimental
+description: >-
+  Ten or more Password-attempts-exceeded responses inside ten minutes from one source address.
+  Accounts are being kept in AWS's exponential lockout, which is an availability attack on the
+  user base whether or not any password is ever guessed.
+references:
+  - https://attack.mitre.org/techniques/T1110/003/  # retrieved 2026-08-29
+tags:
+  - attack.credential-access
+  - attack.t1110.003
+correlation:
+  type: event_count
+  rules:
+    - cognito_user_auth_lockout_bb
+  group-by:
+    - sourceIPAddress
+  timespan: 10m
+  condition:
+    gte: 10
+level: high

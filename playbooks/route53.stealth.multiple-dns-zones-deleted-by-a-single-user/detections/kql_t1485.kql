@@ -1,0 +1,163 @@
+// Multiple DNS Zones Deleted by a Single User (T1485 — Data Destruction)
+//
+// Signal: one principal destroying several Route 53 hosted zones, scored as a campaign rather
+// than as N independent alerts.
+//
+// This query does three things the Sigma correlations structurally cannot.
+//
+// 1. IT BUILDS THE RESTORATION QUEUE, ORDERED. Every zone has to be recreated AND re-delegated
+//    at whatever registrar holds it, and AWS assigns four DIFFERENT name servers to every hosted
+//    zone - "Route 53 assigns four name servers to every hosted zone, and the name servers
+//    differ for each one" - so each zone costs one registrar change and up to 48 hours of
+//    propagation. That cost does not parallelise, so the output is ordered by the evidence of
+//    which names matter: record count destroyed, and whether the zone was public.
+//
+// 2. IT SHOWS THE PURGE SWEEP THAT PRECEDED THE DELETE SWEEP. Route 53 refuses to delete a
+//    non-empty zone, so N deletions imply N purges, and the purges name the records. A count of
+//    deletes alone tells a responder how much is gone and nothing about what it was.
+//
+// 3. IT NAMES THE ZONES. DeleteHostedZone carries `requestParameters.id` and nothing else, and
+//    after the delete GetHostedZone returns NoSuchHostedZone. The names come from earlier events
+//    on the same IDs - a cross-event self-join - or, where those have aged out, from AWS Config.
+//
+// WHAT THE COUNT IS NOT. It is a FLOOR. The correlation fires at its threshold while the actor
+// continues, and a deleted zone is ABSENT from list-hosted-zones, so live state cannot enumerate
+// what is missing. Treat this output as the confirmed subset and reconcile it against an AWS
+// Config inventory (Query 1 of ../PLAYBOOK.md) before calling the scope closed.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+// Route 53 is global: every route53.amazonaws.com event is stamped us-east-1. No Region filter.
+let Lookback = 7d;
+// POPULATE BEFORE DEPLOYING — the same allowlist as the Sigma base rules.
+let IacPrincipals = dynamic([":role/iac-deploy", ":role/cloudformation-exec"]);
+let ZoneKey = (s: string) {
+    tostring(split(trim_end(@"/", s), "/")[array_length(split(trim_end(@"/", s), "/")) - 1]) };
+let R53 =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "route53.amazonaws.com"
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    // `contains`, never `has`: ARNs and role paths are punctuated and `has` is whole-term.
+    | extend IsIac = UserIdentityArn contains tostring(IacPrincipals[0])
+                  or UserIdentityArn contains tostring(IacPrincipals[1]);
+// Zone identity, carried forward from whichever event still names it.
+let ZoneNames =
+    R53
+    | where EventName in ("CreateHostedZone", "ChangeResourceRecordSets")
+    | extend ZoneId = ZoneKey(coalesce(tostring(Resp.hostedZone.id), tostring(Req.hostedZoneId), ""))
+    | extend NameHint = coalesce(tostring(Req.name),
+                                 tostring(Req.changeBatch.changes[0].resourceRecordSet.name), "")
+    | extend WasPrivate = tostring(Req.hostedZoneConfig.privateZone)
+    | extend DelegationSetId = tostring(Req.delegationSetId)
+    | where isnotempty(ZoneId)
+    | summarize NameHints = make_set_if(NameHint, isnotempty(NameHint), 5),
+                WasPrivate = take_anyif(WasPrivate, isnotempty(WasPrivate)),
+                DelegationSetId = take_anyif(DelegationSetId, isnotempty(DelegationSetId))
+      by ZoneId;
+// The purge sweep. One row per zone, with the destroyed records kept as text - a record set may
+// carry up to 400 values and each is evidence. Alias records have NO resourceRecords and no tTL;
+// their target is under aliasTarget, so both are read.
+let Purges =
+    R53
+    | where EventName == "ChangeResourceRecordSets" and isempty(ErrorCode)
+    | extend ZoneId = ZoneKey(tostring(Req.hostedZoneId))
+    | extend ChangeList = todynamic(Req.changeBatch.changes)
+    | extend ParamsOmitted = isempty(RequestParameters) or array_length(coalesce(ChangeList, dynamic([]))) == 0
+    // mv-apply over an EMPTY array drops the row, which would delete exactly the oversized-batch
+    // case. Substitute one empty object so the row survives carrying ParamsOmitted.
+    | mv-apply C = iff(array_length(coalesce(ChangeList, dynamic([]))) == 0,
+                       dynamic([{}]), ChangeList) on (
+        extend Action = tostring(C.action),
+               RecName = tostring(C.resourceRecordSet.name),
+               RecType = tostring(C.resourceRecordSet.type),
+               RecVals = tostring(C.resourceRecordSet.resourceRecords),
+               AliasTarget = tostring(C.resourceRecordSet.aliasTarget.dNSName)
+      )
+    | summarize RecordsDestroyed = countif(Action == "DELETE"),
+                DestroyedNames = make_set_if(RecName, Action == "DELETE" and isnotempty(RecName), 60),
+                DestroyedTypes = make_set_if(RecType, Action == "DELETE" and isnotempty(RecType), 20),
+                DestroyedValues = make_set_if(RecVals, Action == "DELETE" and isnotempty(RecVals), 60),
+                DestroyedAliases = make_set_if(AliasTarget, isnotempty(AliasTarget), 20),
+                OmittedBatches = countif(ParamsOmitted),
+                PurgedBy = make_set(UserIdentityArn, 5), PurgeEnd = max(TimeGenerated)
+      by ZoneId;
+let Refusals =
+    R53
+    | where EventName == "DeleteHostedZone" and ErrorCode == "HostedZoneNotEmpty"
+    | summarize Refusals = count(), FirstRefusal = min(TimeGenerated) by Actor = UserIdentityArn;
+let PerZone =
+    R53
+    | where EventName == "DeleteHostedZone" and isempty(ErrorCode) and IsIac == false
+    | extend ZoneId = ZoneKey(tostring(Req.id))
+    | join kind=leftouter ZoneNames on ZoneId
+    | join kind=leftouter Purges    on ZoneId
+    | extend ResolvedName = coalesce(tostring(NameHints[0]), "UNRESOLVED — AWS Config AWS::Route53::HostedZone")
+    | extend NeedsRegistrarChange = isempty(DelegationSetId)
+    | project TimeGenerated, Actor = UserIdentityArn, ZoneId, ResolvedName, WasPrivate,
+              DelegationSetId, NeedsRegistrarChange, RecordsDestroyed, OmittedBatches,
+              DestroyedNames, DestroyedTypes, DestroyedValues, DestroyedAliases,
+              SourceIpAddress, UserAgent;
+PerZone
+| summarize
+    ZonesDestroyed      = dcount(ZoneId),
+    FirstSeen           = min(TimeGenerated),
+    LastSeen            = max(TimeGenerated),
+    // The restoration queue, worked top down: most records destroyed first, and every zone
+    // needing a registrar change flagged because that is the step this account cannot do alone.
+    Queue               = make_list(pack("zone", ResolvedName, "id", ZoneId,
+                                         "records", RecordsDestroyed,
+                                         "registrar_change_needed", NeedsRegistrarChange,
+                                         "private", WasPrivate), 200),
+    UnnamedZones        = countif(ResolvedName startswith "UNRESOLVED"),
+    ZonesNeedingRegistrar = countif(NeedsRegistrarChange),
+    TotalRecordsDestroyed = sum(RecordsDestroyed),
+    BulkOmittedBatches  = sum(OmittedBatches),
+    SourceIPs           = make_set(SourceIpAddress, 5),
+    Agents              = make_set(UserAgent, 3)
+    by Actor
+| join kind=leftouter Refusals on Actor
+| extend WindowMinutes = datetime_diff("minute", LastSeen, FirstSeen)
+| extend Verdict = case(
+    ZonesDestroyed >= 3 and UnnamedZones > 0,
+        strcat("MASS ZONE DESTRUCTION WITH AN INCOMPLETE WORK-LIST — ", tostring(UnnamedZones),
+               " of the destroyed zones cannot be named from CloudTrail. No Route 53 API will "
+               "return them. Reconcile against AWS Config BEFORE restoring anything"),
+    ZonesDestroyed >= 3 and ZonesNeedingRegistrar > 0,
+        strcat("MASS ZONE DESTRUCTION — ", tostring(ZonesNeedingRegistrar),
+               " zones were not created against a reusable delegation set, so each needs a "
+               "registrar delegation change and up to 48h of propagation. Sever the principal "
+               "before recreating any of them: a new zone holds only SOA and NS, which is "
+               "exactly the state DeleteHostedZone requires"),
+    ZonesDestroyed >= 3,
+        "MASS ZONE DESTRUCTION — every destroyed zone used a reusable delegation set, so recreation restores the same four name servers and the registrar stays out of the recovery path",
+    Refusals > 0,
+        "SINGLE DELETION AFTER A HostedZoneNotEmpty REFUSAL — below the sweep threshold, but the refusal shows the actor is working through a precondition. Watch this principal",
+        "SINGLE NON-PIPELINE ZONE DELETION — below the sweep threshold; work it under ../../route53.stealth.dns-zone-deleted/")
+| project FirstSeen, LastSeen, WindowMinutes, Verdict, Actor, ZonesDestroyed, TotalRecordsDestroyed,
+          ZonesNeedingRegistrar, UnnamedZones, BulkOmittedBatches, Refusals, FirstRefusal,
+          Queue, SourceIPs, Agents
+| order by ZonesDestroyed desc, LastSeen desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// THE ZONES THAT ARE NOT IN THE LOOKBACK. A deleted zone is absent from list-hosted-zones, so
+// there is no live-state call that enumerates what is missing. If the actor's first deletions
+// predate `Lookback`, they are invisible here and to every other CloudTrail query. AWS Config
+// records `AWS::Route53::HostedZone` and is the only source that survives; Query 1 of
+// ../PLAYBOOK.md reconciles it against the surviving zones.
+//
+// WHETHER EACH ZONE WAS PUBLIC. `hostedZoneConfig.privateZone` is on CreateHostedZone, not on
+// the delete, so WasPrivate is populated only where the create is inside the lookback. It decides
+// severity per zone: a public zone's deletion leaves a name AWS says "someone could hijack".
+//
+// WHETHER ANY DESTROYED NAME IS STILL DELEGATED. That is a live DNS question per zone, and at
+// this volume it is a loop rather than a lookup. ../PLAYBOOK.md Query 2 runs it over the queue.
+//
+// WHETHER THE RECORDS CAN BE RESTORED AT ALL. DELETE changes carry exact values by API
+// requirement, so they are restorable. Batches large enough that CloudTrail OMITTED
+// requestParameters - above 100 KB, and Route 53 permits 1,000 ResourceRecord elements per
+// request - left nothing at all, and BulkOmittedBatches counts them.
+//
+// GUARDDUTY HAS NOTHING HERE. No Policy:Route53/* namespace, no finding type whose resource is a
+// hosted zone. This query and ../PLAYBOOK.md are the whole control.

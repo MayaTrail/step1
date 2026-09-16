@@ -1,0 +1,157 @@
+# VPC flow log delivery stopped or downgraded (T1685.002)
+#
+# AN ABSENCE ALERT'S INPUT IS PRECISELY WHAT THE ATTACKER REMOVED. The source rule fires when
+# fewer than one flow record arrives in two hours. That is the right instinct and the wrong
+# control, for four reasons that the CloudTrail rules below exist to replace:
+#
+#   1. IT IS GROUPED ACCOUNT-WIDE. group_by is empty, so the rule counts every flow record in the
+#      account. Deleting ONE VPC's subscription in an account with several changes the total by a
+#      fraction and the rule never fires. The blind spot is exactly proportional to how much else
+#      is still logging, which means the rule is weakest in the estates that need it most.
+#   2. NODATA IS A RECORD. AWS: log-status NODATA means "there was no network traffic to or from
+#      the network interface during the aggregation interval". An idle interface emits records
+#      saying nothing happened, so record presence does not mean traffic is being observed — and
+#      a genuinely quiet resource is indistinguishable from a healthy busy one by count alone.
+#   3. SKIPDATA IS INVISIBLE TO IT. AWS: "some flow log records were skipped during the
+#      aggregation interval... because of an internal capacity constraint, or an internal error."
+#      Partial loss produces records, so a presence check reports healthy while an unknown
+#      fraction of traffic is missing. This is the failure mode during a flood, when it matters.
+#   4. DELIVERY IS BEST EFFORT WITH NO PUBLISHED MAXIMUM. AWS gives "about 5 minutes" to
+#      CloudWatch Logs and "about 10 minutes" to Amazon S3 and states delivery "is on a best
+#      effort basis". A gap is therefore never conclusive on its own, in either direction.
+#
+# THE AUTHORITATIVE SIGNAL IS THE CONTROL PLANE, AND IT IS THE SAME EVENT SOURCE AS EC2. There is
+# no flow-log-specific eventSource; CreateFlowLogs, DeleteFlowLogs and DescribeFlowLogs are
+# ec2.amazonaws.com. AWS Config records AWS::EC2::FlowLog, which gives configuration history for
+# the subscription including the log format.
+#
+# THE DOWNGRADE IS THE QUIET ATTACK, AND ALSO THE COMMON ACCIDENT. A subscription's format cannot
+# be changed — AWS: "you can't change its configuration or the flow log record format... Instead,
+# you can delete the flow log and create a new one." So the delete-then-recreate pair is ordinary
+# maintenance AND the way a custom format becomes the version 2 default. Records keep arriving,
+# every absence alert stays quiet, and every rule that reads tcp-flags, pkt-srcaddr, pkt-dstaddr
+# or flow-direction goes silent at once. Nothing is missing except the fields; that is why the
+# second rule below reads the format rather than counting events.
+title: VPC flow log subscription deleted
+id: 8b3f27e1-5c04-49da-a760-14e9b28c6035
+name: ec2_flow_logs_deleted
+status: experimental
+description: >-
+  DeleteFlowLogs removed one or more flow log subscriptions. This is the event the absence rule
+  is trying to infer, recorded directly, immediately, and attributed to a principal. It fires
+  whether or not other subscriptions in the account continue delivering, which is the specific
+  blind spot of an account-wide count. Deletion is also routine during infrastructure changes —
+  the point is not that it is always malicious but that it must always be accounted for, and a
+  deletion with no corresponding creation within minutes is the shape worth reading.
+references:
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DeleteFlowLogs.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'DeleteFlowLogs'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the infrastructure-as-code roles that own flow log lifecycle.
+  # An empty list is a defensible start — it reports every deletion once, and the roles that
+  # legitimately do this are few and named.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    A subscription being replaced to change its format or destination, which is the only way to
+    change either. Expect a CreateFlowLogs within minutes; a deletion without one is the finding.
+level: high
+---
+title: VPC flow log created without the organisation's standard fields
+id: 4c918b70-2e36-4d51-8f24-a05e7c31d968
+name: ec2_flow_logs_created_downgraded
+status: experimental
+description: >-
+  CreateFlowLogs succeeded with a log format that omits the version 3+ fields the detection estate
+  depends on. This is the silent half of the technique: records keep arriving at the same rate, no
+  absence alert fires, AWS Config shows a healthy resource — and every rule reading tcp-flags,
+  pkt-srcaddr, pkt-dstaddr or flow-direction stops matching, because the default format is version
+  2 and contains none of them. It is also the shape of an ordinary mistake, since the format
+  cannot be edited and a recreate that omits the format argument silently takes the default. The
+  filter below matches the ABSENCE of the standard fields, so a subscription created with no
+  logFormat at all is caught as well as one created with a short custom format.
+references:
+  - https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'CreateFlowLogs'
+  success:
+    errorCode: null
+  has_packet_fields:
+    requestParameters.logFormat|contains: 'pkt-srcaddr'
+  has_direction:
+    requestParameters.logFormat|contains: 'flow-direction'
+  has_flags:
+    requestParameters.logFormat|contains: 'tcp-flags'
+  condition: selection and success and not (has_packet_fields and has_direction and has_flags)
+falsepositives:
+  - >-
+    A deliberately minimal subscription for a low-value network segment, created to control cost.
+    Legitimate, and it should be a recorded exception rather than a silent one — the cost of the
+    exception is that every version 3+ detection is blind on that segment.
+level: medium
+---
+title: VPC flow log delivery destination removed or truncated
+id: e207a45c-6913-4b8f-90d7-3c68f1eb2a54
+name: flow_log_destination_tampered
+status: experimental
+description: >-
+  The subscription still exists and its destination does not. Deleting the CloudWatch log group,
+  or cutting its retention to a day, achieves the same result as deleting the flow log while
+  leaving DescribeFlowLogs reporting an ACTIVE subscription — so a state check that reads only
+  FlowLogStatus is satisfied. Retention deserves particular attention: the CloudWatch Logs default
+  is Never Expire, so a PutRetentionPolicy on a flow log group is always a deliberate act, and one
+  setting it to a very short period destroys history without touching a single flow log API.
+references:
+  - https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/Working-with-log-groups-and-streams.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'logs.amazonaws.com'
+    eventName:
+      - 'DeleteLogGroup'
+      - 'PutRetentionPolicy'
+  success:
+    errorCode: null
+  # ADJUST to the log group naming used for flow log destinations in this estate.
+  flow_log_group:
+    requestParameters.logGroupName|contains:
+      - 'flowlog'
+      - 'flow-log'
+      - '/aws/vpc/'
+  condition: selection and success and flow_log_group
+falsepositives:
+  - >-
+    A deliberate retention reduction for cost. Real, and worth reading every time — the number
+    chosen is the number of days of network history the organisation will have during its next
+    incident, and that decision should not be made silently.
+level: medium

@@ -1,0 +1,164 @@
+# S3 Block Public Access enabled or strengthened — change accounting, and the cover-up half (T1070)
+#
+# A HARDENING EVENT IS NOT A DETECTION. Enabling a guardrail is a good thing happening; it belongs
+# at informational. Its one security use is as the SECOND half of a pair — a principal who lowered
+# the block, acted, and put it back has closed the window behind them, and the restored
+# configuration is what makes a state-based review show nothing wrong.
+#
+# The source rule also matches `PutPublicAccessBlock`, the SDK operation name, so it cannot fire;
+# and `NOT (flag:false)` is not `all four true` when every flag is `Required: No`.
+# Full rationale: detections/detection_note_t1070.md.
+title: S3 Block Public Access enabled or strengthened
+id: b52d7f04-3a19-4e86-9c07-1d4e8b6f2a53
+name: s3_pab_hardened
+status: experimental
+description: >-
+  Base rule — change accounting and correlation component, never for direct alerting. A successful
+  PutBucketPublicAccessBlock or PutAccountPublicAccessBlock in which no flag is set to false. On its
+  own this is a guardrail being applied, which happens on every infrastructure run.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutPublicAccessBlock.html
+tags:
+  - attack.defense-evasion
+  - attack.t1070
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName:
+      - 'PutBucketPublicAccessBlock'
+      - 'PutAccountPublicAccessBlock'
+  success:
+    errorCode: null
+  any_flag_false:
+    requestParameters.PublicAccessBlockConfiguration.RestrictPublicBuckets: false
+  policy_false:
+    requestParameters.PublicAccessBlockConfiguration.BlockPublicPolicy: false
+  acls_false:
+    requestParameters.PublicAccessBlockConfiguration.BlockPublicAcls: false
+  ignore_false:
+    requestParameters.PublicAccessBlockConfiguration.IgnorePublicAcls: false
+  condition: selection and success and not (any_flag_false or policy_false or acls_false or ignore_false)
+level: informational
+---
+title: S3 Block Public Access lowered and then restored by the same principal
+id: 9c31e6ab-84d7-4f52-b0a3-6e29d5178c4f
+status: experimental
+description: >-
+  The same principal weakened Block Public Access and then set it back within a day. The end state
+  is correct, which is the problem — a review of configuration state shows nothing wrong, and the
+  window in between is only visible in the event history. This is the shape of a completed
+  operation with the door closed behind it, and it is the one thing in this directory worth
+  alerting on.
+references:
+  - https://attack.mitre.org/techniques/T1070/
+  - https://attack.mitre.org/techniques/T1530/
+tags:
+  - attack.defense-evasion
+  - attack.collection
+  - attack.t1070
+  - attack.t1530
+correlation:
+  type: temporal_ordered
+  rules:
+    - s3_pab_weakened_any
+    - s3_pab_hardened
+  group-by:
+    - userIdentity.arn
+  timespan: 24h
+falsepositives:
+  - >-
+    An infrastructure apply that tears a bucket's configuration down and rebuilds it in one run,
+    which legitimately produces both halves in order. Allowlist the provisioning role on the base
+    rules rather than shortening the timespan — a short timespan removes the attacker case and
+    keeps the noisy one.
+level: high
+---
+title: S3 Block Public Access partially applied and reported as hardened
+id: 6f8a20d5-c74b-49e1-83b6-2a0d7e51cb96
+name: s3_pab_partial_hardening
+status: experimental
+description: >-
+  A PutBucketPublicAccessBlock in which every flag present is true but fewer than four flags are
+  present. It reads as a hardening and satisfies any rule testing "no flag is false", while leaving
+  the omitted flags in an undocumented state — AWS does not specify whether a flag absent from the
+  request is cleared or preserved. So the resulting configuration is not derivable from the event,
+  and a control that looks applied may not be. Compliance drift rather than attack, and it ships
+  low because that is what it is.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutPublicAccessBlock.html
+tags:
+  - attack.defense-evasion
+  - attack.t1070
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName:
+      - 'PutBucketPublicAccessBlock'
+      - 'PutAccountPublicAccessBlock'
+  success:
+    errorCode: null
+  # Four sibling keys, each requiring one flag to be PRESENT. ANDed, they mean "the request carried
+  # a complete configuration" — so `not complete` is the partial case.
+  complete:
+    requestParameters.PublicAccessBlockConfiguration.RestrictPublicBuckets|exists: true
+    requestParameters.PublicAccessBlockConfiguration.BlockPublicPolicy|exists: true
+    requestParameters.PublicAccessBlockConfiguration.BlockPublicAcls|exists: true
+    requestParameters.PublicAccessBlockConfiguration.IgnorePublicAcls|exists: true
+  any_flag_false:
+    requestParameters.PublicAccessBlockConfiguration.RestrictPublicBuckets: false
+  policy_false:
+    requestParameters.PublicAccessBlockConfiguration.BlockPublicPolicy: false
+  acls_false:
+    requestParameters.PublicAccessBlockConfiguration.BlockPublicAcls: false
+  ignore_false:
+    requestParameters.PublicAccessBlockConfiguration.IgnorePublicAcls: false
+  condition: selection and success and not complete and not (any_flag_false or policy_false or acls_false or ignore_false)
+falsepositives:
+  - >-
+    A tool that deliberately manages one flag and leaves the rest to the account-level setting.
+    Legitimate, and worth knowing about, because the bucket's protection is then entirely dependent
+    on the account floor staying set.
+level: low
+---
+title: S3 Block Public Access weakened
+id: 3e07b4c9-1d68-42fa-95e3-8c7b04af61d2
+name: s3_pab_weakened_any
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. Any successful
+  PutBucketPublicAccessBlock or PutAccountPublicAccessBlock setting a flag to false. The rated
+  detections for this act, split by which flag and therefore by whether data is exposed now, are in
+  ../../s3.exfiltration.public-access-block-removed/.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutPublicAccessBlock.html
+tags:
+  - attack.collection
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName:
+      - 'PutBucketPublicAccessBlock'
+      - 'PutAccountPublicAccessBlock'
+  success:
+    errorCode: null
+  restrict_off:
+    requestParameters.PublicAccessBlockConfiguration.RestrictPublicBuckets: false
+  policy_off:
+    requestParameters.PublicAccessBlockConfiguration.BlockPublicPolicy: false
+  acls_off:
+    requestParameters.PublicAccessBlockConfiguration.BlockPublicAcls: false
+  ignore_off:
+    requestParameters.PublicAccessBlockConfiguration.IgnorePublicAcls: false
+  condition: selection and success and (restrict_off or policy_off or acls_off or ignore_off)
+level: informational

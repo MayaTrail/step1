@@ -353,8 +353,8 @@ components:
       properties:
         title:
           type: string
-          description: Filename of the detection rule (e.g. sigma_t1562_008.yml).
-          example: sigma_t1562_008.yml
+          description: Filename of the detection rule (e.g. sigma_t1685_002.yml).
+          example: sigma_t1685_002.yml
         code:
           type: string
           description: Full rule content — SIGMA YAML or KQL query string.

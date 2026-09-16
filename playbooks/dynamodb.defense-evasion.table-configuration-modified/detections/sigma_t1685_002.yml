@@ -1,0 +1,153 @@
+# DynamoDB table configuration modified (T1685.002)
+#
+# THE RULE'S NAME AND ITS LOGIC DESCRIBE DIFFERENT THINGS. It is called "Multiple Update Operation
+# Performed" and it matches `UpdateTable` — a CONTROL-PLANE call that changes throughput, indexes,
+# stream settings, encryption and deletion protection. It has nothing to do with `UpdateItem`, the
+# data-plane operation its name suggests. A reviewer scanning the rule list would reasonably believe
+# item updates were covered twice; they are covered once, in
+# ../../dynamodb.impact.table-items-modified-or-destroyed/.
+#
+# IT HAS NO CONTENT CHECK ON A CALL THAT CHANGES SEVEN DIFFERENT THINGS, and rates all of them
+# identically. The two that matter for a defender are:
+#   StreamSpecification.StreamEnabled -> false   removes the change record for every future item
+#                                                write, which is frequently the ONLY record of what
+#                                                an item held before it was modified
+#   SSESpecification changed                     alters who can read the table at rest
+# A throughput adjustment and a stream being switched off arrive as the same alert.
+#
+# WHAT IT GETS RIGHT, AND IT IS WORTH RECORDING: it excludes `userAgent:autoscaling.amazonaws.com`.
+# Application Auto Scaling calls UpdateTable continuously to adjust provisioned capacity, and without
+# that exclusion the rule would be pure noise. That is a considered filter, and it is the only one of
+# its kind in this source set.
+#
+# `UpdateTable` IS CONTROL-PLANE AND LOGGED BY DEFAULT. Unlike three of the five DynamoDB source
+# rules, this one works without buying data events — which is exactly why disabling Streams through
+# it is so quiet: the act is logged, and the consequence is that item history stops being recorded.
+title: DynamoDB Streams disabled on a table
+id: 4b0e9c17-52fa-4d83-91b6-0725ed84c3fa
+name: dynamodb_streams_disabled
+status: experimental
+description: >-
+  UpdateTable set StreamEnabled to false. DynamoDB Streams is frequently the only record of what an
+  item held BEFORE it was modified — CloudTrail records that UpdateItem happened, never the previous
+  values. Turning it off removes that record for every future write, and it does so through a call
+  the source rule rates the same as a throughput change.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_UpdateTable.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # Three keys ANDed, and they do co-occur on a single event: an UpdateTable record carries
+  # eventSource, eventName and the submitted stream specification together.
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'UpdateTable'
+    requestParameters.streamSpecification.streamEnabled: false
+  success:
+    errorCode: null
+  # Application Auto Scaling calls UpdateTable continuously. The source rule's exclusion of this
+  # user agent is correct and is kept.
+  autoscaling:
+    userAgent|contains: 'autoscaling.amazonaws.com'
+  condition: selection and success and not autoscaling
+falsepositives:
+  - >-
+    A table whose stream consumer was decommissioned, where disabling the stream is tidy-up. It
+    should follow the consumer's removal; disabling a stream that something is still reading is the
+    shape worth questioning.
+level: high
+---
+title: DynamoDB table encryption configuration changed
+id: e39d5407-1cb8-4a26-b0f4-97e2013da8b5
+name: dynamodb_table_encryption_changed
+status: experimental
+description: >-
+  UpdateTable changed the server-side encryption specification. Moving from a customer-managed KMS
+  key to an AWS-owned key removes the customer's ability to revoke access by disabling the key, and
+  removes the KMS grant trail that shows who decrypted. The table stays encrypted throughout, so a
+  configuration review reports it as compliant.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_UpdateTable.html
+  - https://attack.mitre.org/techniques/T1600/
+tags:
+  - attack.defense-evasion
+  - attack.t1600
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # Three keys ANDed, and they do co-occur on a single event: an UpdateTable record carries
+  # eventSource, eventName and the submitted encryption specification together.
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'UpdateTable'
+    requestParameters.sSESpecification|exists: true
+  success:
+    errorCode: null
+  autoscaling:
+    userAgent|contains: 'autoscaling.amazonaws.com'
+  condition: selection and success and not autoscaling
+falsepositives:
+  - >-
+    A migration onto a customer-managed key, which is the improving direction and produces the same
+    event. The playbook reads which direction it went; the rule cannot.
+level: high
+---
+title: DynamoDB table configuration changed repeatedly by one principal
+id: 71a4c6e8-30bd-4915-8e7f-c250b93da746
+status: experimental
+description: >-
+  One principal made five or more table configuration changes within ten minutes, excluding
+  autoscaling. Any single change has an innocent reading; a sequence of them by one identity is
+  someone working through the configuration, which is the shape the source rule was reaching for
+  with its threshold and could not express because it counted every UpdateTable equally.
+references:
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+correlation:
+  type: event_count
+  rules:
+    - dynamodb_table_config_changed
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gte: 5
+falsepositives:
+  - >-
+    A deployment applying configuration across a table set in one run. Allowlist the pipeline role on
+    the base rule rather than raising the threshold.
+level: medium
+---
+title: DynamoDB table configuration changed
+id: 2c8b47f0-d951-4e63-a17c-680fe32b9d54
+name: dynamodb_table_config_changed
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. Any successful UpdateTable that
+  is not Application Auto Scaling adjusting capacity. Control-plane, logged by default.
+references:
+  - https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_UpdateTable.html
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'dynamodb.amazonaws.com'
+    eventName: 'UpdateTable'
+  success:
+    errorCode: null
+  autoscaling:
+    userAgent|contains: 'autoscaling.amazonaws.com'
+  condition: selection and success and not autoscaling
+level: informational

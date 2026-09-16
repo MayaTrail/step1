@@ -1,0 +1,104 @@
+// Excessive Parameter Creation Detected (T1565.001 — Stored Data Manipulation)
+//
+// PutParameter is create-OR-update. AWS: "Create or update a parameter in
+// Parameter Store." The separator is the Overwrite flag, default false, and it is
+// the field the original rule never looks at. Creating ten new parameters is a
+// deploy; overwriting one parameter a running application reads is config
+// poisoning — and the volume rule scores the second one lower.
+//
+// A second, independent proof of overwrite: PutParameter's response carries the
+// new Version, and AWS documents that editing a parameter value automatically
+// creates a new version. responseElements.version > 1 therefore means an existing
+// parameter was modified, whatever the request flag says. Both are read below.
+//
+// The parameter VALUE is not something to rely on seeing. AWS does not document
+// whether requestParameters.value is recorded for PutParameter. If your trail
+// does carry it, that is a finding in its own right — your CloudTrail bucket has
+// become a secret store — and it belongs in the incident, not in a rule.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "ssm.amazonaws.com"
+| where EventName == "PutParameter"
+| extend Req  = parse_json(RequestParameters)
+| extend Resp = parse_json(ResponseElements)
+| extend ParamName    = tostring(coalesce(Req.name, Req.Name, ""))
+| extend Overwrite    = tobool(coalesce(Req.overwrite, Req.Overwrite, false))
+| extend ParamType    = tostring(coalesce(Req.type, Req.Type, ""))
+| extend KeyId        = tostring(coalesce(Req.keyId, Req.KeyId, ""))
+| extend Policies     = tostring(coalesce(Req.policies, Req.Policies, ""))
+| extend NewVersion   = toint(coalesce(Resp.version, Resp.Version, 0))
+| extend ModifiedExisting = Overwrite or NewVersion > 1
+| summarize
+    Writes         = count(),
+    Overwrites     = countif(ModifiedExisting and isempty(ErrorCode)),
+    Creates        = countif(not(ModifiedExisting) and isempty(ErrorCode)),
+    NameTakenErrs  = countif(ErrorCode == "ParameterAlreadyExists"),
+    DistinctNames  = dcount(ParamName),
+    ExpiryArmed    = countif(Policies contains "Expiration" and isempty(ErrorCode)),
+    SecureStrings  = countif(ParamType == "SecureString" and isempty(ErrorCode)),
+    Names          = make_set_if(ParamName, isnotempty(ParamName), 40),
+    Keys           = make_set_if(KeyId, isnotempty(KeyId), 5),
+    Errors         = make_set_if(ErrorCode, isnotempty(ErrorCode), 10),
+    SourceIPs      = make_set(SourceIpAddress, 5),
+    Agents         = make_set(UserAgent, 3),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 5m)
+| where Overwrites > 0 or NameTakenErrs >= 10 or Writes >= 10 or ExpiryArmed > 0
+| where not(UserIdentityArn contains "role/iac-deploy" or UserIdentityArn contains "role/ci-cd")
+| extend Verdict = case(
+    ExpiryArmed > 0,
+        "EXPIRATION POLICY ARMED — a delayed delete that emits no DeleteParameter event, P1",
+    Overwrites > 0,
+        "EXISTING PARAMETER(S) MODIFIED OUTSIDE THE PIPELINE — compare against known-good, P0",
+    NameTakenErrs >= 10 and DistinctNames >= 10,
+        "PARAMETER NAME ENUMERATION VIA WRITE ATTEMPTS — the write API used as a read oracle, P2",
+    "BULK PARAMETER CREATION — confirm against change records, P3")
+| project FirstSeen, LastSeen, UserIdentityArn, Writes, Overwrites, Creates,
+          NameTakenErrs, DistinctNames, ExpiryArmed, SecureStrings, Names, Keys,
+          Errors, SourceIPs, Agents, Verdict
+| order by LastSeen desc
+//
+// ============================================================================
+// WHAT WAS THE VALUE BEFORE — the only place it survives
+// ============================================================================
+// CloudTrail records the name, never the value. The previous value is in the
+// parameter's own version history, which Parameter Store keeps for the 100 most
+// recent versions:
+//
+//   aws ssm get-parameter-history --name <ParamName> --with-decryption \
+//     --query 'Parameters[].{Version:Version,Modified:LastModifiedDate,User:LastModifiedUser,Value:Value}'
+//
+// That is the diff, and it is also the clock: an attacker who overwrites the same
+// parameter 100 times pushes the pre-incident version out of the window, and it is
+// then gone permanently. Pull the history BEFORE remediating.
+//
+// aws ssm describe-parameters --parameter-filters "Key=Path,Option=Recursive,Values=<path>"
+// gives LastModifiedUser per parameter with no log at all — the fastest way to find
+// everything one principal touched under a path.
+//
+// ============================================================================
+// ERROR CODES
+// ============================================================================
+// ParameterAlreadyExists (the enumeration oracle), ParameterLimitExceeded,
+// ParameterMaxVersionLimitExceeded, ParameterPatternMismatchException,
+// HierarchyLevelLimitExceededException, HierarchyTypeMismatchException,
+// InvalidAllowedPatternException, InvalidKeyId, UnsupportedParameterType,
+// PoliciesLimitExceededException, InvalidPolicyTypeException,
+// InvalidPolicyAttributeException, IncompatiblePolicyException, TooManyUpdates,
+// InternalServerError. Denials are AccessDenied and AccessDeniedException — both.
+//
+// ============================================================================
+// PREVENTION
+// ============================================================================
+// ssm:Overwrite and ssm:Policies are real IAM condition keys, both STRING-valued
+// ("true"/"false") and used with StringEquals, not Bool — AWS's own examples show
+// StringEquals. A Deny on ssm:PutParameter conditioned on ssm:Overwrite = "true"
+// lets a principal create parameters but never change one; a Deny conditioned on
+// ssm:Policies = "true" blocks the expiring-parameter time bomb outright.
+//
+// Note the asymmetric failure: an aws:ec2:image DataType parameter returns HTTP 200
+// and validates asynchronously, so a successful PutParameter event for one does not
+// mean the parameter was created. Do not treat that event as proof of state.

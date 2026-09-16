@@ -1,0 +1,102 @@
+// SQS Server-Side Encryption Disabled (T1600 / T1098)
+//
+// Signal: a SetQueueAttributes (or CreateQueue) call that leaves a queue with no encryption
+// at rest — KmsMasterKeyId cleared without SqsManagedSseEnabled being turned on in the same
+// call, or SqsManagedSseEnabled set to false outright.
+//
+// AWS: "Amazon SQS allows you to turn off all queue encryption. Therefore, turning off
+// KMS-SSE, will not automatically enable SQS-SSE." There is no fallback. And: "With SSE
+// enabled, anonymous SendMessage and ReceiveMessage requests to the encrypted queue will be
+// rejected" — so encryption doubles as an authentication control here, and removing it is
+// the precondition for anonymous access.
+//
+// This query does what the Sigma rules structurally cannot: it pairs each disable with the
+// NEXT policy change on the same queue by the same principal, so an analyst sees the
+// disable-then-open sequence as one row, and it computes the exposure window — the interval
+// during which messages were written in the clear — which is the number the incident record
+// actually needs.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let Window = 30d;
+let Changes =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Window)
+    | where EventSource == "sqs.amazonaws.com"
+    | where EventName in ("SetQueueAttributes", "CreateQueue")
+    | where isempty(ErrorCode)
+    // RequestParameters is typed `string` in this table, not dynamic - parse_json is
+    // required before any field access. Attribute VALUES are always strings, so the
+    // SqsManagedSseEnabled comparison is against "false"/"true", never a bool.
+    | extend Req   = parse_json(RequestParameters)
+    | extend Attrs = Req.attributes
+    | extend QueueUrl  = tostring(Req.queueUrl)
+    | extend QueueName = coalesce(tostring(Req.queueName), tostring(split(QueueUrl, "/")[-1]))
+    | extend KmsKey        = tostring(Attrs.KmsMasterKeyId)
+    | extend KmsKeyPresent = isnotnull(Attrs.KmsMasterKeyId)
+    | extend SqsSse        = tostring(Attrs.SqsManagedSseEnabled)
+    | extend ReusePeriod   = toint(Attrs.KmsDataKeyReusePeriodSeconds)
+    | extend PolicyText    = tostring(Attrs.Policy)
+    // `contains`, never `has`: every operand here is punctuated (an alias path, an ARN, a
+    // JSON fragment), and `has` is whole-term matching that breaks on all of them.
+    | extend IsAwsManagedKey = KmsKey contains "alias/aws/sqs"
+    // The two disable shapes. KmsKeyPresent distinguishes "sent as empty" from "not sent",
+    // which is the distinction the source rule collapses and thereby misses half the attack.
+    | extend KmsCleared  = KmsKeyPresent and isempty(KmsKey) and SqsSse != "true"
+    | extend SqsSseOff   = SqsSse == "false"
+    | extend Disabled    = KmsCleared or SqsSseOff
+    | extend PolicyOpened = isnotempty(PolicyText)
+                            and PolicyText matches regex @'\\?"Principal\\?"\s*:\s*(\{\s*\\?"AWS\\?"\s*:\s*)?(\[\s*)?\\?"\*\\?"';
+// Pair each disable with the next policy-opening change on the same queue. join is used
+// rather than a correlation so the two halves and the gap between them appear on one row.
+let Disables = Changes | where Disabled | project DisabledAt = TimeGenerated, QueueName,
+                                                  Actor = UserIdentityArn, KmsCleared, SqsSseOff,
+                                                  DisableIp = SourceIpAddress, ReusePeriod;
+let Opens    = Changes | where PolicyOpened | project OpenedAt = TimeGenerated, QueueName,
+                                                  Actor = UserIdentityArn;
+Disables
+| join kind=leftouter Opens on QueueName, Actor
+| extend OpenedAfterDisable = isnotempty(OpenedAt) and OpenedAt between (DisabledAt .. (DisabledAt + 30m))
+| summarize
+    Disables       = count(),
+    FirstDisabled  = min(DisabledAt),
+    LastDisabled   = max(DisabledAt),
+    Queues         = make_set(QueueName, 10),
+    QueueCount     = dcount(QueueName),
+    SourceIPs      = make_set(DisableIp, 5),
+    AnyKmsCleared  = max(KmsCleared),
+    AnySqsSseOff   = max(SqsSseOff),
+    AnonymousChain = max(OpenedAfterDisable),
+    MaxReusePeriod = max(ReusePeriod)
+    by Actor
+| extend Verdict = case(
+    AnonymousChain == true, "ANONYMOUS ACCESS CHAIN - encryption removed, then the policy opened to a wildcard principal within 30 minutes",
+    AnyKmsCleared  == true, "SSE-KMS REMOVED - the KMS key was cleared and SSE-SQS was not enabled in the same call, so the queue has NO encryption",
+    AnySqsSseOff   == true, "SSE-SQS TURNED OFF - the queue has no encryption at rest",
+                            "ENCRYPTION ATTRIBUTE CHANGED - review")
+| project FirstDisabled, LastDisabled, Verdict, Actor, QueueCount, Queues, Disables,
+          SourceIPs, MaxReusePeriod
+| order by LastDisabled desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// Which messages were written in the clear, or how many. SendMessage and ReceiveMessage are
+// SQS DATA events, off by default, so unless an advanced event selector on AWS::SQS::Queue
+// was already configured, lookup-events returns zero for them forever. Even with data events
+// on, the body is redacted: AWS's published example shows requestParameters.messageBody as
+// HIDDEN_DUE_TO_SECURITY_REASONS. The volume of the exposure comes from the AWS/SQS
+// CloudWatch metric NumberOfMessagesSent over the window between the disable and the
+// re-enable, and that metric carries a QueueName dimension and nothing else.
+//
+// AN INVERTED SIGNAL WORTH WATCHING. While a queue is SSE-KMS encrypted, every data-key
+// fetch produces a kms:GenerateDataKey event in CloudTrail. Once encryption is off, those
+// events STOP. An abrupt end to KMS activity on a queue's key, with no corresponding drop in
+// NumberOfMessagesSent, is independent corroboration that encryption was removed - and it
+// still works if the SetQueueAttributes event itself was missed. Note that raising
+// KmsDataKeyReusePeriodSeconds to its 86,400-second maximum suppresses the same events
+// without disabling anything, which is why MaxReusePeriod is projected above.
+//
+// PREVENTION. AWS: "To remove the ability to change queue permissions, you must deny
+// permission to the AddPermission, RemovePermission, and SetQueueAttributes actions in your
+// IAM policy." The same SetQueueAttributes denial is what protects the encryption attributes,
+// so one control covers both this playbook and its policy-grant sibling.

@@ -1,0 +1,175 @@
+# EC2 Metadata SSRF Observed at the Web ACL (T1552.005 / T1190)
+#
+# WHAT THE FOUR SOURCE RULES DO. Four separate alerts, one per request component - URI path,
+# query arguments, body, cookie - each `action:"ALLOW" AND labels ~ EC2MetaDataSSRF_<Component>`,
+# each P2, each threshold 0 over 5m, each grouped by `httpRequest.clientIp`. They are one rule
+# with a field varying, and they are shipped here as one.
+#
+# THE `action:"ALLOW"` FILTER IS THE DEFECT, AND IT INVERTS THE CONTROL. All four
+# `EC2MetaDataSSRF_*` rules in the Core rule set carry `Rule action: Block`. In a web ACL running
+# the CRS at its defaults, a metadata SSRF attempt is blocked, evaluation terminates, `action` is
+# `BLOCK`, and the source rules do not fire. They produce output only where the rule group has
+# been overridden to Count or the rule excluded - i.e. only where the protection is OFF. And
+# because nothing watches the blocked stream, the attacker is invisible precisely when the control
+# worked. Terminating action belongs in the rule as a VERDICT AXIS, which is why this file ships
+# two rules over the same label set rather than one rule with a filter.
+#
+# CAPTCHA AND CHALLENGE ARE TERMINATING ACTIONS. AWS: "The CAPTCHA and Challenge actions are
+# terminating when the web request doesn't contain a valid token." A record with
+# `action: "CAPTCHA"` did NOT reach the application, so it belongs with BLOCK and not with ALLOW.
+# The mirror case matters too: a CAPTCHA rule matching a request that HAS a valid token is
+# non-terminating and the record reads `action: "ALLOW"` with the CAPTCHA match under
+# `nonTerminatingMatchingRules` - that request did reach the application.
+#
+# THE LABEL STRINGS ARE EXACT AND THERE IS NO TRANSFORM FROM THE RULE NAME. The CRS rule names are
+# `EC2MetaDataSSRF_BODY`, `_COOKIE`, `_URIPATH`, `_QUERYARGUMENTS`; the labels they emit are
+# `...:EC2MetaDataSSRF_Body`, `_Cookie`, `_URIPath`, `_QueryArguments`. Title-casing the rule name
+# yields `Uripath` and `Queryarguments` and matches nothing - and the same rule group family that
+# spells `SQLi_URIPath` also spells `SQLiExtendedPatterns_UriPath`, so there is no consistent
+# transform to write. The rules below match the component-independent stem and carry the component
+# out as a field, which is the only shape that survives a casing surprise.
+#
+# THE BODY VARIANT HAS A SIZE LIMIT AND THE OTHER THREE DO NOT. `EC2MetaDataSSRF_BODY` inspects
+# the body only up to the web ACL's body limit - 8 KB FIXED for Application Load Balancer and
+# AppSync, 16 KB by default and up to 64 KB for CloudFront, API Gateway, Cognito, App Runner and
+# Verified Access - and uses the `Continue` oversize option, so anything past the limit is not
+# inspected while the whole body is still forwarded to the application. `oversizeFields`
+# containing `REQUEST_BODY` on a request with no body label is that evasion, visible in the log.
+#
+# WHAT NONE OF THIS OBSERVES. A label on an inbound request is an ATTEMPT. Whether a credential
+# was actually retrieved is decided by the target instance's IMDSv2 enforcement, which is not in
+# any web ACL log, and the credential's USE is the only observable outcome - see
+# ../../ec2.credential-access.imds-credential-theft/ for that half.
+title: EC2 metadata SSRF reached the application through the web ACL
+id: a7daa41e-a0aa-4b1a-b5e4-cec5d2d2c439
+name: waf_ssrf_imds_reached
+status: experimental
+description: >-
+  A web request carrying an Amazon EC2 instance metadata SSRF pattern was matched by the Core rule
+  set and was still served to the protected application. The Core rule set blocks these by default,
+  so a terminating action of ALLOW means the rule group is overridden to Count, the rule is
+  excluded, or a later rule allowed the request - the protection is off for this rule.
+references:
+  - https://attack.mitre.org/techniques/T1552/005/                                                 # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1190/                                                     # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/waf/latest/developerguide/aws-managed-rule-groups-baseline.html    # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/waf/latest/developerguide/logging-fields.html                      # retrieved 2026-08-29
+tags:
+  - attack.credential-access
+  - attack.initial-access
+  - attack.t1552.005
+  - attack.t1190
+logsource:
+  product: aws
+  service: waf
+detection:
+  ssrf_label:
+    labels.name|contains: 'core-rule-set:EC2MetaDataSSRF_'
+  reached:
+    action: 'ALLOW'
+  condition: ssrf_label and reached
+falsepositives:
+  - >-
+    A security test or an authorised scanner replaying metadata-service payloads. Distinguishable
+    by source address, not by payload - record the tester's egress addresses and exclude by
+    httpRequest.clientIp, never by relaxing the label match.
+  - >-
+    An application that legitimately accepts a URL parameter naming 169.254.169.254 - vanishingly
+    rare, and if it exists it is the vulnerability rather than the false positive.
+level: high
+---
+# The blocked stream, which the source rules discard entirely. A single blocked attempt is not an
+# incident; a client sending them repeatedly is a client that has an SSRF primitive and is working
+# the payload space, and that is the earliest warning this technique offers. Kept at `low` as a
+# single event, escalated by the correlations below. This is also the ONLY rule in this file that
+# fires in a default web ACL, because the Core rule set blocks by default.
+title: EC2 metadata SSRF stopped at the web ACL
+id: 3f4f3e14-df62-4d5d-aa44-4d46ef27166d
+name: waf_ssrf_imds_stopped
+status: experimental
+description: >-
+  A web request carrying an EC2 instance metadata SSRF pattern was matched by the Core rule set and
+  stopped - blocked, or answered with a CAPTCHA or Challenge interstitial. The request did not
+  reach the application. Volume, not the single event, is the signal.
+references:
+  - https://attack.mitre.org/techniques/T1552/005/                                                 # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/waf/latest/developerguide/logging-fields.html                      # retrieved 2026-08-29
+tags:
+  - attack.credential-access
+  - attack.t1552.005
+logsource:
+  product: aws
+  service: waf
+detection:
+  ssrf_label:
+    labels.name|contains: 'core-rule-set:EC2MetaDataSSRF_'
+  stopped:
+    action:
+      - 'BLOCK'
+      - 'CAPTCHA'
+      - 'CHALLENGE'
+  condition: ssrf_label and stopped
+falsepositives:
+  - >-
+    Internet background scanning. Common and expected on any public endpoint; it is why this rule
+    is `low` alone and meaningful only in volume from one client.
+level: low
+---
+# THRESHOLD BASIS, with no observed baseline. A metadata SSRF payload is not a mistype and not a
+# crawler artefact: reaching 169.254.169.254 has no benign reason to appear in a web request at
+# all. Background scanning does produce isolated hits, so a single blocked attempt stays `low`;
+# five from one client address inside an hour is somebody iterating encodings and components
+# against a target they believe is vulnerable. `gte`, never `gt`, so a run of exactly five does
+# not fall through. Re-baseline against this endpoint's own scan volume before deploying.
+title: Repeated EC2 metadata SSRF attempts from one client address
+id: 0cd66377-dcfc-4412-a081-10a1aacb298e
+status: experimental
+description: >-
+  One client address sent five or more EC2 metadata SSRF requests that the web ACL stopped, within
+  one hour. The control is holding, and somebody is working the payload space against it.
+references:
+  - https://attack.mitre.org/techniques/T1552/005/   # retrieved 2026-08-29
+tags:
+  - attack.credential-access
+  - attack.t1552.005
+correlation:
+  type: event_count
+  rules:
+    - waf_ssrf_imds_stopped
+  group-by:
+    - httpRequest.clientIp
+  timespan: 1h
+  condition:
+    gte: 5
+level: medium
+---
+# The four source rules made this pattern invisible by splitting it four ways: one actor probing
+# the URI path, the query string and the body arrived as three unrelated P2 alerts against the same
+# client address. Distinct LABELS from one client is the signal the split destroyed - two or more
+# components means deliberate enumeration of where the application is injectable, not a single
+# opportunistic payload. Counting labels rather than events also survives the case where one
+# request carries two of the four labels at once.
+title: EC2 metadata SSRF probed across multiple request components by one client
+id: 1f7ee551-3387-4dea-ae80-1eccd593e9f9
+status: experimental
+description: >-
+  One client address caused two or more distinct EC2MetaDataSSRF component labels within an hour -
+  the URI path, query arguments, body or cookie tried in turn. That is enumeration of the
+  injection point, and the four source rules reported it as unrelated alerts.
+references:
+  - https://docs.aws.amazon.com/waf/latest/developerguide/aws-managed-rule-groups-baseline.html   # retrieved 2026-08-29
+tags:
+  - attack.credential-access
+  - attack.t1552.005
+correlation:
+  type: value_count
+  rules:
+    - waf_ssrf_imds_stopped
+    - waf_ssrf_imds_reached
+  group-by:
+    - httpRequest.clientIp
+  field: labels.name
+  timespan: 1h
+  condition:
+    gte: 2
+level: high

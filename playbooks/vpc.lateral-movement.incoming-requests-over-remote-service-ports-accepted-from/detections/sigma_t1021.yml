@@ -1,0 +1,240 @@
+# Remote-service port accepting connections from the public internet (T1021 / T1133)
+#
+# THE SOURCE RULE'S ENTIRE DISCRIMINATOR IS AN ENRICHMENT, AND THAT INVERTS THE PRIORITY.
+# It requires a threat-intel reputation score on the source address before it will fire. So a
+# connection from an address nobody has reported yet — which is every address on its first day,
+# and every address an attacker rents fresh — produces no alert at all, while the finding that
+# actually matters, that SSH is reachable from the whole internet, is never stated. Worse, the
+# field lives in an enrichment pipeline rather than in the flow log: if that pipeline is not
+# configured, or its schema changes, the rule reports clean forever and nothing indicates why.
+#
+# INVERTED HERE. The accepted inbound connection on a remote-service port IS the finding, at high,
+# with no enrichment required. Reputation is carried as a SEPARATE, higher-severity rule layered
+# on top — it raises urgency when present and proves nothing when absent. A detection whose base
+# case depends on an optional pipeline is a detection with a silent off switch.
+#
+# THE PORT LIST. The source covers 22, 3389 and 5900. Missing: 5985 and 5986 (WinRM, the standard
+# Windows remote-management transport and the one least likely to be noticed), 23 (telnet, which
+# still appears on appliances and IoT), 5901-5904 (additional VNC displays — 5900 alone covers
+# display :0 only), and 2222 (a conventional alternate SSH port that is chosen precisely because
+# rules list 22).
+#
+# FIELD VERSIONS. `flow-direction` is version 5 and `pkt-srcaddr`/`pkt-dstaddr` are version 3; the
+# default flow-log format is version 2 and carries none of them, and AWS states the format cannot
+# be changed after the subscription is created. Without flow-direction, an OUTBOUND administrative
+# SSH session from a bastion matches identically to an inbound intrusion. Without pkt-srcaddr,
+# ingress through a load balancer or NAT shows "the primary private IPv4 address" of the
+# interface, so the source is recorded as internal and the rule never fires. See ../PLAYBOOK.md §1.
+#
+# `protocol` IS AN IANA NUMBER — 6 is TCP. `action` is uppercase ACCEPT or REJECT.
+title: Remote-service port accepted a connection from a public address
+id: 2f8c04d1-7e59-4b36-a840-91d76e3b5c02
+name: vpc_remote_service_from_internet
+status: experimental
+description: >-
+  An inbound TCP flow from a non-private address to SSH, RDP, VNC, WinRM or telnet was ACCEPTED.
+  Accepted is the signal: the security group, the network ACL and the route all permit the public
+  internet to reach a remote-administration service. No reputation feed is consulted, on purpose —
+  the exposure is the finding whether or not anybody has reported the source yet, and the first
+  connection from a fresh address is exactly the one a reputation gate cannot see.
+references:
+  - https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html
+  - https://attack.mitre.org/techniques/T1133/
+tags:
+  - attack.initial-access
+  - attack.lateral-movement
+  - attack.t1021
+  - attack.t1133
+logsource:
+  product: aws
+  service: vpcflowlogs
+detection:
+  inbound_accepted:
+    flow-direction: 'ingress'
+    action: 'ACCEPT'
+    protocol: 6
+  remote_service_port:
+    dstport:
+      - 22        # SSH
+      - 2222      # conventional alternate SSH
+      - 23        # telnet
+      - 3389      # RDP
+      - 3390      # alternate RDP
+      - 5900      # VNC display :0
+      - 5901      # VNC display :1
+      - 5902
+      - 5903
+      - 5985      # WinRM HTTP
+      - 5986      # WinRM HTTPS
+  private_source:
+    pkt-srcaddr|startswith:
+      - '10.'
+      - '192.168.'
+      - '172.16.'
+      - '172.17.'
+      - '172.18.'
+      - '172.19.'
+      - '172.2'
+      - '172.30.'
+      - '172.31.'
+      - '100.64.'
+      - '127.'
+  # POPULATE BEFORE DEPLOYING with the public addresses of the corporate VPN and any managed
+  # bastion service. This is the only legitimate way a remote-service port should be reachable
+  # from a public address, the list is short, and it is the entire tuning surface. An empty list
+  # is a defensible start — it reports every such connection once, which is how the list is built.
+  known_admin_sources:
+    pkt-srcaddr:
+      - '203.0.113.10'
+      - '203.0.113.11'
+  condition: inbound_accepted and remote_service_port and not private_source and not known_admin_sources
+falsepositives:
+  - >-
+    A managed bastion or a vendor support session arriving from an address not yet on the list.
+    Real, and each one is worth confirming once — the answer becomes an allowlist entry, and the
+    number of such entries should stay countable on one hand.
+level: high
+---
+title: Remote-service port accepted a connection from a reported-malicious address
+id: b47a1e93-c026-4d58-9f31-807be2c4a6d5
+name: vpc_remote_service_from_known_bad
+status: experimental
+description: >-
+  The same accepted connection, where the source also carries a high-confidence reputation hit.
+  This is a PRIORITISER layered on the rule above, not a gate in front of it — the field below is
+  populated by an enrichment pipeline rather than by the flow log itself, so its absence means
+  "not enriched" and never "not malicious". Shipped at critical because a reputation hit on an
+  address that successfully reached SSH removes the ambiguity about intent, and it should page
+  rather than queue. Field name and confidence scale differ by enrichment provider; the two below
+  are alternatives, matched permissively so the rule degrades to not-firing rather than to a
+  parse error.
+references:
+  - https://attack.mitre.org/techniques/T1021/
+tags:
+  - attack.lateral-movement
+  - attack.t1021
+logsource:
+  product: aws
+  service: vpcflowlogs
+detection:
+  inbound_accepted:
+    flow-direction: 'ingress'
+    action: 'ACCEPT'
+    protocol: 6
+  remote_service_port:
+    dstport:
+      - 22
+      - 2222
+      - 23
+      - 3389
+      - 3390
+      - 5900
+      - 5901
+      - 5902
+      - 5903
+      - 5985
+      - 5986
+  # ADJUST TO THE LOCAL ENRICHMENT SCHEMA. Two common shapes are listed; a deployment will have
+  # one of them or neither. If neither is populated this rule never fires, and the rule above
+  # still carries the whole use case — which is the point of separating them.
+  reputation_verdict:
+    threat_intel.verdict:
+      - 'malicious'
+      - 'suspicious'
+  reputation_score:
+    threat_intel.confidence|gte: 7
+  condition: inbound_accepted and remote_service_port and (reputation_verdict or reputation_score)
+falsepositives:
+  - >-
+    A stale or low-quality feed. Reputation data ages badly, and a residential address recycled by
+    an ISP inherits somebody else's history — which is why this is a prioritiser on top of a
+    behavioural rule rather than the rule itself.
+level: critical
+---
+title: One external source refused across many remote-service ports
+id: 6d0f582b-93ca-41e7-b5a4-2c718e930fd6
+status: experimental
+description: >-
+  A single external address was refused across an unusual number of distinct remote-service ports
+  or hosts. Undirected internet scanning hits port 22 across many addresses; this is the inverse —
+  many administration ports against your addresses, which is somebody enumerating your remote
+  access surface rather than the internet's. It arrives before an exposure is found rather than
+  after, and it requires no enrichment. Timespan is 1h against the default 10-minute aggregation
+  interval plus AWS's typical delivery latency.
+references:
+  - https://attack.mitre.org/techniques/T1595/
+tags:
+  - attack.reconnaissance
+  - attack.t1595
+correlation:
+  type: value_count
+  rules:
+    - vpc_remote_service_refused
+  group-by:
+    - pkt-srcaddr
+  timespan: 1h
+  condition:
+    field: dstport
+    gte: 4
+falsepositives:
+  - >-
+    Commercial internet-wide scanning services, which are numerous, persistent and publish their
+    address ranges. Exclude them by source address and keep the rule.
+level: medium
+---
+title: Remote-service port refused a connection from a public address
+id: a3591c7e-4b82-40df-9026-e5c84317bad9
+name: vpc_remote_service_refused
+status: experimental
+description: >-
+  Base rule for the correlation above, and background at low on its own. The internet scans every
+  address continuously, so a steady rate of these means the controls are working and should go to
+  a dashboard rather than to a person. Note that AWS documents REJECT as covering security-group
+  and network-ACL denials AND "packets arrived after the connection was closed", so this is not
+  purely a count of blocked attacks.
+references:
+  - https://docs.aws.amazon.com/vpc/latest/userguide/flow-log-records.html
+  - https://attack.mitre.org/techniques/T1595/
+tags:
+  - attack.reconnaissance
+  - attack.t1595
+logsource:
+  product: aws
+  service: vpcflowlogs
+detection:
+  inbound_refused:
+    flow-direction: 'ingress'
+    action: 'REJECT'
+    protocol: 6
+  remote_service_port:
+    dstport:
+      - 22
+      - 2222
+      - 23
+      - 3389
+      - 3390
+      - 5900
+      - 5901
+      - 5902
+      - 5903
+      - 5985
+      - 5986
+  private_source:
+    pkt-srcaddr|startswith:
+      - '10.'
+      - '192.168.'
+      - '172.16.'
+      - '172.17.'
+      - '172.18.'
+      - '172.19.'
+      - '172.2'
+      - '172.30.'
+      - '172.31.'
+      - '100.64.'
+      - '127.'
+  condition: inbound_refused and remote_service_port and not private_source
+falsepositives:
+  - >-
+    Internet background scanning, continuously and by design. Shipped at low precisely because it
+    is mostly that.
+level: low

@@ -1,0 +1,98 @@
+// A database port reachable from the public internet (T1190)
+//
+// The finding is REACHABILITY, not volume. One accepted inbound flow from a public address to a
+// database port proves the security group, the network ACL and the route all permit it — a
+// configuration fact that stays true between alerts. This query is therefore written to produce
+// one row per exposed (host, port), not one row per connection.
+//
+// `action` is UPPERCASE — AWS documents exactly ACCEPT and REJECT. A filter on "reject" excludes
+// nothing on a case-sensitive backend, which is how the source rule ends up reporting blocked
+// scanning as a live exposure. Compared positively here.
+//
+// `contains` throughout, never `has` — addresses are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. Table name depends on ingestion.
+let LOOKBACK = 7d;
+let DbPorts = dynamic([3306, 33060, 5432, 1433, 1521, 5439, 27017, 27018, 6379, 11211, 9200, 9300, 9042, 5984, 8529, 7000]);
+let PortName = (p:int) { case(
+    p == 3306 or p == 33060, "MySQL/MariaDB", p == 5432, "PostgreSQL", p == 1433, "SQL Server",
+    p == 1521, "Oracle", p == 5439, "Redshift", p == 27017 or p == 27018, "MongoDB/DocumentDB",
+    p == 6379, "Redis", p == 11211, "Memcached", p == 9200 or p == 9300, "OpenSearch",
+    p == 9042 or p == 7000, "Cassandra", p == 5984, "CouchDB", p == 8529, "ArangoDB", "unknown") };
+AWSVPCFlow
+| where TimeGenerated > ago(LOOKBACK)
+// Version 3 and 5 fields; the default format is version 2 and the format cannot be changed after
+// the subscription is created. coalesce degrades to the interface's view rather than to nothing,
+// and Degraded marks which rows are being read that way — behind an NLB the version 2 fallback
+// names the load balancer interface, not the database.
+| extend PktSrc = coalesce(column_ifexists("pkt_srcaddr", ""), tostring(SrcAddr))
+| extend PktDst = coalesce(column_ifexists("pkt_dstaddr", ""), tostring(DstAddr))
+| extend Direction = coalesce(column_ifexists("flow_direction", ""), "")
+| extend Degraded = isempty(column_ifexists("pkt_dstaddr", "")) or isempty(Direction)
+| extend Proto = toint(Protocol), Dport = toint(DstPort)
+| where Proto == 6 and set_has_element(DbPorts, Dport)
+| where Direction == "ingress" or Degraded
+// Exclude private space rather than enumerate public space — the complement is finite.
+| extend SrcPrivate = PktSrc startswith "10." or PktSrc startswith "192.168."
+                   or PktSrc startswith "127." or PktSrc startswith "100.64."
+                   or (PktSrc matches regex @"^172\.(1[6-9]|2[0-9]|3[01])\.")
+| where not(SrcPrivate)
+| summarize
+    Accepted    = countif(Action == "ACCEPT"),
+    Refused     = countif(Action == "REJECT"),
+    Sources     = dcount(PktSrc),
+    TopSources  = make_set_if(PktSrc, Action == "ACCEPT", 10),
+    ScanSources = make_set_if(PktSrc, Action == "REJECT", 10),
+    Bytes       = sumif(tolong(Bytes), Action == "ACCEPT"),
+    AnyDegraded = max(Degraded),
+    FirstSeen   = min(TimeGenerated),
+    LastSeen    = max(TimeGenerated)
+    by Target = PktDst, Dport
+| extend Engine = PortName(Dport)
+| extend Verdict = case(
+    Accepted > 0 and Sources > 20,
+        strcat("EXPOSED AND FOUND — ", Engine, " is reachable from the internet and many distinct sources have connected. Assume compromised, not merely exposed, P0"),
+    Accepted > 0,
+        strcat("EXPOSED — ", Engine, " accepted a connection from a public address. The security group permits it; this is a configuration finding, not a traffic finding, P0"),
+    Refused > 100,
+        strcat("HEAVILY PROBED, NOT REACHABLE — ", Engine, " is being scanned and the controls are holding. Confirm they are the controls you think they are, P2"),
+    strcat("PROBED — background internet scanning against ", Engine, ", P3"))
+| project FirstSeen, LastSeen, Target, Dport, Engine, Verdict,
+          Accepted, Refused, Sources, Bytes, TopSources, ScanSources, AnyDegraded
+| order by Accepted desc, Refused desc
+//
+// ============================================================================
+// THE CONTROL PLANE — who created the exposure. Different table, different question.
+// ============================================================================
+// AWSCloudTrail
+// | where TimeGenerated > ago(30d)
+// | where EventSource == "ec2.amazonaws.com"
+// | where EventName in ("AuthorizeSecurityGroupIngress", "ModifySecurityGroupRules",
+//                       "CreateNetworkAclEntry", "ReplaceNetworkAclEntry")
+// | where isempty(ErrorCode)
+// | extend Req = parse_json(RequestParameters)
+// | extend Open = tostring(Req) contains "0.0.0.0/0" or tostring(Req) contains "::/0"
+// | where Open
+// | project TimeGenerated, EventName, UserIdentityArn, SourceIpAddress,
+//           group = tostring(Req.groupId), Req
+// | order by TimeGenerated desc
+//
+// Flow logs prove the reachability was exercised. CloudTrail proves who created it. Neither
+// answers the other's question, and an incident needs both.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHETHER ANYONE AUTHENTICATED. A flow log is a 5-tuple counter. An ACCEPTed flow to 3306 means
+// TCP was established; it says nothing about whether a login succeeded. Database audit logs
+// answer that and nothing here does — and for Redis and Memcached in their default
+// configurations, TCP establishment IS access, because there is no authentication step.
+//
+// HOW MUCH DATA LEFT. The Bytes column is the accepted inbound direction only, and in a VPC with
+// Block Public Access enabled AWS does not populate `bytes` at all — "Flow logs for VPC BPA do
+// not include bytes even if you include the bytes field in your flow log". A zero there is not
+// evidence of a small transfer.
+//
+// WHETHER THE EXPOSURE IS STILL LIVE. This is a log. `describe-security-groups` is the answer,
+// and Query 2 of ../PLAYBOOK.md runs it — an exposure closed an hour ago and an exposure open
+// right now produce identical rows here.

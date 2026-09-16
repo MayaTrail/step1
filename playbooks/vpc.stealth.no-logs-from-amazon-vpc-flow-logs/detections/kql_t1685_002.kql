@@ -1,0 +1,86 @@
+// VPC flow log delivery stopped or downgraded (T1685.002)
+//
+// The control-plane view first, because it is the one that can attribute. The absence view is
+// second and is a corroborator, never the alert — see the note in the second section for the four
+// states an empty window can mean.
+//
+// `contains` throughout, never `has` — log group names and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where (EventSource == "ec2.amazonaws.com" and EventName in ("CreateFlowLogs", "DeleteFlowLogs"))
+     or (EventSource == "logs.amazonaws.com" and EventName in ("DeleteLogGroup", "PutRetentionPolicy"))
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Resp = parse_json(ResponseElements)
+| extend LogFormat = tostring(Req.logFormat)
+| extend LogGroup  = tostring(Req.logGroupName)
+| extend Retention = toint(Req.retentionInDays)
+| extend Resources = tostring(Req.resourceIds)
+| extend FlowLogIds = tostring(Req.flowLogIds)
+// The three fields any version 3+ detection needs. A CreateFlowLogs missing any of them is a
+// downgrade, whether the format is short or absent entirely — an omitted logFormat takes the
+// version 2 default silently.
+| extend Downgraded = EventName == "CreateFlowLogs"
+                      and not(LogFormat contains "pkt-srcaddr"
+                              and LogFormat contains "flow-direction"
+                              and LogFormat contains "tcp-flags")
+| extend Verdict = case(
+    EventName == "DeleteFlowLogs",
+        "FLOW LOG SUBSCRIPTION DELETED — the event an absence rule can only infer. Check for a CreateFlowLogs within minutes; a deletion with no recreation is the finding, P0",
+    Downgraded,
+        "FLOW LOG CREATED WITHOUT THE STANDARD FIELDS — records keep arriving at the same rate and every tcp-flags, pkt-srcaddr, pkt-dstaddr and flow-direction rule goes silent. No absence alert will fire on this, ever, P0",
+    EventName == "CreateFlowLogs",
+        "Flow log created with the standard format — expected after a delete; confirm it is the same resource",
+    EventName == "DeleteLogGroup",
+        "FLOW LOG DESTINATION DELETED — the subscription still reports ACTIVE while nothing lands. A state check reading FlowLogStatus alone is satisfied by this, P0",
+    Retention <= 7,
+        strcat("FLOW LOG RETENTION CUT TO ", tostring(Retention), " DAY(S) — the CloudWatch default is Never Expire, so this is always deliberate. That number is how much network history you will have during the next incident, P1"),
+    "Flow log retention changed — read the number")
+| project TimeGenerated, EventName, Verdict, UserIdentityArn, SourceIpAddress,
+          Resources, FlowLogIds, LogGroup, Retention, LogFormat, Downgraded, UserAgent
+| order by TimeGenerated desc
+//
+// ============================================================================
+// THE ABSENCE VIEW — a corroborator, and why it cannot be the alert
+// ============================================================================
+// Group by RESOURCE, never account-wide. An account-wide count of flow records changes by a
+// fraction when one VPC's subscription is deleted, so the rule is weakest in exactly the estates
+// with the most to lose. Grouped per resource, a gap is at least attributable.
+//
+// AWSVPCFlow
+// | where TimeGenerated > ago(7d)
+// | extend Status = tostring(column_ifexists("LogStatus", "OK"))
+// | summarize Records = count(),
+//             Ok      = countif(Status == "OK"),
+//             NoData  = countif(Status == "NODATA"),
+//             Skipped = countif(Status == "SKIPDATA"),
+//             LastSeen = max(TimeGenerated)
+//           by VpcId = tostring(column_ifexists("VpcId", "")), bin(TimeGenerated, 1h)
+// | extend GapHours = datetime_diff('hour', now(), LastSeen)
+// | where GapHours >= 2 or Skipped > 0
+//
+// FOUR THINGS PRODUCE AN EMPTY WINDOW AND ONLY ONE IS AN INCIDENT:
+//   1. The subscription was deleted            -> DeleteFlowLogs above says so, with a principal
+//   2. The destination was removed             -> DeleteLogGroup above says so
+//   3. Delivery is lagging                     -> AWS: "about 5 minutes" to CloudWatch Logs,
+//      "about 10 minutes" to S3, and "log delivery is on a best effort basis" with no published
+//      maximum. A gap is never conclusive on its own.
+//   4. There was genuinely no traffic          -> and this one still produces RECORDS, because
+//      log-status NODATA means "there was no network traffic to or from the network interface
+//      during the aggregation interval". Presence of records is not presence of observation.
+//
+// AND A FIFTH STATE THE ABSENCE RULE CANNOT SEE AT ALL: SKIPDATA. AWS drops records "because of
+// an internal capacity constraint, or an internal error", so partial loss looks completely
+// healthy to a count. The Skipped column above is the only way it surfaces, and it is the failure
+// mode most likely during a traffic flood — precisely when the records matter most.
+//
+// ============================================================================
+// THE STATE VIEW — which neither log can give you
+// ============================================================================
+// `aws ec2 describe-flow-logs` returns FlowLogStatus and DeliverLogsErrorMessage per
+// subscription. A subscription whose delivery role lost its permissions reports ACTIVE with an
+// error message and delivers nothing, and no CloudTrail event marks the moment it started
+// failing. Query 2 of ../PLAYBOOK.md reads it; run it on a schedule, not only during an incident.

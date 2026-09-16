@@ -18,6 +18,7 @@
  * delegates presentation to StackCard, StackFilters, and DeploymentLogsModal.
  */
 
+import { useSearchParams } from 'react-router-dom'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import type { Stack, StackStatus } from '@/types'
 import { StackCard, type StackDetailView } from './StackCard'
@@ -36,6 +37,7 @@ import {
 import { destroyEmulationStack } from '@/services/emulation.service'
 import { Breadcrumb } from '@/components/ui/Breadcrumb'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { ConnectPrompt, useAWSConnection } from '@/components/common/ConnectGate'
 
 const BUSY_STATUSES = new Set<StackStatus>(['deploying', 'destroying', 'refreshing'])
 
@@ -49,6 +51,7 @@ const LIVE_POLL_STATUSES = new Set<StackStatus>([
 const LIVE_POLL_INTERVAL_MS = 4000
 
 export function StacksPage() {
+    const { connected } = useAWSConnection()
     const [stacks, setStacks] = useState<Stack[]>([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
@@ -60,6 +63,20 @@ export function StacksPage() {
     const [expandedId, setExpandedId] = useState<string | null>(null)
     const [detailView, setDetailView] = useState<StackDetailView>('details')
     useEffect(() => { setDetailView('details') }, [expandedId])
+
+    /*
+     * Deep link support: /stacks?stack=<id> opens that stack's detail.
+     * A workflow's deploy step links here, and sending the reader to an
+     * undifferentiated list of stacks would leave them to find the right one
+     * by eye. Applied once the list has loaded, and only when nothing is
+     * already open, so it cannot fight a click the reader has since made.
+     */
+    const [searchParams] = useSearchParams()
+    const requestedStack = searchParams.get('stack')
+    useEffect(() => {
+        if (!requestedStack || loading) return
+        setExpandedId((current) => current ?? requestedStack)
+    }, [requestedStack, loading])
 
     // Logs modal
     const [logsStack, setLogsStack] = useState<Stack | null>(null)
@@ -220,6 +237,22 @@ export function StacksPage() {
             // Keep the existing record if the refresh fails — non-fatal.
         }
     }, [expandedId])
+
+    // An unconnected user has no stacks and cannot create one, so the grid would
+    // render as an unexplained empty state. Say why instead.
+    if (!connected) {
+        return (
+            <div className="animate-fadeIn">
+                <Breadcrumb items={[{ label: 'Home', to: '/' }, { label: 'Infrastructure Stacks' }]} />
+                <div className="mt-6">
+                    <ConnectPrompt
+                        title="No AWS account connected"
+                        body="Stacks are the infrastructure MayaTrail provisions inside your own AWS account. Connect a verified IAM role to deploy one. Until then you can still browse the emulation catalogue, detection rules and playbooks."
+                    />
+                </div>
+            </div>
+        )
+    }
 
     if (loading) {
         return (

@@ -1,0 +1,131 @@
+# Secrets Manager automatic rotation turned off (T1098)
+#
+# CANCELLING ROTATION IS PERSISTENCE, NOT EVASION. Nothing about the defender's visibility changes
+# and the call is fully logged — what changes is that a value the actor already holds stops expiring.
+#
+# THE SOURCE RULE EXCLUDES ERRORS, so a REFUSED CancelRotateSecret — an actor the permissions caught
+# — is invisible to it. That is the one clean signal this technique offers. Restored below.
+#
+# UNDOING THIS IS THREE CALLS. AWS warns that cancelling mid-rotation can leave VersionStage labels
+# in an unexpected state, and that "failing to clean up a cancelled rotation can block you from
+# starting future rotations". See ../../_ground-truth/secretsmanager.md §5.
+#
+# Every Secrets Manager call is a management event, so all four documents work without data events.
+title: Secrets Manager automatic rotation cancelled
+id: 10f9ce50-6d1e-49c4-ac0e-74f73700255d
+status: experimental
+description: >-
+  CancelRotateSecret turns off automatic rotation and cancels any rotation in progress. Nothing
+  breaks and nothing is logged as an error — the credential simply stops changing, which is what
+  makes it a persistence primitive rather than an outage.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_CancelRotateSecret.html
+  - https://attack.mitre.org/techniques/T1098/
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # All three keys are on the SAME event: CloudTrail writes eventSource, eventName and the outcome
+  # of one API call into one record. ANDing them is correct.
+  selection:
+    eventSource: secretsmanager.amazonaws.com
+    eventName: CancelRotateSecret
+    errorCode: null
+  filter_automation:
+    userIdentity.arn|contains: 'PlatformAutomation'
+  # justified: no threshold. One cancellation on one secret is the whole technique — a second adds
+  # nothing to the finding. The automation filter is the only discrimination available and it is
+  # applied; rotation is otherwise cancelled by hand, under a change record.
+  condition: selection and not filter_automation
+falsepositives:
+  - A rotation Lambda being replaced, where rotation is cancelled and re-enabled within minutes —
+    check for a RotateSecret on the same secret shortly afterwards
+level: high
+---
+# The refused case, which the source rule's error filter excludes. An actor stopped by the
+# permissions is worth knowing about precisely because nothing else records the attempt.
+title: Secrets Manager rotation cancellation refused
+id: 3360ef6a-79f1-4a69-9fe6-5405db03c0f3
+status: experimental
+description: >-
+  CancelRotateSecret returned an error. The source rule filters errors out, so an attempt to stop
+  rotation that the permissions caught leaves no alert at all.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_CancelRotateSecret.html
+  - https://attack.mitre.org/techniques/T1098/
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: secretsmanager.amazonaws.com
+    eventName: CancelRotateSecret
+  filter_success:
+    errorCode: null
+  condition: selection and not filter_success
+falsepositives:
+  - A caller retrying against a secret that has no rotation Lambda configured, which returns an
+    error of its own
+level: medium
+---
+name: secretsmanager_rotation_cancelled
+title: Secrets Manager rotation cancelled — base rule
+id: 0f060caf-fad9-421b-93d2-db123772d0d6
+status: informational
+description: >-
+  Any successful CancelRotateSecret. Base rule for the correlation below; informational alone
+  because a single cancellation is already carried at high severity by the first document.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_CancelRotateSecret.html
+  - https://attack.mitre.org/techniques/T1098/
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: secretsmanager.amazonaws.com
+    eventName: CancelRotateSecret
+    errorCode: null
+  condition: selection
+falsepositives:
+  - Rotation Lambda replacement, which cancels and re-enables within minutes
+level: informational
+---
+# Rotation cancelled on several secrets by one principal is a sweep. The source rule thresholds at
+# zero and so cannot tell one deliberate change from a walk across the account's credentials.
+title: Secrets Manager rotation cancelled across multiple secrets by one principal
+id: fba6ff67-5cb0-4453-aca7-56fc28e89e3b
+status: experimental
+description: >-
+  One principal cancelled rotation on three or more distinct secrets within thirty minutes. Every
+  credential involved now stays valid indefinitely, and the pattern is a sweep rather than an
+  operational change.
+references:
+  - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_CancelRotateSecret.html
+  - https://attack.mitre.org/techniques/T1098/
+tags:
+  - attack.persistence
+  - attack.t1098
+correlation:
+  type: value_count
+  rules:
+    - secretsmanager_rotation_cancelled
+  group-by:
+    - userIdentity.arn
+  timespan: 30m
+  condition:
+    gte: 3
+    field: requestParameters.secretId
+falsepositives:
+  - A migration off automatic rotation for a whole application, identifiable from a change record
+    naming the same secrets
+level: critical

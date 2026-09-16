@@ -18,6 +18,8 @@ urlpatterns = [
     path("api/logs/", include("apps.logs.urls")),
     path("api/metrics/", include("apps.metrics.urls")),
     path("api/ai/", include("apps.ai.urls")),
+    path("api/threat-intel/", include("apps.threatintel.urls")),
+    path("api/workflows/", include("apps.workflows.urls")),
     path("api/playbooks/", include("apps.playbooks.urls")),
     path("api/detections/authored/", include("apps.authored_detections.urls")),
 ]

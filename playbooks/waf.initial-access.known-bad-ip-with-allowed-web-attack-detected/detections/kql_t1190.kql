@@ -1,0 +1,92 @@
+// Known-Bad IP with Allowed Web Attack (T1190)
+//
+// The composite the source rule asks for — reputation label AND attack label AND ALLOW on
+// one request — is nearly unreachable at AWS managed defaults, and the reason is evaluation
+// order. A terminating action stops evaluation, so a BLOCK at the reputation group means the
+// attack groups never run and never label. This query therefore reports BOTH signals and
+// says which configuration produced each.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL over AWS WAF web ACL traffic logs. NOT
+// CloudTrail — WAF traffic logs are a separate stream and are OFF BY DEFAULT.
+AWSWAFLogs_CL
+| where TimeGenerated > ago(7d)
+// labels is an ARRAY OF SINGLE-KEY OBJECTS: [{"name":"..."}] — read .name, not the array.
+| extend Labels = todynamic(labels)
+| mv-apply L = Labels on (summarize LabelNames = tostring(make_set(tostring(L.name))))
+//
+// contains, never has: label strings are colon-delimited and `has` is whole-term matching,
+// so it breaks on every one of these operands.
+| extend RepBlocking = LabelNames contains ":AWSManagedIPReputationList"
+                    or LabelNames contains ":AWSManagedReconnaissanceList"
+                    or LabelNames contains ":AnonymousIPList"
+                    or LabelNames contains ":HostingProviderIPList"
+// AWSManagedIPDDoSList is the only reputation rule whose default action is COUNT, so it is
+// the only one that labels and lets evaluation continue. Tracked separately because its
+// presence alongside an attack label is EXPECTED, not anomalous.
+| extend RepCounting = LabelNames contains ":AWSManagedIPDDoSList"
+| extend AttackLabel = LabelNames contains ":SQLi_" or LabelNames contains ":SQLiExtendedPatterns_"
+                    or LabelNames contains ":GenericLFI_" or LabelNames contains ":GenericRFI_"
+                    or LabelNames contains ":CrossSiteScripting_" or LabelNames contains ":EC2MetaDataSSRF_"
+                    or LabelNames contains ":Log4JRCE_" or LabelNames contains ":JavaDeserializationRCE_"
+                    or LabelNames contains ":ReactJSRCE_" or LabelNames contains ":PHPHighRiskMethodsVariables_"
+                    or LabelNames contains ":WindowsShellCommands_" or LabelNames contains ":PowerShellCommands_"
+                    or LabelNames contains ":UNIXShellCommandsVariables_"
+| where RepBlocking or RepCounting
+//
+| extend Req      = todynamic(httpRequest)
+| extend ClientIp = tostring(Req.clientIp)
+| extend Country  = tostring(Req.country)
+| extend Uri      = tostring(Req.uri)
+| extend Reached  = action == "ALLOW"
+| summarize
+    Requests    = count(),
+    Allowed     = countif(Reached),
+    Stopped     = countif(not(Reached)),
+    WithAttack  = countif(AttackLabel),
+    OnlyCounting = min(iff(RepCounting and not(RepBlocking), 1, 0)),
+    Uris        = make_set(Uri, 8),
+    Countries   = make_set(Country, 5),
+    Labels      = make_set(LabelNames, 4),
+    FirstSeen   = min(TimeGenerated),
+    LastSeen    = max(TimeGenerated)
+    by ClientIp, webaclId, bin(TimeGenerated, 10m)
+| extend Verdict = case(
+    Allowed > 0 and WithAttack > 0 and OnlyCounting == 1,
+        "ATTACK FROM A DDoS-LIST ADDRESS, SERVED — expected shape: that list is Count by default. Judge on the ATTACK, not the address, P1",
+    Allowed > 0 and WithAttack > 0,
+        "ATTACK FROM A BLOCK-LIST ADDRESS, SERVED — the reputation group is overridden to Count. THE PROTECTION IS OFF, P0",
+    Stopped > 49,
+        "SUSTAINED TARGETING FROM A LISTED ADDRESS, BLOCKED — control working, P2",
+    Allowed > 0,
+        "Listed address served, no attack label — evaluation may have terminated before the attack groups ran, P3",
+    "Listed address blocked — control working, P3")
+| project FirstSeen, LastSeen, ClientIp, Verdict, Allowed, Stopped, WithAttack,
+          Countries, Uris, Labels, webaclId
+| order by Allowed desc, Stopped desc
+//
+// ============================================================================
+// WHY THE ABSENCE OF THE COMPOSITE IS NOT REASSURANCE
+// ============================================================================
+// Rules run in priority order; a terminating action ends evaluation and nothing after it
+// labels. With the reputation group placed first — the usual and recommended placement —
+// a match on AWSManagedIPReputationList or AWSManagedReconnaissanceList BLOCKS and stops.
+// The CRS, SQLi and known-bad-inputs groups never run, so no attack label is ever added and
+// a rule requiring both labels cannot fire. That is the control working perfectly.
+//
+// Placed the other way round, an attack the attack group blocks terminates first and the
+// reputation label is never added. Either ordering suppresses the composite.
+//
+// So: read a zero here as "evaluation order", never as "no attacker". The signal that
+// survives at defaults is the blocked-volume correlation, which is why it ships alongside.
+//
+// ============================================================================
+// THE ADDRESS IS THE ORIGIN, NOT THE CLIENT
+// ============================================================================
+// The reputation group evaluates the web request ORIGIN address. Behind a proxy, a CDN in
+// front of your CloudFront distribution, or a second load balancer, that is the intermediary
+// — so a listed address may be your own edge and the finding may be somebody else's traffic.
+// Establish the true client from X-Forwarded-For in httpRequest.headers before acting on an
+// IP, and note that header is attacker-controllable.
+//
+// A customer IPSet produces NO label unless the customer's own rule adds one with RuleLabels.
+// A label-matching rule cannot see a customer IP set by default.

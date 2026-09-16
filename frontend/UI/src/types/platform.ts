@@ -355,6 +355,23 @@ export interface StackResourceSummary {
   edges?: Array<{ from: string; to: string }>
 }
 
+/** One recorded status a stack entered, with how long it stayed there. */
+export interface StackPhase {
+  status: StackStatus
+  /** ISO-8601 timestamp the phase was entered. */
+  at: string
+  /** Seconds spent in this phase. Counts up while `current` is true. */
+  seconds: number | null
+  /** The phase the stack is in now, still running. */
+  current: boolean
+  /** Failure reason, recorded only on a failed transition. */
+  detail: string
+  /** Median seconds this emulation usually spends here, or null if unknown. */
+  baselineSeconds: number | null
+  /** Running clearly longer than the baseline. Never true without one. */
+  slow: boolean
+}
+
 export interface Stack {
   id: string
   name: string
@@ -372,6 +389,12 @@ export interface Stack {
   resource_summary?: StackResourceSummary
   created_at: string
   updated_at: string
+  /**
+   * Measured phases, oldest first, derived from recorded status transitions.
+   * Empty for a stack that predates the recording, which renders as a status
+   * with no invented history rather than a fabricated timeline.
+   */
+  lifecycle: StackPhase[]
 }
 
 export interface CreateStackRequest {

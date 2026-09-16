@@ -1,0 +1,124 @@
+// RDS Snapshot Exported to S3 (T1567.002 / T1530)
+//
+// Signal: StartExportTask moving a snapshot or a live cluster into S3 as Parquet, scored by
+// DESTINATION rather than by event name.
+//
+// This query does what the Sigma rule structurally cannot: it decides whether the destination is
+// FOREIGN. The bucket name alone cannot say - S3 names are global and carry no account - so the
+// account is read from the two ARNs on the same event, `iamRoleArn` and `kmsKeyId`, and compared
+// against the recipient account of the trail record. A role or a key in another account is a
+// destination outside this organisation's control, and it is the single strongest indicator on
+// the event. Sigma has no way to compare two fields to each other.
+//
+// It also reconciles the request/response field-name split: the destination bucket is
+// `s3BucketName` in the request and `s3Bucket` in the response. Reading one of them is reading
+// half the event.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE PipelineRoles AND KnownBuckets BELOW BEFORE DEPLOYING.
+let Lookback = 30d;
+let KnownBuckets = dynamic(["analytics-exports-prod", "reporting-lake-prod"]);
+let Exports =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "rds.amazonaws.com"
+    | where EventName in ("StartExportTask", "CancelExportTask")
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    // Request says s3BucketName, response says s3Bucket. Same value, two names, one event.
+    | extend Bucket   = coalesce(tostring(Req.s3BucketName), tostring(Resp.s3Bucket))
+    | extend Prefix   = coalesce(tostring(Req.s3Prefix), tostring(Resp.s3Prefix))
+    | extend RoleArn  = coalesce(tostring(Req.iamRoleArn), tostring(Resp.iamRoleArn))
+    | extend KeyId    = coalesce(tostring(Req.kmsKeyId), tostring(Resp.kmsKeyId))
+    | extend SourceArn = coalesce(tostring(Req.sourceArn), tostring(Resp.sourceArn))
+    | extend TaskId   = coalesce(tostring(Req.exportTaskIdentifier), tostring(Resp.exportTaskIdentifier))
+    // responseElements is FLAT here - the API's output shape IS the ExportTask object, with no
+    // wrapper - so status and sourceType sit at the top level.
+    | extend Status     = tostring(Resp.status)
+    | extend SourceType = tostring(Resp.sourceType)
+    // exportOnly names the databases, schemas or tables selected. When present it is the most
+    // precise statement of WHAT was taken that this account will ever hold.
+    | extend ExportOnly = tostring(Req.exportOnly)
+    // Account extraction from the ARNs on the event. `split` on ":" gives the 5th element as the
+    // account for a standard ARN; a key referenced by alias or bare key ID yields an empty
+    // string, which is reported as unknown rather than treated as local.
+    | extend RoleAcct = tostring(split(RoleArn, ":")[4])
+    | extend KeyAcct  = tostring(split(KeyId, ":")[4])
+    // `contains`, never `has`: ARNs and role paths are punctuated and `has` is whole-term.
+    | extend IsPipeline = RoleArn contains ":role/analytics-export"
+                       or UserIdentityArn contains ":role/analytics-export"
+                       or UserIdentityArn contains ":role/iac-deploy"
+    | extend ForeignRole = isnotempty(RoleAcct) and RoleAcct != AWSAccountId
+    | extend ForeignKey  = isnotempty(KeyAcct)  and KeyAcct  != AWSAccountId
+    | extend UnknownDest = isempty(RoleAcct) or isempty(KeyAcct);
+let Cancels =
+    Exports | where EventName == "CancelExportTask"
+            | project TaskId, CancelledAt = TimeGenerated, Canceller = UserIdentityArn;
+// Refusals apart from successes. IamRoleMissingPermissions and KMSKeyNotAccessibleFault in a run
+// are somebody assembling the export path and getting the plumbing wrong - intent, not exfiltration.
+let Refusals =
+    Exports
+    | where EventName == "StartExportTask" and isnotempty(ErrorCode)
+    | summarize Refused = count(), RefusedCodes = make_set(ErrorCode, 8),
+                RefusedBuckets = make_set(Bucket, 5) by Actor = UserIdentityArn;
+Exports
+| where EventName == "StartExportTask" and isempty(ErrorCode)
+| join kind=leftouter Cancels on TaskId
+| summarize
+    Tasks         = count(),
+    FirstSeen     = min(TimeGenerated),
+    LastSeen      = max(TimeGenerated),
+    TaskIds       = make_set(TaskId, 20),
+    Buckets       = make_set(Bucket, 10),
+    Prefixes      = make_set(Prefix, 10),
+    Roles         = make_set(RoleArn, 5),
+    Keys          = make_set(KeyId, 5),
+    Sources       = make_set(SourceArn, 20),
+    SourceTypes   = make_set(SourceType, 2),
+    Selections    = make_set(ExportOnly, 10),
+    Cancelled     = countif(isnotempty(CancelledAt)),
+    AnyForeignRole = max(ForeignRole),
+    AnyForeignKey  = max(ForeignKey),
+    AnyUnknownDest = max(UnknownDest),
+    Pipeline      = max(IsPipeline),
+    SourceIPs     = make_set(SourceIpAddress, 5),
+    Agents        = make_set(UserAgent, 3)
+    by Actor = UserIdentityArn
+| join kind=leftouter Refusals on Actor
+| extend UnknownBucket = not(set_has_element(KnownBuckets, tostring(Buckets[0])))
+| extend Verdict = case(
+    AnyForeignRole == true or AnyForeignKey == true,
+        "CROSS-ACCOUNT EXPORT - the write role or the encryption key belongs to another AWS account. AWS supports this only through the CLI and API, never the console, so it was scripted deliberately",
+    AnyUnknownDest == true,
+        "DESTINATION ACCOUNT UNRESOLVED - the role or key ARN did not parse to an account. Treat as unknown and resolve by hand; do not read this as local",
+    Pipeline == false and UnknownBucket,
+        "EXPORT TO AN UNRECOGNISED BUCKET BY A NON-PIPELINE PRINCIPAL - the database contents are now Parquet objects governed by that bucket's policy",
+    Pipeline == false,
+        "NON-PIPELINE EXPORT TO A KNOWN BUCKET - the destination is familiar and the principal is not; confirm the reporting need",
+        "PIPELINE EXPORT - expected, but verify the bucket is one of the known set and that its own exposure has been reviewed")
+| project FirstSeen, LastSeen, Verdict, Actor, Tasks, TaskIds, Buckets, Prefixes, Roles, Keys,
+          Sources, SourceTypes, Selections, Cancelled, Refused, RefusedCodes, RefusedBuckets,
+          SourceIPs, Agents
+| order by LastSeen desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// WHETHER THE EXPORTED OBJECTS WERE READ. s3:GetObject is a DATA event and is off by default. If
+// the destination bucket has no data-event trail, StartExportTask is the last thing observable
+// and "was it taken" is unanswerable from this account. Say so in the record rather than
+// reporting the absence of reads as the absence of access.
+//
+// WHETHER THE DESTINATION BUCKET IS EXPOSED. Bucket policy, ACL and Block Public Access are not
+// in this event, and the export's blast radius is the bucket's exposure as much as the database's
+// contents. Query 2 of ../PLAYBOOK.md reads that live, and
+// ../../_superseded/aws.exfiltration.s3-bucket-public-exposure/ is where the response continues if it is open.
+//
+// HOW MUCH LEFT. The completed size arrives as `totalExtractedDataInGB` on the ExportTask, which
+// this account can read with `aws rds describe-export-tasks` while the task record survives, and
+// which the START event does not carry - the task is at status `starting` with no volume yet.
+//
+// PREVENTION. StartExportTask requires a symmetric KMS key whose policy grants kms:CreateGrant
+// and kms:DescribeKey to the service principal export.rds.amazonaws.com. An AWS-managed key's
+// policy cannot be edited, so every export runs through a key somebody deliberately configured -
+// which makes the key policy, not the IAM policy, the tightest available control point.

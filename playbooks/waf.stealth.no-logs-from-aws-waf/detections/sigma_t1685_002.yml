@@ -1,0 +1,116 @@
+# WAF Logging Stopped (T1685.002 — Disable or Modify Cloud Log)
+#
+# The source rule is an absence alert: no WAF log records in a window. Absence alerts have a
+# structural problem this playbook exists to confront — the detection depends on the
+# telemetry the technique disables, so the alert's own input is what was removed. It cannot
+# tell you WHY the stream stopped, and there are four distinct causes with four different
+# responses, only one of which is an incident.
+#
+# The rules below invert the problem: instead of watching the traffic stream for silence,
+# watch the CONTROL PLANE for the calls that produce silence. Those are CloudTrail
+# management events and they survive the WAF log stopping.
+#
+# Two of the four causes leave the logging configuration in place and still stop delivery,
+# which is why a rule on DeleteLoggingConfiguration alone is insufficient:
+#   * A LoggingFilter with DefaultBehavior DROP and no keeping filter silences the stream
+#     while GetLoggingConfiguration still returns a configuration and the console still
+#     shows logging enabled.
+#   * PutLoggingConfiguration COMPLETELY REPLACES the previous configuration, so a call that
+#     "fixes" logging also destroys the record of what it used to be.
+title: WAF logging configuration deleted
+id: 5b8f2e14-9c47-4a03-b6d1-3e07f5a82c94
+name: waf_logging_config_deleted
+status: experimental
+description: >-
+  wafv2:DeleteLoggingConfiguration removed a web ACL's logging configuration. WAF continues
+  to evaluate and block; it stops writing any request record, and the gap is unrecoverable.
+references:
+  - https://attack.mitre.org/techniques/T1685/002/                             # retrieved 2026-08-30
+  - https://docs.aws.amazon.com/waf/latest/developerguide/logging-management-configure.html  # retrieved 2026-08-30
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'wafv2.amazonaws.com'
+    eventName: 'DeleteLoggingConfiguration'
+  success:
+    errorCode: null
+  condition: selection and success
+falsepositives:
+  - Decommissioning a web ACL. The delete should be accompanied by the ACL's own deletion
+    within minutes; a delete that stands alone is the finding.
+level: high
+---
+# The quiet variant, and the reason an absence alert cannot be replaced by watching Delete
+# alone. PutLoggingConfiguration is a full replacement, so it is used both to enable logging
+# and to silence it — a LoggingFilter of DefaultBehavior DROP leaves the configuration
+# present and the console reporting logging as enabled, with nothing delivered.
+title: WAF logging configuration replaced
+id: 2d94a7f6-08be-4c51-9f37-6ac1b2e08d5f
+name: waf_logging_config_replaced
+status: experimental
+description: >-
+  wafv2:PutLoggingConfiguration replaced a web ACL's logging configuration. This both
+  enables logging and is the only way to install a DROP filter or redact fields, so every
+  call needs the resulting configuration read before it is dispositioned.
+references:
+  - https://docs.aws.amazon.com/waf/latest/developerguide/logging-management-configure.html  # retrieved 2026-08-30
+  - https://docs.aws.amazon.com/waf/latest/APIReference/API_LoggingFilter.html  # retrieved 2026-08-30
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'wafv2.amazonaws.com'
+    eventName: 'PutLoggingConfiguration'
+  success:
+    errorCode: null
+  condition: selection and success
+falsepositives:
+  - Enabling logging for the first time, or moving the destination. Both are legitimate and
+    both use this call — read the resulting LoggingFilter before dispositioning. This rule
+    is deliberately broad because the call is the only signal; the content decides.
+level: medium
+---
+# The delivery-side break, which touches no WAF API at all. Enabling logging creates a
+# resource policy on the CloudWatch Logs group, a bucket policy on S3, or a service-linked
+# role for Firehose. Removing that permission out from under a live configuration stops
+# delivery while GetLoggingConfiguration still returns an intact, correct configuration.
+title: WAF log delivery permission removed
+id: e7c035a9-1f62-4d88-a094-5b3e7c216fda
+status: experimental
+description: >-
+  A log-delivery permission underpinning a WAF logging configuration was removed. WAF's own
+  configuration is untouched and still reports as enabled; delivery stops silently.
+references:
+  - https://docs.aws.amazon.com/waf/latest/developerguide/logging-destinations.html  # retrieved 2026-08-30
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventName:
+      - 'DeleteLogDelivery'
+      - 'DeleteResourcePolicy'
+      - 'DeleteBucketPolicy'
+  # The destination name must begin with aws-waf-logs- for WAF to accept it, so this prefix
+  # is a reliable way to scope the noisy generic calls to WAF's own destinations.
+  waf_destination:
+    requestParameters|contains: 'aws-waf-logs-'
+  success:
+    errorCode: null
+  condition: selection and waf_destination and success
+falsepositives:
+  - Log-group lifecycle managed by IaC. Correlate against the same principal's other calls
+    in the window; a deletion with no accompanying recreation is the finding.
+level: medium

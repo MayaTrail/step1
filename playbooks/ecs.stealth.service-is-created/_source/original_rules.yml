@@ -1,0 +1,20 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Amazon ECS - Service Is Created
+  priority: P3
+  type: logs_immediate
+  mitre: T1578/TA0005
+  query: |
+    eventSource:"ecs.amazonaws.com" AND eventName:"CreateService" AND NOT _exists_:errorCode
+  group_by: []
+

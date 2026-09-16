@@ -1,0 +1,160 @@
+# Multiple DNS Zones Deleted by a Single User (T1485 — Data Destruction)
+#
+# WHAT THE SOURCE RULE DOES. A unique-count of successful `DeleteHostedZone` events grouped by
+# caller. The observable is identical to the single-zone rule next door
+# (`../../route53.stealth.dns-zone-deleted/`); what differs is the RESPONSE, which is why the two
+# ship as separate use cases rather than as one playbook with two trigger rows.
+#
+# DOCUMENT ORDER IS DELIBERATE. The correlation comes FIRST because it IS the use case - no
+# single event can express volume - and its base rules follow it. Every rule referenced by a
+# correlation is defined by `name:` in this same file.
+#
+# WHY A COUNT OF DELETES IS ALREADY LATE. Route 53 refuses `DeleteHostedZone` on a zone that
+# still holds records: "You can delete a hosted zone only if it contains only the default SOA and
+# NS records... Attempting to delete a hosted zone with additional records or DNSSEC enabled
+# returns a `HostedZoneNotEmpty` error." So N deletions were preceded by N purges, and the purge
+# sweep - the third and fourth documents below - is the same actor several minutes earlier, while
+# the zones still exist. That is the rule worth paging on.
+#
+# THE COUNT IS A FLOOR, NOT THE SCOPE. The correlation fires the moment the threshold is crossed
+# and the actor is not finished. `lookup-events` pages at 50, and - decisively - a deleted zone is
+# ABSENT from `list-hosted-zones`, so live state cannot enumerate what is missing. The work-list
+# has to be reconciled against an AWS Config inventory before any restoration begins. That is
+# what makes this a different response and not a louder version of the same one.
+#
+# THRESHOLD BASIS, with no observed baseline to derive one from. An AWS account carries 500
+# hosted zones by default and AWS documents no rate limit on `DeleteHostedZone`, so an actor
+# sweeping an account is bounded only by how fast the purges complete. Against that, a
+# legitimate environment teardown removes one or two zones, and it does so through the pipeline
+# role. THREE distinct zones from one principal inside an hour is a sweep. `gte` at the baseline,
+# never `gt`, so a run that removes exactly three does not fall through (F6). Re-baseline against
+# your own teardown history before deploying.
+#
+# REGION. Route 53 is global; every `route53.amazonaws.com` event is stamped `us-east-1`.
+title: Multiple Route 53 hosted zones deleted by one principal
+id: c26bc8b7-9209-4ec4-a392-db1135371de5
+status: experimental
+description: >-
+  One principal destroyed three or more Route 53 hosted zones within an hour. Deletion is
+  irreversible and each recreated zone is assigned four DIFFERENT name servers, so the recovery
+  work-list is one registrar delegation change per zone, not one restore.
+references:
+  - https://attack.mitre.org/techniques/T1485/                                                    # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/Route53/latest/APIReference/API_DeleteHostedZone.html             # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/hosted-zone-public-considerations.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: value_count
+  rules:
+    - route53_zone_deleted_bb
+  group-by:
+    - userIdentity.arn
+  field: requestParameters.id
+  timespan: 1h
+  condition:
+    gte: 3
+level: critical
+---
+# Base rule — sequence and volume component only, not for direct alerting. The success filter is
+# not optional: without it a principal probing permissions and collecting three AccessDenied
+# results fires the same critical alert as three completed destructions (D-f, B6).
+#
+# The pipeline exclusion lives here rather than on the correlation so that BOTH correlations
+# inherit it. Zones are torn down legitimately by infrastructure code, and an unpopulated
+# allowlist reproduces the source rule's false-positive rate.
+title: Route 53 hosted zone deleted
+id: 0e50f739-8faf-4537-ab19-06d7e834ad22
+name: route53_zone_deleted_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/APIReference/API_DeleteHostedZone.html             # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53.amazonaws.com'
+    eventName: 'DeleteHostedZone'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING — allowlist the PRINCIPAL. Zone IDs are unpredictable and cannot
+  # be allowlisted in advance.
+  iac_pipeline:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'          # replace with this account's Terraform/CDK execution role
+      - ':role/cloudformation-exec' # replace with this account's CloudFormation service role
+  condition: selection and success and not iac_pipeline
+level: informational
+---
+# Base rule — the purge that MUST precede every deletion. Route 53 will not delete a non-empty
+# zone, so this fires first, on more zones, and while every one of them still exists.
+#
+# ARRAY ADDRESSING. `changes` is a list; the dotted form below is what Elastic-family and
+# Sentinel backends produce from a flattened event. A backend requiring explicit indices needs
+# `[0]` inserted. Confirm against one real event before deploying — an unmatched path fails
+# silently, and this is the rule whose silence costs the most.
+title: Route 53 records deleted from a hosted zone
+id: 7bde402e-6cbd-4f61-a9e2-1f0663cf9443
+name: route53_zone_purged_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/APIReference/API_ChangeResourceRecordSets.html     # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53.amazonaws.com'
+    eventName: 'ChangeResourceRecordSets'
+  delete_action:
+    requestParameters.changeBatch.changes.action: 'DELETE'
+  success:
+    errorCode: null
+  iac_pipeline:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'
+      - ':role/cloudformation-exec'
+  condition: selection and delete_action and success and not iac_pipeline
+level: informational
+---
+# THE RULE THAT ARRIVES IN TIME. One principal stripping records from three or more DISTINCT
+# hosted zones inside an hour is the sweep, observed while every zone still exists and every
+# record is still recoverable from the DELETE changes themselves ("To delete a resource record
+# set, you must specify all the same values that you specified when you created it").
+#
+# Same threshold as the deletion correlation, and deliberately so: the two count the same set of
+# zones at two points in time, so a different figure on each would mean the earlier rule stayed
+# silent while the later one fired.
+title: Records stripped from multiple Route 53 hosted zones by one principal
+id: 2eca96a8-de87-4e65-820e-ebe0d20f6499
+status: experimental
+description: >-
+  One principal deleted records from three or more distinct hosted zones within an hour. Route 53
+  refuses to delete a zone that still holds records, so this is the destruction itself and it
+  precedes every deletion that follows. Nothing is unrecoverable yet.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/APIReference/API_ChangeResourceRecordSets.html     # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: value_count
+  rules:
+    - route53_zone_purged_bb
+  group-by:
+    - userIdentity.arn
+  field: requestParameters.hostedZoneId
+  timespan: 1h
+  condition:
+    gte: 3
+level: high

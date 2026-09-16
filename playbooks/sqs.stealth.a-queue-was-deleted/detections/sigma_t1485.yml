@@ -1,0 +1,158 @@
+# SQS Queue Deletion, single and at volume (T1485 / T1070)
+#
+# ONE PLAYBOOK, TWO SOURCE RULES. The source set carries a per-event "A Queue Was Deleted"
+# and a volume "Excessive Queue Deletion" (5 in 5 minutes). Their queries are byte-identical,
+# their priorities are identical, and the response to one deletion and to fifty is the same
+# procedure run once or run in a loop. They are merged here under the tiering rule's first
+# merge test — same observable, same response, differing only in threshold — and the volume
+# rule survives as the `sqs_queue_deleted_at_volume` correlation below.
+#
+# WHAT THE SOURCE RULES DO NOT DO. Both match `eventName:"DeleteQueue"` with a success filter
+# and nothing else, so every scheduled teardown, every ephemeral test-stack destroy and every
+# Terraform apply that removes a queue fires them. Neither looks at WHO called. In an account
+# where queue lifecycle is owned by a pipeline, the caller is the entire signal, and Rule 1
+# below is built on it.
+#
+# IRREVERSIBILITY, AND THE 60-SECOND WINDOW THAT MATTERS TWICE. AWS: "When you delete a queue,
+# any messages in the queue are no longer available", and "the deletion process takes up to 60
+# seconds. Requests you send involving that queue during the 60 seconds might succeed. For
+# example, a SendMessage request might succeed, but after 60 seconds the queue and the message
+# you sent no longer exist." Separately: "When you delete a queue, you must wait at least 60
+# seconds before creating a queue with the same name" - a second attempt inside that window
+# returns `QueueDeletedRecently`. That constraint is what makes the delete-then-recreate
+# correlation below detectable as a distinct shape rather than as two unrelated events: an
+# actor taking over a queue NAME has to wait, and the pause is visible.
+#
+# FIELD SHAPE. `DeleteQueue` carries `requestParameters.queueUrl` and returns HTTP 200 with an
+# empty body, so there is NO `responseElements` - the request is the entire record, and the
+# queue's policy, encryption setting and redrive wiring are not in it. `CreateQueue` carries
+# `requestParameters.queueName` and returns `responseElements.queueUrl` (flat, per the API's
+# Response Syntax, which has no wrapper object). The two events therefore name the same queue
+# through DIFFERENT fields, which is why the correlation groups by principal and the analyst
+# confirms the name match.
+title: SQS queue deleted by a principal outside the queue-lifecycle pipeline
+id: 52cce057-2cee-45cd-b76d-2b9b8bf0bad2
+name: sqs_queue_deleted_nonpipeline
+status: experimental
+description: >-
+  A queue was deleted by a principal that does not own queue lifecycle. Deletion is
+  irreversible: every stored and in-flight message is gone, and the queue's policy,
+  encryption configuration and redrive wiring survive only in whatever infrastructure code
+  created them.
+references:
+  - https://attack.mitre.org/techniques/T1485/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_DeleteQueue.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+  - attack.stealth
+  - attack.t1070
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sqs.amazonaws.com'
+    eventName: 'DeleteQueue'
+  # POPULATE BEFORE DEPLOYING. Unpopulated, this fires on every pipeline teardown. The
+  # allowlist IS the discriminator - the event name carries no signal on its own.
+  queue_lifecycle_pipeline:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'          # replace with this account's deployment role
+      - ':role/BreakGlassAdmin'     # replace with this account's break-glass role
+  success:
+    errorCode: null
+  condition: selection and success and not queue_lifecycle_pipeline
+falsepositives:
+  - >-
+    An engineer cleaning up a personal or ephemeral queue outside the pipeline. Common in
+    development accounts and rare in production ones; if it is common in production, the
+    finding is that queue lifecycle is not owned by the pipeline.
+level: high
+---
+# Base rule — sequence component only, not for direct alerting. Carries the success filter so
+# a denied CreateQueue cannot compose into the high-severity correlation below.
+title: SQS queue created
+id: 5cfff3c9-cf1c-4386-8b35-de9759cfd12d
+name: sqs_queue_created_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_CreateQueue.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sqs.amazonaws.com'
+    eventName: 'CreateQueue'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+# Threshold basis — the source rules' own 5-in-5-minutes is retained, and here is why it is
+# defensible rather than inherited: deleting five queues inside five minutes is not something
+# a person does by hand, and the one process that legitimately does it — a stack teardown —
+# runs under the pipeline role, which the base rule already excludes. `gte` at the baseline,
+# never `gt`, so a run that touches exactly five does not fall through. Re-baseline against
+# your own account before deploying; if engineers routinely destroy five-queue dev stacks
+# under their own identity, raise it rather than muting the rule.
+title: SQS queues deleted at volume by one principal
+id: a05452dc-04e0-432f-a910-bee7139c89f6
+status: experimental
+description: >-
+  One non-pipeline principal deleted five or more queues inside five minutes. That is
+  destruction at machine speed, not maintenance, and the work-list for recovery is every
+  queue in the group.
+references:
+  - https://attack.mitre.org/techniques/T1485/  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: event_count
+  rules:
+    - sqs_queue_deleted_nonpipeline
+  group-by:
+    - userIdentity.arn
+  timespan: 5m
+  condition:
+    gte: 5
+level: high
+---
+# Delete-then-recreate is queue-NAME TAKEOVER, and it is a different incident from a deletion.
+# The recreated queue is a new resource: no policy, no encryption beyond the SSE-SQS default,
+# no redrive wiring, and whatever attributes the actor chose. Producers that address the queue
+# by name reconnect to it without erroring, so nothing looks broken while messages land
+# somewhere the actor controls.
+#
+# The correlation groups by `userIdentity.arn` and NOT by queue name, because DeleteQueue
+# names the queue in `requestParameters.queueUrl` while CreateQueue names it in
+# `requestParameters.queueName` — Sigma cannot join across two field names. Confirm the names
+# match by hand, or use the KQL, which does the join. Fifteen minutes spans the documented
+# 60-second `QueueDeletedRecently` wait plus a retry or two without spanning unrelated work.
+title: SQS queue deleted and a queue recreated by the same principal
+id: 59f6a18c-fd3e-4656-949a-498751d3a43a
+status: experimental
+description: >-
+  One principal deleted a queue and created a queue within fifteen minutes. If the names
+  match, the queue's name has been taken over: producers addressing it by name reconnect to a
+  resource the actor configured, with none of the original policy, encryption or redrive.
+references:
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_CreateQueue.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: temporal_ordered
+  rules:
+    - sqs_queue_deleted_nonpipeline
+    - sqs_queue_created_bb
+  group-by:
+    - userIdentity.arn
+  timespan: 15m
+level: high

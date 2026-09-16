@@ -1,0 +1,141 @@
+// RDS Database Created Without Storage Encryption (T1578.002 / T1537)
+//
+// Signal: a DB instance, cluster or global cluster created or restored into an unencrypted state.
+//
+// This query does three things the Sigma rules structurally cannot.
+//
+//   1. IT SEPARATES "SET TO FALSE" FROM "NEVER MENTIONED". AWS documents the CreateDBInstance
+//      default as "By default, it isn't encrypted", so most unencrypted databases are produced by
+//      an omission rather than a decision. Those are different conversations with different
+//      owners - a module that forgot the field versus an engineer who turned it off - and the
+//      source rule, which tests for the literal "false", sees only the second.
+//   2. IT DEDUPLICATES THE AURORA AMPLIFIER. "This setting doesn't apply to Amazon Aurora DB
+//      instances. The encryption for DB instances is managed by the DB cluster." An unencrypted
+//      three-node Aurora cluster emits four matching events for one control failure. Summarising
+//      by database identifier and reporting the cluster alongside its members turns four alerts
+//      into one finding.
+//   3. IT JOINS THE UNENCRYPTED DATABASE TO A LATER SHARE OF ITS OWN SNAPSHOT, on the snapshot's
+//      SOURCE INSTANCE rather than on the principal. The Sigma correlation can only group by
+//      caller over seven days; this follows the data.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let Lookback = 90d;
+let CreateApis = dynamic(["CreateDBInstance","CreateDBCluster","CreateGlobalCluster",
+                          "CreateDBInstanceReadReplica","RestoreDBInstanceFromDBSnapshot",
+                          "RestoreDBInstanceToPointInTime","RestoreDBInstanceFromS3",
+                          "RestoreDBClusterFromSnapshot","RestoreDBClusterToPointInTime",
+                          "RestoreDBClusterFromS3"]);
+let Creates =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "rds.amazonaws.com"
+    | where EventName in (CreateApis)
+    | where isempty(ErrorCode)
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    // responseElements is FLAT for RDS - no DBInstance wrapper - confirmed by AWS's own published
+    // CreateDBInstance sample event, which carries "storageEncrypted": false at the top level.
+    | extend ReqEnc  = tolower(tostring(Req.storageEncrypted))
+    | extend RespEnc = tolower(tostring(Resp.storageEncrypted))
+    | where RespEnc == "false" or ReqEnc == "false"
+    | extend DbId = coalesce(tostring(Resp.dBInstanceIdentifier), tostring(Resp.dBClusterIdentifier),
+                             tostring(Req.dBInstanceIdentifier), tostring(Req.dBClusterIdentifier),
+                             tostring(Req.globalClusterIdentifier))
+    | extend ClusterId = coalesce(tostring(Resp.dBClusterIdentifier), tostring(Req.dBClusterIdentifier))
+    | extend Engine = coalesce(tostring(Resp.engine), tostring(Req.engine))
+    | extend InstanceClass = coalesce(tostring(Resp.dBInstanceClass), tostring(Req.dBInstanceClass))
+    | extend Arn = coalesce(tostring(Resp.dBInstanceArn), tostring(Resp.dBClusterArn))
+    // The distinction the source rule cannot draw. `isempty` on the tostring() of an absent key
+    // is the test for "the caller never mentioned encryption".
+    | extend HowUnencrypted = case(
+        ReqEnc == "false",                        "explicitly set to false",
+        isempty(ReqEnc) and RespEnc == "false",   "AWS default, storageEncrypted never sent",
+                                                  "unclear - read the raw event")
+    // Aurora member instances repeat their cluster's state and are not separate findings.
+    // `contains`, never `has`: engine strings are punctuated (aurora-postgresql, sqlserver-ex).
+    | extend IsAuroraMember = (Engine contains "aurora") and (EventName contains "DBInstance");
+// Every snapshot taken of one of those databases, and whether it was then shared out.
+let SnapsOfUnencrypted =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "rds.amazonaws.com"
+    | where EventName in ("CreateDBSnapshot", "CreateDBClusterSnapshot")
+    | where isempty(ErrorCode)
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    | extend DbId   = coalesce(tostring(Req.dBInstanceIdentifier), tostring(Req.dBClusterIdentifier))
+    | extend SnapId = coalesce(tostring(Req.dBSnapshotIdentifier), tostring(Req.dBClusterSnapshotIdentifier))
+    | project DbId, SnapId, SnappedAt = TimeGenerated;
+let SharedSnaps =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "rds.amazonaws.com"
+    | where EventName in ("ModifyDBSnapshotAttribute", "ModifyDBClusterSnapshotAttribute")
+    | where isempty(ErrorCode)
+    | extend Req = parse_json(RequestParameters)
+    | where tostring(Req.attributeName) == "restore"
+    | extend SnapId = coalesce(tostring(Req.dBSnapshotIdentifier), tostring(Req.dBClusterSnapshotIdentifier))
+    | mv-expand AddedValue = Req.valuesToAdd to typeof(string)
+    | where isnotempty(AddedValue)
+    | project SnapId, AddedValue, SharedAt = TimeGenerated, Sharer = UserIdentityArn;
+let LeakPath =
+    SnapsOfUnencrypted
+    | join kind=inner SharedSnaps on SnapId
+    | summarize SharedSnapshots = make_set(SnapId, 10), Recipients = make_set(AddedValue, 10),
+                AnyPublic = max(AddedValue == "all"), LastShared = max(SharedAt) by DbId;
+Creates
+| summarize
+    Events        = count(),
+    FirstSeen     = min(TimeGenerated),
+    LastSeen      = max(TimeGenerated),
+    Apis          = make_set(EventName, 6),
+    HowSet        = make_set(HowUnencrypted, 3),
+    Engines       = make_set(Engine, 3),
+    Classes       = make_set(InstanceClass, 3),
+    Arns          = make_set(Arn, 3),
+    Cluster       = any(ClusterId),
+    AuroraMember  = max(IsAuroraMember),
+    Actors        = make_set(UserIdentityArn, 5),
+    SourceIPs     = make_set(SourceIpAddress, 5),
+    Agents        = make_set(UserAgent, 3)
+    by DbId
+| join kind=leftouter LeakPath on DbId
+| extend Verdict = case(
+    AnyPublic == true,
+        "UNENCRYPTED DATABASE WHOSE SNAPSHOT IS PUBLIC - the exact outcome encryption at rest prevents. Go to ../../rds.exfiltration.snapshot-made-public/ immediately",
+    isnotempty(LastShared),
+        "UNENCRYPTED DATABASE WHOSE SNAPSHOT WAS SHARED OUT - a copy is in another account and, being unencrypted, its use leaves no KMS trace in this one",
+    AuroraMember == true,
+        "AURORA MEMBER INSTANCE OF AN UNENCRYPTED CLUSTER - not a separate finding; the cluster is",
+    set_has_element(HowSet, "AWS default, storageEncrypted never sent"),
+        "UNENCRYPTED BY OMISSION - storageEncrypted was never sent and AWS defaults to unencrypted. The owner is whatever template produced this, not the person who ran it",
+        "UNENCRYPTED BY DECISION - storageEncrypted was explicitly false. Somebody chose this; find out why")
+| project FirstSeen, LastSeen, Verdict, DbId, Cluster, Engines, Classes, HowSet, Apis, Actors,
+          SharedSnapshots, Recipients, AnyPublic, LastShared, Arns, SourceIPs, Agents, Events
+| order by LastSeen desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// DATABASES THAT PREDATE THE LOOKBACK. Encryption is decided once, at create time, and can never
+// be changed afterwards - so the oldest unencrypted databases are the ones with no create event
+// left anywhere. Only a live sweep finds them:
+//   aws rds describe-db-instances --query "DBInstances[?StorageEncrypted==\`false\`].DBInstanceIdentifier"
+//   aws rds describe-db-clusters  --query "DBClusters[?StorageEncrypted==\`false\`].DBClusterIdentifier"
+// Query 2 of ../PLAYBOOK.md runs both, plus the snapshot sweep, and the snapshot sweep needs two
+// different field names: DBSnapshot exposes `Encrypted` while DBClusterSnapshot exposes
+// `StorageEncrypted`.
+//
+// WHETHER ENCRYPTION WAS EVEN POSSIBLE. The db.m1.*, db.m2.* and db.t2.micro instance classes do
+// not support encryption at all, so a create on one of those could not have been encrypted
+// whatever the caller asked for. `Classes` is projected above so that case is visible rather than
+// mistaken for negligence; the finding there is the instance class.
+//
+// AURORA'S DEFAULT. AWS documents "By default, it isn't encrypted" for CreateDBInstance and states
+// NO default for CreateDBCluster.StorageEncrypted. An Aurora cluster created without the parameter
+// is therefore of undetermined state from the request alone - which is another reason this query
+// and the shipped rules read the RESPONSE first.
+//
+// PREVENTION. AWS Config `rds-storage-encrypted` (RDS_STORAGE_ENCRYPTED) and
+// `rds-cluster-encrypted-at-rest` (RDS_CLUSTER_ENCRYPTED_AT_REST) evaluate the state, and the
+// first supports PROACTIVE mode - evaluating a resource before it is provisioned, which is the
+// only form of this control that helps, because the setting cannot be changed afterwards.
+// `rds-snapshot-encrypted` covers the snapshots. GuardDuty has no coverage of any of this.

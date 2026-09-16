@@ -1,0 +1,139 @@
+# Network Firewall logging stopped (T1685.002)
+#
+# THIS SERVICE HAS A LEGITIMATE, PERMANENT REASON TO PRODUCE NO LOGS, AND THE SOURCE RULE CANNOT
+# TELL IT FROM AN INCIDENT. AWS: "Firewall logging is only available for traffic that you forward
+# to the stateful rules engine. You forward traffic to the stateful engine through stateless rule
+# actions and stateless default actions in the firewall policy."
+#
+# So a policy whose stateless default action is aws:drop or aws:pass rather than aws:forward_to_sfe
+# produces NO alert log and NO flow log, correctly and forever. An absence rule fires on that
+# configuration continuously, and the team learns to ignore it — which is the state they are in
+# when logging is actually disabled.
+#
+# UpdateLoggingConfiguration RECORDS WHAT REMAINS, NOT WHAT WAS REMOVED. Logging is a configuration
+# ON the firewall rather than a separate resource, so there is no delete verb to watch. The call
+# REPLACES the whole configuration: removing the alert log type and removing every log type are the
+# same API call, and the request carries the SURVIVING log destinations. A rule matching "the alert
+# type was removed" therefore matches nothing — the removed type is exactly what the event does not
+# contain. The rules below match on the configuration becoming EMPTY or SHRINKING, which is what
+# the event can actually express, and §2 of ../PLAYBOOK.md carries the state comparison that
+# resolves the partial case.
+#
+# THE group_by IS EMPTY. The source rule counts records account-wide, so one firewall going dark
+# among several barely moves the total. Firewalls are per-VPC-endpoint resources; the firewall is
+# the unit and it is the one the rule cannot name.
+title: Network Firewall logging configuration replaced with an empty one
+id: 5f2c7940-8b31-4ea6-93d0-16c4a87e2b5f
+name: netfw_logging_removed
+status: experimental
+description: >-
+  UpdateLoggingConfiguration submitted with no log destinations at all. This is the unambiguous
+  case — every log type off, one call, attributed to a principal, naming the firewall. Note the
+  shape: logging is an attribute of the firewall and the call replaces the entire configuration, so
+  an empty LogDestinationConfigs list IS the removal. There is no delete event and no per-type
+  removal event to watch for.
+references:
+  - https://docs.aws.amazon.com/network-firewall/latest/developerguide/firewall-update-logging-configuration.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'network-firewall.amazonaws.com'
+    eventName: 'UpdateLoggingConfiguration'
+  success:
+    errorCode: null
+  has_destinations:
+    requestParameters.loggingConfiguration.logDestinationConfigs.logType|exists: true
+  # POPULATE BEFORE DEPLOYING with the infrastructure-as-code roles that own firewall configuration.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not has_destinations and not known_provisioners
+falsepositives:
+  - >-
+    A firewall being decommissioned, which should be followed by DeleteFirewall within minutes. An
+    empty logging configuration with the firewall still in service is the finding.
+level: high
+---
+title: Network Firewall logging configuration changed
+id: b3806e15-4c72-49fd-a058-2e91d7346cb0
+name: netfw_logging_configuration_changed
+status: experimental
+description: >-
+  Any successful UpdateLoggingConfiguration that still carries destinations. Shipped at medium and
+  deliberately broad, because the API cannot express the interesting case any other way: the call
+  replaces the whole configuration and the request contains the log types that SURVIVE, so a
+  partial removal — dropping alert logging while keeping flow logging — is indistinguishable from a
+  routine destination change without comparing against the previous state. That comparison is a
+  state read, not a log match, and it is Query 2 of ../PLAYBOOK.md. This rule exists so the
+  comparison is triggered.
+references:
+  - https://docs.aws.amazon.com/network-firewall/latest/developerguide/firewall-update-logging-configuration.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'network-firewall.amazonaws.com'
+    eventName: 'UpdateLoggingConfiguration'
+  success:
+    errorCode: null
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    Changing a log destination, adding a log type, or migrating buckets — all ordinary and all
+    indistinguishable from a partial removal in the event alone. That is the point of the rule:
+    it triggers the state comparison rather than deciding on its own.
+level: medium
+---
+title: Firewall policy changed to stop forwarding traffic to the stateful engine
+id: a71d5e38-06b9-4c24-8f57-3ba90c62e7d1
+name: netfw_stateless_forward_removed
+status: experimental
+description: >-
+  UpdateFirewallPolicy or CreateFirewallPolicy submitted with stateless default actions that do not
+  include aws:forward_to_sfe. This achieves the same result as disabling logging, without touching
+  the logging configuration at all: AWS logs only traffic forwarded to the stateful engine, so a
+  policy that drops or passes statelessly produces no alert log and no flow log for that traffic.
+  It is quieter than turning logging off — every dashboard still shows logging enabled — and it
+  removes the inspection as well as the record.
+references:
+  - https://docs.aws.amazon.com/network-firewall/latest/developerguide/firewall-policy-settings.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'network-firewall.amazonaws.com'
+    eventName:
+      - 'UpdateFirewallPolicy'
+      - 'CreateFirewallPolicy'
+  success:
+    errorCode: null
+  forwards_to_stateful:
+    requestParameters.firewallPolicy.statelessDefaultActions|contains: 'aws:forward_to_sfe'
+  condition: selection and success and not forwards_to_stateful
+falsepositives:
+  - >-
+    A policy that genuinely handles a traffic class statelessly for throughput reasons. Legitimate,
+    and it should be a recorded decision — the cost of that decision is that the traffic is neither
+    inspected by the stateful engine nor logged anywhere.
+level: high

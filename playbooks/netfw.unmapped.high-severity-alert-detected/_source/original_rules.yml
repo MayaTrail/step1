@@ -1,0 +1,21 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: AWS Network Firewall - High Severity Alert Detected
+  priority: P2
+  type: logs_threshold
+  mitre: none
+  query: |
+    event.event_type:"alert" AND event.alert.severity:"1" AND (event.alert.action:"allowed" OR NOT event.alert.action:"blocked")
+  threshold: 0.0  window: 5m
+  group_by: []
+

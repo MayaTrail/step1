@@ -17,7 +17,7 @@ interface AuthContextValue {
   user: User | null
   loading: boolean
   // True while the app hydrates user state from the server on mount.
-  // ProtectedRoute and ConnectorPage hold rendering until this resolves
+  // ProtectedRoute holds rendering until this resolves
   // to prevent premature redirects based on stale JWT claims.
   initializing: boolean
   error: string | null
@@ -29,7 +29,7 @@ interface AuthContextValue {
   logout: () => void
   clearError: () => void
   verifyConnector: (req: ConnectorRequest) => Promise<void>
-  activateDemo: () => Promise<void>
+  disconnectConnector: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -50,8 +50,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
      * On mount, hydrate user state from the server via /auth/me/.
      *
      * The JWT stored in localStorage is used solely as a bearer token.
-     * User profile fields (isVerified, isDemo, etc.) may have changed
-     * server-side after the token was issued (e.g. demo activation,
+     * User profile fields (isVerified, etc.) may have changed
+     * server-side after the token was issued (e.g.
      * connector verification), so we always fetch fresh state from the
      * /auth/me/ endpoint rather than trusting the JWT claims.
      *
@@ -167,15 +167,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const activateDemo = useCallback(async () => {
+  const disconnectConnector = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      await authService.activateDemo()
+      await authService.disconnectConnector()
       const refreshed = await authService.refreshUser()
       setUser(refreshed)
     } catch (err: any) {
-      setError(err.message ?? 'Demo activation failed')
+      setError(err.message ?? 'Could not disconnect the AWS account')
       throw err
     } finally {
       setLoading(false)
@@ -193,7 +193,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider value={{
       user, loading, initializing, error,
       login, googleSSO, signup, verifyOTP, resendOTP, logout, clearError,
-      verifyConnector, activateDemo,
+      verifyConnector, disconnectConnector,
     }}>
       {children}
     </AuthContext.Provider>

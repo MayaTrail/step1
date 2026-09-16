@@ -35,7 +35,7 @@ TAGS = {
     "MayaTrail":          "true",
     "Purpose":            "adversary-emulation",
     "ThreatActor":        "ATOMIC-rds-modify-public-access",
-    "Technique":          "T1562.007",
+    "Technique":          "T1686.001",
     "DataClassification": "SandboxOnly",
 }
 
@@ -97,7 +97,7 @@ aws.ec2.RouteTableAssociation(
 rds_sg = aws.ec2.SecurityGroup(
     "rds-security-group",
     vpc_id=vpc.id,
-    description="RDS emulation lab SG - T1562.007 - no inbound at deploy",
+    description="RDS emulation lab SG - T1686.001 - no inbound at deploy",
     ingress=[],
     egress=[aws.ec2.SecurityGroupEgressArgs(
         protocol="-1",
@@ -114,7 +114,7 @@ rds_subnet_group = aws.rds.SubnetGroup(
     "rds-subnet-group",
     name=RDS_SUBNET_GROUP_NAME,
     subnet_ids=[subnet_a.id, subnet_b.id],
-    description="RDS subnet group for T1562.007 emulation",
+    description="RDS subnet group for T1686.001 emulation",
     tags=TAGS,
 )
 

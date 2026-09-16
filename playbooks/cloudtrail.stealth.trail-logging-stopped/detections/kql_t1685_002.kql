@@ -1,0 +1,81 @@
+// CloudTrail logging stopped (T1685.002)
+//
+// The source rule filters on success. This one reads the FAILURES too, because AWS refuses
+// StopLogging anywhere but the trail's home Region — so an actor who does not already know which
+// Region owns the trail fails first, and that failure is both higher fidelity and earlier than the
+// success a success-only rule waits for.
+//
+// `contains` throughout, never `has` — trail names and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "cloudtrail.amazonaws.com"
+| where EventName in ("StopLogging", "StartLogging", "DeleteTrail", "UpdateTrail",
+                      "PutEventSelectors", "DescribeTrails")
+| extend TrailName = tostring(parse_json(RequestParameters).name)
+| extend Failed = isnotempty(ErrorCode)
+// InvalidHomeRegion is the one that matters: AWS refuses the call outside the trail's home Region
+// and refuses it on shadow trails entirely, so this is a caller who was guessing.
+| extend WrongRegion = ErrorCode == "InvalidHomeRegionException"
+// A member account cannot alter an organization trail at all — "turn logging on or off, change
+// what types of events are logged, or otherwise alter organization trails in any way".
+| extend OrgTrailRefusal = ErrorCode == "NotOrganizationMasterAccountException"
+| extend Enumerating = ErrorCode in ("TrailNotFoundException", "AccessDenied")
+| summarize
+    Stopped      = countif(EventName == "StopLogging" and not(Failed)),
+    StopRefused  = countif(EventName == "StopLogging" and Failed),
+    WrongRegionTries = countif(EventName == "StopLogging" and WrongRegion),
+    OrgRefusals  = countif(EventName == "StopLogging" and OrgTrailRefusal),
+    Enumeration  = countif(Enumerating),
+    Started      = countif(EventName == "StartLogging" and not(Failed)),
+    Deleted      = countif(EventName == "DeleteTrail" and not(Failed)),
+    Modified     = countif(EventName in ("UpdateTrail", "PutEventSelectors") and not(Failed)),
+    Trails       = make_set(TrailName, 10),
+    Regions      = make_set(AwsRegion, 10),
+    FirstStop    = minif(TimeGenerated, EventName == "StopLogging" and not(Failed)),
+    FirstStart   = minif(TimeGenerated, EventName == "StartLogging" and not(Failed)),
+    SourceIps    = make_set(SourceIpAddress, 5),
+    LastSeen     = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where Stopped > 0 or StopRefused > 0
+// A stop followed by a start leaves a correct end state: every configuration check passes and only
+// the event history holds the gap.
+| extend DarkMinutes = iff(Stopped > 0 and isnotempty(FirstStart) and FirstStart > FirstStop,
+                           datetime_diff('minute', FirstStart, FirstStop), int(null))
+| extend Verdict = case(
+    Stopped > 0 and isnotnull(DarkMinutes),
+        strcat("LOGGING STOPPED AND RESTARTED by the same principal over ", tostring(DarkMinutes),
+               " min — the end state is correct and only this history holds the gap, P0"),
+    Stopped > 0 and Deleted > 0,
+        "LOGGING STOPPED AND THE TRAIL DELETED — the stop was the first half of a teardown; nothing will restore this trail's coverage, P0",
+    Stopped > 0,
+        "LOGGING STOPPED AND STILL STOPPED. AWS states a trail can be updated without stopping it, so there is no reconfiguration reading. Confirm whether an organization trail still covers this account, P0",
+    WrongRegionTries > 0,
+        "StopLogging REFUSED — WRONG REGION. AWS accepts this call only in the trail's home Region and never on a shadow trail, so the caller was guessing. This precedes success and no success-only rule sees it, P0",
+    OrgRefusals > 0,
+        "StopLogging REFUSED — ORGANIZATION TRAIL. A member-account principal tried to silence a trail it cannot alter. The attempt is the finding; the org trail did its job, P1",
+    StopRefused > 0,
+        "StopLogging refused — read ErrorCode. An attempt is an attempt whether or not it landed, P1",
+    "CloudTrail state change")
+| project FirstStop, LastSeen, UserIdentityArn, Verdict, Stopped, StopRefused, WrongRegionTries,
+          OrgRefusals, Enumeration, Started, Deleted, Modified, DarkMinutes, Trails, Regions, SourceIps
+| order by Stopped desc, WrongRegionTries desc
+//
+// ============================================================================
+// WHETHER THE ACCOUNT ACTUALLY WENT DARK IS NOT IN THIS EVENT
+// ============================================================================
+// Where a management-account organization trail covers this account, a member-account StopLogging
+// cannot touch it and coverage continues. Where one does not, the account may have just gone
+// silent. The event looks the same either way. Resolve it against the trail inventory:
+//   aws cloudtrail describe-trails --include-shadow-trails
+// checking IsOrganizationTrail, IsMultiRegionTrail and HomeRegion — not just that a trail exists.
+//
+// ============================================================================
+// SINGLE-REGION TRAILS OUTSIDE us-east-1 NEVER SAW IAM OR STS
+// ============================================================================
+// Global service events for IAM, STS and CloudFront are recorded in us-east-1, and CloudTrail
+// "delivers global service events only to single-Region trails in US East (N. Virginia)". So a
+// single-Region trail elsewhere was already blind to every IAM and STS call before anyone stopped
+// it, and a coverage review that only checks a trail exists will report green.

@@ -1,0 +1,85 @@
+// SYN flood against a VPC endpoint (T1498)
+//
+// This query sums PACKETS. A flow log record is an aggregate over the interval carrying `packets`
+// and `bytes`, so one record can represent a hundred thousand packets — a threshold on record
+// count measures how many distinct 5-tuples appeared, not how much traffic arrived. That is the
+// central defect in the source rule and it is the reason this file exists alongside the Sigma:
+// Sigma correlations have no summation operator, so the packet-level view can only live here.
+//
+// `contains` throughout, never `has` — addresses are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. Table name depends on ingestion.
+let LOOKBACK = 24h;
+// Not shorter than the aggregation interval. AWS: default maximum is 10 minutes, 1 minute on
+// Nitro-attached interfaces; delivery is "about 5 minutes" to CloudWatch Logs, best effort.
+let WINDOW = 15m;
+AWSVPCFlow
+| where TimeGenerated > ago(LOOKBACK)
+| extend PktSrc = coalesce(column_ifexists("pkt_srcaddr", ""), tostring(SrcAddr))
+| extend PktDst = coalesce(column_ifexists("pkt_dstaddr", ""), tostring(DstAddr))
+| extend Direction = coalesce(column_ifexists("flow_direction", ""), "")
+| extend Flags = toint(column_ifexists("tcp_flags", int(null)))
+// tcp-flags is a VERSION 3 field and the default format is version 2. A null here is not "no
+// flags" — it is "this subscription cannot answer the question", and the two must not be
+// conflated. NoFlagField carries that distinction into the output.
+| extend NoFlagField = isnull(Flags)
+| extend Proto = toint(Protocol)
+| where Proto == 6
+| where Direction == "ingress" or isempty(Direction)
+| where tostring(column_ifexists("LogStatus", "OK")) == "OK"
+// The SYN bit is 2. AWS OR-s the flags across the interval, so an exact == 2 misses 3 (SYN+FIN),
+// 6 (SYN+RST), 18 (SYN-ACK), 19 and the rest. binary_and is the honest test; the enumerated
+// fallback exists because not every ingestion preserves the field as an integer.
+| extend SynSet = iff(NoFlagField, false, binary_and(Flags, 2) != 0)
+| where SynSet or NoFlagField
+| summarize
+    Records      = count(),
+    Packets      = sum(tolong(Packets)),
+    Bytes        = sum(tolong(Bytes)),
+    Sources      = dcount(PktSrc),
+    Accepted     = countif(Action == "ACCEPT"),
+    Refused      = countif(Action == "REJECT"),
+    TopSources   = make_set(PktSrc, 10),
+    PortsHit     = make_set(toint(DstPort), 10),
+    FlagValues   = make_set(Flags, 10),
+    FieldMissing = max(NoFlagField),
+    FirstSeen    = min(TimeGenerated),
+    LastSeen     = max(TimeGenerated)
+    by Target = PktDst, bin(TimeGenerated, WINDOW)
+| extend PacketsPerSource = iff(Sources > 0, Packets / Sources, Packets)
+| where Packets > 100000 or Sources > 500
+| extend Verdict = case(
+    FieldMissing,
+        "TCP FLAGS UNAVAILABLE — this subscription uses the version 2 default format. Volume is real, the SYN attribution is not. Recreate the subscription with a custom format; it cannot be changed in place",
+    Sources > 500 and PacketsPerSource < 50,
+        "DISTRIBUTED SYN FLOOD — many sources, few packets each. Spoofed or botnet traffic; blocking source addresses will not keep up, P0",
+    Sources <= 5 and Packets > 1000000,
+        "CONCENTRATED SYN FLOOD — a handful of sources saturating the target. Blocking at the network ACL is viable here and is not in the distributed case, P0",
+    Refused > Accepted,
+        "HIGH SYN VOLUME, MOSTLY REFUSED — the controls are absorbing it. Confirm the target is not simply unreachable for a different reason, P1",
+    "ELEVATED SYN VOLUME — could be a launch, a campaign, or a cache expiring across a large client base. Compare the source set against last week's, P2")
+| project FirstSeen, LastSeen, Target, Verdict, Packets, Sources, PacketsPerSource,
+          Records, Accepted, Refused, Bytes, PortsHit, FlagValues, TopSources, FieldMissing
+| order by Packets desc
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHETHER THE HANDSHAKE COMPLETED. AWS: "since tcp-flags does not support logging ACK or PSH
+// flags, records for traffic with these unsupported flags will result in tcp-flags value 0." ACK
+// is not recorded, so "SYN without ACK" — the textbook half-open test — describes a field that
+// does not exist. The half-open character is inferred from PacketsPerSource: a completed
+// connection exchanges more than a handful of packets, a half-open one does not.
+//
+// WHETHER THE SOURCE ADDRESSES ARE REAL. A SYN flood spoofs them by design, so TopSources is a
+// list of claimed origins and a blocklist built from it may block nobody and somebody else.
+//
+// WHETHER THE SERVICE WAS ACTUALLY DEGRADED. Flow logs record what arrived at the interface, not
+// what the application did with it. Target health checks, load balancer 5xx rates and application
+// latency answer that; ../../alb.recon.high-number-of-5xx-response-code-by-alb/ is the adjacent
+// view when the target sits behind an Application Load Balancer.
+//
+// WHETHER RECORDS ARE MISSING. `log-status` SKIPDATA means AWS dropped records "because of an
+// internal capacity constraint, or an internal error" — and a traffic flood is exactly the
+// condition under which that becomes likely. Under-counting during a flood is the expected
+// failure mode, so read these numbers as a floor.

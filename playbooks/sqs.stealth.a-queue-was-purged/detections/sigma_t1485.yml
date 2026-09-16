@@ -1,0 +1,141 @@
+# SQS Queue Purged (T1485 / T1070)
+#
+# PURGE IS THE QUIET DESTRUCTION. `DeleteQueue` removes the container and every producer and
+# consumer starts erroring within a minute; `PurgeQueue` removes only the MESSAGES and leaves
+# the queue, its policy, its encryption, its redrive wiring and its metrics exactly as they
+# were. Nothing breaks, no alarm on queue existence fires, consumers simply have nothing to
+# read - which is indistinguishable from a quiet period. That is why the sibling deletion
+# playbook and this one are separate use cases with different responses, and why a P3 on this
+# one is arguably the worst-calibrated priority in the source set: a delete pages someone
+# regardless of the alert, a purge is invisible outside this event.
+#
+# IRREVERSIBLE AND NOT RECONSTRUCTABLE. AWS: "When you use the PurgeQueue action, you can't
+# retrieve any messages deleted from a queue." There is no version history and no undo. The
+# event itself carries only `requestParameters.queueUrl` and returns HTTP 200 with an empty
+# body, so there is NO `responseElements` and no count of what was destroyed. The only
+# surviving measure is the AWS/SQS CloudWatch metric ApproximateNumberOfMessagesVisible read
+# at its last datapoint BEFORE the purge - and unlike a deletion, the queue still exists
+# afterwards and keeps emitting, so a post-purge read returns a legitimate, meaningless zero.
+# Reading the metric after the fact and reporting "no messages lost" is the false-clean shape
+# this corpus keeps finding.
+#
+# THE 60-SECOND CONSTRAINT IS A DETECTION OPPORTUNITY. AWS: "The message deletion process
+# takes up to 60 seconds", messages sent before the call "might be received but are deleted
+# within the next minute", messages sent after "might be deleted while the queue is being
+# purged", and a second purge inside that window returns `PurgeQueueInProgress`. So an actor
+# making sure a queue stays empty produces a distinctive error trail that a success-only rule
+# discards - Rule 2 below keeps it, because the error IS the evidence of intent.
+#
+# THE SOURCE RULE matches `eventName:"PurgeQueue"` with a success filter and nothing else. The
+# event name is genuinely rare, so unlike its siblings this is not hopeless - but it never
+# looks at who called, so a developer clearing a dev queue and an actor destroying an audit
+# backlog arrive identically, and it discards the denied and in-progress attempts entirely.
+title: SQS queue purged
+id: 071305ff-31f2-484f-8031-a9fa537f040c
+name: sqs_queue_purged
+status: experimental
+description: >-
+  Every message in a queue was destroyed while the queue itself was left intact. Nothing
+  downstream errors, so unless this event is alerted on, the loss surfaces only as consumers
+  processing nothing.
+references:
+  - https://attack.mitre.org/techniques/T1485/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_PurgeQueue.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+  - attack.stealth
+  - attack.t1070
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sqs.amazonaws.com'
+    eventName: 'PurgeQueue'
+  success:
+    errorCode: null
+  # POPULATE. Purging is not part of any normal deployment, so this allowlist is expected to
+  # stay small or empty - unlike the deletion sibling's, where teardown is routine. Left empty
+  # the rule fires on every purge, which for this API is the correct default.
+  purge_operators:
+    userIdentity.arn|contains:
+      - ':role/BreakGlassAdmin'   # replace, or delete this block entirely
+  condition: selection and success and not purge_operators
+falsepositives:
+  - >-
+    A developer clearing a development or test queue by hand. Legitimate and common in
+    non-production accounts; in a production account there is no routine reason to purge, so
+    treat a production hit as an incident until the owner accounts for it.
+level: high
+---
+# The error is the evidence. `PurgeQueueInProgress` is returned only when a purge was already
+# requested on that queue within the last 60 seconds, so it cannot occur by accident: it means
+# somebody asked twice. Read together with a preceding success it shows an actor making sure
+# the queue stays empty; read alone it shows a purge attempt whose first half may predate your
+# retention window. A success-only rule throws this away.
+title: SQS repeat purge attempt inside the 60-second window
+id: 99d33381-1b8b-4772-b266-cbab30172081
+name: sqs_purge_repeat_attempt
+status: experimental
+description: >-
+  A `PurgeQueue` call was rejected with `PurgeQueueInProgress`, which AWS returns only when
+  the same queue was purged within the previous 60 seconds. The caller asked twice.
+references:
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_PurgeQueue.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sqs.amazonaws.com'
+    eventName: 'PurgeQueue'
+  # Matched with |contains rather than equality: the API reference names the bare code
+  # `PurgeQueueInProgress`, while the older query-protocol form carries an
+  # `AWS.SimpleQueueService.` prefix. Prefix-tolerant matching covers both; confirm which one
+  # your own trail records before narrowing it.
+  in_progress:
+    errorCode|contains: 'PurgeQueueInProgress'
+  condition: selection and in_progress
+falsepositives:
+  - >-
+    A retry loop in an automated test harness that purges before each case. Baseline it; in
+    production this error has no benign cause.
+level: medium
+---
+# Threshold basis — derived from documented behaviour, not an observed count. The technique's
+# own baseline is ONE queue: a single purge is the whole attack, and `sqs_queue_purged` above
+# already fires high on it. This correlation is a severity escalator that separates one
+# developer clearing one queue from an actor emptying a message estate. Three distinct queues
+# in fifteen minutes sits above any single legitimate purge and below nothing legitimate at
+# all, because there is no process that purges three production queues in a quarter of an
+# hour. `gte`, never `gt`, so a sweep that touches exactly three does not fall through.
+# Baseline against your own account before deploying.
+title: SQS queues purged across multiple queues by one principal
+id: 0be12849-e97a-468c-ae0d-7f7eec197b48
+status: experimental
+description: >-
+  One principal purged three or more distinct queues inside fifteen minutes. That is an
+  estate being emptied, not a queue being cleared.
+references:
+  - https://attack.mitre.org/techniques/T1485/  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: value_count
+  rules:
+    - sqs_queue_purged
+  group-by:
+    - userIdentity.arn
+  timespan: 15m
+  # `field` belongs INSIDE `condition` for a value_count correlation — it is the field whose
+  # DISTINCT values are counted. A top-level `field:` under `correlation:` is not in the
+  # specification and leaves the rule with nothing to count.
+  condition:
+    gte: 3
+    field: requestParameters.queueUrl
+level: high

@@ -8,7 +8,7 @@
 | Platform | aws |
 | Severity | Critical |
 | MITRE Tactics | Defense Evasion |
-| MITRE Techniques | T1562.007 — Impair Defenses: Disable or Modify Cloud Firewall |
+| MITRE Techniques | T1686.001 — Disable or Modify System Firewall: Cloud Firewall |
 | Execution Plane | Control Plane (AWS API / CloudTrail management events) |
 
 ---

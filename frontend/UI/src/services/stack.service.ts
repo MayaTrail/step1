@@ -116,6 +116,9 @@ export async function pollStackUntilReady(
         const synthetic: Stack = {
           id: stackId, name: '', region: '', status: 'destroyed',
           outputs: {}, owner: '', created_at: '', updated_at: '',
+          // The row is gone, so its recorded phases went with it. Empty is the
+          // honest value and renders as "no phase history", not as a timeline.
+          lifecycle: [],
         }
         onUpdate?.(synthetic)
         return synthetic

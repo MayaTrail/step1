@@ -1,0 +1,80 @@
+// SQL Injection Detected in Request Body (T1190)
+//
+// The terminating action is the VERDICT AXIS, not a filter. Every rule in
+// AWSManagedRulesSQLiRuleSet defaults to Block, so a source rule gating on action = ALLOW
+// is silent in a correctly configured web ACL — and a blocked attempt then raises nothing
+// at all. This query keeps both streams and separates them by verdict.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL over AWS WAF web ACL traffic logs
+// (AWSWAFLogs-style custom table). NOT CloudTrail — WAF traffic logs are a separate stream,
+// they are OFF BY DEFAULT, and they are enabled per web ACL by wafv2:PutLoggingConfiguration.
+// Adjust the table name to your ingestion; field paths below are WAF's own log schema.
+AWSWAFLogs_CL
+| where TimeGenerated > ago(7d)
+//
+// labels is an ARRAY OF SINGLE-KEY OBJECTS: [{"name":"awswaf:managed:aws:sql-database:SQLi_Body"}].
+// It is not an array of strings — mv-expand then read .name, or every match returns empty.
+| extend Labels = todynamic(labels)
+| mv-apply L = Labels on (summarize LabelNames = make_set(tostring(L.name)))
+//
+// endswith, not has: label strings are colon-delimited and `has` is whole-term, so it
+// breaks on every one of these operands. Casing is exact and is NOT mechanically derivable
+// from the rule name — the same rule group ships SQLi_URIPath and SQLiExtendedPatterns_UriPath.
+| extend SqliBody = tostring(LabelNames) contains ":SQLi_Body"
+                 or tostring(LabelNames) contains ":SQLiExtendedPatterns_Body"
+| where SqliBody
+//
+| extend Req        = todynamic(httpRequest)
+| extend ClientIp   = tostring(Req.clientIp)
+| extend Uri        = tostring(Req.uri)
+| extend Country    = tostring(Req.country)          // "-" when undetermined
+// There is NO httpRequest.host — the Host value lives inside the headers array.
+| extend Host       = tostring(todynamic(Req.headers)
+                        | mv-apply H = todynamic(Req.headers) on
+                          (where tolower(tostring(H.name)) == "host" | project tostring(H.value)))
+| extend Oversize   = tostring(oversizeFields)
+| extend BodyUninspected = Oversize contains "REQUEST_BODY" or Oversize contains "REQUEST_JSON_BODY"
+//
+// Reached the application? CAPTCHA and CHALLENGE are TERMINATING actions when the request
+// carries no valid token, so they did NOT reach the backend. Treat them with BLOCK.
+| extend Reached = action == "ALLOW"
+| summarize
+    Attempts     = count(),
+    Allowed      = countif(Reached),
+    Stopped      = countif(not(Reached)),
+    AnyUninspected = max(BodyUninspected),
+    Uris         = make_set(Uri, 8),
+    Countries    = make_set(Country, 5),
+    Labels       = make_set(tostring(LabelNames), 5),
+    FirstSeen    = min(TimeGenerated),
+    LastSeen     = max(TimeGenerated)
+    by ClientIp, Host, webaclId, bin(TimeGenerated, 10m)
+| extend Verdict = case(
+    Allowed > 0 and AnyUninspected,
+        "SQLi BODY ALLOWED, AND THE BODY WAS TRUNCATED — the rule saw only the first 8-16 KB and the whole body was forwarded, P0",
+    Allowed > 0,
+        "SQLi BODY REACHED THE APPLICATION — these rules default to Block, so the group is overridden to Count or the rule is excluded. THE PROTECTION IS OFF, P0",
+    Stopped > 19,
+        "SUSTAINED SQLi PROBING, BLOCKED — control working; targeting signal, P2",
+    "SQLi attempt blocked — single event, control working, P3")
+| project FirstSeen, LastSeen, ClientIp, Host, Verdict, Allowed, Stopped, AnyUninspected,
+          Uris, Countries, Labels, webaclId
+| order by Allowed desc, Stopped desc
+//
+// ============================================================================
+// WHAT THIS QUERY CANNOT DO
+// ============================================================================
+// THE BODY IS NEVER IN THE LOG. WAF records headers and the query string; it does not
+// record the request body. So the payload behind a body-rule match is not here and cannot
+// be recovered from WAF at all — it has to come from the application.
+//
+// matchedData IS EMPTY FOR MOST RULES. terminatingRuleMatchDetails and ruleMatchDetails are
+// populated ONLY for SQL-injection and cross-site-scripting MATCH STATEMENTS. The SQLi_*
+// rules do use the built-in SQLi statement (sensitivity Low) so they DO populate it —
+// but the SQLiExtendedPatterns_* rules are regex/byte-match and produce no matchedData.
+// A triage flow that expects the matched tokens gets an empty array for half this rule set.
+//
+// ABSENCE IS NOT SAFETY. AWSManagedRulesSQLiRuleSet is use-case specific and is NOT part of
+// a baseline deployment. If the group is not associated with the web ACL, every SQLi label
+// is absent and this query returns nothing — for a configuration reason, not a traffic one.
+// Confirm the group is present before reading silence as clean.

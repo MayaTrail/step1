@@ -1,0 +1,170 @@
+# CloudTrail audit configuration enumerated (T1654)
+#
+# THE SOURCE RULE MATCHES `userIdentity.type:"IAMUser"` ONLY, which excludes SSO, federation, EC2
+# instance roles, Lambda and every cross-account path — all AssumedRole, and the normal shape of a
+# cloud intrusion.
+#
+# It also watches DescribeTrails but not GetTrailStatus or GetEventSelectors, which yield IsLogging
+# and the HomeRegion that StopLogging and DeleteTrail both require. This is the one rule in the pack
+# whose MITRE mapping is correct and live.
+# Full rationale: detections/detection_note_t1654.md.
+title: CloudTrail logging configuration enumerated
+id: 9f60c3b1-84e2-4d07-a5b9-31c04e7f28da
+name: cloudtrail_audit_config_read
+status: experimental
+description: >-
+  Base rule — correlation component and low-value on its own. A read of the CloudTrail logging
+  configuration by a human or role principal, covering the calls that matter rather than only
+  DescribeTrails: GetTrailStatus returns IsLogging and, with DescribeTrails, the HomeRegion that
+  StopLogging and DeleteTrail both require; GetEventSelectors returns what is actually captured. All
+  identity types, because AssumedRole is the normal shape of a modern compromise.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_GetTrailStatus.html
+  - https://attack.mitre.org/techniques/T1654/
+tags:
+  - attack.discovery
+  - attack.t1654
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName:
+      - 'DescribeTrails'
+      - 'ListTrails'
+      - 'GetTrailStatus'
+      - 'GetEventSelectors'
+      - 'GetInsightSelectors'
+      - 'LookupEvents'
+  # AWS-service-invoked calls set invokedBy. This one filter replaces the source rule's
+  # sourceIPAddress regex, which depended on an index mapping and added no coverage.
+  service_invoked:
+    userIdentity.invokedBy|exists: true
+  condition: selection and not service_invoked
+level: informational
+---
+title: CloudTrail logging configuration swept by one principal
+id: 4c18b7de-2035-49a6-b13f-8ea27d60c495
+status: experimental
+description: >-
+  One principal made five or more distinct reads of the CloudTrail logging configuration within ten
+  minutes. A single read is unremarkable and is why the base rule is informational; a sweep is
+  someone building a picture of what is logged and where, which is the step before deciding what to
+  turn off. Ten minutes is short on purpose — this is a scripted pattern, not an exploratory one.
+references:
+  - https://attack.mitre.org/techniques/T1654/
+tags:
+  - attack.discovery
+  - attack.t1654
+correlation:
+  type: event_count
+  rules:
+    - cloudtrail_audit_config_read
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gte: 5
+falsepositives:
+  - >-
+    A compliance scanner or CSPM tool enumerating trails across every Region. It will look exactly
+    like this and should be allowlisted by role on the base rule — which is also a useful exercise,
+    because an unrecognised scanner is itself worth knowing about.
+level: medium
+---
+title: CloudTrail logging configuration read, then the trail tampered with
+id: 7a2e5904-c86d-41b3-90f7-6b5031ade8c2
+status: experimental
+description: >-
+  A principal read the logging configuration and then stopped, deleted or reconfigured a trail. This
+  is the sequence the enumeration exists to enable — StopLogging and DeleteTrail are both refused
+  outside the trail's home Region, so an actor either finds it first or fails visibly. Catching the
+  pair converts a low-value discovery signal into the earliest reliable warning of tampering.
+references:
+  - https://attack.mitre.org/techniques/T1654/
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.discovery
+  - attack.defense-evasion
+  - attack.t1654
+  - attack.t1685.002
+correlation:
+  type: temporal_ordered
+  rules:
+    - cloudtrail_audit_config_read
+    - cloudtrail_config_tampered
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+level: critical
+---
+title: CloudTrail configuration read refused
+id: e0c74af6-9b21-4d58-8306-25f19bc0e743
+name: cloudtrail_audit_config_read_denied
+status: experimental
+description: >-
+  A read of the CloudTrail logging configuration that was denied. A principal probing for visibility
+  into the logging estate without holding the permission is a clearer signal than one that holds it,
+  because the successful case has many legitimate explanations and the denied case has few. Dropped
+  entirely by any rule filtering on success.
+references:
+  - https://attack.mitre.org/techniques/T1654/
+tags:
+  - attack.discovery
+  - attack.t1654
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName:
+      - 'DescribeTrails'
+      - 'ListTrails'
+      - 'GetTrailStatus'
+      - 'GetEventSelectors'
+      - 'GetInsightSelectors'
+      - 'LookupEvents'
+  denied:
+    errorCode|contains:
+      - 'AccessDenied'
+      - 'UnauthorizedOperation'
+  condition: selection and denied
+falsepositives:
+  - >-
+    A least-privilege role that legitimately lacks the permission and whose tooling retries anyway.
+    Worth fixing at the source rather than allowlisting, because a retry loop here is
+    indistinguishable from probing.
+level: medium
+---
+title: CloudTrail trail configuration tampered with
+id: 51b8d02c-6e47-4a93-bf10-c74a26e0938b
+name: cloudtrail_config_tampered
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. Any successful call that stops,
+  deletes or reconfigures a trail. The rated detections for these acts are in the sibling
+  directories ../../cloudtrail.stealth.trail-logging-stopped/,
+  ../../cloudtrail.impact.trail-deleted/ and ../../cloudtrail.stealth.trail-modified/.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_StopLogging.html
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName:
+      - 'StopLogging'
+      - 'DeleteTrail'
+      - 'UpdateTrail'
+      - 'PutEventSelectors'
+      - 'PutInsightSelectors'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational

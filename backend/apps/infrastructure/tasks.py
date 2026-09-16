@@ -490,10 +490,10 @@ def _persist_failure(stack_id: str, entries: list[dict], exc: Exception) -> None
     try:
         Stack = apps.get_model("infrastructure", "Stack")
         record = Stack.objects.get(id=stack_id)
-        record.status = Stack.Status.FAILED
+        record.transition_to(Stack.Status.FAILED, save=False)
         record.last_logs = _trim_logs(entries)
         record.last_error = _extract_error(exc)
-        record.save(update_fields=["status", "last_logs", "last_error", "updated_at"])
+        record.save(update_fields=["status", "status_history", "last_logs", "last_error", "updated_at"])
     except Exception:
         pass
 
@@ -538,13 +538,13 @@ def deploy_stack(self, stack_id: str) -> dict:
         # result.outputs is dict[str, OutputValue] — .value unwraps the typed value.
         outputs = {key: val.value for key, val in result.outputs.items()}
 
-        record.status = Stack.Status.READY
+        record.transition_to(Stack.Status.READY, save=False)
         record.outputs = outputs
         record.resource_summary = _summarize_resources(pulumi_stack)
         record.last_logs = _trim_logs(entries)
         record.last_error = ""
         record.save(update_fields=[
-            "status", "outputs", "resource_summary",
+            "status", "status_history", "outputs", "resource_summary",
             "last_logs", "last_error", "updated_at",
         ])
 
@@ -672,12 +672,12 @@ def refresh_stack(self, stack_id: str) -> dict:
         pulumi_stack.refresh(on_output=on_output)
 
         # Refresh re-syncs state with the cloud, so the inventory may have changed.
-        record.status = Stack.Status.READY
+        record.transition_to(Stack.Status.READY, save=False)
         record.resource_summary = _summarize_resources(pulumi_stack)
         record.last_logs = _trim_logs(entries)
         record.last_error = ""
         record.save(update_fields=[
-            "status", "resource_summary", "last_logs", "last_error", "updated_at",
+            "status", "status_history", "resource_summary", "last_logs", "last_error", "updated_at",
         ])
 
         logger.info("Refresh complete: stack=%s", record.name)

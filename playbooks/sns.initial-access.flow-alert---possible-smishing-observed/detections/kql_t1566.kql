@@ -1,0 +1,109 @@
+// Outbound SMS abuse from a compromised AWS account — smishing (T1566 / T1584.006)
+//
+// Signal: one principal enumerating the account's SMS posture and then changing it — raising
+// the spend limit, registering sandbox destinations, setting a sender id. This is the
+// MANAGEMENT-PLANE setup, and it is the only part of this technique CloudTrail records.
+//
+// WHY THE SENDING ITSELF IS NOT IN THIS QUERY. AWS lists the loggable SNS data-event resource
+// types as AWS::SNS::Topic and AWS::SNS::PlatformEndpoint, and states: "SNS resource type
+// AWS::SNS::PhoneNumber is not logged by CloudTrail." A Publish carrying a PhoneNumber and no
+// TopicArn — sending an SMS to a stranger, which is the technique — produces no CloudTrail
+// record under ANY trail configuration. There is nothing to query. The evidence of sending
+// lives in CloudWatch: the metrics and the SMS delivery-status log group, both named in the
+// trailing section below and both queried from the playbook, not from here.
+//
+// `contains` throughout, never whole-term matching: ARNs and role paths break term-splitting
+// on their colons and slashes.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let SmsRecon = dynamic(["GetSMSAttributes", "GetSMSSandboxAccountStatus",
+                        "ListOriginationNumbers", "ListPhoneNumbersOptedOut",
+                        "ListSMSSandboxPhoneNumbers", "CheckIfPhoneNumberIsOptedOut"]);
+let SmsSetup = dynamic(["SetSMSAttributes", "CreateSMSSandboxPhoneNumber",
+                        "VerifySMSSandboxPhoneNumber", "DeleteSMSSandboxPhoneNumber",
+                        "OptInPhoneNumber"]);
+let SmsEvents =
+AWSCloudTrail
+| where TimeGenerated > ago(30d)
+| where EventSource == "sns.amazonaws.com"
+| where EventName in (SmsRecon) or EventName in (SmsSetup)
+| extend Req = parse_json(RequestParameters)
+// SetSMSAttributes carries a map; the spend limit is the field that matters most and the
+// one to surface. Path inferred from CloudTrail's map convention, not from a published SNS
+// event example — confirm against a real event before alerting on the value itself.
+| extend SpendLimit  = tostring(Req.attributes.MonthlySpendLimit),
+         SenderId    = tostring(Req.attributes.DefaultSenderID),
+         SmsType     = tostring(Req.attributes.DefaultSMSType),
+         DeliveryRole = tostring(Req.attributes.DeliveryStatusIAMRole),
+         PhoneNumber = tostring(Req.phoneNumber)
+| extend Phase = iff(EventName in (SmsRecon), "recon", "setup");
+//
+SmsEvents
+| summarize
+    ReconCount   = countif(Phase == "recon"),
+    SetupCount   = countif(Phase == "setup" and isempty(ErrorCode)),
+    DeniedCount  = countif(isnotempty(ErrorCode)),
+    ReconFirst   = minif(TimeGenerated, Phase == "recon"),
+    SetupFirst   = minif(TimeGenerated, Phase == "setup" and isempty(ErrorCode)),
+    LastSeen     = max(TimeGenerated),
+    Events       = make_set(EventName, 12),
+    Errors       = make_set_if(ErrorCode, isnotempty(ErrorCode), 5),
+    SpendLimits  = make_set_if(SpendLimit, isnotempty(SpendLimit), 5),
+    SenderIds    = make_set_if(SenderId, isnotempty(SenderId), 5),
+    SandboxNums  = make_set_if(PhoneNumber, isnotempty(PhoneNumber), 10),
+    SourceIPs    = make_set(SourceIpAddress, 5),
+    Regions      = make_set(AwsRegion, 5)
+  by Actor = UserIdentityArn, ActorType = UserIdentityType
+| extend ReconThenSetup = isnotempty(ReconFirst) and isnotempty(SetupFirst)
+                          and SetupFirst >= ReconFirst
+                          and SetupFirst - ReconFirst <= 24h
+| extend SandboxTouched = SandboxNums != "[]"
+| extend Verdict = case(
+    ReconThenSetup and SandboxTouched,
+        "SMS RECON THEN SANDBOX DESTINATIONS REGISTERED — the account is being prepared to send to numbers it does not own, P0",
+    ReconThenSetup and array_length(SpendLimits) > 0,
+        "SMS RECON THEN SPEND LIMIT SET — the account default is 1.00 USD, so a raised limit is a volume-campaign precursor, P0",
+    ReconThenSetup,
+        "SMS RECON THEN CONFIGURATION CHANGE by the same principal within 24h, P0",
+    SetupCount > 0,
+        "SMS CONFIGURATION CHANGED with no preceding recon by this principal — still worth triage, P1",
+    DeniedCount > 0 and ReconCount > 0,
+        "SMS ENUMERATION WITH DENIALS — SNS returns AuthorizationError, never AccessDenied; permission probing, P2",
+    "SMS enumeration only — routine unless the principal has never done it before, P3")
+| project ReconFirst, SetupFirst, LastSeen, Actor, ActorType, Events, SpendLimits,
+          SenderIds, SandboxNums, Errors, SourceIPs, Regions,
+          ReconCount, SetupCount, DeniedCount, Verdict
+| order by LastSeen desc
+//
+// ============================================================================
+// WHERE THE ACTUAL SENDING IS RECORDED — none of it is in this table
+// ============================================================================
+// 1. CloudWatch metric AWS/SNS SMSMonthToDateSpentUSD. Valid dimensions: NONE. It is an
+//    account-wide figure, so it tells you THAT money is being spent and never on what. It is
+//    also the metric AWS itself uses to stop sending when the quota is reached.
+// 2. CloudWatch metrics AWS/SNS NumberOfMessagesPublished, NumberOfNotificationsDelivered,
+//    NumberOfNotificationsFailed and SMSSuccessRate on dimension PhoneNumber — AWS defines
+//    that dimension as "the phone number when you publish SMS directly to a phone number
+//    (without a topic)". This is the ONLY per-destination telemetry AWS produces for the
+//    technique.
+// 3. CloudWatch Logs, SMS delivery status. Log groups:
+//        sns/<region>/<account-id>/DirectPublishToPhoneNumber
+//        sns/<region>/<account-id>/DirectPublishToPhoneNumber/Failure
+//    Each entry carries delivery.destination (the recipient number), delivery.priceInUSD,
+//    delivery.smsType, delivery.providerResponse, delivery.phoneCarrier, mcc/mnc,
+//    numberOfMessageParts, dwellTimeMs, notification.messageId and status. This is the
+//    closest thing to a recipient list that exists.
+//    IT IS OFF UNTIL SOMEONE TURNS IT ON: it requires a delivery-status IAM role, set through
+//    SetSMSAttributes — the same call this query alerts on. With no success sample rate
+//    configured AWS writes logs for all successful deliveries; a rate of 0 logs failures
+//    only. Entries can take up to 72 hours to appear.
+// 4. NOTHING records the message text. Even for topic-based publishes with data events on,
+//    requestParameters.message and .subject are the literal HIDDEN_DUE_TO_SECURITY_REASONS.
+//    The phishing content is not recoverable from AWS; obtain it from a recipient.
+//
+// PREVENTION: the account's SMS spend quota is the strongest built-in control, and it
+// defaults to 1.00 USD per month. AWS stops publishing SMS within minutes of the quota being
+// exceeded, and a value set above the account's service quota does not raise it — that needs
+// a support case. An account still at the default is largely self-limiting; an account raised
+// for a legitimate campaign is the one exposed here. Treat the quota as a security control
+// and review it as one.

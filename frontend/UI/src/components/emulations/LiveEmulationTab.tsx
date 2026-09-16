@@ -17,6 +17,7 @@ import {
 } from '@/services/emulation.service'
 import { fetchDetections } from '@/services/platform.service'
 import { servicesForPlatform, type AwsService } from '@/data/awsServices'
+import { ConnectGate } from '@/components/common/ConnectGate'
 
 const ACTIVE_STATUSES: EmulationRunStatus[] = ['pending', 'running']
 
@@ -159,13 +160,15 @@ export function LiveEmulationTab({
         <p className="text-content-secondary text-[0.85rem] mb-5">
           Run {emulation.name} to watch it execute across your infrastructure, phase by phase.
         </p>
-        <button
-          onClick={onRun}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn font-body text-[0.9rem] font-semibold cursor-pointer border-none
-            bg-danger text-white transition-all hover:-translate-y-px"
-        >
-          &#9654; Run Emulation
-        </button>
+        <ConnectGate>
+          <button
+            onClick={onRun}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn font-body text-[0.9rem] font-semibold cursor-pointer border-none
+              bg-danger text-white transition-all hover:-translate-y-px"
+          >
+            &#9654; Run Emulation
+          </button>
+        </ConnectGate>
       </div>
     )
   }

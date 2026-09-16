@@ -11,7 +11,7 @@
 | Severity | Critical |
 | First Reported | Sysdig Threat Research Team - 28 February 2023 (v1), 11 July 2023 (v2) |
 | MITRE Tactics | Initial Access, Execution, Persistence, Privilege Escalation, Defense Evasion, Credential Access, Discovery, Lateral Movement, Collection, Exfiltration, Impact |
-| MITRE Techniques | T1190, T1552.005, T1552.001, T1555.006, T1580, T1526, T1619, T1613, T1562.008, T1136.003, T1098.001, T1078.004, T1530, T1537, T1648, T1496, T1498 |
+| MITRE Techniques | T1190, T1552.005, T1552.001, T1555.006, T1580, T1526, T1619, T1613, T1685.002, T1136.003, T1098.001, T1078.004, T1530, T1537, T1648, T1496, T1498 |
 
 ---
 
@@ -62,8 +62,8 @@
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
-| P0 | `cloudtrail:StopLogging` or `cloudtrail:DeleteTrail` from any non-break-glass principal | CloudTrail / CloudWatch Alarm | T1562.008 |
-| P0 | GuardDuty: `Stealth:IAMUser/CloudTrailLoggingDisabled` | GuardDuty | T1562.008 |
+| P0 | `cloudtrail:StopLogging` or `cloudtrail:DeleteTrail` from any non-break-glass principal | CloudTrail / CloudWatch Alarm | T1685.002 |
+| P0 | GuardDuty: `Stealth:IAMUser/CloudTrailLoggingDisabled` | GuardDuty | T1685.002 |
 | P0 | `iam:CreateUser` creating `aws_support` (or comparable support-impersonating name) | CloudTrail | T1136.003 |
 | P0 | `iam:CreateAccessKey` issued for multiple existing IAM users in a short window | CloudTrail | T1098.001 |
 | P0 | Container process reading `169.254.169.254/latest/meta-data/iam/security-credentials/` | Runtime sensor / Falco | T1552.005 |
@@ -83,7 +83,7 @@
 | P2 | Burst of `iam:ListUsers` + `iam:ListRoles` + `iam:GetAccountSummary` + `sts:GetCallerIdentity` within 60 seconds | CloudTrail | T1580 |
 | P2 | `s3:ListBuckets` followed by `s3:ListObjectsV2` across many buckets from one session | CloudTrail | T1619 |
 | P2 | `secretsmanager:ListSecrets` followed by `GetSecretValue` in the same session | CloudTrail | T1555.006 |
-| P2 | `cloudtrail:DescribeTrails` immediately preceding `StopLogging` - the attacker locating the trail to disable | CloudTrail | T1562.008 |
+| P2 | `cloudtrail:DescribeTrails` immediately preceding `StopLogging` - the attacker locating the trail to disable | CloudTrail | T1685.002 |
 | P2 | `secretsmanager:GetSecretValue` on a secret the calling role has never read before | CloudTrail | T1555.006 |
 | P2 | `lambda:ListFunctions` followed by `lambda:GetFunction` from a role whose intended scope is a single bucket | CloudTrail | T1526 |
 | P2 | Denied `iam:CreateUser` / `iam:CreateGroup` / `iam:CreateAccessKey` - failed persistence attempts precede successful ones | CloudTrail (`errorCode`) | T1136.003 |

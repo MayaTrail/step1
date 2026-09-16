@@ -1,0 +1,90 @@
+// Subdomain delegation created — domain shadowing via an NS record (T1584.001 / T1584.002)
+//
+// Expands changeBatch.changes[] so "an NS record was CREATEd or UPSERTed" is proven per element
+// rather than inferred across the batch — which is the one thing the Sigma cannot do.
+//
+// `contains` throughout, never `has`: nameserver names are punctuated (ns-1234.awsdns-56.org)
+// and whole-term matching misses them.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+// POPULATE if the organisation genuinely delegates subdomains to a third-party DNS provider.
+// Leave it as the example and every external delegation is flagged, which is the correct
+// starting position — a delegation nobody can name is the finding.
+let ApprovedExternalNS = "dns\\.example-provider\\.net";
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "route53.amazonaws.com"
+| where EventName == "ChangeResourceRecordSets"
+| extend Req = parse_json(RequestParameters)
+| extend ZoneId = tostring(Req.hostedZoneId)
+// An absent requestParameters is a signal, not a parse failure: CloudTrail omits the whole field
+// above 100 KB rather than truncating, so an oversized batch shows zero changes. Surface those
+// rows before mv-expand drops them — expanding an empty array removes the record entirely.
+| extend ChangeCount = array_length(Req.changeBatch.changes)
+| extend Omitted = isempty(RequestParameters) or isnull(Req.changeBatch) or ChangeCount == 0
+| extend Changes = iff(Omitted, dynamic([{}]), todynamic(Req.changeBatch.changes))
+| mv-expand C = Changes
+| extend Action = tostring(C.action)
+| extend RRType = tostring(C.resourceRecordSet.type)
+| extend RRName = tostring(C.resourceRecordSet.name)      // TRAILING DOT, stored normalised
+| extend RRTtl  = toint(C.resourceRecordSet.tTL)          // lower t, upper TL
+| extend Values = tostring(C.resourceRecordSet.resourceRecords)
+| where Omitted or (RRType == "NS" and Action in ("CREATE", "UPSERT", "DELETE"))
+// Route 53's own nameservers are always ns-<n>.awsdns-<n>.{com,net,org,co.uk}. A delegation whose
+// values do not contain awsdns points the subtree at somebody else's infrastructure — the one
+// test here that needs no baseline and no zone-name lookup.
+| extend PointsAtRoute53 = Values contains "awsdns"
+| extend PointsAtApproved = Values matches regex ApprovedExternalNS
+// Label depth is a proxy for apex-vs-delegation and nothing more. The zone's NAME is not in the
+// event — only its ID — so the real classification needs a resolve, and Query 2 of ../PLAYBOOK.md
+// does it. Never report this column as if it settled the question.
+| extend LabelCount = array_length(split(trim_end(".", RRName), "."))
+| project TimeGenerated, ZoneId, Action, RRName, LabelCount, RRTtl, Values,
+          PointsAtRoute53, PointsAtApproved, Omitted, ChangeCount,
+          UserIdentityArn, SourceIpAddress, UserAgent, ErrorCode
+| extend Verdict = case(
+    Omitted,
+        "REQUEST PARAMETERS OMITTED — a batch over 100 KB. Every type-matching rule is blind to this event; reconstruct from IaC or AWS Config, P1",
+    isnotempty(ErrorCode),
+        strcat("NS CHANGE REFUSED (", ErrorCode, ") — intent observed; batches are transactional so nothing was applied, P2"),
+    not(PointsAtRoute53) and not(PointsAtApproved),
+        "SUBTREE DELEGATED OUTSIDE ROUTE 53 — whoever runs these nameservers answers for everything below this label, and can complete DNS-based domain-control validation for it, P0",
+    Action == "UPSERT",
+        "NS RRSET REPLACED — the previous nameservers are in no AWS event and no AWS API. Compare against IaC state or AWS Config, never against CloudTrail, P0",
+    RRTtl >= 172800,
+        "DELEGATION PUBLISHED WITH A 48-HOUR TTL — AWS's recommended value, and also the cache tail you inherit if you revert it. Expensive to undo, P2",
+    RRTtl <= 300,
+        "DELEGATION PUBLISHED WITH A VERY SHORT TTL — designed to be swapped again, P2",
+    "NS record changed — confirm against change management")
+| order by TimeGenerated desc
+//
+// ============================================================================
+// THE APEX QUESTION, AND WHY IT IS NOT ANSWERED HERE
+// ============================================================================
+// AWS distinguishes two uses of NS by the record's NAME:
+//   name == the hosted zone's own name -> the apex RRset, declaring which nameservers Route 53
+//     claims are authoritative. AWS: "Except in rare circumstances, we recommend that you don't
+//     add, change, or delete name servers in this record." UNVERIFIED whether Route 53 enforces
+//     that; treat an apex NS change as permitted, rare, and very high signal.
+//   name below the zone -> a delegation, handing that subtree to the listed nameservers.
+// The event carries hostedZoneId, not the zone name, so the comparison cannot be made in the log.
+// Query 2 of ../PLAYBOOK.md resolves every zone ID to its name and classifies every NS record in
+// the account, including delegations created before this lookback window began.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHAT THE DELEGATED NAMESERVERS ARE SERVING. Route 53 stops answering for the subtree the moment
+// the delegation exists; everything after that happens on infrastructure AWS has no view of. The
+// only evidence is external: resolve names under the label against the delegated nameservers
+// directly, and check certificate transparency for certificates issued under it.
+//
+// WHETHER ANYONE USED IT. Route 53 query logging is opt-in, public-zone only, one configuration
+// per zone, and AWS states "query logs might contain information about only one query out of
+// every several thousand queries" because recursive resolvers cache. And it stops at the
+// delegation: queries answered by someone else's nameservers were never seen by Route 53 at all.
+//
+// WHAT THE DELEGATION REPLACED. UPSERT carries only the new values and Route 53 keeps no version
+// history. DELETE is the opposite — the API requires an exact match of every existing value, so a
+// DELETE event's resourceRecords IS the removed record and is usable for restoration.

@@ -1,0 +1,223 @@
+# RDS DB Security Group APIs — Legacy (EC2-Classic) and the Modern Equivalent (T1686.001 / T1578.005)
+#
+# READ THIS BEFORE DEPLOYING ANYTHING BELOW. The source rule matches
+# `eventName:("CreateDBSecurityGroup" OR "DeleteDBSecurityGroup")` AND `NOT _exists_:errorCode`.
+# Those APIs manage **DB security groups**, which are an EC2-Classic construct. AWS's own note,
+# carried verbatim on the CreateDBSecurityGroup, DeleteDBSecurityGroup, DescribeDBSecurityGroups
+# and AuthorizeDBSecurityGroupIngress pages and on the CloudFormation resource:
+#
+#     "A DB security group controls access to EC2-Classic DB instances that are not in a VPC."
+#     "EC2-Classic was retired on August 15, 2022."
+#
+# And on CreateDBInstance's own DBSecurityGroups parameter: "This setting applies to the legacy
+# EC2-Classic platform, which is no longer used to create new DB instances. Use the
+# VpcSecurityGroupIds setting instead." The RDS User Guide's "Controlling access with security
+# groups" page no longer mentions DB security groups as a mechanism at all - only the API
+# reference retains them.
+#
+# THE CONSEQUENCE FOR THE SOURCE RULE IS THAT IT CANNOT FIRE. CreateDBSecurityGroup documents the
+# error `DBSecurityGroupNotSupported` - "A DB security group isn't allowed for this action", HTTP
+# 400 - and in a VPC-only account, which is every account created since the retirement, that is
+# what the call returns. The rule's `NOT _exists_:errorCode` success filter therefore excludes the
+# only outcome the API can produce. DeleteDBSecurityGroup is worse: it can only succeed against a
+# DB security group that exists, and none can be created.
+#
+# WHAT COULD NOT BE VERIFIED, stated rather than assumed: no AWS statement was found asserting
+# that the operation now ALWAYS fails, and this analysis had no account in which to test it. The
+# rules below are therefore written to fire on the CALL rather than on its success, which is
+# correct under either reading and is the stronger detection in both.
+#
+# SO THE RULE IS INVERTED. In an account with no EC2-Classic estate, a CreateDBSecurityGroup call
+# in 2026 is worth seeing precisely BECAUSE nothing legitimate emits it: it is stale tooling, a
+# copied script, or an actor enumerating API surface to find something unmonitored. The failure IS
+# the signal. Rule 1 matches the call, not the outcome.
+#
+# AND THE REAL OBSERVABLE IS SOMEWHERE ELSE. What the source rule was reaching for - a change to
+# the firewall in front of a database - happens today in two places, and the source set covers
+# neither: `ModifyDBInstance` with `vpcSecurityGroupIds`, which REPLACES the whole set of groups
+# on an instance in one call, and `ec2:AuthorizeSecurityGroupIngress` on a group attached to one.
+# Rule 3 covers the first. The second is owned by
+# ../../_superseded/aws.initial-access.sg-remote-management-open/, which handles port-range containment and
+# the nested ipPermissions.items[] request form properly.
+#
+# FIELD SHAPE. eventSource `rds.amazonaws.com`, management plane, regional. Legacy:
+# `requestParameters.dBSecurityGroupName`, plus `cIDRIP`, `eC2SecurityGroupName`,
+# `eC2SecurityGroupId` and `eC2SecurityGroupOwnerId` on the authorize and revoke calls - note the
+# leading-acronym lowercasing, which is the same convention that produces `cACertificateIdentifier`
+# elsewhere in RDS. Modern: `requestParameters.vpcSecurityGroupIds` is an ARRAY and it is the
+# COMPLETE new set, not a delta - the groups it omits are the groups being removed.
+title: Legacy EC2-Classic DB security group API called
+id: fb10e29a-8616-4dc6-af61-3115d9e371a3
+name: rds_legacy_dbsecuritygroup_called
+status: experimental
+description: >-
+  A DB security group API was called. These manage EC2-Classic DB security groups, and EC2-Classic
+  was retired on 15 August 2022; in a VPC-only account nothing legitimate calls them, and
+  CreateDBSecurityGroup is documented to return DBSecurityGroupNotSupported. The call itself is
+  the signal, whether or not it succeeded.
+references:
+  - https://attack.mitre.org/techniques/T1686/001/                                                     # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_CreateDBSecurityGroup.html            # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.RDSSecurityGroups.html              # retrieved 2026-08-29
+tags:
+  - attack.defense-impairment
+  - attack.t1686.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # justified: bare `selection` is intentional and is the whole point of this rule. Adding a
+  # success filter - which is what the source rule does - excludes DBSecurityGroupNotSupported,
+  # the only outcome these APIs can produce in a VPC-only account, and leaves a rule that can
+  # never fire. In an account with a genuine EC2-Classic estate, add the principal allowlist that
+  # owns it; everywhere else, any call at all is the finding.
+  selection:
+    eventSource: 'rds.amazonaws.com'
+    eventName:
+      - 'CreateDBSecurityGroup'
+      - 'DeleteDBSecurityGroup'
+      - 'AuthorizeDBSecurityGroupIngress'
+      - 'RevokeDBSecurityGroupIngress'
+  # justified: EC2-Classic DB security groups are a retired construct. A call to
+  # this API surface in a current account is legacy tooling nobody removed or
+  # somebody probing for an old path — both warrant a read, and there is no
+  # field on the event that would narrow it further.
+  condition: selection
+falsepositives:
+  - >-
+    An account with a surviving EC2-Classic estate, or a configuration-management tool still
+    emitting these calls from a template written before August 2022. Both are worth knowing about:
+    the first is a migration that never finished, the second is tooling nobody has read in years.
+level: medium
+---
+# Base rule — sequence component only, not for direct alerting. DescribeDBSecurityGroups is the
+# read half and is what an actor enumerating API surface calls first. It is separated from the
+# mutating rule because a scanner that only reads is a different finding from one that writes.
+title: Legacy EC2-Classic DB security groups enumerated
+id: b2e17555-5f1b-436f-993e-488c792bfc66
+name: rds_legacy_dbsecuritygroup_read_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_DescribeDBSecurityGroups.html   # retrieved 2026-08-29
+tags:
+  - attack.discovery
+  - attack.t1580
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # justified: informational base rule feeding the correlation below; the API is retired, so any
+  # call is anomalous and no further filter is meaningful.
+  selection:
+    eventSource: 'rds.amazonaws.com'
+    eventName: 'DescribeDBSecurityGroups'
+  condition: selection
+level: informational
+---
+# THE MODERN EQUIVALENT, and the rule the source set does not have. `ModifyDBInstance` with
+# `vpcSecurityGroupIds` changes the firewall in front of a live database - and it REPLACES the
+# entire set rather than adding to it, so the groups the call omits are the groups being removed.
+# A call that drops the restrictive group and leaves a permissive one looks, in the event, exactly
+# like a call that adds a group: the removal is invisible except by comparison with prior state.
+#
+# `vpcSecurityGroupIds: null` matches when the field is ABSENT - Sigma's documented null semantics
+# - so `not sg_absent` is how this rule requires the parameter to be present without depending on
+# an `exists` modifier that not every backend supports.
+title: RDS instance security groups replaced by a principal outside the database-lifecycle pipeline
+id: 7e5edb5c-cffe-47df-9e31-23aa0899a693
+name: rds_vpc_security_groups_replaced
+status: experimental
+description: >-
+  The set of VPC security groups on a DB instance or cluster was replaced. This is the live
+  equivalent of the retired DB security group APIs, and the parameter is the complete new set - the
+  groups it does not name are the groups being removed.
+references:
+  - https://attack.mitre.org/techniques/T1578/005/                                          # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_ModifyDBInstance.html      # retrieved 2026-08-29
+tags:
+  - attack.defense-impairment
+  - attack.t1686.001
+  - attack.t1578.005
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'rds.amazonaws.com'
+    eventName:
+      - 'ModifyDBInstance'
+      - 'ModifyDBCluster'
+  sg_absent:
+    requestParameters.vpcSecurityGroupIds: null
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING. Unpopulated this fires on every pipeline apply that touches a
+  # database. The allowlist IS the discriminator - the parameter carries no signal on its own.
+  database_lifecycle_pipeline:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'          # replace with this account's deployment role
+      - ':role/BreakGlassAdmin'     # replace with this account's break-glass role
+  condition: selection and success and not sg_absent and not database_lifecycle_pipeline
+falsepositives:
+  - >-
+    An engineer attaching a temporary bastion group during a debugging session. Should be rare and
+    should be followed by a call putting the original set back - if the second call never comes,
+    that is the finding.
+level: high
+---
+# THRESHOLD BASIS, with no observed baseline to derive one from. Changing the security groups on
+# one database is maintenance. Doing it to three inside an hour is a fleet-wide firewall change,
+# and the response is to compare every affected database against its intended group set rather
+# than to triage them one at a time. `gte` at the baseline, never `gt`, so a run that touches
+# exactly three does not fall through. Re-baseline against your own change windows before deploying.
+title: RDS security groups replaced across multiple databases by one principal
+id: ba674cb0-c56b-4f56-b0fc-8e09ba2bfd95
+status: experimental
+description: >-
+  One non-pipeline principal replaced the security groups on three or more distinct databases
+  within an hour. The recovery work-list is every database in the group.
+references:
+  - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_ModifyDBInstance.html   # retrieved 2026-08-29
+tags:
+  - attack.defense-impairment
+  - attack.t1686.001
+correlation:
+  type: value_count
+  rules:
+    - rds_vpc_security_groups_replaced
+  group-by:
+    - userIdentity.arn
+  field: requestParameters.dBInstanceIdentifier
+  timespan: 1h
+  condition:
+    gte: 3
+level: high
+---
+# ENUMERATE-THEN-CALL is what API-surface probing looks like from the outside: read the retired
+# resource type, discover it is empty or refused, try to create one anyway. Neither half is
+# interesting alone - a single stale call is tooling - but the pair, from one principal inside an
+# hour, is somebody working through an API reference rather than running a deployment.
+title: Legacy DB security groups enumerated and then modified by one principal
+id: 80e99d8d-ce21-42f7-ba5f-878c69f4627c
+status: experimental
+description: >-
+  One principal listed DB security groups and then called a mutating DB security group API within
+  an hour. Against a retired EC2-Classic resource type this reads as API-surface enumeration, not
+  as administration.
+references:
+  - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_DescribeDBSecurityGroups.html   # retrieved 2026-08-29
+tags:
+  - attack.discovery
+  - attack.defense-impairment
+  - attack.t1580
+  - attack.t1686.001
+correlation:
+  type: temporal_ordered
+  rules:
+    - rds_legacy_dbsecuritygroup_read_bb
+    - rds_legacy_dbsecuritygroup_called
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+level: high

@@ -33,7 +33,7 @@ MANIFEST = {'schema_version': 3,
                                   'name': 'Usage of EC2 Serial Console to Push an SSH Public '
                                           'Key'}]}],
  'mitre_mappings': [{'id': 'T1021.004',
-                     'name': 'Usage of EC2 Serial Console to Push an SSH Public Key',
+                     'name': 'Remote Services: SSH',
                      'tactic': 'Lateral Movement',
                      'platform': 'AWS EC2',
                      'description': 'CloudTrail ec2-instance-connect:SendSerialConsoleSSHPublicKey '

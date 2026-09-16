@@ -1,0 +1,155 @@
+# KMS Key Disabled (T1489 / T1486)
+#
+# DISABLING A KEY IS THE REVERSIBLE HALF OF KEY-BASED DESTRUCTION, AND THAT IS THE WHOLE
+# REASON IT IS A SEPARATE USE CASE FROM SCHEDULED DELETION. `DisableKey` moves the key to
+# `Disabled`; AWS documents the effect as "almost immediate (subject to eventual
+# consistency)" and every cryptographic operation then fails with
+# `DisabledException: <key ARN> is disabled.` Nothing is destroyed, `EnableKey` puts it back,
+# and there is no clock. The sibling `../../kms.impact.kms-key-scheduled-deletion/` has a
+# deadline after which no response exists at all, which is why the two responses are not the
+# same and the two playbooks are not merged.
+#
+# WHAT DOES NOT BREAK IMMEDIATELY IS THE TRAP. AWS: the effect on DATA KEYS already issued
+# under the KMS key "is delayed until the KMS key is used again". An encrypted EBS volume
+# already attached to a running instance keeps serving disk I/O from the data key held in the
+# Nitro hardware; the failure appears on the next attach. So "nothing has broken" is never
+# evidence that nothing was affected, and the blast radius is not knowable from the event.
+#
+# EVERY DisableKey EVENT IN YOUR TRAIL CONCERNS A CUSTOMER MANAGED KEY. AWS managed keys
+# cannot be managed by you at all — "you cannot change any properties of AWS managed keys,
+# rotate them, change their key policies, or schedule them for deletion" — and AWS owned keys
+# are not in your account. There is therefore no AWS-managed-key noise to filter out, and no
+# `keyManager` field in the event to filter on either.
+#
+# THE SOURCE RULES match `eventName:"disablekey"` in lower case with no success filter, no
+# principal check and no content inspection, at P4 for the single event and P3 for five in ten
+# minutes. CloudTrail writes `DisableKey`; the source set is internally inconsistent about
+# this — its `PutKeyPolicy` rule is cased correctly while its `disablekey`, `createkey` and
+# `schedulekeydeletion` rules are not — so the lower-case form is a defect in these rules and
+# not a platform convention. Both are corrected here, and the volume variant is merged into
+# this file as a correlation under `07-TIERS.md` merge test 1.
+title: KMS key disabled outside the key-administration allowlist
+id: 2f15e404-fd9a-42bf-bf89-34c0250d54fd
+name: kms_key_disabled
+status: experimental
+description: >-
+  A customer managed KMS key was moved to the Disabled state by a principal outside the
+  allowlisted key-administration set. Every cryptographic operation against the key now fails
+  with DisabledException, and resources holding data keys already issued under it fail on
+  their next use rather than immediately.
+references:
+  - https://docs.aws.amazon.com/kms/latest/APIReference/API_DisableKey.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/kms/latest/developerguide/unusable-kms-keys.html  # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1489/  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1489
+  - attack.t1486
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'kms.amazonaws.com'
+    eventName: 'DisableKey'
+  success:
+    errorCode: null
+  # POPULATE before deploying. Left empty this rule fires on every disable in the account,
+  # which for a service where key retirement is a deliberate, scheduled act is the correct
+  # default — but it is a default, not a tuned rule. List the ARNs that legitimately retire
+  # keys: the key-administration role and the IaC deployment role, nothing else.
+  key_administrators:
+    userIdentity.arn|contains:
+      - ':role/KeyAdministrator'      # replace, or delete this block entirely
+      - ':role/InfrastructureDeploy'  # replace, or delete this block entirely
+  condition: selection and success and not key_administrators
+falsepositives:
+  - >-
+    A planned key retirement performed by hand outside the deployment role. Legitimate, and
+    the reason the allowlist exists — allowlist the principal, never mute the rule.
+  - >-
+    A decommission change window that disables several keys before scheduling their deletion.
+    Expected to fire, and expected to be closed against the change record.
+level: high
+---
+# The denied attempt is evidence, and a success-only rule throws it away. A principal that
+# calls DisableKey and is refused has decided to disable a key; the refusal says only that the
+# key policy or IAM held. Counted separately from successes so that a principal probing twenty
+# keys is never reported as a principal that disabled twenty keys (B6).
+title: KMS key disable attempt denied
+id: c1c7a0a0-115d-420e-9d29-2ed6bcbb4176
+name: kms_key_disable_denied
+status: experimental
+description: >-
+  A DisableKey call was refused. AccessDenied means the key policy or IAM refused the caller;
+  KMSInvalidStateException means the key was already pending deletion, which is a materially
+  worse finding than a denial and belongs to the scheduled-deletion playbook.
+references:
+  - https://docs.aws.amazon.com/kms/latest/APIReference/API_DisableKey.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/kms/latest/developerguide/key-state.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1489
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'kms.amazonaws.com'
+    eventName: 'DisableKey'
+  # Prefix-tolerant on purpose (A7). IAM-evaluated denials surface as `AccessDenied`,
+  # service-evaluated ones as `AccessDeniedException`, and KMS's own state rejection as
+  # `KMSInvalidStateException`. Confirm which forms your own trail carries.
+  denied:
+    errorCode|contains:
+      - 'AccessDenied'
+      - 'KMSInvalidStateException'
+      - 'NotFoundException'
+  condition: selection and denied
+falsepositives:
+  - >-
+    An automation iterating keys it does not own — a cross-account tool or a stale key list.
+    Baseline it; the same shape is what permission probing looks like.
+level: low
+---
+# Threshold basis — derived from documented behaviour, not from an observed count. The
+# technique's own baseline is ONE key: a single disable is already an outage for whatever
+# depends on that key, and `kms_key_disabled` above fires high on it. This correlation
+# separates one operator retiring one key from a principal walking the key estate. THREE
+# distinct keys in ten minutes, not the source's five, because a decommission that touches
+# three production keys inside ten minutes is already a change-window event that should be
+# reconcilable against a ticket, and waiting for a fourth and fifth buys nothing while the
+# outage widens. `gte`, never `gt`, so a sweep that touches exactly three does not fall
+# through (F6). Baseline against your own account before deploying.
+#
+# The counted field is `requestParameters.keyId`, which is CALLER-TYPED — it carries whatever
+# the caller passed, a bare key ID or a full key ARN. A caller alternating the two forms
+# inflates the distinct count; it can never deflate it. For a volume rule that failure
+# direction is safe, and it is the only key identifier present on the REQUEST side.
+title: Multiple KMS keys disabled by one principal
+id: 024cfba9-dd74-4ee4-9f0a-b1f90c7d9410
+status: experimental
+description: >-
+  One principal disabled three or more distinct KMS keys inside ten minutes. That is a key
+  estate being taken offline, not a key being retired.
+references:
+  - https://docs.aws.amazon.com/kms/latest/developerguide/enabling-keys.html  # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1489/  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1489
+  - attack.t1486
+correlation:
+  type: value_count
+  rules:
+    - kms_key_disabled
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  # `field` belongs INSIDE `condition` for a value_count correlation — it is the field whose
+  # DISTINCT values are counted. A top-level `field:` under `correlation:` is not in the
+  # specification and leaves the rule with nothing to count.
+  condition:
+    gte: 3
+    field: requestParameters.keyId
+level: high

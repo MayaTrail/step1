@@ -1,0 +1,289 @@
+# Security Group Opened to the Internet on a Remote-Management Port (T1686.001 / T1133)
+#
+# The original rules match the literal integer in `fromPort` — `fromPort:(22|3389|5985|5986)`.
+# The port RANGE is the discriminator, not the port value. `fromPort:0, toPort:65535`
+# exposes SSH without the number 22 appearing anywhere in the event, `fromPort:1,
+# toPort:1024` does the same, and `ipProtocol:"-1"` opens every port on every protocol
+# with no port fields at all. All three are the wide-open cases, all three are what an
+# actor in a hurry actually sends, and the original rule matches none of them.
+#
+# The companion rule matches the CIDR at `requestParameters.cidrIp` — a real request
+# parameter, but only for the FLATTENED submission form. The array form puts it at
+# `requestParameters.ipPermissions.items[].ipRanges.items[].cidrIp`, two `items` wrappers
+# deep, and a flat path against a nested event yields null silently. Neither rule reads
+# `ipv6Ranges.items[].cidrIpv6`, so `::/0` is uncovered end to end.
+#
+# Both request forms are matched here as SIBLING blocks ORed in the condition. They cannot
+# be two keys in one block: keys inside a block are ANDed, and the two paths never both
+# resolve on one event, so ANDing them is a rule that can never fire. Note that testing for
+# `ipPermissions` alone does NOT separate the forms — in the flat form it is still present,
+# as an empty object. Only `ipPermissions.items` distinguishes them.
+#
+# `RevokeSecurityGroupIngress` is REMEDIATION — it removes an ingress rule. The source
+# set alerts on it at P4. It is deliberately absent from every rule below: matching the
+# close alongside the open inverts the signal and buries the exposure in its own cleanup.
+#
+# WHAT THESE RULES CANNOT DO. Sigma has no numeric comparison and no array-index
+# correlation, so it cannot express `fromPort <= 22 <= toPort`, and it cannot require
+# that the open CIDR and the spanning port sit in the SAME `ipPermissions` element. A
+# call adding 443 to `0.0.0.0/0` and 22 to the corporate CIDR satisfies both blocks from
+# different elements. The true range-containment test is in `kql_t1686_001.kql` and in
+# Query 2 of the playbook; these rules are the substring approximation that triggers it.
+# Treat a hit as the trigger for the reachability check, not as a disposition.
+#
+# INSIDE THE FIRST RULE, three things that are not obvious from its field names:
+#   * `|endswith: '/0'` is the unrestricted-source test, and is stronger than the literal
+#     string — AWS canonicalizes CIDRs, so 1.2.3.4/0 is accepted and becomes 0.0.0.0/0, and
+#     real trail data carries fully-open rules in that non-canonical form. No other prefix
+#     length ends in '/0': /10, /20 and /30 all end in a digit pair.
+#   * the `fromPort` list is range STARTS, not port values — 0 and 1 are the wide-sweep
+#     starts, the rest are the management and database ports themselves.
+#   * `ipProtocol: '-1'` means all protocols and all ports "regardless of any port range you
+#     specify", and those events carry no fromPort/toPort at all.
+#
+# FIELD-PATH CAVEAT. The nested paths below assume the ingestion pipeline flattens
+# CloudTrail's `items[]` arrays into a repeated dotted field. Confirm against one real
+# event in your own pipeline before deploying — a path the backend does not produce
+# yields no match and no error.
+title: Security group ingress opened to the internet spanning a remote-management port
+id: 1531cfff-3db4-4d31-87e3-5c5736f5e6dd
+name: sg_ingress_world_open_management_port
+status: experimental
+description: >-
+  An ingress rule was created allowing an unrestricted source (prefix length /0, IPv4 or IPv6)
+  on a port range reaching SSH, RDP, WinRM, VNC, SMB or a database engine — or on every
+  protocol at once. The service is reachable from the whole internet the moment it lands.
+references:
+  - https://attack.mitre.org/techniques/T1686/001/                                              # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_AuthorizeSecurityGroupIngress.html # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_IpPermission.html                # retrieved 2026-08-27
+tags:
+  - attack.defense-impairment
+  - attack.initial-access
+  - attack.t1686.001
+  - attack.t1133
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'AuthorizeSecurityGroupIngress'
+  world_open_v4:
+    requestParameters.ipPermissions.items.ipRanges.items.cidrIp|endswith: '/0'
+  world_open_v6:
+    requestParameters.ipPermissions.items.ipv6Ranges.items.cidrIpv6|endswith: '/0'
+  mgmt_port_start:
+    requestParameters.ipPermissions.items.fromPort: [0, 1, 22, 23, 135, 445, 1433, 1521,
+      2375, 2376, 3306, 3389, 5432, 5900, 5984, 5985, 5986, 6379, 9200, 9300, 10250,
+      11211, 27017, 27018]
+  all_protocols:
+    requestParameters.ipPermissions.items.ipProtocol: '-1'
+  success:
+    errorCode: null
+  condition: selection and (world_open_v4 or world_open_v6) and (mgmt_port_start or all_protocols) and success
+falsepositives:
+  - A deliberately public listener whose range starts at 0 or 1 — a load-balancer or bastion
+    group from IaC. Filter by `groupId` on a reviewed allowlist, never by principal alone.
+  - A management-port rule on a group attached to nothing, or on a host with no public address
+    — the grant, not the reachability. `tools/sg_reachability.sh` resolves it.
+level: high
+---
+# THE FLAT SUBMISSION FORM, as its own rule rather than more blocks on the one above.
+# The two shapes never both resolve on one event, so they cannot be keys in a single
+# selection block — keys inside a block are ANDed, and ANDing paths that cannot co-occur is
+# a rule that never fires. Splitting them keeps each rule readable and each condition true
+# of exactly the events it describes.
+#
+# Beware: in this form `ipPermissions` is STILL PRESENT, as an empty object. Only the
+# absence of `ipPermissions.items` distinguishes the shapes, so a rule that tests for
+# `ipPermissions` alone routes flat events into the nested rule, where they match nothing.
+title: Security group ingress opened to the internet on a remote-management port (flat form)
+id: a6f45926-7396-4463-a091-578f7b5c002b
+name: sg_ingress_world_open_management_port_flat
+status: experimental
+description: >-
+  As the nested-form rule, but for callers that set the top-level CidrIp / FromPort /
+  ToPort / IpProtocol request parameters directly instead of an IpPermissions array.
+  Deploy both: which one fires depends on how the caller was written, not on intent.
+references:
+  - https://attack.mitre.org/techniques/T1686/001/                                              # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_AuthorizeSecurityGroupIngress.html # retrieved 2026-08-27
+tags:
+  - attack.defense-impairment
+  - attack.initial-access
+  - attack.t1686.001
+  - attack.t1133
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'AuthorizeSecurityGroupIngress'
+  world_open_flat:
+    requestParameters.cidrIp|endswith: '/0'
+  mgmt_port_start_flat:
+    requestParameters.fromPort: [0, 1, 22, 23, 135, 445, 1433, 1521, 2375, 2376, 3306,
+      3389, 5432, 5900, 5984, 5985, 5986, 6379, 9200, 9300, 10250, 11211, 27017, 27018]
+  all_protocols_flat:
+    requestParameters.ipProtocol: '-1'
+  success:
+    errorCode: null
+  condition: selection and world_open_flat and (mgmt_port_start_flat or all_protocols_flat) and success
+falsepositives:
+  - The same public-listener and unattached-group cases as the nested-form rule.
+level: high
+---
+# Replaces the source set's `requestParameters.cidrIp:"0.0.0.0/0"` rule. Same intent,
+# three corrections: the nested path is read as well as the flat one, `::/0` is covered,
+# and denied calls no longer fire. Deliberately has NO port condition — it is the
+# catch-all for an unrestricted grant on a port this library has not enumerated, and it
+# sits at `medium` because a public web listener is a legitimate instance of it.
+title: Security group ingress opened to an unrestricted source on any port
+id: b5a43615-953f-4b30-a9a6-f265e6a07b68
+name: sg_ingress_world_open_any_port
+status: experimental
+description: >-
+  A security group ingress rule was created with a source prefix length of /0 —
+  the entire IPv4 or IPv6 internet — on any port. Corroborate against the port
+  range and the instance's actual reachability before dispositioning.
+references:
+  - https://attack.mitre.org/techniques/T1133/                                                  # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_AuthorizeSecurityGroupIngress.html # retrieved 2026-08-27
+tags:
+  - attack.initial-access
+  - attack.t1133
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'AuthorizeSecurityGroupIngress'
+  world_open_v4:
+    requestParameters.ipPermissions.items.ipRanges.items.cidrIp|endswith: '/0'
+  world_open_v6:
+    requestParameters.ipPermissions.items.ipv6Ranges.items.cidrIpv6|endswith: '/0'
+  world_open_flat:
+    requestParameters.cidrIp|endswith: '/0'
+  success:
+    errorCode: null
+  condition: selection and (world_open_v4 or world_open_v6 or world_open_flat) and success
+falsepositives:
+  - Public HTTP/HTTPS listeners on ports 80 and 443. These are the dominant true-but-benign
+    hit and the reason this rule is `medium` — tune by port, not by muting the rule.
+level: medium
+---
+# The API the source set does not cover at all. `ModifySecurityGroupRules` edits an
+# EXISTING rule in place, so a rule already permitting 10.0.0.0/8 on port 22 can be
+# widened to 0.0.0.0/0 with no `AuthorizeSecurityGroupIngress` event ever emitted. Every
+# rule keyed on the authorize event is blind to it.
+#
+# FIELD SHAPE — corroborated from real events and from an AWS-published CloudTrail Lake
+# sample query, but NOT specified in the API reference. Unlike the authorize call, this
+# one renders in CloudTrail with the XML request wrapper intact and PascalCase keys,
+# doubly nested:
+#   requestParameters.ModifySecurityGroupRulesRequest.SecurityGroupRule.SecurityGroupRule.CidrIpv4
+# The inner `SecurityGroupRule` may also be an array when several rules are modified in
+# one call. Confirm both against a real event in your own trail before deploying.
+title: Existing security group rule edited to an unrestricted source
+id: 21604f28-f8f7-4cb9-9aad-9b1d3098e331
+name: sg_rule_edited_to_world_open
+status: experimental
+description: >-
+  An existing security group rule was modified in place so its source became a /0
+  prefix — the whole internet. This widens an already-permitted port without ever
+  emitting AuthorizeSecurityGroupIngress, so rules keyed on that event do not fire.
+references:
+  - https://attack.mitre.org/techniques/T1686/001/                                         # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifySecurityGroupRules.html # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_SecurityGroupRuleRequest.html # retrieved 2026-08-27
+tags:
+  - attack.defense-impairment
+  - attack.initial-access
+  - attack.t1686.001
+  - attack.t1133
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'ModifySecurityGroupRules'
+  world_open_v4:
+    requestParameters.ModifySecurityGroupRulesRequest.SecurityGroupRule.SecurityGroupRule.CidrIpv4|endswith: '/0'
+  world_open_v6:
+    requestParameters.ModifySecurityGroupRulesRequest.SecurityGroupRule.SecurityGroupRule.CidrIpv6|endswith: '/0'
+  success:
+    errorCode: null
+  condition: selection and (world_open_v4 or world_open_v6) and success
+falsepositives:
+  - Console rule editing during a legitimate change window. `ModifySecurityGroupRules` is
+    the API behind the console's inline rule editor, so a human widening a rule on purpose
+    produces exactly this event — confirm against the change record, not against volume.
+level: high
+---
+title: Security group ingress authorization denied
+id: b924d3fb-f776-4b3b-b297-94ecdf85e2f4
+name: sg_ingress_authorize_denied
+status: experimental
+description: Base rule — volume component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html   # retrieved 2026-08-27
+tags:
+  - attack.discovery
+  - attack.t1686.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName:
+      - 'AuthorizeSecurityGroupIngress'
+      - 'ModifySecurityGroupRules'
+      - 'CreateSecurityGroup'
+  # EC2 prefixes its CloudTrail error codes with `Client.` — the unprefixed form is the
+  # SDK's error code and matches nothing in a trail. `contains` is prefix-tolerant and
+  # catches both `Client.UnauthorizedOperation` and a bare `UnauthorizedOperation`.
+  denied:
+    errorCode|contains: 'UnauthorizedOperation'
+  condition: selection and denied
+level: low
+---
+# Kept strictly separate from the success-path rules. The source set has no `errorCode`
+# filter on either exposure rule, so a principal WITHOUT ec2:AuthorizeSecurityGroupIngress
+# hammering the API fires the identical P1 as a completed internet exposure. Its two
+# lower-priority siblings both carry `NOT _exists_:errorCode`, so the idiom was known and
+# simply not applied to the rules where it decides the disposition.
+#
+# Threshold basis: derived from operator behaviour, not from an observed baseline. Opening
+# one port is one call; a human who gets UnauthorizedOperation reads the message and stops
+# or asks for the permission. An actor sweeping which security groups it can write walks
+# groups, and a misconfigured IaC apply retries the same call on a fixed interval — the
+# per-principal grouping and ten-minute window separate those from each other. Four or
+# more denials in ten minutes sits above ordinary human retry. Baseline against your own
+# account before deploying: a starting point, not a measurement.
+title: Security group write calls denied repeatedly for one principal
+id: cf8cec61-1e31-411c-97d6-7c086ea1f0ea
+status: experimental
+description: >-
+  One principal was denied four or more security group write calls within ten minutes —
+  an actor establishing which security groups its credentials can modify before it opens
+  one. Reconnaissance, not exposure; it must not share an alert with a completed grant.
+references:
+  - https://attack.mitre.org/techniques/T1686/001/    # retrieved 2026-08-27
+tags:
+  - attack.discovery
+  - attack.t1686.001
+correlation:
+  type: event_count
+  rules:
+    - sg_ingress_authorize_denied
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gt: 3
+level: medium

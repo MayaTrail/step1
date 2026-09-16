@@ -15,6 +15,8 @@ import {
   IconBarChart,
   IconGear,
   IconBook,
+  IconBroadcast,
+  IconLaunch,
 } from '@/components/ui/Icons'
 
 interface SidebarProps {
@@ -68,12 +70,14 @@ function ClassicNav() {
       {/* ── Dashboard ── */}
       <SectionLabel>Dashboard</SectionLabel>
       <NavItem to="/" exact icon={<IconHome size={17} />} label="Dashboard" />
+      <NavItem to="/threat-feed" icon={<IconBroadcast size={17} />} label="Threat Feed" />
       <NavItem to="/stacks" icon={<IconLayers size={17} />} label="Stacks" />
 
       <Spacer />
 
       {/* ── Operations ── */}
       <SectionLabel>Operations</SectionLabel>
+      <NavItem to="/workflows" icon={<IconLaunch size={17} />} label="Workflows" />
       <NavItem to="/runs" icon={<IconActivity size={17} />} label="Active Runs" />
       <NavItem to="/results" icon={<IconClock size={17} />} label="Results" />
       <NavItem to="/schedules" icon={<IconActivity size={17} />} label="Schedules" />

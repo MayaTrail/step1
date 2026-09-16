@@ -1,0 +1,198 @@
+# ECS Service Deleted (T1489 / T1070)
+#
+# WHAT THE SOURCE RULE DOES NOT DO. It matches `eventName:"DeleteService"` with a success
+# filter and nothing else, at P3, mapped to T1578 under TA0005. It never looks at who called,
+# and — the sharper omission — it never reads `requestParameters.force`, which is the one field
+# in the event that carries real signal.
+#
+# WHY `force` IS THE DISCRIMINATOR. AWS: "You can delete a service if you have no running tasks
+# in it and the desired task count is zero. If the service is actively maintaining tasks, you
+# can't delete it, and you must update the service to a desired task count of zero." The
+# `force` parameter is documented as: "If true, allows you to delete a service even if it
+# wasn't scaled down to zero tasks. It's only necessary to use this if the service uses the
+# REPLICA scheduling strategy." So an orderly teardown produces TWO events — an UpdateService
+# setting desiredCount to 0, then a DeleteService — while `force: true` is the single-call
+# shortcut that removes a service WHILE IT IS STILL SERVING. Rule 2 below reads it, and is
+# deliberately not gated on the principal: a pipeline that force-deletes production services
+# is a finding about the pipeline.
+#
+# Note what AWS does NOT say: `force` is nowhere documented as terminating running tasks. It
+# waives a precondition. Do not write "force kills the tasks" into a playbook.
+#
+# THE PROBLEM THIS RULE HAS THAT ITS SIBLINGS DO NOT: DELETION IS ALSO THE REMEDIATION.
+# `DeleteService` is exactly the call an incident responder makes to remove an attacker's
+# workload — it is step one of ../../ecs.stealth.service-is-created/ §4. A rule that pages on
+# every DeleteService will page on its own SOC. The allowlist below therefore has to carry the
+# break-glass RESPONDER role as well as the deployment role, and the KQL joins each deletion
+# back to the CreateService that produced the service, so an analyst can see whether the thing
+# being deleted was ours or the actor's. That distinction is the triage, and no field in the
+# DeleteService event supplies it.
+#
+# FIELD SHAPE. `DeleteService` carries exactly three request parameters — `cluster` (short name
+# or full ARN, caller-typed), `service`, and `force`. The response is NESTED at
+# `responseElements.service.*` and its `status` is typically `DRAINING`, not `INACTIVE`: AWS
+# documents the transition as ACTIVE -> DRAINING -> INACTIVE, with DRAINING lasting until "all
+# tasks have transitioned to either STOPPING or STOPPED status". A rule matching
+# `responseElements.service.status: INACTIVE` would miss almost every real deletion.
+title: ECS service deleted by a principal outside the service-lifecycle pipeline
+id: cf459c6f-631b-4bb0-b92d-8780be96e9b5
+name: ecs_service_deleted_nonpipeline
+status: experimental
+description: >-
+  A service was deleted by a principal that neither deploys nor responds to incidents. The
+  service's tasks stop and are not replaced, and once the service reaches INACTIVE it may be
+  purged from ECS record keeping entirely, at which point DescribeServices returns
+  ServiceNotFoundException and its configuration survives only in infrastructure code.
+references:
+  - https://attack.mitre.org/techniques/T1489/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DeleteService.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1489
+  - attack.stealth
+  - attack.t1070
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecs.amazonaws.com'
+    eventName: 'DeleteService'
+  # POPULATE BEFORE DEPLOYING, AND INCLUDE THE RESPONDER ROLE. Deleting a service is how an
+  # incident responder removes an attacker's workload, so an allowlist holding only the
+  # deployment role will page the SOC on its own containment work.
+  service_lifecycle_and_response:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'          # replace with this account's deployment role
+      - ':role/BreakGlassAdmin'     # replace with this account's break-glass responder role
+  success:
+    errorCode: null
+  condition: selection and success and not service_lifecycle_and_response
+falsepositives:
+  - >-
+    An engineer removing a personal or ephemeral service outside the pipeline. Expected in
+    development accounts; in production it is the finding.
+  - >-
+    Incident response on another technique. Deleting a service is the containment step for
+    ecs.stealth.service-is-created, so correlate against open incidents before escalating.
+level: high
+---
+# Not gated on the principal: force-deleting a service that is actively maintaining tasks is
+# worth a look whoever does it, and a pipeline that does it routinely is the finding.
+title: ECS service force-deleted while still maintaining tasks
+id: 0a554f6d-44bd-4519-ade1-e56f9de85b8e
+name: ecs_service_deleted_forced
+status: experimental
+description: >-
+  A service was deleted with force=true, which AWS documents as waiving the requirement that
+  the service first be scaled to zero. An orderly teardown produces a scale-to-zero and then a
+  deletion; this is the single-call shortcut that removes a service while it is still serving.
+references:
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DeleteService.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1489
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecs.amazonaws.com'
+    eventName: 'DeleteService'
+  forced:
+    requestParameters.force: true
+  success:
+    errorCode: null
+  condition: selection and success and forced
+falsepositives:
+  - >-
+    Automated teardown of ephemeral environments often sets force to avoid a second call.
+    Baseline which pipelines do; a force delete from anything else is the signal.
+level: high
+---
+# Base rule — sequence component only, not for direct alerting. The mandatory first half of an
+# orderly teardown, and the event the source set's only UpdateService rule cannot see because
+# it fires on a HIGH desiredCount.
+title: ECS service scaled to zero
+id: 26849141-2687-443a-8aa2-3ce33506f560
+name: ecs_service_scaled_to_zero_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_UpdateService.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1489
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecs.amazonaws.com'
+    eventName: 'UpdateService'
+  scaled_to_zero:
+    requestParameters.desiredCount: 0
+  success:
+    errorCode: null
+  condition: selection and success and scaled_to_zero
+level: informational
+---
+# Scale-to-zero then delete, by one non-pipeline principal, is a DELIBERATE and SEQUENCED
+# teardown rather than a stray API call — someone who knew that ECS refuses to delete a service
+# maintaining tasks and worked around it the documented way.
+#
+# TIMESPAN BASIS. Thirty minutes. The gap is however long the tasks take to drain, which is
+# bounded by the service's deregistration delay and health-check grace period rather than by
+# anything in ECS; half an hour covers a slow drain without spanning unrelated work.
+title: ECS service scaled to zero and then deleted by one principal
+id: 920802b2-88b3-456e-a1b2-76041c1f032c
+status: experimental
+description: >-
+  One non-pipeline principal set a service's desired count to zero and then deleted it inside
+  thirty minutes. That is the documented teardown sequence executed deliberately, not an
+  accident, and it destroys the service's configuration along with its tasks.
+references:
+  - https://attack.mitre.org/techniques/T1489/  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1489
+correlation:
+  type: temporal_ordered
+  rules:
+    - ecs_service_scaled_to_zero_bb
+    - ecs_service_deleted_nonpipeline
+  group-by:
+    - userIdentity.arn
+  timespan: 30m
+level: high
+---
+# Threshold basis. There is no observed baseline, so the reasoning is structural rather than
+# numeric-by-assertion: ECS permits 5,000 services per cluster, so the quota constrains nothing
+# and cannot supply a threshold. What can is the shape of the work — a human removing a service
+# deliberately removes one and confirms it, while three or more inside ten minutes is
+# machine-paced, and the two processes that legitimately do that are the deployment pipeline
+# and an incident responder, both of which the base rule's allowlist already excludes. `gte` at
+# the baseline, never `gt`, so a run that deletes exactly three does not fall through.
+# Re-baseline against your own account before deploying.
+title: ECS services deleted at volume by one non-pipeline principal
+id: 4fb554fe-fdad-43a0-ac18-21a5dbb5b327
+status: experimental
+description: >-
+  One principal outside the deployment and response allowlist deleted three or more services
+  inside ten minutes. Each deletion independently destroys a service's configuration and stops
+  its tasks, so the restoration work-list is every service in the group.
+references:
+  - https://docs.aws.amazon.com/general/latest/gr/ecs-service.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1489
+correlation:
+  type: event_count
+  rules:
+    - ecs_service_deleted_nonpipeline
+  group-by:
+    - userIdentity.arn
+  timespan: 10m
+  condition:
+    gte: 3
+level: high

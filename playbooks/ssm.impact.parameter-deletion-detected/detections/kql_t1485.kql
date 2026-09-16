@@ -1,0 +1,100 @@
+// Parameter Deletion Detected (T1485 — Data Destruction)
+//
+// Deletion is terminal. AWS: "Deleting a parameter removes all versions of it.
+// Once deleted, the parameter and its versions can't be restored." No recovery
+// window, no soft delete — unlike Secrets Manager, which gives you 7 to 30 days.
+// Everything below is written on the assumption that by the time this query
+// returns, the data is gone and the only questions left are what and how much.
+//
+// Counting EVENTS is not counting destruction. DeleteParameters accepts up to ten
+// names per call, so the array length is the unit, not the row. The query reads
+// requestParameters.names and falls back to requestParameters.name for the
+// singular call.
+//
+// Two blind spots this query cannot close, both documented:
+//   * DeleteParameter against a name that does not exist emits NO CloudTrail event
+//     at all — AWS states the ParameterNotFound exception "is not recorded in AWS
+//     CloudTrail event logs". Probing the namespace through the delete API is
+//     invisible.
+//   * A parameter removed by an Expiration parameter policy is deleted by
+//     Parameter Store itself. No principal, no delete event. That destruction is
+//     armed at PutParameter time and is only visible there.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "ssm.amazonaws.com"
+| where EventName in ("DeleteParameter", "DeleteParameters")
+| extend Req  = parse_json(RequestParameters)
+| extend Resp = parse_json(ResponseElements)
+| extend SingleName = tostring(coalesce(Req.name, Req.Name, ""))
+| extend NameArray  = todynamic(coalesce(Req.names, Req.Names, dynamic([])))
+| extend Requested  = iff(array_length(NameArray) > 0, NameArray, pack_array(SingleName))
+// responseElements presence for DeleteParameters is NOT documented by AWS. When it
+// is there, deletedParameters is authoritative; when it is not, fall back to the
+// requested list and reconcile against the live inventory (see the note below).
+| extend Confirmed  = todynamic(coalesce(Resp.deletedParameters, Resp.DeletedParameters, dynamic([])))
+| extend Invalid    = todynamic(coalesce(Resp.invalidParameters, Resp.InvalidParameters, dynamic([])))
+| mv-expand RequestedName = Requested to typeof(string)
+| where isnotempty(RequestedName)
+| summarize
+    Calls            = dcount(AwsRequestId),
+    NamesRequested   = dcount(RequestedName),
+    RequestedNames   = make_set(RequestedName, 100),
+    ConfirmedDeleted = make_set_if(tostring(Confirmed), array_length(Confirmed) > 0, 20),
+    NotDeleted       = make_set_if(tostring(Invalid), array_length(Invalid) > 0, 20),
+    Errors           = make_set_if(ErrorCode, isnotempty(ErrorCode), 10),
+    SourceIPs        = make_set(SourceIpAddress, 5),
+    Agents           = make_set(UserAgent, 3),
+    FirstSeen        = min(TimeGenerated),
+    LastSeen         = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 15m)
+| where not(UserIdentityArn contains "role/iac-deploy" or UserIdentityArn contains "role/ci-cd")
+| extend Verdict = case(
+    NamesRequested >= 25,
+        "MASS PARAMETER DESTRUCTION — unrecoverable, treat as an availability incident now, P0",
+    NamesRequested >= 5,
+        "MULTIPLE PARAMETERS DESTROYED OUTSIDE THE PIPELINE — unrecoverable, P0",
+    "PARAMETER DESTROYED OUTSIDE THE PIPELINE — confirm ownership and consumers, P1")
+| project FirstSeen, LastSeen, UserIdentityArn, Calls, NamesRequested, RequestedNames,
+          ConfirmedDeleted, NotDeleted, Errors, SourceIPs, Agents, Verdict
+| order by NamesRequested desc
+//
+// No production-path filter is hard-coded above, deliberately: the prefix is
+// deployment-specific and one written here would match nothing in most accounts.
+// Add your own before the summarize, e.g.
+//   | where RequestedName startswith "/app/prod/"
+// and raise the verdict for that subset.
+//
+// ============================================================================
+// WHAT WAS ACTUALLY DESTROYED — reconcile, do not assume
+// ============================================================================
+// A successful DeleteParameters can name ten parameters and delete none of them:
+// its only documented error is InternalServerError, and unknown names are returned
+// in the 200-response InvalidParameters array. So "no ErrorCode" is not "ten gone".
+//
+// Reconcile RequestedNames against what still exists:
+//   aws ssm describe-parameters \
+//     --parameter-filters "Key=Path,Option=Recursive,Values=<path>" \
+//     --query 'Parameters[].Name'
+// A requested name that is absent now was destroyed. A requested name still
+// present was not — either it was in InvalidParameters, or it has been recreated
+// since, which is a different and equally important finding.
+//
+// ============================================================================
+// RECOVERY — there is none inside AWS
+// ============================================================================
+// GetParameterHistory does NOT help: history is deleted with the parameter. The
+// value has to come from an external source — the configuration repository, the
+// system of record for the secret, or a backup. Recreating the name requires
+// waiting: AWS states "after deleting a parameter, wait for at least 30 seconds to
+// create a parameter with the same name."
+//
+// ============================================================================
+// ERROR CODES
+// ============================================================================
+// DeleteParameter: ParameterNotFound (NOT recorded in CloudTrail),
+// InternalServerError. DeleteParameters: InternalServerError only. Denials as
+// AccessDenied and AccessDeniedException — match both, and confirm against a real
+// denied event. There is no ThrottlingException-shaped signal to lean on here:
+// deleting is cheap and fast.

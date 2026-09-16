@@ -1,0 +1,29 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Resource-based Policy Modified by IAM User
+  priority: P4
+  type: logs_threshold
+  mitre: T1584/TA0042
+  query: |
+    eventSource:"lambda.amazonaws.com" AND eventName.keyword:/addpermission.*/ AND userIdentity.type:"IAMUser" AND NOT _exists_:errorCode AND NOT sourceIPAddress.keyword:/.*amazonaws.com/
+  threshold: 0.0  window: 10m
+  group_by: ['userIdentity.arn']
+
+- name: IAM Policy Was Configured
+  priority: P3
+  type: logs_threshold
+  mitre: none
+  query: |
+    eventSource:"lambda.amazonaws.com" AND eventName.keyword:/AddPermission|RemovePermission/ AND NOT _exists_:errorCode AND NOT sourceIPAddress.keyword:/.*amazonaws.com/
+  threshold: 0.0  window: 10m
+  group_by: ['userIdentity.arn']

@@ -13,6 +13,7 @@ import {
   RunsRow,
   RunsCell,
 } from '@/components/operations/runHelpers'
+import { ConnectGate } from '@/components/common/ConnectGate'
 
 /**
  * Past Findings tab. The execution history for this emulation: the user's runs
@@ -80,9 +81,11 @@ export function PastFindingsTab({ emulation: em, onRun }: PastFindingsTabProps) 
             Run this emulation to validate your cloud environment. Each execution is recorded here with its
             status, phase progress, and duration.
           </div>
-          <Button variant="primary" size="lg" onClick={onRun}>
-            Run Emulation
-          </Button>
+          <ConnectGate>
+            <Button variant="primary" size="lg" onClick={onRun}>
+              Run Emulation
+            </Button>
+          </ConnectGate>
         </div>
       </Card>
     )

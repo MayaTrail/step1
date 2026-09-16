@@ -1,0 +1,347 @@
+// CloudTrail Logging Tampered (T1685.002)
+//
+// One signal, expressed structurally: a CloudTrail configuration change that REDUCES what
+// is recorded. Stopping or deleting a trail, turning off multi-Region coverage or global
+// service events, disabling log file integrity validation, repointing the destination
+// bucket, or rewriting the event selectors so that management events, write events, one
+// service's control plane, or one principal's activity stop matching.
+//
+// This query does what the Sigma rules structurally cannot. `PutEventSelectors` carries
+// the RESULTING selector configuration rather than the delta — AWS states the cross-type
+// case ("If you apply `AdvancedEventSelectors` to a trail, any existing `EventSelectors`
+// are overwritten") and demonstrates the same-type case, there being no patch verb on the
+// API. So the sharpest test on it is an ABSENCE test across an array: an advanced
+// selector set that contains no `eventCategory Equals Management` condition means
+// management events are no longer logged at all. No substring match expresses "no element
+// of this array satisfies P". The parse below does.
+//
+// It does NOT cover the two things that are not CloudTrail events at all — a trail that is
+// still logging but can no longer deliver (an S3-side break, visible only on
+// GetTrailStatus), and the account that stops producing CloudTrail rows entirely. Both are
+// in the commented companions at the bottom. Deploy those too; on this technique the
+// absence detector is the one that fires when the primary query has nothing left to see.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "cloudtrail.amazonaws.com"
+// The event-data-store calls are here for one reason, and it is a scoping fact that is
+// easy to get backwards. On a TRAIL, AWS documents `userIdentity.arn` as a selector field
+// for DATA events and network activity events only — the management-event field set for a
+// trail is `eventCategory`, `eventSource`, `readOnly`. Filtering MANAGEMENT events by
+// caller identity is available only on an EVENT DATA STORE, so the sharpest form of
+// self-exclusion does not arrive on PutEventSelectors at all. It arrives here.
+| where EventName in ("StopLogging", "DeleteTrail", "UpdateTrail",
+                      "PutEventSelectors", "PutInsightSelectors",
+                      "CreateEventDataStore", "UpdateEventDataStore")
+// Denied attempts are a different incident — see the companion at the bottom. Counting a
+// failed StopLogging as a stopped trail sends a responder to restore a trail that never
+// went down, and hides the actor who was refused.
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+//
+// FIELD SHAPE. The API Reference names these parameters `Name`, `S3BucketName`,
+// `IsMultiRegionTrail`, `EventSelectors[].ReadWriteType`,
+// `AdvancedEventSelectors[].FieldSelectors[].Field`. CloudTrail writes the
+// INITIAL-LOWERCASE form into requestParameters, and AWS publishes the proof twice — a
+// success-path `StartLogging` record reading `"requestParameters": {"name": "myTrail"}`,
+// and an `UpdateTrail` record reading
+// `"requestParameters": {"name": "myTrail2", "isMultiRegionTrail": true}`
+// (CloudTrail concepts and log file examples, retrieved 2026-08-29). The UpdateTrail one
+// is published as an ERROR example and carries `errorCode: TrailNotFoundException`, so
+// cite it for the casing and not for what a successful call does. The PascalCase half of every
+// `coalesce` below is therefore belt-and-braces for a re-shaping ingestion pipeline, not a
+// hedge against not knowing — an unmatched key here returns empty and the rule would
+// report a clean account, which is the one failure mode worth paying two extra terms for.
+// The flattened top-level columns used below — UserIdentityArn, UserIdentityAccessKeyId,
+// EventName, EventSource, ErrorCode, SourceIpAddress, AwsRegion — are Sentinel columns,
+// not dotted JSON paths; only RequestParameters needs parse_json.
+| extend TrailName = coalesce(tostring(Req.name), tostring(Req.Name),
+                              tostring(Req.trailName), tostring(Req.TrailName),
+                              tostring(Req.eventDataStore), tostring(Req.EventDataStore))
+| extend NewBucket = coalesce(tostring(Req.s3BucketName), tostring(Req.S3BucketName))
+//
+// UpdateTrail behaves as a PARTIAL update: an omitted optional parameter leaves the
+// setting unchanged. AWS demonstrates this rather than stating it — its
+// `update-trail --name my-trail --is-multi-region-trail` example passes one flag and the
+// returned trail still carries S3BucketName, IncludeGlobalServiceEvents,
+// LogFileValidationEnabled and IsOrganizationTrail unchanged. So a `false` here was
+// explicitly sent, and the widening (`true`) is a different string. This is the whole
+// difference between a narrowing and a routine trail edit, and it is why matching
+// `EventName == "UpdateTrail"` alone cannot work.
+| extend MultiRegionOff = tostring(coalesce(Req.isMultiRegionTrail, Req.IsMultiRegionTrail)) =~ "false"
+| extend GlobalEventsOff = tostring(coalesce(Req.includeGlobalServiceEvents, Req.IncludeGlobalServiceEvents)) =~ "false"
+| extend ValidationOff = tostring(coalesce(Req.enableLogFileValidation, Req.EnableLogFileValidation)) =~ "false"
+//
+// SHAPE GUARDS. Both selector collections are arrays when present and ABSENT otherwise —
+// and absent is not the same as empty, which is what the trailing `dynamic([])` in each
+// coalesce is for. Without it the value is null, `array_length(null)` is null, the padding
+// test below evaluates neither true nor false, `iff` falls to its else branch and hands
+// `mv-apply` a null: every StopLogging, DeleteTrail and UpdateTrail row is then dropped
+// before it is ever scored, and the query returns a clean account while a trail is down.
+// Normalising absent-to-empty here is what makes the padding deterministic.
+// `HasAdvSelectors` is captured BEFORE padding, because the absence test further down is
+// only meaningful for a request that actually supplied advanced selectors — a
+// basic-selector request has no advanced array and must not read as "management events
+// removed".
+| extend EvSelRaw  = coalesce(Req.eventSelectors, Req.EventSelectors, dynamic([]))
+| extend AdvSelRaw = coalesce(Req.advancedEventSelectors, Req.AdvancedEventSelectors, dynamic([]))
+| extend HasAdvSelectors = array_length(AdvSelRaw) > 0
+| extend InsSelRaw = coalesce(Req.insightSelectors, Req.InsightSelectors, dynamic([]))
+// Insights is turned off by passing an EMPTY list — that is the documented mechanism, so
+// the empty array IS the signal and must survive the padding below.
+| extend InsightsEmptied = EventName == "PutInsightSelectors" and array_length(InsSelRaw) == 0
+//
+// PADDING, and this is the trap. `mv-apply` over an EMPTY array DROPS the source row, so
+// every StopLogging and UpdateTrail event would silently vanish from the result set before
+// it was ever evaluated. Pad each array to one empty object so the aggregation returns
+// zero rather than removing the row.
+| extend EvSelArr  = iff(array_length(EvSelRaw)  == 0, dynamic([{}]), EvSelRaw)
+| extend AdvSelArr = iff(array_length(AdvSelRaw) == 0, dynamic([{}]), AdvSelRaw)
+| mv-apply es = EvSelArr on (
+    summarize
+      BasicMgmtOff  = countif(tostring(coalesce(es.includeManagementEvents, es.IncludeManagementEvents)) =~ "false"),
+      BasicReadOnly = countif(tostring(coalesce(es.readWriteType, es.ReadWriteType)) =~ "ReadOnly"),
+      BasicExcluded = countif(array_length(coalesce(es.excludeManagementEventSources, es.ExcludeManagementEventSources, dynamic([]))) > 0)
+  )
+| mv-apply aes = AdvSelArr on (
+    // Same absent-vs-empty normalisation as above, and for the same reason: the padded
+    // `{}` element carries no fieldSelectors at all, so without the trailing dynamic([])
+    // this inner mv-apply is handed a null and drops the row.
+    mv-apply fs = iff(array_length(coalesce(aes.fieldSelectors, aes.FieldSelectors, dynamic([]))) == 0,
+                      dynamic([{}]),
+                      coalesce(aes.fieldSelectors, aes.FieldSelectors, dynamic([]))) on (
+      extend FName = tostring(coalesce(fs.field, fs.Field))
+      | extend FEq = coalesce(fs.equals, fs.Equals, dynamic([]))
+      | summarize
+          // set_has_element tests the ARRAY. strcat_array would strip the quotes and an
+          // equality test on the joined string drops every multi-element case.
+          MgmtCategory = countif(FName =~ "eventCategory" and set_has_element(FEq, "Management")),
+          SelfExclude  = countif(FName =~ "userIdentity.arn"),
+          AdvReadOnly  = countif(FName =~ "readOnly" and set_has_element(FEq, "true"))
+    )
+    | summarize MgmtCategory = sum(MgmtCategory), SelfExclude = sum(SelfExclude), AdvReadOnly = sum(AdvReadOnly)
+  )
+//
+// The absence test. Advanced selectors were supplied and NONE of them asks for management
+// events, so the trail records no control-plane activity from this point on. Sigma cannot
+// state this; it is the reason this file exists alongside the Sigma.
+| extend AdvMgmtRemoved = HasAdvSelectors and MgmtCategory == 0
+| extend ScopeReduced =
+      EventName in ("StopLogging", "DeleteTrail")
+   or MultiRegionOff or GlobalEventsOff or ValidationOff
+   or isnotempty(NewBucket)
+   or BasicMgmtOff > 0 or BasicReadOnly > 0 or BasicExcluded > 0
+   or AdvMgmtRemoved or SelfExclude > 0 or AdvReadOnly > 0
+   or InsightsEmptied
+| where ScopeReduced
+//
+// `contains`, never `has`. Every operand that matters here — "cloudtrail.amazonaws.com",
+// "userIdentity.arn", an ARN, a bucket name with dots — is punctuated, and `has` is
+// whole-term matching that breaks on exactly those characters.
+| extend Detail = case(
+    EventName == "StopLogging",  strcat("logging stopped on ", TrailName),
+    EventName == "DeleteTrail",  strcat("trail deleted: ", TrailName),
+    // Scope the wording to what the selector can actually do on the resource it was
+    // applied to. Calling the trail case "management logging" would send a responder
+    // hunting for a control-plane gap that is not there, and understate the EDS case.
+    SelfExclude > 0 and EventName in ("CreateEventDataStore", "UpdateEventDataStore"),
+        "event data store selector filters MANAGEMENT events by userIdentity.arn — one principal's control-plane activity is no longer recorded",
+    SelfExclude > 0,             "trail selector filters DATA/network-activity events by userIdentity.arn — one principal's data access is no longer recorded",
+    AdvMgmtRemoved,              "advanced selectors no longer request eventCategory=Management",
+    BasicMgmtOff > 0,            "includeManagementEvents set false",
+    BasicReadOnly > 0 or AdvReadOnly > 0, "restricted to read-only — every mutating call is now unlogged",
+    BasicExcluded > 0,           "a management event source excluded from the trail",
+    MultiRegionOff,              "multi-Region coverage turned off — shadow trails deleted",
+    GlobalEventsOff,             "global service events (IAM, STS) dropped",
+    ValidationOff,               "log file integrity validation disabled — digest chain breaks in one hour",
+    isnotempty(NewBucket),       strcat("destination repointed to ", NewBucket),
+    InsightsEmptied,             "Insights event collection turned off",
+    "scope reduced")
+| summarize
+    Changes    = count(),
+    Trails     = make_set(TrailName, 5),
+    Details    = make_set(Detail, 8),
+    Events     = make_set(EventName, 5),
+    Buckets    = make_set(NewBucket, 5),
+    SourceIPs  = make_set(SourceIpAddress, 5),
+    AccessKeys = make_set(UserIdentityAccessKeyId, 5),
+    AnyStopped   = max(toint(EventName in ("StopLogging", "DeleteTrail"))),
+    AnyMgmtExcl  = max(toint(SelfExclude > 0 and EventName in ("CreateEventDataStore", "UpdateEventDataStore"))),
+    AnyDataExcl  = max(toint(SelfExclude > 0 and EventName == "PutEventSelectors")),
+    AnyMgmtGone  = max(toint(AdvMgmtRemoved or BasicMgmtOff > 0)),
+    AnyWriteGone = max(toint(BasicReadOnly > 0 or AdvReadOnly > 0)),
+    FirstSeen  = min(TimeGenerated),
+    LastSeen   = max(TimeGenerated)
+    by UserIdentityArn, AwsRegion, bin(TimeGenerated, 15m)
+| extend Verdict = case(
+    AnyMgmtExcl == 1,
+        "IDENTITY EXCLUDED FROM MANAGEMENT-EVENT LOGGING on an event data store — no benign form of this, P0",
+    AnyDataExcl == 1,
+        "IDENTITY EXCLUDED FROM DATA-EVENT LOGGING on a trail — management events still recorded, but this principal's data access is not, P0",
+    AnyStopped == 1,
+        "TRAIL STOPPED OR DELETED — restore logging first, then investigate, P0",
+    AnyMgmtGone == 1,
+        "MANAGEMENT EVENTS NO LONGER RECORDED while the trail still reports healthy, P0",
+    AnyWriteGone == 1,
+        "TRAIL RESTRICTED TO READ-ONLY — every mutating call is now invisible, P0",
+    "TRAIL SCOPE REDUCED — confirm against the selector baseline before dispositioning, P1")
+| project FirstSeen, LastSeen, UserIdentityArn, AwsRegion, Verdict, Details, Trails,
+          Buckets, Events, Changes, AccessKeys, SourceIPs
+| order by LastSeen desc
+//
+// ============================================================================
+// COMPANION 1 — THE ABSENCE DETECTOR. Deploy this. It is the only rule here that
+// fires when the technique has already succeeded.
+// ============================================================================
+// Everything above needs a CloudTrail event to exist. Once a trail is stopped, no further
+// event from that Region reaches this workspace, so the query above goes quiet — and quiet
+// is indistinguishable from a calm Tuesday unless something is watching for it.
+//
+// Threshold basis: NOT an observed count. Set `MinRowsPerRegion` from your own quietest
+// hour per Region, measured over at least four weeks including a weekend, and set the bin
+// no shorter than your ingestion lag or the rule alerts on the pipeline rather than on the
+// account. A Region with no workload legitimately produces zero rows; exclude it by name
+// rather than by lowering the threshold for every Region at once.
+//
+// let MinRowsPerRegion = 1;
+// let ActiveRegions = dynamic(["us-east-1", "eu-west-1"]);   // your own list
+// let Window = 2h;
+// AWSCloudTrail
+// | where TimeGenerated > ago(1d)
+// | where AwsRegion in (ActiveRegions)
+// | summarize Rows = count() by AwsRegion, Slot = bin(TimeGenerated, Window)
+// | where Rows < MinRowsPerRegion
+// | extend Verdict = "NO CLOUDTRAIL RECORDS FROM THIS REGION IN THE WINDOW — trail stopped,
+//                     delivery broken, selectors narrowed, or the shipper is down. All four
+//                     look identical here; GetTrailStatus separates them."
+// | order by Slot desc
+//
+// A note on why that verdict is worded as four possibilities rather than one. The source
+// alert this replaces groups by the log-stream identifier rather than by Region, which
+// makes it fire once for the whole account and name none of the four causes. Grouping by
+// Region at least tells the responder where to point GetTrailStatus.
+//
+// ============================================================================
+// COMPANION 2 — denied CloudTrail writes, kept SEPARATE from the success path
+// ============================================================================
+// A principal collecting AccessDenied across CloudTrail writes is establishing whether it
+// can blind the account. That is reconnaissance and must not share a verdict with a trail
+// that is actually down.
+//
+// AWSCloudTrail
+// | where TimeGenerated > ago(1d)
+// | where EventSource == "cloudtrail.amazonaws.com"
+// | where ErrorCode contains "AccessDenied"
+// | where EventName in ("StopLogging","DeleteTrail","UpdateTrail","PutEventSelectors",
+//                       "PutInsightSelectors","DeleteEventDataStore","UpdateEventDataStore",
+//                       "StopEventDataStoreIngestion")
+// | summarize Denials = count(), Attempted = make_set(EventName, 8),
+//             FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated)
+//             by UserIdentityArn, AwsRegion, bin(TimeGenerated, 15m)
+// | where Denials > 2
+// | order by Denials desc
+//
+// ============================================================================
+// WHAT NO QUERY OVER THIS TABLE CAN SEE
+// ============================================================================
+// 1. DELIVERY BROKEN S3-SIDE. A bucket policy that no longer permits
+//    cloudtrail.amazonaws.com to `s3:PutObject`, a deleted bucket, or a KMS key CloudTrail
+//    can no longer use, all stop log files arriving while the trail reports
+//    `IsLogging: true` and emits no CloudTrail event of its own. The only signal is
+//    `GetTrailStatus` -> `LatestDeliveryError` (S3 log files), `LatestDigestDeliveryError`
+//    (digest files) and `LatestCloudWatchLogsDeliveryError` (the CloudWatch Logs path),
+//    polled per trail per Region. `IsLogging` alone is NOT a health check — treating it as
+//    one produces a clean bill of health on a trail delivering nothing.
+//    CloudTrail retries delivery for 30 days after a misconfiguration, so fixing the
+//    bucket policy inside that window recovers the missed files.
+//
+// 2. A NARROWING THAT ONLY A DIFF REVEALS. `PutEventSelectors` submits the selector set
+//    whole, and a set that drops one data-resource ARN or tightens one StartsWith
+//    prefix is a narrowing that looks identical to the widening that added it. Compare
+//    `get-event-selectors` output against a stored baseline on a schedule — the same
+//    shape as a code-hash drift detector, and the only control that survives a compromised
+//    logging pipeline whose ARN is on every allowlist here.
+//
+// 3. ANOTHER ACCOUNT'S TRAIL. Nothing in this workspace sees a member account degrade its
+//    own trail unless that account ships here too. An ORGANIZATION trail is the structural
+//    answer: AWS documents that users in member accounts "do not have sufficient
+//    permissions to delete organization trails, turn logging on or off, change what types
+//    of events are logged, or otherwise change an organization trail in any way".
+//
+// ============================================================================
+// TELEMETRY THAT SURVIVES THE TAMPERING — and one that does not
+// ============================================================================
+// SURVIVES. CloudTrail **Event history** is a separate 90-day per-Region record of
+// MANAGEMENT events, and AWS states that "changes you make to your event data stores or
+// trails do not affect the event history". `aws cloudtrail lookup-events` reads it. A
+// stopped trail therefore does not blind management-event forensics inside 90 days in the
+// Region where the calls landed — it blinds the pipeline that feeds this table, the
+// durable archive beyond 90 days, and every event category Event history never held.
+//
+// SURVIVES. GuardDuty consumes CloudTrail management events "directly from CloudTrail
+// through an independent and duplicated stream of events", and AWS states plainly that
+// "your CloudTrail configurations don't affect how GuardDuty consumes and processes the
+// event logs". `Stealth:IAMUser/CloudTrailLoggingDisabled` fires on a successful trail
+// deletion or update; its DEFAULT SEVERITY IS LOW, which is the wrong disposition for this
+// event and needs raising in your severity mapping.
+//
+// DOES NOT SURVIVE. EventBridge is not an independent path. AWS: "To record events with
+// one of the CloudTrail `detail-type` values, you must enable a CloudTrail trail with
+// logging." An EventBridge rule on `AWS API Call via CloudTrail` is therefore downstream of
+// the thing being disabled. Separately, a default `ENABLED` rule matches only WRITE
+// management events; read-only management events need the rule state
+// `ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS`.
+//
+// ============================================================================
+// ERROR STRINGS
+// ============================================================================
+// Denials: `AccessDenied` (IAM-evaluated) and `AccessDeniedException` (service-evaluated).
+// Match both prefix-tolerantly; confirm which your account produces against a real denied
+// event. CloudTrail does NOT use the EC2 `Client.` prefix.
+//
+// Non-denial errors these calls throw, which must NOT be counted as probing. Enumerated
+// from each operation's Errors section, not guessed, and the set is NOT uniform — see the
+// PutInsightSelectors exception immediately below the common list:
+//   common to StopLogging, DeleteTrail, UpdateTrail and PutEventSelectors — all eleven, on
+//   all four:      TrailNotFoundException, InvalidTrailNameException,
+//                  CloudTrailARNInvalidException, InvalidHomeRegionException,
+//                  OperationNotPermittedException, UnsupportedOperationException,
+//                  ConflictException, ThrottlingException,
+//                  NotOrganizationMasterAccountException, NoManagementAccountSLRExistsException,
+//                  InsufficientDependencyServiceAccessPermissionException
+//   PutInsightSelectors carries nine of those eleven: it does NOT list
+//                  ConflictException or InsufficientDependencyServiceAccessPermissionException.
+//                  A "common set" written as twelve-across-five would be wrong twice.
+//   UpdateTrail     InsufficientS3BucketPolicyException, InsufficientSnsTopicPolicyException,
+//                   InsufficientEncryptionPolicyException, S3BucketDoesNotExistException,
+//                   InvalidS3BucketNameException, InvalidS3PrefixException,
+//                   InvalidSnsTopicNameException, InvalidKmsKeyIdException,
+//                   KmsKeyNotFoundException, KmsException, KmsKeyDisabledException (deprecated),
+//                   InvalidCloudWatchLogsLogGroupArnException, InvalidCloudWatchLogsRoleArnException,
+//                   CloudWatchLogsDeliveryUnavailableException, CloudTrailAccessNotEnabledException,
+//                   CloudTrailInvalidClientTokenIdException, InvalidParameterException,
+//                   InvalidParameterCombinationException, InvalidEventSelectorsException,
+//                   OrganizationsNotInUseException, OrganizationNotInAllFeaturesModeException,
+//                   TrailNotProvidedException (deprecated)
+//   PutEventSelectors    InvalidEventSelectorsException
+//   PutInsightSelectors  InvalidInsightSelectorsException, InsufficientS3BucketPolicyException,
+//                        InsufficientEncryptionPolicyException, S3BucketDoesNotExistException,
+//                        KmsException, InvalidParameterException, InvalidParameterCombinationException
+//
+// `InvalidHomeRegionException` is the operationally interesting one: DeleteTrail,
+// UpdateTrail and PutEventSelectors must be called from the trail's HOME Region, and
+// StopLogging must be for any trail enabled in all Regions. None of them works against a
+// shadow trail. An actor who guesses the Region wrong leaves a denied-shaped event in the
+// Region it guessed, which is a free early warning — and a RESPONDER who guesses wrong
+// gets zero rows from every query in this file, which is why the playbook resolves the
+// home Region from `describe-trails` before it queries anything.
+//
+// ============================================================================
+// PREVENTION
+// ============================================================================
+// A second trail that the account under attack cannot reach — an organization trail owned
+// by the management account, or a trail in a separate logging account delivering to a
+// bucket in a third account with Object Lock — is the only control that holds when the
+// principal degrading the trail is legitimately allowed to administer CloudTrail. Every
+// allowlist in this file necessarily exempts that principal.

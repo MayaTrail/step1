@@ -1,0 +1,79 @@
+// GuardDuty disabled or suppressed (T1685)
+//
+// The source rule fires when no findings arrive in 36 hours. In a secure account that is the normal
+// state, so the rule is inverted rather than merely ambiguous — it alerts on health. Everything
+// here detects the ACT instead, in CloudTrail, where it is attributed and timestamped.
+//
+// `contains` throughout, never `has` — ARNs and S3 locations are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "guardduty.amazonaws.com"
+| where EventName in ("DeleteDetector", "UpdateDetector", "CreateFilter", "UpdateFilter",
+                      "DeleteFilter", "CreateIPSet", "UpdateIPSet", "DeleteIPSet",
+                      "ArchiveFindings", "UpdateMemberDetectors", "DeleteMembers",
+                      "DisassociateFromMasterAccount", "CreateDetector")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Detector = tostring(Req.detectorId)
+| extend FilterName = tostring(Req.name)
+| extend FilterAction = tostring(Req.action)
+| extend Criteria = tostring(Req.findingCriteria)
+| extend IpSetLocation = tostring(Req.location)
+| extend IpSetName = tostring(Req.name)
+| extend Enabled = tostring(Req.enable)
+| extend Features = tostring(Req.features)
+| extend Verdict = case(
+    EventName == "DeleteDetector",
+        "GUARDDUTY DETECTOR DELETED — detection is off in this Region. GuardDuty is regional, so every other Region still reports normally and an account-wide view looks healthy, P0",
+    EventName == "UpdateDetector" and Enabled == "false",
+        "GUARDDUTY DETECTOR DISABLED — same effect as deletion, and it uses the same event name as enabling one. The parameters are the discriminator, P0",
+    EventName == "UpdateDetector" and Features contains "DISABLED",
+        "GUARDDUTY FEATURE DISABLED — one protection plan turned off while the detector stays enabled. The console shows GuardDuty running, P0",
+    EventName in ("CreateIPSet", "UpdateIPSet"),
+        "TRUSTED IP LIST CHANGED — findings for these addresses are NEVER GENERATED. Not archived, never created. No finding-stream monitoring can reveal this, and the addresses are in the S3 object at Location, not in this event, P0",
+    (EventName == "CreateFilter" or EventName == "UpdateFilter") and FilterAction == "ARCHIVE",
+        "SUPPRESSION RULE CREATED — matching findings are auto-archived, so the detector looks healthy and the suppressed class reaches nobody. Read the criteria, P0",
+    EventName == "ArchiveFindings",
+        "FINDINGS ARCHIVED MANUALLY — read which ones and why; archiving during an incident stops re-notification when the activity resumes, P1",
+    EventName in ("UpdateMemberDetectors", "DeleteMembers", "DisassociateFromMasterAccount"),
+        "MEMBER ACCOUNT DETACHED OR ALTERED — detection changed for an account other than this one, P0",
+    EventName == "DeleteIPSet",
+        "Trusted IP list removed — restores detection for those addresses; confirm it was intended",
+    EventName == "CreateDetector",
+        "Detector created — expected after a deletion; confirm the features match the standard",
+    "GuardDuty configuration changed — read the parameters")
+| project TimeGenerated, EventName, Verdict, UserIdentityArn, SourceIpAddress, AwsRegion,
+          Detector, FilterName, FilterAction, IpSetLocation, Enabled, Features, Criteria, UserAgent
+| order by TimeGenerated desc
+//
+// ============================================================================
+// WHY THE ABSENCE VIEW IS NOT SHIPPED HERE AT ALL
+// ============================================================================
+// In every other service in this corpus an absence view is kept as a corroborator. Not here.
+//
+// GuardDuty emits a finding when it DETECTS something. An account with nothing wrong emits none,
+// for days, correctly — AWS defines even the lowest band as "attempted suspicious activity that did
+// not compromise your environment". So a rule firing on the absence of findings is firing on the
+// desired state, and there is no window length that fixes it: making the window longer makes the
+// rule slower without making it right.
+//
+// The corroborating question that IS worth asking is about the detector, not the findings, and it
+// is a state read rather than a log query. Query 2 of ../PLAYBOOK.md runs it.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHICH ADDRESSES ARE TRUSTED. CreateIPSet carries a Location — an S3 object URI — and not the list
+// contents. The addresses have to be read from that object, and an attacker who can write to it can
+// change the trusted set without any further GuardDuty API call at all.
+//
+// WHAT A SUPPRESSION RULE SUPPRESSES, IN PRACTICE. The criteria are in the event, but their effect
+// depends on what would otherwise have matched. A filter that looks narrow can cover the exact
+// finding type an actor expects to generate.
+//
+// WHETHER GUARDDUTY'S INPUTS WERE REMOVED INSTEAD. Its DNS findings need Route 53 Resolver query
+// logging for the VPC and its EKS findings need audit log monitoring. Disabling those blinds
+// GuardDuty without touching GuardDuty, and produces nothing in this table.

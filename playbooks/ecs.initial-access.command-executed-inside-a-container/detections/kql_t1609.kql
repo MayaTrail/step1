@@ -1,0 +1,127 @@
+// Command Executed Inside an ECS Container — ECS Exec (T1609 / T1552.005)
+//
+// Signal: ExecuteCommand opening a session into a running container; the shell case where
+// CloudTrail records only the binary; the enable-then-use pair; fan-out across tasks; and —
+// the part that matters most — WHAT THE TASK ROLE DID AFTERWARDS.
+//
+// This query does the join the Sigma rules structurally cannot. An ECS task role session
+// carries the TASK ID as its role session name: AWS's own example shows
+// arn:aws:sts::123456789012:assumed-role/s3-write-go-bucket-role/7e9894e088ad416eb5cab92afExample,
+// describing the suffix as "the name of the task". The ExecuteCommand event names that same
+// task in requestParameters.task. So the 32-hex string in the Exec event is the string that
+// will appear at the end of the ARN on every API call made with credentials read out of that
+// container — and joining on it turns "someone opened a shell" into "someone opened a shell
+// and then these calls were made with the container's identity". That is the whole incident,
+// and it is the container analogue of the instance-ID join in
+// ec2.credential-access.imds-credential-theft.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE DebugRoles BELOW BEFORE DEPLOYING.
+let Lookback = 30d;
+let Ecs =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "ecs.amazonaws.com"
+    // RequestParameters and ResponseElements are typed `string` in this table, not dynamic.
+    | extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+    // `contains`, never `has`: role paths, ARNs and command strings are punctuated, and `has`
+    // is whole-term - it would never reliably match "/bin/bash" or ":role/OnCallDebug".
+    | extend IsDebugRole = (UserIdentityArn contains ":role/OnCallDebug")
+                        or (UserIdentityArn contains ":role/BreakGlassAdmin");
+let ExecEvents = Ecs
+    | where EventName == "ExecuteCommand"
+    // requestParameters.task is the task ID or the full task ARN, caller's choice. Reduced to
+    // the bare ID because that is the form the role session name uses.
+    | extend TaskId = tostring(split(tostring(Req.task), "/")[-1])
+    | extend ClusterName = tostring(split(tostring(Req.cluster), "/")[-1])
+    | extend Command = tostring(Req.command)
+    | extend ContainerName = tostring(Req.container)
+    // session.sessionId is the pivot into the ECS Exec session log and the SSM session record.
+    // Its documented example form is ecs-execute-command-<hex>. Presence is tested rather than
+    // the redacted tokenValue placeholder, whose exact string differs between AWS's own
+    // examples and is not a documented constant.
+    | extend SessionId = tostring(Resp.session.sessionId)
+    | extend TaskArn = tostring(Resp.taskArn)
+    | extend IsShell = Command contains "/bin/sh" or Command contains "/bin/bash"
+                    or Command contains "/bin/ash" or Command contains "/bin/zsh"
+                    or Command contains "powershell" or Command contains "cmd.exe";
+let Enablements = Ecs
+    | where EventName in ("UpdateService", "CreateService", "RunTask", "StartTask")
+          and isempty(ErrorCode) and tostring(Req.enableExecuteCommand) == "true"
+    | summarize EnabledAt = max(TimeGenerated), Enabler = any(UserIdentityArn)
+             by ClusterName = tostring(split(tostring(Req.cluster), "/")[-1]);
+// Every API call made by ANY assumed-role session whose session name is a 32-hex task ID.
+// No eventSource filter: a stolen task-role credential works against every service, so
+// constraining this to ECS would hide the entire point of the technique.
+let TaskRoleActivity =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where UserIdentityType == "AssumedRole"
+    | extend SessionName = tostring(split(UserIdentityArn, "/")[-1])
+    | where SessionName matches regex @"^[0-9a-f]{32}$"
+    | summarize CallCount = count(), Services = make_set(EventSource, 15),
+                Events = make_set(EventName, 20), CallerIps = make_set(SourceIpAddress, 10),
+                FirstCall = min(TimeGenerated), LastCall = max(TimeGenerated),
+                RoleName = any(SessionIssuerUserName), Keys = make_set(UserIdentityAccessKeyId, 5)
+             by TaskId = SessionName;
+ExecEvents
+| join kind=leftouter TaskRoleActivity on TaskId
+| join kind=leftouter Enablements on ClusterName
+| extend ExecEnabledRecently = isnotempty(EnabledAt) and EnabledAt <= TimeGenerated
+                               and EnabledAt > TimeGenerated - 1h
+| extend RoleUsedAfterExec = isnotempty(LastCall) and LastCall > TimeGenerated
+| extend Denied = isnotempty(ErrorCode)
+| extend Verdict = case(
+    Denied,
+        strcat("EXEC ATTEMPT FAILED (", ErrorCode, ") - no session opened. TargetNotConnectedException means the data path to that container is not established: no execute-command, no ssmmessages permissions on the task role, or a missing Session Manager VPC endpoint"),
+    RoleUsedAfterExec and IsShell,
+        strcat("SHELL SESSION FOLLOWED BY TASK-ROLE ACTIVITY - a shell was opened (contents NOT in CloudTrail) and role ", RoleName, " then made ", CallCount, " calls against ", tostring(array_length(Services)), " service(s). Treat the task role's credentials as stolen"),
+    RoleUsedAfterExec,
+        strcat("EXEC FOLLOWED BY TASK-ROLE ACTIVITY - role ", RoleName, " made ", CallCount, " calls after the session opened. Compare CallerIps against the task's own egress addresses"),
+    ExecEnabledRecently and Enabler == UserIdentityArn,
+        "ENABLE-THEN-USE - this principal turned on execute-command in this cluster within the hour and then opened a session. ECS Exec cannot be turned on for existing tasks, so new tasks were also placed",
+    IsShell,
+        strcat("INTERACTIVE SHELL, CONTENTS UNRECORDED - CloudTrail logged the binary '", Command, "' and nothing typed inside it. The transcript exists only if the cluster's executeCommandConfiguration set logging to OVERRIDE, or the task definition carries an awslogs driver"),
+    not(IsDebugRole),
+        strcat("ECS EXEC BY A NON-DEBUG PRINCIPAL - one-shot command '", Command, "' as root inside container ", ContainerName),
+        strcat("ECS EXEC BY A DEBUG ROLE - '", Command, "'. Confirm against the incident or ticket that authorised it"))
+| project TimeGenerated, Verdict, Actor = UserIdentityArn, ClusterName, TaskId, ContainerName,
+          Command, IsShell, SessionId, TaskArn, ErrorCode,
+          RoleName, CallCount, Services, Events, CallerIps, FirstCall, LastCall, Keys,
+          ExecEnabledRecently, Enabler, EnabledAt,
+          SourceIpAddress, UserAgent
+| order by TimeGenerated desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// What was typed in an interactive session. AWS: "if you open an interactive shell section only
+// the /bin/bash command is logged in CloudTrail but not all the others inside the shell." The
+// transcript lives in ECS Exec session logging, and the default does not produce one: AWS
+// documents `logging: DEFAULT` as using "the awslogs configuration in the task definition" and
+// adds that "If no awslogs log driver is configured in the task definition, the output won't be
+// logged." Even with logging: OVERRIDE it can silently produce nothing, because "the container
+// image requires `script` and `cat` to be installed in order to have command logs uploaded
+// correctly." Absence of a session log is never evidence of absence of a session.
+//
+// The credential read itself. The task's credentials come from the ECS container credentials
+// endpoint at 169.254.170.2, served locally by the container agent out of its own cache. There
+// is no eventSource for it and it appears in no ECS data event - the only documented ECS data
+// events are ecs:Poll, ecs:StartTelemetrySession and ecs:PutSystemLogEvents under
+// AWS::ECS::ContainerInstance. AWS never states outright that the read produces no CloudTrail
+// event; the conclusion rests on the endpoint being local and on that data-event list being
+// exhaustive.
+//
+// Sessions started OUTSIDE execute-command. AWS: "While starting SSM sessions on your container
+// outside of ECS Exec is possible, this could potentially result in the sessions not being
+// logged... We recommend limiting this access by denying the ssm:start-session action directly
+// for your Amazon ECS tasks using an IAM policy." Those sessions produce no ecs.amazonaws.com
+// event at all and this query is blind to them by construction.
+//
+// The task role's ATTACHED POLICIES. RoleName above is the identity; what it could reach is an
+// IAM lookup and is the actual blast radius.
+//
+// PREVENTION. Deny ecs:ExecuteCommand outside a named debugging role; deny ssm:StartSession on
+// the task roles so the unlogged path is closed; and set executeCommandConfiguration to
+// logging=OVERRIDE with a CloudWatch or S3 destination, because the default records nothing.

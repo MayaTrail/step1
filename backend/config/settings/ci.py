@@ -36,14 +36,41 @@ ROOT_URLCONF = "config.ci_urls"
 # Only the apps whose models or code the suite actually loads. apps.users owns
 # AUTH_USER_MODEL, and apps.infrastructure is required because
 # emulations.EmulationRun.stack is a foreign key to infrastructure.Stack;
-# omitting it fails the system check with fields.E300. apps.guardrails has no
-# models and is listed only so its test label resolves. The remaining apps
-# (connectors, logs, ai) are not referenced by any test or by these models.
+# omitting it fails the system check with fields.E300. apps.guardrails and
+# apps.threatintel have no models and are listed only so their test labels
+# resolve. apps.workflows does own models, and they carry foreign keys to
+# infrastructure.Stack and emulations.EmulationRun, both already present. The
+# remaining apps (connectors, logs, ai) are not referenced by any test or by
+# these models.
 #
-# apps.playbooks owns the Playbook model and is the one app in the suite with
-# database-backed tests, so its migrations run against the in-memory sqlite
-# above. Its view tests import DRF and skip themselves when it is absent, the
-# same way the detection-validator test skips without pySigma.
+# apps.playbooks owns the Playbook model and apps.authored_detections owns
+# AuthoredDetection; both have database-backed tests, so their migrations run
+# against the in-memory sqlite above. Their view tests import DRF and skip
+# themselves when it is absent, the same way the detection-validator test skips
+# without pySigma.
+# Build the test database straight from the models, with no migration graph.
+#
+# Four apps ship no migrations on purpose (docker-compose generates them at
+# container start), which leaves workflows/0001 depending on
+# infrastructure.__first__ -- a node that does not exist. Nothing noticed while
+# every suite here was a SimpleTestCase, because Django only builds the test
+# database when a test actually asks for one. The moment a database-backed test
+# joins the run it fails during setup, before a single assertion executes.
+#
+# Setting a module to None tells Django to create that app's tables from its
+# current models, which is what the test database wants anyway: these tests
+# assert on model behaviour, never on migration history.
+MIGRATION_MODULES = {
+    "users": None,
+    "infrastructure": None,
+    "emulations": None,
+    "logs": None,
+    "workflows": None,
+    "ai": None,
+    "playbooks": None,
+    "authored_detections": None,
+}
+
 INSTALLED_APPS = [
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -52,6 +79,8 @@ INSTALLED_APPS = [
     "apps.emulations",
     "apps.metrics",
     "apps.guardrails",
+    "apps.threatintel",
+    "apps.workflows",
     "apps.playbooks",
     "apps.authored_detections",
 ]

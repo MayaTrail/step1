@@ -1,0 +1,153 @@
+# A DNS answer pointing inside the VPC — DNS rebinding toward the metadata service (T1552.005)
+#
+# THE SOURCE RULE SEARCHES THE WHOLE RECORD FOR A STRING, AND THE FIELD IT LANDS IN IS THE WHOLE
+# MEANING. `"169.254.169.254" AND _exists_:query_name` is a free-text match. That literal can
+# appear in two fields and they are unrelated events:
+#
+#   rdata = 169.254.169.254      -> A DOMAIN THE ATTACKER CONTROLS RESOLVED TO THE METADATA
+#                                   ADDRESS. This is DNS rebinding: a browser, a webhook fetcher
+#                                   or an SSRF-capable service resolves an ordinary-looking name
+#                                   and connects to the link-local metadata endpoint, bypassing
+#                                   any allowlist that checks the hostname rather than the answer.
+#                                   This is the attack.
+#   query_name contains the IP   -> somebody looked up the literal address as a name. Malformed,
+#                                   occasionally a scanner, rarely interesting.
+#
+# The rules below read `rdata` specifically, and the query_name case is not shipped at all.
+#
+# `AND _exists_:query_name` IS A CHECK THAT CANNOT FAIL. Every Resolver query log record carries a
+# query_name — it is the name that was asked for. The clause narrows nothing and contributes
+# nothing except the appearance of specificity.
+#
+# THE ADDRESS SET IS WIDER THAN ONE ADDRESS. 169.254.169.254 is the instance metadata endpoint,
+# but 169.254.170.2 serves ECS task metadata and task-role credentials, and 169.254.170.23 serves
+# EKS Pod Identity credentials. A rule naming only the first misses two credential endpoints that
+# are reached the same way. The whole 169.254.0.0/16 link-local range is matched below by prefix.
+#
+# AND REBINDING IS NOT ONLY ABOUT METADATA. Any public name resolving to a private address is the
+# same primitive pointed somewhere else — the internal admin panel, the database, the Kubernetes
+# API. That case ships as its own rule at a lower level, because the ceiling is lower and the
+# false-positive surface is real: split-horizon DNS and internal service discovery do this
+# legitimately.
+#
+# THE CACHE LIMITATION DOES NOT HURT HERE, AND THAT IS WORTH KNOWING. AWS logs only unique queries,
+# not cache hits — which ruins volume reasoning about stable domains. Rebinding depends on a very
+# short TTL by construction, so every rebinding query is a cache miss and every one is logged.
+#
+# firewall_rule_action IS NOT A VERDICT. AWS populates it "only if DNS Firewall found a match for a
+# rule with action set to alert or block", so an empty value means no match — never "allowed by
+# policy". It is projected for context and never used as a filter.
+title: DNS answer resolved to the instance metadata address range
+id: 4b17e920-6c53-48da-95f7-2e0863bc471d
+name: r53dns_rebind_to_metadata
+status: experimental
+description: >-
+  A DNS query returned an address in 169.254.0.0/16 — the link-local range that serves EC2 instance
+  metadata, ECS task metadata and EKS Pod Identity credentials. Unless the queried name is itself a
+  known internal service using link-local addressing, this is DNS rebinding: a name the attacker
+  controls answering with an address that reaches a credential endpoint, so that a fetcher which
+  validated the hostname connects somewhere else entirely. It needs no threshold and no baseline;
+  no legitimate public name resolves into this range.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-query-logs-format.html
+  - https://attack.mitre.org/techniques/T1552/005/
+tags:
+  - attack.credential-access
+  - attack.t1552.005
+logsource:
+  product: aws
+  service: route53resolver
+detection:
+  metadata_answer:
+    rdata|startswith: '169.254.'
+  condition: metadata_answer
+falsepositives:
+  - >-
+    A container platform or agent that publishes its own link-local service name in internal DNS.
+    Rare, nameable, and it should be excluded by query_name rather than by weakening the rdata
+    test — the answer is the signal and the name is the exception.
+level: critical
+---
+title: Public domain name resolved to a private address
+id: c8203e5f-71b4-40a9-86d2-5f97e14ab630
+name: r53dns_rebind_to_private
+status: experimental
+description: >-
+  A DNS query returned an RFC 1918 or loopback address. This is the same rebinding primitive
+  pointed at something other than the metadata service — an internal admin panel, a database, the
+  Kubernetes API server. It ships lower than the metadata rule because the false-positive surface
+  is genuinely large: split-horizon DNS, internal service discovery and private hosted zones all
+  answer this way by design. The tuning surface is the ZONE, not the address range, which is why
+  the filter below excludes internal domain suffixes rather than internal address space.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-query-logs-format.html
+  - https://attack.mitre.org/techniques/T1590/002/
+tags:
+  - attack.reconnaissance
+  - attack.t1590.002
+logsource:
+  product: aws
+  service: route53resolver
+detection:
+  private_answer:
+    rdata|startswith:
+      - '10.'
+      - '192.168.'
+      - '172.16.'
+      - '172.17.'
+      - '172.18.'
+      - '172.19.'
+      - '172.2'
+      - '172.30.'
+      - '172.31.'
+      - '127.'
+  # POPULATE BEFORE DEPLOYING with the domain suffixes this organisation resolves privately —
+  # private hosted zones, service-discovery namespaces, the corporate internal domain. This is the
+  # entire tuning surface and it is a short, stable list. Leaving it empty makes the rule report
+  # every internal lookup once, which is how the list gets built.
+  internal_zones:
+    query_name|endswith:
+      - '.internal'
+      - '.local'
+      - '.compute.internal'
+      - '.example.internal'
+  condition: private_answer and not internal_zones
+falsepositives:
+  - >-
+    A private hosted zone or service-discovery namespace missing from internal_zones. Expect a
+    burst on first deployment; enumerate them once and the rule goes quiet. If it does not go
+    quiet, the finding is that public names in this estate resolve to private space.
+level: medium
+---
+title: DNS Firewall blocked or alerted on a query
+id: 9f4a6d81-30c7-4e52-b019-72c58ae3f04b
+name: r53dns_firewall_action
+status: experimental
+description: >-
+  DNS Firewall matched a rule with an alert or block action. Shipped as a companion because the
+  firewall fields are the only place in this log source where AWS states a verdict, and because
+  their ABSENCE is routinely misread — AWS populates firewall_rule_action "only if DNS Firewall
+  found a match for a rule with action set to alert or block", so an empty value means no match
+  and never "allowed by policy". A blocked query is a stopped attempt, which is still intent
+  observed and still tells you a host is trying.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-dns-firewall-rule-groups.html
+  - https://attack.mitre.org/techniques/T1071/004/
+tags:
+  - attack.command-and-control
+  - attack.t1071.004
+logsource:
+  product: aws
+  service: route53resolver
+detection:
+  firewall_matched:
+    firewall_rule_action:
+      - 'BLOCK'
+      - 'ALERT'
+  condition: firewall_matched
+falsepositives:
+  - >-
+    A domain list that is broader than intended — ad and tracker lists in particular generate
+    steady volume from ordinary browsing. Tune by rule group rather than by muting the rule, and
+    keep the block action separate from the alert action in routing.
+level: medium

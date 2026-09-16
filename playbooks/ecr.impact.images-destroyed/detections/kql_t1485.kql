@@ -1,0 +1,87 @@
+// Container images destroyed in ECR (T1485)
+//
+// Destruction has three shapes and the source pack rates them as three unrelated things: immediate
+// image deletion, repository deletion, and a lifecycle policy that deletes on a schedule. The third
+// is the quietest — nothing is removed at the time — and is mapped by the source to a privilege
+// escalation technique.
+//
+// `contains` throughout, never `has` — repository names and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource in ("ecr.amazonaws.com", "ecr-public.amazonaws.com")
+| where EventName in ("BatchDeleteImage", "DeleteRepository", "PutLifecyclePolicy",
+                      "DeleteLifecyclePolicy", "PutImageTagMutability")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Repo = tostring(Req.repositoryName)
+| extend Forced = tostring(Req.force) == "true"
+| extend Policy = tostring(Req.lifecyclePolicyText)
+| extend ImageIds = tostring(Req.imageIds)
+// DeleteRepository succeeds WITHOUT force on an empty repository, so an actor who deletes the
+// images first never sets the flag. Reported, not required.
+| extend RepoDeleted = EventName == "DeleteRepository"
+| extend ImagesDeleted = EventName == "BatchDeleteImage"
+// A lifecycle policy expiring after very few days, or keeping very few images, is destruction on a
+// timer. These are heuristics on the policy text — StartLifecyclePolicyPreview is the authority.
+| extend AggressiveExpiry = Policy contains '"sinceImagePushed"'
+                            and (Policy contains '"countNumber":1' or Policy contains '"countNumber":2'
+                                 or Policy contains '"countNumber":3')
+| extend KeepsVeryFew = Policy contains '"imageCountMoreThan"'
+                        and (Policy contains '"countNumber":1' or Policy contains '"countNumber":2')
+| extend TargetsTagged = Policy contains '"tagStatus":"tagged"' or Policy contains '"tagStatus":"any"'
+| summarize
+    RepoDeletions   = countif(RepoDeleted),
+    ForcedDeletions = countif(RepoDeleted and Forced),
+    UnforcedDeletions = countif(RepoDeleted and not(Forced)),
+    ImageDeletions  = countif(ImagesDeleted),
+    LifecyclePolicies = countif(EventName == "PutLifecyclePolicy"),
+    AggressivePolicies = countif(EventName == "PutLifecyclePolicy" and (AggressiveExpiry or KeepsVeryFew)),
+    PoliciesOnTagged = countif(EventName == "PutLifecyclePolicy" and TargetsTagged),
+    DistinctRepos   = dcount(Repo),
+    Repos           = make_set(Repo, 20),
+    SourceIps       = make_set(SourceIpAddress, 5),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where RepoDeletions > 0 or ImageDeletions > 0 or LifecyclePolicies > 0
+| extend Verdict = case(
+    DistinctRepos >= 3 and (RepoDeletions > 0 or ImageDeletions > 0),
+        strcat("IMAGES DESTROYED ACROSS ", tostring(DistinctRepos),
+               " REPOSITORIES IN AN HOUR — nothing in ECR is recoverable, so this is permanent, P0"),
+    ForcedDeletions > 0,
+        "REPOSITORY FORCE-DELETED — the repository and every image in it are gone, with no versioning and no undelete, P0",
+    UnforcedDeletions > 0 and ImageDeletions > 0,
+        "IMAGES DELETED AND THEN THE REPOSITORY REMOVED — the same end state as a force delete, reached without ever setting the force flag that the source rule requires, P0",
+    RepoDeletions > 0,
+        "REPOSITORY DELETED, P0",
+    AggressivePolicies > 0 and PoliciesOnTagged > 0,
+        "LIFECYCLE POLICY TARGETING TAGGED IMAGES WITH AN AGGRESSIVE COUNT — destruction on a timer, and it will remove images days from now with no event naming them. Run StartLifecyclePolicyPreview, P0",
+    LifecyclePolicies > 0,
+        "LIFECYCLE POLICY APPLIED — ordinary cost management, or delayed destruction. StartLifecyclePolicyPreview resolves it in one call without deleting anything, P1",
+    ImageDeletions > 0,
+        "IMAGES DELETED — untagged cleanup is routine; tagged images across repositories is not. Read the repository and the image ids, P1",
+    "ECR destruction activity")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, RepoDeletions, ForcedDeletions,
+          UnforcedDeletions, ImageDeletions, LifecyclePolicies, AggressivePolicies,
+          DistinctRepos, Repos, SourceIps
+| order by DistinctRepos desc, RepoDeletions desc
+//
+// ============================================================================
+// NOTHING DELETED FROM ECR IS RECOVERABLE
+// ============================================================================
+// There is no versioning, no recycle bin and no undelete. Once a digest is gone the layers are gone,
+// and recovery means rebuilding from source. That inverts the usual priority: establishing WHAT was
+// destroyed matters more than restoring it, because restoration is not available.
+//
+// ============================================================================
+// THE LIFECYCLE POLICY IS THE ONE TO CHECK, NOT THE ONE TO ALERT ON
+// ============================================================================
+// The AggressiveExpiry and KeepsVeryFew columns are heuristics over the policy text and will be
+// wrong in both directions. The authority is:
+//   aws ecr start-lifecycle-policy-preview --repository-name <repo> --lifecycle-policy-text <json>
+//   aws ecr get-lifecycle-policy-preview --repository-name <repo>
+// It reports exactly which images the policy WOULD remove, without removing them. Run it before
+// rating any lifecycle finding.

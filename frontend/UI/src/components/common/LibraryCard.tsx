@@ -12,6 +12,10 @@ export interface CardAction {
   onClick?: () => void
   /** Emphasis: primary = red accent (Run), secondary = bordered (View). */
   variant?: 'primary' | 'secondary'
+  /** Render inert. Used for an action the current user is not allowed to take. */
+  disabled?: boolean
+  /** Tooltip explaining why, shown when disabled. */
+  disabledReason?: string
 }
 
 interface LibraryCardProps {
@@ -107,6 +111,21 @@ function CardActionButton({ action }: { action: CardAction }) {
       ? 'bg-danger/[0.12] border border-danger/30 text-danger hover:bg-danger/[0.18]'
       : 'border border-[rgba(255,255,255,0.12)] text-content-primary hover:opacity-60'
   const className = `${base} ${variant}`
+
+  // Kept visible rather than hidden: an action the user cannot take yet still
+  // tells them what the product does, and the tooltip says how to unlock it.
+  if (action.disabled) {
+    return (
+      <span
+        title={action.disabledReason}
+        aria-disabled="true"
+        className={`${className} cursor-not-allowed opacity-40`}
+      >
+        {action.icon}
+        {action.label}
+      </span>
+    )
+  }
 
   if (action.to) {
     return (

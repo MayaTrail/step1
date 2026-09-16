@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import { useDemoCountdown, formatCountdown } from '@/hooks/useDemoCountdown'
 import { fetchProfile, type UserProfile } from '@/services/auth.service'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
+import { ConnectCloudDialog } from './ConnectCloudDialog'
 import {
     IconChevron,
     IconGear,
@@ -13,9 +13,6 @@ import {
     IconCloud,
     IconCopy,
     IconLogout,
-    IconFlask,
-    IconClock,
-    IconInfo,
     IconAlert,
 } from '@/components/ui/Icons'
 
@@ -25,7 +22,7 @@ import {
  * A prominent identity header (avatar, name, status badges) sits above
  * a vertical stack of information cards: Account Overview, AWS Connection,
  * Security & Access, and a sign-out danger zone. Presentation only:
- * data comes from fetchProfile + useAuth, demo expiry from useDemoCountdown.
+ * data comes from fetchProfile + useAuth.
  */
 export function ProfilePage() {
     const { user, logout } = useAuth()
@@ -33,6 +30,7 @@ export function ProfilePage() {
     const [profile, setProfile] = useState<UserProfile | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
+    const [connectOpen, setConnectOpen] = useState(false)
 
     const loadProfile = useCallback(async () => {
         setLoading(true)
@@ -105,8 +103,9 @@ export function ProfilePage() {
     const authMethod = profile?.auth_method === 'google_sso' ? 'Google SSO' : 'Credentials'
 
     return (
-        <div className="max-w-3xl mx-auto py-8 px-4 animate-fadeIn">
-            <div className="flex flex-col gap-6">
+        <>
+            <div className="max-w-3xl mx-auto py-8 px-4 animate-fadeIn">
+                <div className="flex flex-col gap-6">
                 {/* ── Profile header hero ── */}
                 <ProfileHeader
                     initials={initials}
@@ -137,7 +136,7 @@ export function ProfilePage() {
                 <ConnectionModeCard
                     user={user}
                     profile={profile}
-                    onUpgrade={() => navigate('/connector?upgrade=1')}
+                    onConnect={() => setConnectOpen(true)}
                 />
 
                 {/* ── Security & access ── */}
@@ -172,8 +171,19 @@ export function ProfilePage() {
                         Sign out
                     </Button>
                 </Card>
+                </div>
             </div>
-        </div>
+
+            {/* Reloading on close picks up a newly verified ARN without a page refresh. */}
+            {connectOpen && (
+                <ConnectCloudDialog
+                    onClose={() => {
+                        setConnectOpen(false)
+                        loadProfile()
+                    }}
+                />
+            )}
+        </>
     )
 }
 
@@ -199,10 +209,7 @@ function ProfileHeader({
         if (user.isVerified) {
             return { label: 'AWS Connected', tone: 'green' as const }
         }
-        if (user.isDemo) {
-            return { label: 'Demo Active', tone: 'yellow' as const }
-        }
-        return { label: 'Not Connected', tone: 'neutral' as const }
+        return { label: 'Unverified', tone: 'red' as const }
     })()
 
     return (
@@ -333,16 +340,16 @@ function AccessRow({
 function ConnectionModeCard({
     user,
     profile,
-    onUpgrade,
+    onConnect,
 }: {
     user: ReturnType<typeof useAuth>['user']
     profile: UserProfile | null
-    onUpgrade: () => void
+    onConnect: () => void
 }) {
     if (!user) return null
 
-    if (user.isDemo) {
-        return <DemoModeCard user={user} onUpgrade={onUpgrade} />
+    if (!user.isVerified) {
+        return <ConnectAWSCard onConnect={onConnect} />
     }
 
     if (user.isVerified) {
@@ -378,6 +385,11 @@ function ConnectionModeCard({
                         <div className="font-mono text-xs text-accent-blue break-all">{maskedArn}</div>
                     </div>
                 )}
+                <div className="mt-4">
+                    <Button variant="secondary" onClick={onConnect}>
+                        Manage connection
+                    </Button>
+                </div>
             </Card>
         )
     }
@@ -385,70 +397,51 @@ function ConnectionModeCard({
     return null
 }
 
-/* ── Demo Mode hero with live countdown ── */
-function DemoModeCard({
-    user,
-    onUpgrade,
-}: {
-    user: NonNullable<ReturnType<typeof useAuth>['user']>
-    onUpgrade: () => void
-}) {
-    const { remaining, isExpired } = useDemoCountdown(user.demoExpiresAt)
+/* ── AWS connection form, shown to an unconnected user ────────────────────────
+   The profile is the connector's permanent home: it is where a user looks when
+   they have decided to connect. The just-in-time prompt on a blocked action
+   links here rather than duplicating the form. ------------------------------ */
 
+/**
+ * Shown when no cloud account is connected.
+ *
+ * Deliberately a launcher rather than a form. Connecting means creating an IAM
+ * role and choosing a policy, which needs the explanation and the policy JSON
+ * the dialog carries; a bare ARN field here would ask for the answer without
+ * showing the question.
+ */
+function ConnectAWSCard({ onConnect }: { onConnect: () => void }) {
     return (
-        <Card accent={isExpired ? 'red' : 'amber'} className="p-6">
+        <Card accent="red" className="p-6">
             <div className="flex items-center justify-between gap-4 mb-4">
                 <div className="flex items-center gap-3">
-                    <span
-                        className={`w-10 h-10 rounded-btn flex items-center justify-center border ${
-                            isExpired
-                                ? 'bg-danger-dim border-danger/20 text-danger'
-                                : 'bg-warning-dim border-warning/20 text-warning'
-                        }`}
-                    >
-                        {isExpired ? <IconClock size={20} /> : <IconFlask size={20} />}
+                    <span className="w-10 h-10 rounded-btn flex items-center justify-center bg-danger/10 border border-danger/20 text-danger">
+                        <IconCloud size={20} />
                     </span>
                     <div>
                         <div className="font-mono text-2xs uppercase tracking-label text-content-dim mb-0.5">
                             Connection mode
                         </div>
                         <div className="font-display text-sm font-semibold text-content-primary">
-                            Demo Sandbox
+                            No AWS account connected
                         </div>
                     </div>
                 </div>
-                <Badge tone={isExpired ? 'red' : 'yellow'} mono dot pulse={!isExpired}>
-                    {isExpired ? 'Expired' : remaining !== null ? formatCountdown(remaining) : 'Active'}
+                <Badge tone="red" mono dot>
+                    Unverified
                 </Badge>
             </div>
 
-            {isExpired && (
-                <div className="bg-danger-dim border border-danger/20 rounded-btn px-4 py-3 mb-4">
-                    <p className="font-mono text-xs text-danger leading-relaxed">
-                        Your demo session has ended. Connect your AWS account to continue using MayaTrail.
-                    </p>
-                </div>
-            )}
+            <p className="text-[0.9rem] leading-relaxed text-content-secondary mb-4">
+                You can browse the full catalogue, detection rules and playbooks without connecting.
+                Deploying infrastructure and running emulations needs a verified IAM role, because
+                those actions change resources in your own AWS account.
+            </p>
 
-            <div className="flex items-start gap-2 mb-4 bg-surface-elevated rounded-btn px-3.5 py-2.5 border border-border">
-                <span className="text-content-dim mt-0.5 shrink-0">
-                    <IconInfo size={14} />
-                </span>
-                <p className="font-mono text-2xs text-content-dim leading-relaxed">
-                    Demo mode can only be activated once. Connect your AWS account for full, unlimited
-                    access to all emulations and detections.
-                </p>
-            </div>
-
-            <Button
-                variant="cta"
-                size="lg"
-                onClick={onUpgrade}
-                icon={<IconCloud size={16} />}
-                className="w-full"
-            >
-                Connect AWS Account
+            <Button icon={<IconCloud size={14} />} onClick={onConnect}>
+                Connect cloud account
             </Button>
         </Card>
     )
 }
+

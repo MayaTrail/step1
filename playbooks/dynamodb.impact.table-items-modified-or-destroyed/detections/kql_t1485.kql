@@ -1,0 +1,105 @@
+// DynamoDB table items modified or destroyed (T1485 / T1565.001)
+//
+// Both source rules are DATA-PLANE and neither says so: DeleteItem, BatchWriteItem, UpdateItem and
+// TransactWriteItems require DynamoDB data events, which are off by default and billable. This
+// query leads with the CONTROL-PLANE preconditions instead, because those are logged in every
+// account and they decide whether destruction is recoverable.
+//
+// `contains` throughout, never `has` — table names and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "dynamodb.amazonaws.com"
+| where EventName in (
+    // Control plane — logged by default, present in every account.
+    "UpdateContinuousBackups", "UpdateTimeToLive", "UpdateTable", "DeleteTable",
+    "CreateBackup", "DeleteBackup", "RestoreTableToPointInTime",
+    // Data plane — requires data events. PartiQL names included: ExecuteStatement can issue a
+    // DELETE that does exactly what DeleteItem does and matches neither source rule.
+    "DeleteItem", "BatchWriteItem", "PutItem", "UpdateItem", "TransactWriteItems",
+    "ExecuteStatement", "BatchExecuteStatement", "ExecuteTransaction")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend Table = tostring(Req.tableName)
+| extend ReqText = tostring(RequestParameters)
+| extend PitrOff = EventName == "UpdateContinuousBackups"
+                   and tostring(Req.pointInTimeRecoverySpecification.pointInTimeRecoveryEnabled) == "false"
+| extend ProtectionOff = EventName == "UpdateTable" and tostring(Req.deletionProtectionEnabled) == "false"
+// TTL is bulk deletion on a schedule, and AWS does not log the deletions it causes — this
+// configuration event is the only record that will ever exist.
+| extend TtlConfigured = EventName == "UpdateTimeToLive"
+| extend IsPartiQL = EventName in ("ExecuteStatement", "BatchExecuteStatement", "ExecuteTransaction")
+| extend IsDestroy = EventName in ("DeleteItem", "BatchWriteItem")
+                     or (IsPartiQL and (ReqText contains "DELETE" or ReqText contains "delete"))
+| extend IsModify = EventName in ("PutItem", "UpdateItem", "TransactWriteItems")
+                    or (IsPartiQL and (ReqText contains "UPDATE" or ReqText contains "INSERT"))
+| extend IsDataPlane = EventName in ("DeleteItem", "BatchWriteItem", "PutItem", "UpdateItem",
+                                     "TransactWriteItems", "ExecuteStatement",
+                                     "BatchExecuteStatement", "ExecuteTransaction")
+| summarize
+    PitrDisabled    = countif(PitrOff),
+    ProtectionRemoved = countif(ProtectionOff),
+    TtlChanges      = countif(TtlConfigured),
+    TableDeletes    = countif(EventName == "DeleteTable"),
+    BackupDeletes   = countif(EventName == "DeleteBackup"),
+    ItemDeletes     = countif(IsDestroy),
+    ItemModifies    = countif(IsModify),
+    PartiQLCalls    = countif(IsPartiQL),
+    DataPlaneSeen   = countif(IsDataPlane),
+    Tables          = make_set(Table, 20),
+    FirstControlChange = minif(TimeGenerated, PitrOff or ProtectionOff or TtlConfigured),
+    FirstDestroy    = minif(TimeGenerated, IsDestroy),
+    SourceIps       = make_set(SourceIpAddress, 5),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where PitrDisabled > 0 or ProtectionRemoved > 0 or TtlChanges > 0 or ItemDeletes > 0 or TableDeletes > 0
+| extend RecoveryRemovedFirst = (PitrDisabled > 0 or ProtectionRemoved > 0)
+                                and isnotempty(FirstControlChange) and isnotempty(FirstDestroy)
+                                and FirstControlChange < FirstDestroy
+| extend Verdict = case(
+    RecoveryRemovedFirst,
+        "RECOVERY REMOVED, THEN ITEMS DESTROYED by the same principal — this is the ordering that makes the loss permanent, P0",
+    PitrDisabled > 0 and TableDeletes > 0,
+        "PITR DISABLED AND A TABLE DELETED — with continuous backups off there is no point-in-time restore, P0",
+    PitrDisabled > 0,
+        "POINT-IN-TIME RECOVERY DISABLED — control-plane and logged by default, so this is visible even where item events are not. It is the precondition for permanent loss, P0",
+    ProtectionRemoved > 0,
+        "DELETION PROTECTION REMOVED — the table itself can now be deleted, P0",
+    TtlChanges > 0,
+        "TIME-TO-LIVE CONFIGURED — bulk deletion on a schedule, and AWS does NOT log TTL deletions. This event is the only record that will ever exist, P0",
+    ItemDeletes > 0 and PartiQLCalls > 0,
+        "ITEMS DELETED VIA PARTIQL — ExecuteStatement issuing a DELETE, which matches no rule scoped to DeleteItem, P1",
+    ItemDeletes > 0,
+        "ITEMS DELETED — requires data events, so seeing this at all means they are enabled here, P1",
+    "DynamoDB activity")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, PitrDisabled, ProtectionRemoved,
+          TtlChanges, TableDeletes, BackupDeletes, ItemDeletes, ItemModifies, PartiQLCalls,
+          Tables, SourceIps
+| order by RecoveryRemovedFirst desc, PitrDisabled desc
+//
+// ============================================================================
+// IF `DataPlaneSeen` IS ALWAYS ZERO, DATA EVENTS ARE NOT ENABLED
+// ============================================================================
+// Item-level operations require DynamoDB data events, which are off by default and billable. Across
+// a month of real traffic, a DataPlaneSeen of zero means the two source rules for item deletion and
+// item update have never fired here and never will — and that "no results" from them is not
+// evidence that nothing happened. Confirm directly:
+//   aws cloudtrail get-event-selectors --trail-name <trail> | grep -i dynamodb
+//
+// ============================================================================
+// TTL DELETIONS ARE NEVER LOGGED
+// ============================================================================
+// AWS: "DynamoDB Time to Live data plane actions are not logged by CloudTrail." No data event, no
+// management event, nothing — even with data events fully enabled. So a short TTL removes items in
+// bulk leaving only the UpdateTimeToLive configuration event behind, which is why that ships at high
+// and why the playbook reads the affected item population rather than waiting for deletions.
+//
+// ============================================================================
+// COST OBJECTION TO DATA EVENTS HAS A DOCUMENTED ANSWER
+// ============================================================================
+// AWS notes GetRecords calls from internal operations such as global tables replication inflate data
+// event volume, and gives the remedy: the "Exclude AWS service-initiated events" selector template,
+// or an advanced selector with userIdentity.arn NotStartsWith AWSServiceRoleFor.

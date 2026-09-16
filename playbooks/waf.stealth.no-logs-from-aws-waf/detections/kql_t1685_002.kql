@@ -1,0 +1,81 @@
+// WAF Logging Stopped (T1685.002)
+//
+// The technique disables the telemetry the detection would use, so this query runs against
+// CLOUDTRAIL — the control plane — not against the WAF traffic log. Every call below
+// survives the WAF stream stopping, which is the whole point.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL over AWSCloudTrail. Flattened columns.
+AWSCloudTrail
+| where TimeGenerated > ago(30d)
+| where EventSource == "wafv2.amazonaws.com"
+| where EventName in ("PutLoggingConfiguration", "DeleteLoggingConfiguration")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend WebAclArn = tostring(coalesce(Req.resourceArn, Req.ResourceArn,
+                                       Req.loggingConfiguration.resourceArn))
+// A LoggingFilter with DefaultBehavior DROP and no keeping filter silences the stream while
+// the configuration remains present and the console still shows logging enabled. This is
+// the quiet variant an absence alert cannot distinguish from a delete.
+| extend Filter        = Req.loggingConfiguration.loggingFilter
+| extend DefaultDrop   = tostring(Filter.DefaultBehavior) =~ "DROP"
+| extend FilterPresent = isnotnull(Filter)
+| extend KeepFilters   = array_length(todynamic(Filter.Filters))
+| extend Redacted      = array_length(todynamic(Req.loggingConfiguration.redactedFields))
+// ARN parsing: for an assumed-role ARN the LAST segment is the session name and the SECOND
+// is the role name. One idiom does not serve both forms.
+| extend ArnParts  = split(UserIdentityArn, "/")
+| extend Actor     = iff(UserIdentityArn contains ":assumed-role/",
+                         tostring(ArnParts[1]),
+                         tostring(ArnParts[array_length(ArnParts) - 1]))
+| summarize
+    Calls      = count(),
+    Deletes    = countif(EventName == "DeleteLoggingConfiguration"),
+    Replaces   = countif(EventName == "PutLoggingConfiguration"),
+    AnyDrop    = max(DefaultDrop),
+    AnyRedact  = max(coalesce(Redacted, 0) > 0),
+    MinKeeps   = min(coalesce(KeepFilters, 0)),
+    SourceIPs  = make_set(SourceIpAddress, 5),
+    FirstSeen  = min(TimeGenerated),
+    LastSeen   = max(TimeGenerated)
+    by WebAclArn, Actor, UserIdentityArn
+| extend Verdict = case(
+    Deletes > 0,
+        "WAF LOGGING DELETED — the web ACL still evaluates and blocks, and writes nothing. The gap is unrecoverable, P0",
+    AnyDrop and MinKeeps == 0,
+        "LOGGING FILTER SET TO DROP WITH NO KEEPING FILTER — configuration present, console shows enabled, stream silent, P0",
+    AnyDrop,
+        "LOGGING FILTER INSTALLED WITH DefaultBehavior DROP — read the Filters array; anything not explicitly kept is discarded, P1",
+    AnyRedact,
+        "REDACTED FIELDS ADDED — those components now log as the literal string xxx. Confirm intent, P2",
+    "WAF logging configuration replaced — read the resulting configuration before dispositioning, P2")
+| project FirstSeen, LastSeen, WebAclArn, Verdict, Actor, UserIdentityArn,
+          Deletes, Replaces, AnyDrop, MinKeeps, AnyRedact, SourceIPs
+| order by LastSeen desc
+//
+// ============================================================================
+// WHY AN ABSENCE ALERT IS NOT ENOUGH, AND WHAT IT CANNOT TELL YOU
+// ============================================================================
+// The source rule alerts when no WAF records arrive in a window. Four things produce that,
+// and only one is an incident:
+//   1. DeleteLoggingConfiguration        — the incident.
+//   2. A LoggingFilter of DefaultBehavior DROP — the incident, and invisible to
+//      GetLoggingConfiguration reading as "enabled".
+//   3. The delivery permission removed (log-group resource policy, S3 bucket policy,
+//      Firehose service-linked role) — the incident, and WAF's own config is untouched.
+//   4. GENUINELY NO TRAFFIC — a dev endpoint at night, a decommissioned ACL, a DNS cutover.
+// An absence alert reports all four identically. That is why the deployable rules watch the
+// control plane instead, and why the absence alert is kept only as a corroborating signal.
+//
+// ============================================================================
+// WHAT IS UNRECOVERABLE
+// ============================================================================
+// For any window in which the web ACL had no logging configuration there is no per-request
+// record and there never will be. Nothing reconstructs it. Three weaker things survive:
+//   * CloudWatch AWS/WAFV2 metrics — counts only, no request content, 1-minute resolution,
+//     governed by VisibilityConfig.CloudWatchMetricsEnabled (independent of logging).
+//   * GetSampledRequests — a random sample from the first 5,000 requests in a chosen window
+//     within the PREVIOUS THREE HOURS ONLY, MaxItems 1-500. It has NO query string and NO
+//     body, so it is not a substitute even inside its window.
+//   * Amazon Security Lake, if separately configured.
+// The three-hour sampling window is the only one that expires, which is why evidence
+// capture precedes remediation in this playbook rather than following it.

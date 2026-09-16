@@ -1,5 +1,7 @@
 export * from './platform'
 export * from './auth'
+export * from './threatintel'
+export * from './workflow'
 export * from './playbook'
 export * from './detectionExport'
 export * from './authoredDetection'

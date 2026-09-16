@@ -1,0 +1,93 @@
+// Stolen credentials used for model compute — "LLMjacking" (T1496 / T1078.004)
+//
+// Two planes, and most accounts have only the second:
+//   BedrockModelInvocationLogs -> who, which model, how many tokens, and the prompt and response.
+//                                 DISABLED BY DEFAULT.
+//   AWSCloudTrail              -> who and which model, never the content. Present wherever
+//                                 bedrock-runtime data events are enabled.
+//
+// `contains` throughout, never `has` — ARNs and model IDs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. Table names depend on ingestion.
+let LOOKBACK = 7d;
+let WINDOW = 1h;
+// POPULATE: the Regions this organisation actually uses for Bedrock.
+let ExpectedRegions = dynamic(["us-east-1", "eu-west-1"]);
+BedrockModelInvocationLogs
+| where TimeGenerated > ago(LOOKBACK)
+| extend Principal = tostring(identity_arn)
+| extend Model     = tostring(modelId)
+| extend Op        = tostring(operation)
+| extend Rgn       = tostring(region)
+| extend InTok     = tolong(input_inputTokenCount)
+| extend OutTok    = tolong(output_outputTokenCount)
+// requestMetadata is "the only field supplied by the caller" — attacker-supplied when the caller is
+// the attacker. Projected for context and NEVER used as a grouping key or a trust signal.
+| extend CallerTags = tostring(requestMetadata)
+// The role SESSION name is the part of an assumed-role ARN that varies per assumption, so stripping
+// it groups a role's sessions together while keeping the full ARN available for the pivot.
+| extend RoleBase = iff(Principal contains ":assumed-role/",
+                        strcat_array(array_slice(split(Principal, "/"), 0, 1), "/"),
+                        Principal)
+| summarize
+    Calls        = count(),
+    Models       = dcount(Model),
+    ModelList    = make_set(Model, 10),
+    Ops          = make_set(Op, 5),
+    Regions      = make_set(Rgn, 5),
+    Sessions     = dcount(Principal),
+    InputTokens  = sum(InTok),
+    OutputTokens = sum(OutTok),
+    TagsSeen     = make_set(CallerTags, 3),
+    FirstSeen    = min(TimeGenerated),
+    LastSeen     = max(TimeGenerated)
+    by RoleBase, bin(TimeGenerated, WINDOW)
+| extend UnexpectedRegion = set_difference(Regions, ExpectedRegions)
+| extend Verdict = case(
+    array_length(UnexpectedRegion) > 0,
+        strcat("INVOCATION FROM AN UNUSED REGION — ", tostring(UnexpectedRegion), ". Model access is per-Region, so an actor exploring a stolen credential spreads across Regions looking for an enabled model, and nobody watches the bill in a Region they do not operate in, P0"),
+    Models >= 5 and Calls < 200,
+        "MANY DISTINCT MODELS, FEW CALLS EACH — the shape of a credential being explored rather than used. This fires earlier and on far less volume than any cost threshold, P0",
+    Calls >= 1000,
+        "SUSTAINED INVOCATION VOLUME — compare against this principal's own history, not a fleet average. A batch pipeline does this legitimately and a human-facing application does not, P1",
+    OutputTokens > InputTokens * 20 and Calls > 50,
+        "OUTPUT VASTLY EXCEEDS INPUT — short prompts producing long generations, which is content production rather than an application answering questions, P1",
+    Models >= 5,
+        "MODEL BREADTH — a legitimate workload uses one model or a small fixed set chosen at design time, P2",
+    "Bedrock invocations — compare against this principal's baseline")
+| project FirstSeen, LastSeen, RoleBase, Verdict, Calls, Models, ModelList, Ops,
+          Regions, UnexpectedRegion, Sessions, InputTokens, OutputTokens, TagsSeen
+| order by Calls desc, Models desc
+//
+// ============================================================================
+// WITHOUT INVOCATION LOGGING — the CloudTrail-only view, which most accounts have
+// ============================================================================
+// AWSCloudTrail
+// | where TimeGenerated > ago(7d)
+// | where EventSource == "bedrock-runtime.amazonaws.com"
+// | where EventName in ("InvokeModel", "InvokeModelWithResponseStream", "Converse", "ConverseStream")
+// | extend Req = parse_json(RequestParameters)
+// | extend Model = tostring(Req.modelId)
+// | summarize Calls = count(), Models = dcount(Model), ModelList = make_set(Model, 10),
+//             Regions = make_set(AwsRegion, 5), SourceIps = make_set(SourceIpAddress, 10)
+//           by UserIdentityArn, bin(TimeGenerated, 1h)
+// | where Calls >= 1000 or Models >= 5
+//
+// This gives the principal, the model, the Region and the source address — and no tokens and no
+// content. Token counts are the cost measure and they exist only in the invocation log, so with
+// CloudTrail alone the volume signal is call count and the spend question goes to Cost Explorer.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHAT WAS ASKED OR PRODUCED, unless invocation logging was enabled beforehand — it is off by
+// default and cannot be applied retroactively. And even then, bodies over 100 KB and all binary
+// data are stored as separate S3 objects rather than inline, so a search of the log text misses the
+// largest prompts.
+//
+// WHETHER THE CALLER WAS WHO THEY CLAIM. requestMetadata is caller-supplied. identity.arn is
+// captured by Bedrock and is the only trustworthy actor field here.
+//
+// WHETHER OTHER ENDPOINTS WERE USED. AWS: invocation logging covers the bedrock-runtime endpoint,
+// and "calls made through other endpoints... are not currently captured by invocation logging."
+// That is a documented gap in the log source and it is not configurable.

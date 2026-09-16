@@ -1,0 +1,86 @@
+// S3 bucket ACL configured to grant public or cross-account access (T1530)
+//
+// The source rule matches every successful PutBucketAcl with no content check, at P3 — identical
+// output for an ACL set to `private` and one granting the world read access. This query splits
+// them, because AWS's definition of a public ACL is exactly two predefined group URIs and is
+// therefore cheap to check.
+//
+// `contains` throughout, never `has` — the grantee values are URIs.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "s3.amazonaws.com"
+| where EventName in ("PutBucketAcl", "PutBucketPublicAccessBlock", "PutAccountPublicAccessBlock",
+                      "DeleteBucketPublicAccessBlock")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend ReqText = tostring(RequestParameters)
+| extend Bucket = tostring(Req.bucketName)
+// AWS: "Amazon S3 considers a bucket or object ACL public if it grants any permissions to members
+// of the predefined AllUsers or AuthenticatedUsers groups." Two URIs, and nothing else in an ACL
+// makes it public.
+| extend GrantsAllUsers = ReqText contains "groups/global/AllUsers"
+// AuthenticatedUsers means any principal in ANY AWS account — not any principal in yours. It is
+// public in AWS's evaluation and in practice, and the name invites the opposite conclusion.
+| extend GrantsAuthUsers = ReqText contains "groups/global/AuthenticatedUsers"
+| extend CannedAcl = tostring(Req["x-amz-acl"])
+| extend CannedPublic = CannedAcl in ("public-read", "public-read-write", "authenticated-read")
+// Where another account sets the ACL, AWS redacts the grantee from the bucket owner's copy of the
+// event. No grantee URI, no canned header and no CanonicalUser means the grant is NOT DETERMINABLE
+// from this event — which is a different verdict from clean.
+| extend Opaque = EventName == "PutBucketAcl" and not(GrantsAllUsers) and not(GrantsAuthUsers)
+                  and isempty(CannedAcl) and not(ReqText contains "CanonicalUser")
+| extend AclGateLowered = EventName contains "PublicAccessBlock"
+    and (tostring(Req.PublicAccessBlockConfiguration.BlockPublicAcls) == "false"
+         or tostring(Req.PublicAccessBlockConfiguration.IgnorePublicAcls) == "false"
+         or EventName contains "Delete")
+| summarize
+    PublicGrants  = countif(GrantsAllUsers or CannedPublic),
+    AuthUserGrants= countif(GrantsAuthUsers),
+    OpaqueWrites  = countif(Opaque),
+    AclWrites     = countif(EventName == "PutBucketAcl"),
+    GateEvents    = countif(AclGateLowered),
+    FirstGate     = minif(TimeGenerated, AclGateLowered),
+    FirstPublic   = minif(TimeGenerated, GrantsAllUsers or GrantsAuthUsers or CannedPublic),
+    Canned        = make_set_if(CannedAcl, isnotempty(CannedAcl), 5),
+    Buckets       = make_set(Bucket, 20),
+    SourceIps     = make_set(SourceIpAddress, 5),
+    LastSeen      = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where PublicGrants > 0 or AuthUserGrants > 0 or OpaqueWrites > 0
+| extend GateThenGrant = GateEvents > 0 and isnotempty(FirstGate) and isnotempty(FirstPublic)
+                         and FirstGate < FirstPublic
+| extend Verdict = case(
+    GateThenGrant,
+        "ACL GATE LOWERED, THEN A PUBLIC ACL WRITTEN by the same principal — the sequence BlockPublicAcls exists to prevent, P0",
+    PublicGrants > 0,
+        "PUBLIC ACL GRANTED TO AllUsers AND IT SUCCEEDED — which is itself proof BlockPublicAcls was false at that instant, because S3 rejects this call when it is set, P0",
+    AuthUserGrants > 0,
+        "GRANTED TO AuthenticatedUsers — this is ANY principal in ANY AWS account, not yours. AWS evaluates it as public and so should you, P0",
+    OpaqueWrites > 0,
+        "ACL WRITTEN WITH NO READABLE GRANTEE — the shape produced when another account sets the ACL, since AWS redacts the grantee from the owner's event. Verdict is 'cannot be determined', not 'clean', P2",
+    "bucket ACL written — no public grant in the request")
+| project FirstGate, FirstPublic, LastSeen, UserIdentityArn, Verdict, PublicGrants, AuthUserGrants,
+          OpaqueWrites, AclWrites, GateEvents, Canned, Buckets, SourceIps
+| order by GateThenGrant desc, PublicGrants desc, AuthUserGrants desc
+//
+// ============================================================================
+// READING THE ACL BACK DOES NOT SETTLE IT
+// ============================================================================
+// AWS: "suppose that a bucket has an ACL that grants public access, but the bucket also has the
+// IgnorePublicAcls setting enabled. In this case, GetBucketAcl returns an ACL that reflects the
+// access permissions that Amazon S3 is enforcing, rather than the actual ACL that is associated
+// with the bucket." So a live read can show a clean ACL while a public grant is stored and merely
+// suppressed — and it becomes live the moment IgnorePublicAcls is turned off. Read the guardrail
+// state alongside the ACL, never on its own.
+//
+// ============================================================================
+// ACLs MAY NOT EVEN BE IN USE
+// ============================================================================
+// Object Ownership set to bucket-owner-enforced disables ACLs entirely, and PutBucketAcl then
+// fails. Before treating an absence of hits as coverage, confirm ACLs are actually in play:
+//   aws s3api get-bucket-ownership-controls --bucket <name>
+// A clean result on a bucket-owner-enforced bucket means the feature is off, not that the control
+// is working.

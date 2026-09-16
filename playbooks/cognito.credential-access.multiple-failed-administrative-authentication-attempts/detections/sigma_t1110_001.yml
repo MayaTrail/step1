@@ -1,0 +1,243 @@
+# Failed Administrative Authentication Attempts (T1110.001 / T1078.004)
+#
+# WHAT THE ORIGINAL RULE GOT WRONG, AND WHY IT RETURNS ZERO ON A DEFAULT USER POOL.
+# The source rule matches `AdminInitiateAuth` with an errorCode of NotAuthorizedException or
+# UserNotFoundException and an authFlow in
+# (ADMIN_USER_PASSWORD_AUTH, ADMIN_NO_SRP_AUTH, USER_SRP_AUTH, CUSTOM_AUTH). Two of those four
+# flows cannot produce a PASSWORD failure on that event at all. In USER_SRP_AUTH the initial
+# call only exchanges SRP_A for a salt and SRP_B - it SUCCEEDS - and the password claim is
+# verified in the following `AdminRespondToAuthChallenge`, which is where AWS documents the
+# "generic NotAuthorizedException". CUSTOM_AUTH is the same shape: the challenge is answered on
+# the Respond call. So for those two flows the rule sees a success and a failure it never looks
+# at. The same is true of the PASSWORD challenge inside USER_AUTH, which the rule omits
+# entirely.
+#
+# That is not a corner case, it is the default. AWS: if `ExplicitAuthFlows` is not specified,
+# an app client supports ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_SRP_AUTH and ALLOW_CUSTOM_AUTH -
+# and nothing else. ADMIN_USER_PASSWORD_AUTH must be turned on deliberately. On a default app
+# client the only reachable flows are exactly the two whose password failures land on the
+# Respond call, so the source rule is structurally dead. The rules below match BOTH halves of
+# every flow: `AdminInitiateAuth` and `AdminRespondToAuthChallenge`.
+#
+# THE SECOND SUPPRESSION. `PreventUserExistenceErrors` is an APP CLIENT setting, and AWS
+# documents that when it is active the password flows return `NotAuthorizedException` with the
+# message "Incorrect username or password" where they would otherwise have returned
+# `UserNotFoundException`. The console selects it by default; the API leaves it `LEGACY`. So
+# the source rule's UserNotFoundException clause is live on IaC-created clients and dead on
+# console-created ones, and nothing in the rule reveals which. Enumeration coverage therefore
+# cannot rest on that code - it rests on volume and on distinct usernames.
+#
+# THE THIRD THING NEITHER SIDE MATCHES: THE LOCKOUT. AWS documents that after five failed
+# password attempts Cognito locks the user out for 2^(n-5) seconds, to a ceiling of about
+# fifteen minutes, and that attempts during a lockout "generate a `Password attempts exceeded`
+# exception". The counter is shared: "regardless of whether those are requested with
+# unauthenticated or IAM-authorized API operations". A sustained run against ONE account
+# therefore stops producing NotAuthorizedException and starts producing the lockout form, so a
+# rule matching only the two codes undercounts a real attack and can miss the threshold. The
+# lockout is matched here as a sibling block on `errorMessage`.
+#
+# FIELD SHAPE, AND WHAT CANNOT BE PIVOTED ON. `cognito-idp` API operations are CloudTrail
+# MANAGEMENT events, on by default, with `eventType: AwsApiCall`. `AdminInitiateAuth` is
+# IAM-authorized - AWS: "you must use IAM credentials to authorize requests" - so every event
+# carries a real `userIdentity.arn`, which is the opposite of its unauthenticated sibling in
+# ../../cognito.credential-access.multiple-failed-authentication-attempts-from-single-source/.
+# But AWS also states it "records UserSub but not UserName in CloudTrail logs for requests that
+# are specific to a user", and obscures private fields with the literal string
+# HIDDEN_DUE_TO_SECURITY_REASONS. The targeted account is therefore identified by `sub`, not by
+# username, and the AuthParameters map carrying USERNAME and PASSWORD is redaction-class. AWS
+# publishes no example CloudTrail event for any cognito-idp management operation, so the exact
+# `requestParameters` shape is UNVERIFIED - do not gate a rule on
+# `requestParameters.authFlow` until you have confirmed it in your own trail.
+title: Repeated Cognito administrative authentication failures from one principal
+id: 4fbcd659-ca99-44ee-b541-4bc897a344fa
+name: cognito_admin_auth_failure_burst
+status: experimental
+description: >-
+  One AWS principal produced five or more failed server-side user-pool authentications inside
+  ten minutes from one source address. The caller already holds AWS credentials carrying
+  cognito-idp:AdminInitiateAuth, so this is not an anonymous internet brute force - it is an
+  in-account principal guessing or spraying passwords against the user directory.
+references:
+  - https://attack.mitre.org/techniques/T1110/001/  # retrieved 2026-08-29
+  - https://attack.mitre.org/techniques/T1078/004/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_AdminInitiateAuth.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/cognito/latest/developerguide/authentication.html  # retrieved 2026-08-29
+tags:
+  - attack.credential-access
+  - attack.t1110.001
+  - attack.initial-access
+  - attack.t1078.004
+correlation:
+  type: event_count
+  rules:
+    - cognito_admin_auth_failure_bb
+  group-by:
+    - userIdentity.arn
+    - sourceIPAddress
+  timespan: 10m
+  condition:
+    gte: 5
+falsepositives:
+  - >-
+    A backend service holding a stale credential for one service account, retrying in a loop.
+    Distinguishable because it repeats against a single sub with an unchanging user agent; a
+    guessing run walks distinct subs or distinct passwords. If it is frequent, the finding is
+    that a machine identity is authenticating as a human user.
+level: high
+---
+# Threshold basis - five in ten minutes, inherited from the source and defensible for a reason
+# the source does not state. AWS locks an account out after exactly FIVE failed password
+# attempts, so five is the point at which a guessing run has already changed the state of a
+# real user's account. `gte`, never `gt`: a run that stops at exactly five must not fall
+# through the rule it was designed to catch (F6).
+#
+# Ten minutes is retained as the window because it spans the documented lockout ceiling of
+# "approximately 15 minutes" poorly but the ATTACK's own cadence well - a scripted run makes
+# five calls in seconds. Re-baseline against your own account: if a backend service legitimately
+# produces five auth failures in ten minutes, raise the threshold rather than muting the rule,
+# and record which principal it was in the allowlist that rule 3 below uses.
+title: Cognito administrative authentication failed
+id: e8de9471-e5ce-4861-a7cc-7770e3f155ee
+name: cognito_admin_auth_failure_bb
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. Matches both halves of every
+  admin auth flow, because the password is verified on AdminInitiateAuth for the
+  ADMIN_USER_PASSWORD_AUTH and ADMIN_NO_SRP_AUTH flows and on AdminRespondToAuthChallenge for
+  USER_SRP_AUTH, CUSTOM_AUTH and the PASSWORD challenge of USER_AUTH.
+references:
+  - https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_AdminRespondToAuthChallenge.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pool-managing-errors.html  # retrieved 2026-08-29
+tags:
+  - attack.credential-access
+  - attack.t1110.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cognito-idp.amazonaws.com'
+    eventName:
+      - 'AdminInitiateAuth'
+      - 'AdminRespondToAuthChallenge'
+  # UserNotConfirmedException is a FAILED authentication that also proves the account EXISTS,
+  # which is why it is counted here and not treated as noise. UserNotFoundException survives
+  # only on app clients where PreventUserExistenceErrors is LEGACY.
+  auth_failure:
+    errorCode:
+      - 'NotAuthorizedException'
+      - 'UserNotFoundException'
+      - 'UserNotConfirmedException'
+  # The lockout form. AWS documents the exception by its message rather than by a distinct
+  # code, so this is a sibling block on errorMessage OR-ed into the condition - never a second
+  # key inside `auth_failure`, which would AND it and match nothing (B4).
+  lockout:
+    errorMessage|contains: 'Password attempts exceeded'
+  condition: selection and (auth_failure or lockout)
+level: low
+---
+title: Cognito administrative authentication succeeded
+id: 787d4b71-57cc-484f-b958-4d8126d79b1f
+name: cognito_admin_auth_success_bb
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. Carries the success filter so a
+  denied or failed call cannot compose into the critical correlation below (D-f).
+references:
+  - https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_AdminInitiateAuth.html  # retrieved 2026-08-29
+tags:
+  - attack.credential-access
+  - attack.t1110.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cognito-idp.amazonaws.com'
+    eventName:
+      - 'AdminInitiateAuth'
+      - 'AdminRespondToAuthChallenge'
+  success:
+    errorCode: null
+  condition: selection and success
+level: low
+---
+# Failures then a success is the only shape in this file that says the brute force WORKED.
+# Fifteen minutes is chosen against the lockout curve rather than arbitrarily: a run that has
+# tripped the lockout waits out a doubling interval capped at about fifteen minutes, so a
+# success arriving inside that span is the same run resuming, and one arriving much later is a
+# separate session.
+#
+# LIMITATION, stated so nobody reads more into a hit than is there. The correlation groups by
+# `userIdentity.arn` and CANNOT require that the success is against the SAME user account as
+# the failures - CloudTrail records the target as `sub`, not username, and Sigma has no
+# cross-event field join. A backend legitimately signing in user B seconds after failing on
+# user A will match. Confirm the sub is the same before treating a hit as a confirmed
+# compromise; the KQL reports the sub set so the analyst can do exactly that.
+title: Cognito administrative authentication failures followed by a success
+id: 747d52c1-f007-4324-a932-3affc943cbe8
+status: experimental
+description: >-
+  One AWS principal failed server-side user-pool authentication repeatedly and then succeeded
+  within fifteen minutes. If the successful call names the same sub as the failures, a user
+  pool account password has been guessed and the tokens it returned are already issued.
+references:
+  - https://attack.mitre.org/techniques/T1110/001/  # retrieved 2026-08-29
+tags:
+  - attack.credential-access
+  - attack.t1110.001
+correlation:
+  type: temporal_ordered
+  rules:
+    - cognito_admin_auth_failure_bb
+    - cognito_admin_auth_success_bb
+  group-by:
+    - userIdentity.arn
+  timespan: 15m
+level: critical
+---
+# The correction the source rule omits entirely: WHO is allowed to authenticate users
+# server-side. AdminInitiateAuth is IAM-authorized, so unlike its unauthenticated sibling every
+# event names a principal - and in most accounts exactly one backend role has any business
+# calling it. This rule fires on the FIRST call by anyone else, success or failure, without
+# waiting for a threshold.
+#
+# POPULATE BEFORE DEPLOYING. Unpopulated, `backend_auth_principals` matches nothing and this
+# fires on every legitimate server-side sign-in. That is the safe failure direction - noisy
+# toward surfacing - but it is still a rule you must tune before it is useful.
+title: Cognito administrative authentication by a principal outside the server-side auth allowlist
+id: 09b1b215-39e7-4e9b-af7b-ae6e78f3c006
+status: experimental
+description: >-
+  A principal that does not own server-side authentication called AdminInitiateAuth or
+  AdminRespondToAuthChallenge. The API returns real user pool tokens, so a principal holding it
+  can impersonate any user in the directory without knowing a password only if it also holds a
+  valid password - but it can enumerate the directory and drive every account into lockout
+  regardless.
+references:
+  - https://docs.aws.amazon.com/cognito/latest/developerguide/security_iam_service-with-iam.html  # retrieved 2026-08-29
+tags:
+  - attack.credential-access
+  - attack.t1110.001
+  - attack.initial-access
+  - attack.t1078.004
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cognito-idp.amazonaws.com'
+    eventName:
+      - 'AdminInitiateAuth'
+      - 'AdminRespondToAuthChallenge'
+  backend_auth_principals:
+    userIdentity.arn|contains:
+      - ':role/app-backend-auth'    # replace with this account's server-side auth role
+      - ':role/BreakGlassAdmin'     # replace with this account's break-glass role
+  condition: selection and not backend_auth_principals
+falsepositives:
+  - >-
+    An engineer testing sign-in from a workstation under a personal role. Should be rare and
+    traceable; if it is common, the finding is that user impersonation is not gated on a
+    dedicated role.
+level: high

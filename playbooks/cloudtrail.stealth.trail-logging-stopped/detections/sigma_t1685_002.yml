@@ -1,0 +1,134 @@
+# CloudTrail logging stopped (T1685.002)
+#
+# THE SOURCE RULE FILTERS ON SUCCESS AND THROWS AWAY THE BETTER SIGNAL. AWS refuses StopLogging
+# outside the trail's home Region and refuses it on shadow trails entirely, so an actor who does not
+# already know the home Region fails first — higher fidelity than the success, and earlier.
+#
+# AWS also states "there is no need to use this action. You can update a trail without stopping it
+# first", so there is no benign reconfiguration reading. And whether the account actually went dark
+# is not in the event: member accounts cannot alter an organization trail at all.
+# Full rationale: detections/detection_note_t1685_002.md.
+title: CloudTrail logging stopped
+id: 6d4a08f9-15c3-4e72-b806-2f95a7c1e34b
+name: cloudtrail_stop_logging
+status: experimental
+description: >-
+  A successful StopLogging. AWS states this is the only way to stop recording and that there is
+  normally no reason to use it, since a trail can be updated while running — so there is no
+  benign-reconfiguration reading. Whether the account actually went dark depends on whether an
+  organization trail also covers it, which this event does not carry.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_StopLogging.html
+  - https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-concepts.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'StopLogging'
+  success:
+    errorCode: null
+  condition: selection and success
+falsepositives:
+  - >-
+    A trail being decommissioned, where the DeleteTrail that follows within minutes is the
+    corroborating evidence. Its absence is what makes a lone stop worth waking someone for.
+level: critical
+---
+title: CloudTrail StopLogging attempted and refused
+id: 3f70b621-9c8e-4d45-a1f2-570e8ba3d69c
+name: cloudtrail_stop_logging_refused
+status: experimental
+description: >-
+  A StopLogging that failed. The error code says what the caller did not know. InvalidHomeRegion
+  means they were guessing which Region owns the trail — AWS refuses the call anywhere but the home
+  Region and refuses it on shadow trails entirely. NotOrganizationMasterAccount means a member
+  account tried to silence an organization trail it cannot touch. TrailNotFound means they were
+  enumerating names. All three are an actor working out how to go dark, before they manage it, and
+  all three are dropped by any rule filtering on success.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_StopLogging.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'StopLogging'
+  diagnostic_errors:
+    errorCode:
+      - 'InvalidHomeRegionException'
+      - 'NotOrganizationMasterAccountException'
+      - 'TrailNotFoundException'
+      - 'AccessDenied'
+      - 'InsufficientDependencyServiceAccessPermissionException'
+  condition: selection and diagnostic_errors
+falsepositives:
+  - >-
+    A cross-Region automation loop that calls StopLogging in every Region and expects most calls to
+    fail. That is a real pattern and a bad one; allowlist the role rather than dropping the rule,
+    because it is also exactly what an actor probing for the home Region looks like.
+level: high
+---
+title: CloudTrail logging stopped and restarted by the same principal
+id: b8e51de0-247a-4c96-83b7-e0d4f1a62c58
+status: experimental
+description: >-
+  A principal stopped logging and started it again. The end state is correct, which is the problem —
+  every state-based check passes and only the event history holds the gap. The interval between the
+  two events is the window in which nothing was recorded, and reconstructing what happened inside it
+  is not possible from CloudTrail by definition.
+references:
+  - https://attack.mitre.org/techniques/T1685/002/
+  - https://attack.mitre.org/techniques/T1070/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+  - attack.t1070
+correlation:
+  type: temporal_ordered
+  rules:
+    - cloudtrail_stop_logging
+    - cloudtrail_start_logging
+  group-by:
+    - userIdentity.arn
+  timespan: 24h
+falsepositives:
+  - >-
+    A maintenance window that legitimately stops and restarts a trail. AWS states a trail can be
+    updated without stopping it, so this should be rare enough to allowlist by role rather than to
+    tune away by shortening the timespan.
+level: critical
+---
+title: CloudTrail logging started
+id: 92c7f38a-b046-4e51-9d38-7ab150ce62f4
+name: cloudtrail_start_logging
+status: experimental
+description: >-
+  Base rule — correlation component and change accounting, never for direct alerting. A successful
+  StartLogging. On its own this is a trail being turned on, which is a good thing happening.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_StartLogging.html
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'StartLogging'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational

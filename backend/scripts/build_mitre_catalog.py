@@ -10,9 +10,16 @@ is deterministic and reviewable.  Re-run this script to upgrade to a newer
 ATT&CK release; commit the regenerated JSON.
 
 Granularity: TECHNIQUE-LEVEL.  Sub-techniques (e.g. T1552.005) are excluded
-from the catalogue — they roll up to their parent (T1552) at scoring time.
-This matches the product decision that the denominator is the ~200 parent
+from the `techniques` list — they roll up to their parent (T1552) at scoring
+time.  This matches the product decision that the denominator is the ~200 parent
 Enterprise techniques, not the ~600 parent+sub IDs.
+
+Sub-technique NAMES are emitted separately under `subtechniques` (a flat
+id -> name map).  That key is deliberately not part of the coverage denominator;
+it exists so manifest validation can check that a sub-technique ID a manifest
+cites is real and that the name it prints beside that ID is MITRE's own.  The
+UI renders the ID and the name together as an ATT&CK citation, so a wrong name
+is a factual error shown to the user.
 
 Source:
     MITRE ATT&CK STIX 2.1 bundle, enterprise-attack domain, published at
@@ -121,17 +128,79 @@ def _build(bundle: dict[str, Any]) -> dict[str, Any]:
 
     techniques.sort(key=lambda t: t["id"])
 
+    # Sub-technique id -> name, for manifest validation only (see module docstring).
+    subtechniques: dict[str, str] = {}
+    for obj in objects:
+        if obj.get("type") != "attack-pattern":
+            continue
+        if obj.get("revoked") or obj.get("x_mitre_deprecated"):
+            continue
+        if not obj.get("x_mitre_is_subtechnique"):
+            continue
+        ext = _external_id(obj)
+        if ext:
+            subtechniques[ext] = obj.get("name", "")
+
     live_ids = {t["id"] for t in techniques}
     revoked_map = _build_revoked_map(objects, live_ids)
+    revoked_map.update(_build_subtechnique_revoked_map(objects, set(subtechniques)))
 
     return {
         "attack_version": _bundle_version(objects),
         "generated_from": "enterprise-attack",
         "tactics": ordered_tactics,
         "techniques": techniques,
+        "subtechniques": dict(sorted(subtechniques.items())),
         "revoked_map": revoked_map,
         "technique_count": len(techniques),
+        "subtechnique_count": len(subtechniques),
     }
+
+
+def _build_subtechnique_revoked_map(
+    objects: list[dict[str, Any]], live_sub_ids: set[str]
+) -> dict[str, str]:
+    """
+    Map revoked SUB-technique IDs to their live replacement sub-technique.
+
+    Needed because a parent-level revocation can fan out to more than one
+    replacement parent.  ATT&CK v19 revoked T1562 "Impair Defenses" in favour of
+    T1685 "Disable or Modify Tools", but its firewall sub-technique T1562.007
+    was replaced by T1686.001 "Cloud Firewall" — a different parent.  Resolving
+    T1562.007 through the parent map alone lands it under T1685 and attributes a
+    firewall technique to the wrong heatmap row.
+
+    Args:
+        objects:      All STIX objects from the bundle.
+        live_sub_ids: Sub-technique IDs kept in the catalogue.
+
+    Returns:
+        Mapping of revoked sub-technique ID -> current replacement ID.
+    """
+    sid_to_ext = {
+        obj["id"]: _external_id(obj)
+        for obj in objects
+        if obj.get("type") == "attack-pattern"
+    }
+    direct: dict[str, str] = {}
+    for obj in objects:
+        if obj.get("type") != "relationship" or obj.get("relationship_type") != "revoked-by":
+            continue
+        old = sid_to_ext.get(obj.get("source_ref", ""), "")
+        new = sid_to_ext.get(obj.get("target_ref", ""), "")
+        if old and new and "." in old:
+            direct[old] = new
+
+    resolved: dict[str, str] = {}
+    for old in direct:
+        seen = {old}
+        target = direct[old]
+        while target in direct and target not in seen:
+            seen.add(target)
+            target = direct[target]
+        if target in live_sub_ids:
+            resolved[old] = target
+    return resolved
 
 
 def _build_revoked_map(objects: list[dict[str, Any]], live_ids: set[str]) -> dict[str, str]:
@@ -210,7 +279,8 @@ def main() -> int:
     out_path.write_text(json.dumps(catalog, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     print(
-        f"Wrote {catalog['technique_count']} techniques across "
+        f"Wrote {catalog['technique_count']} techniques and "
+        f"{catalog['subtechnique_count']} sub-technique names across "
         f"{len(catalog['tactics'])} tactics (ATT&CK {catalog['attack_version']}) "
         f"to {out_path}",
         file=sys.stderr,

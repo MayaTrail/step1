@@ -1,0 +1,79 @@
+// ECR image vulnerability scanning disabled (T1685)
+//
+// The source rule matches a lowercase event name and cannot fire. It also covers one setting of one
+// tier: the per-repository BASIC configuration. The registry-wide switch between Enhanced and Basic
+// is a different API, discards every existing finding, and leaves scanning nominally enabled.
+//
+// `contains` throughout, never `has` — repository names and ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource in ("ecr.amazonaws.com", "ecr-public.amazonaws.com")
+| where EventName in ("PutImageScanningConfiguration", "PutRegistryScanningConfiguration",
+                      "CreateRepository", "PutImage")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend ReqText = tostring(RequestParameters)
+| extend Repo = tostring(Req.repositoryName)
+| extend ScanOnPushOff = tostring(Req.imageScanningConfiguration.scanOnPush) == "false"
+| extend ScanOnPushOn = tostring(Req.imageScanningConfiguration.scanOnPush) == "true"
+// The registry-level call sets the scanning TYPE. AWS: "Switching between Enhanced scanning and
+// Basic scanning will cause previously established scans to no longer be available." Moving to
+// BASIC therefore discards the finding history for the whole registry in one call.
+| extend RegistryConfig = EventName == "PutRegistryScanningConfiguration"
+| extend SwitchedToBasic = RegistryConfig and ReqText contains "BASIC"
+| extend SwitchedToEnhanced = RegistryConfig and ReqText contains "ENHANCED"
+| extend IsPush = EventName == "PutImage"
+| summarize
+    RepoScanningOff  = countif(ScanOnPushOff),
+    RepoScanningOn   = countif(ScanOnPushOn),
+    RegistryChanges  = countif(RegistryConfig),
+    ToBasic          = countif(SwitchedToBasic),
+    ToEnhanced       = countif(SwitchedToEnhanced),
+    Pushes           = countif(IsPush),
+    Repos            = make_set_if(Repo, isnotempty(Repo), 20),
+    FirstConfigChange= minif(TimeGenerated, ScanOnPushOff or RegistryConfig),
+    FirstPush        = minif(TimeGenerated, IsPush),
+    SourceIps        = make_set(SourceIpAddress, 5),
+    FirstSeen        = min(TimeGenerated),
+    LastSeen         = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 1h)
+| where RepoScanningOff > 0 or RegistryChanges > 0
+// Disabling BEFORE pushing means the image arrives with no finding attached. The reverse order is
+// an ordinary configuration change on a repository that happened to be updated.
+| extend DisabledThenPushed = Pushes > 0 and isnotempty(FirstConfigChange) and isnotempty(FirstPush)
+                              and FirstConfigChange < FirstPush
+| extend Verdict = case(
+    ToBasic > 0,
+        "REGISTRY SWITCHED TO BASIC SCANNING — this discards every previously established scan result across the whole registry, while scanning stays nominally ENABLED. scanOnPush may still read true and the console looks healthy, P0",
+    DisabledThenPushed,
+        "SCANNING DISABLED, THEN AN IMAGE PUSHED by the same principal — the image arrives with no finding attached and nothing downstream has a reason to question it, P0",
+    RegistryChanges > 0,
+        "REGISTRY SCANNING CONFIGURATION CHANGED — the source pack watches this API nowhere. Compare the new type against the previous one, P1",
+    RepoScanningOff > 0,
+        "REPOSITORY SCANNING TURNED OFF — images pushed from here on are unscanned. This is the basic tier and one repository; check the registry configuration too, P1",
+    "scanning configuration change")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, RepoScanningOff, RegistryChanges,
+          ToBasic, ToEnhanced, Pushes, DisabledThenPushed, Repos, SourceIps
+| order by ToBasic desc, DisabledThenPushed desc
+//
+// ============================================================================
+// SCANNING CAN LOOK ENABLED AND PRODUCE NOTHING
+// ============================================================================
+// Three states all present as "scanning is on":
+//   * Registry switched Enhanced -> Basic: findings discarded, scanning still enabled, and the
+//     coverage drops from OS+language packages with continuous rescanning to OS packages only.
+//   * scanOnPush true under Basic with no manual scans: nothing is scanned after the first push.
+//   * Image ARCHIVED: "Archived images cannot be scanned. Archived images must be restored before
+//     they can be scanned." No scanning configuration changed at all.
+// Confirm from findings rather than configuration:
+//   aws ecr describe-image-scan-findings --repository-name <r> --image-id imageDigest=<d>
+//
+// ============================================================================
+// A CLEAN SCAN IS NOT AN INTEGRITY CHECK
+// ============================================================================
+// Scanning reports known CVEs in packages. It does not detect an implanted backdoor, which is what
+// ../../ecr.stealth.malicious-image-pushed/ covers. Disabling scanning matters because it removes a
+// control and signals intent — not because scanning would have caught the implant.

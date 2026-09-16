@@ -1,0 +1,215 @@
+# ECS Cluster Deleted (T1070 / T1578.003)
+#
+# WHAT THE SOURCE RULE DOES NOT DO. It matches `eventName:"DeleteCluster"` with a success
+# filter, at P1, with `threshold: > 0` inside a ten-minute window grouped by
+# `userIdentity.arn`. Any count above zero satisfies "> 0", so the threshold and window buy
+# nothing except a ten-minute batching delay on a P1 alert. It never looks at WHO called, so
+# every ephemeral test-stack teardown and every Terraform destroy fires it.
+#
+# THE FACT THAT REFRAMES THIS ENTIRE TECHNIQUE. Amazon ECS REFUSES to delete a non-empty
+# cluster. AWS: "You must deregister all container instances from this cluster before you may
+# delete it", and the API throws ClusterContainsContainerInstancesException,
+# ClusterContainsServicesException, ClusterContainsTasksException and
+# ClusterContainsCapacityProviderException. The error text is explicit: "You can't delete a
+# cluster that contains services. First, update the service to reduce its desired task count
+# to 0, and then delete the service." So a SUCCESSFUL DeleteCluster is proof that the cluster
+# was already emptied — the destruction happened in the preceding UpdateService
+# (desiredCount 0), DeleteService and DeregisterContainerInstance calls, and the cluster
+# deletion is the tidy-up behind them. Alerting on DeleteCluster alone therefore fires on the
+# LAST event of the chain, after everything is already gone. Rule 1 below still ships,
+# because the deletion is the event that reliably exists; the correlation is what gives a
+# responder the chain, and the base rule is what makes the precursors visible at all.
+#
+# WHY THIS IS INDICATOR REMOVAL AND NOT DATA DESTRUCTION. What the call destroys is a record:
+# the cluster's settings (including whether Container Insights was on), its tags, its
+# capacity-provider associations, and — through a documented side effect — the ability to
+# retrieve stopped tasks later. AWS: "If you have tasks with tags, and then delete the
+# cluster, the tagged tasks are returned in the response. If you create a new cluster with
+# the same name as the deleted cluster, the tagged tasks are not included in the response."
+# Delete-then-recreate under the same name is therefore a supported, documented way to make
+# the task history unreachable, and it is the shape the second correlation looks for.
+#
+# FIELD SHAPE. `DeleteCluster` carries exactly one request parameter, `cluster`, and AWS
+# documents it as "The short name or full Amazon Resource Name (ARN) of the cluster to
+# delete" — so the value is CALLER-TYPED and may be either form. `CreateCluster` names the
+# cluster in `clusterName`. The two events therefore identify the same cluster through
+# different fields in different formats, which is why the correlation groups by principal and
+# `kql_t1070.kql` does the name join after normalising both to a bare name. Both calls return
+# the object NESTED: `responseElements.cluster.*`, with `status` = `INACTIVE` after deletion.
+title: ECS cluster deleted by a principal outside the cluster-lifecycle pipeline
+id: ab91a150-dbb2-4f3a-ae92-2a26d28fdaae
+name: ecs_cluster_deleted_nonpipeline
+status: experimental
+description: >-
+  An ECS cluster was deleted by a principal that does not own cluster lifecycle. Because ECS
+  refuses to delete a cluster that still contains services, tasks or registered container
+  instances, a successful deletion proves the cluster was emptied first — the destructive
+  work is already complete and this event is the end of the chain, not the start of it.
+references:
+  - https://attack.mitre.org/techniques/T1070/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DeleteCluster.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonECS/latest/developerguide/logging-using-cloudtrail.html  # retrieved 2026-08-29
+tags:
+  - attack.stealth
+  - attack.t1070
+  - attack.t1578.003
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecs.amazonaws.com'
+    eventName: 'DeleteCluster'
+  # POPULATE BEFORE DEPLOYING. Unpopulated, this fires on every pipeline teardown. The
+  # allowlist IS the discriminator - DeleteCluster carries no field that separates a
+  # destructive deletion from a scheduled one.
+  cluster_lifecycle_pipeline:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'          # replace with this account's deployment role
+      - ':role/BreakGlassAdmin'     # replace with this account's break-glass role
+  success:
+    errorCode: null
+  condition: selection and success and not cluster_lifecycle_pipeline
+falsepositives:
+  - >-
+    An engineer destroying a personal or ephemeral cluster outside the pipeline. Expected in
+    development accounts; in a production account it is the finding, because it means cluster
+    lifecycle is not owned by the pipeline.
+level: high
+---
+# Base rule — sequence component only, not for direct alerting. These are the calls that MUST
+# succeed before a DeleteCluster can succeed, and the source set alerts on none of them
+# except DeleteService. `UpdateService` with `desiredCount: 0` is the scale-to-zero AWS names
+# explicitly in its own error text, and it is the single most important uncovered precursor:
+# the source set's only UpdateService rule fires on a HIGH desiredCount and is structurally
+# blind to zero, which is the destructive direction.
+#
+# eventName and the desiredCount test are deliberately SEPARATE sibling blocks. Keys inside
+# one block are ANDed, and `eventName: DeleteService` could never co-occur with
+# `desiredCount: 0` on a single event.
+title: ECS cluster teardown precursor
+id: c2ec0873-1f59-40fd-b3fd-541edb279eb7
+name: ecs_cluster_teardown_precursor_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DeleteService.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_UpdateService.html  # retrieved 2026-08-29
+tags:
+  - attack.impact
+  - attack.t1489
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  svc:
+    eventSource: 'ecs.amazonaws.com'
+  teardown:
+    eventName:
+      - 'DeleteService'
+      - 'DeregisterContainerInstance'
+      - 'StopTask'
+      - 'DeleteCapacityProvider'
+  scale_to_zero_event:
+    eventName: 'UpdateService'
+  scale_to_zero_value:
+    requestParameters.desiredCount: 0
+  success:
+    errorCode: null
+  condition: svc and success and (teardown or (scale_to_zero_event and scale_to_zero_value))
+level: informational
+---
+# Base rule — sequence component only, not for direct alerting. Carries the success filter so
+# a denied CreateCluster cannot compose into the high-severity correlation below.
+title: ECS cluster created
+id: 8dcaafd9-fff2-4a95-934d-5768209dd074
+name: ecs_cluster_created_bb
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_CreateCluster.html  # retrieved 2026-08-29
+tags:
+  - attack.stealth
+  - attack.t1070
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecs.amazonaws.com'
+    eventName: 'CreateCluster'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+# The full teardown chain by one principal. This is the document that actually carries the
+# incident: a DeleteCluster on its own tells you the cluster is gone, while this tells you the
+# same principal emptied it first and how.
+#
+# TIMESPAN BASIS. Sixty minutes, and the basis is service drain rather than an arbitrary
+# round number. AWS documents a deleted service moving ACTIVE -> DRAINING -> INACTIVE "after
+# all tasks have transitioned to either STOPPING or STOPPED status", and DeleteCluster keeps
+# throwing ClusterContainsTasksException until that completes, so the actor is forced to wait
+# out the drain between the precursor and the deletion. An hour spans a slow drain on a
+# service with a long deregistration delay without spanning unrelated maintenance. Re-baseline
+# against your own longest observed drain before deploying.
+title: ECS cluster emptied and then deleted by one principal
+id: c20a2356-3612-4090-817e-31d6d07eea3a
+status: experimental
+description: >-
+  One principal ran the teardown calls that empty a cluster and then deleted the cluster,
+  inside an hour. ECS will not delete a non-empty cluster, so this is the complete
+  destruction sequence rather than its final event, and the work-list for recovery is every
+  service and task named in the precursor group.
+references:
+  - https://attack.mitre.org/techniques/T1070/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DeleteCluster.html  # retrieved 2026-08-29
+tags:
+  - attack.stealth
+  - attack.t1070
+  - attack.impact
+  - attack.t1489
+correlation:
+  type: temporal_ordered
+  rules:
+    - ecs_cluster_teardown_precursor_bb
+    - ecs_cluster_deleted_nonpipeline
+  group-by:
+    - userIdentity.arn
+  timespan: 60m
+level: high
+---
+# Delete-then-recreate under the same cluster name is ANTI-FORENSICS, and AWS documents the
+# mechanism rather than leaving it to inference: "If you have tasks with tags, and then delete
+# the cluster, the tagged tasks are returned in the response. If you create a new cluster with
+# the same name as the deleted cluster, the tagged tasks are not included in the response."
+# So the recreate is what makes the task history unreachable, and it is the step a responder
+# can still get in front of.
+#
+# The correlation groups by principal and NOT by cluster name, because DeleteCluster names the
+# cluster in `requestParameters.cluster` (short name OR full ARN, caller's choice) while
+# CreateCluster names it in `requestParameters.clusterName`. Sigma cannot join across two
+# field names, let alone across two formats. Confirm the name match by hand, or use the KQL,
+# which normalises both sides to a bare name and joins on it.
+title: ECS cluster deleted and a cluster created by the same principal
+id: a48c260f-092c-4012-a151-10aacf0ec2bb
+status: experimental
+description: >-
+  One principal deleted a cluster and created a cluster within thirty minutes. If the names
+  match, the stopped-task records that survived the deletion are now unreachable, and the
+  cluster's own history has been replaced by an empty resource wearing its name.
+references:
+  - https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DescribeTasks.html  # retrieved 2026-08-29
+tags:
+  - attack.stealth
+  - attack.t1070
+correlation:
+  type: temporal_ordered
+  rules:
+    - ecs_cluster_deleted_nonpipeline
+    - ecs_cluster_created_bb
+  group-by:
+    - userIdentity.arn
+  timespan: 30m
+level: high

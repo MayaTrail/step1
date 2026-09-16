@@ -4,9 +4,6 @@ export interface User {
   initials: string
   method: 'credentials' | 'google_sso'
   isVerified: boolean
-  isDemo: boolean
-  demoUsed: boolean
-  demoExpiresAt: string | null
 }
 
 export interface LoginRequest {
@@ -54,9 +51,6 @@ export interface TokenPayload {
   initials: string
   method: string
   isVerified: boolean
-  isDemo: boolean
-  demoUsed: boolean
-  demoExpiresAt: string | null
   iat: number
   exp: number
 }
@@ -68,7 +62,6 @@ export interface ConnectorRequest {
 export interface ConnectorResponse {
   status: 'verified' | 'error'
   account_id?: string
-  is_demo?: boolean
   message?: string
 }
 

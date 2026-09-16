@@ -1,0 +1,87 @@
+// SNS topic encryption downgraded to the AWS-managed key (T1600)
+//
+// Signal: SetTopicAttributes pointing KmsMasterKeyId at alias/aws/sns. That event ALONE is
+// ambiguous and this query exists to resolve the ambiguity, because CloudTrail records the
+// new value only — there is no oldValue field and no attribute version history:
+//     customer-managed key -> alias/aws/sns   = a downgrade
+//     no encryption at all -> alias/aws/sns   = encryption being TURNED ON
+// The query reconstructs the previous value from the topic's own earlier attribute writes
+// and grades on the transition, not on the destination.
+//
+// `contains` throughout, never whole-term matching: an alias path and a key ARN both break
+// term-splitting on their slashes and colons.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let KeyWrites =
+AWSCloudTrail
+| where TimeGenerated > ago(90d)
+| where EventSource == "sns.amazonaws.com"
+| where EventName in ("SetTopicAttributes", "CreateTopic")
+| extend Req = parse_json(RequestParameters), Resp = parse_json(ResponseElements)
+| extend TopicArn = tostring(coalesce(Resp.topicArn, Req.topicArn))
+// SetTopicAttributes carries the value FLAT in attributeValue; CreateTopic nests it under
+// the attributes map. Both are real and a query that reads only one silently loses half.
+| extend KeyValue = iff(EventName == "CreateTopic",
+                        tostring(Req.attributes.KmsMasterKeyId),
+                        iff(tostring(Req.attributeName) == "KmsMasterKeyId",
+                            tostring(Req.attributeValue), ""))
+| where EventName == "CreateTopic" or tostring(Req.attributeName) == "KmsMasterKeyId"
+| extend Kind = case(
+    isempty(KeyValue),                      "none",
+    KeyValue endswith "alias/aws/sns",      "aws-managed",
+    "customer-managed-or-opaque")
+| project TimeGenerated, EventName, TopicArn, KeyValue, Kind,
+          Actor = UserIdentityArn, ActorIP = SourceIpAddress, AwsRegion, ErrorCode;
+//
+// The previous key state for each event on the same topic, from the topic's own history.
+let WithPrevious =
+KeyWrites
+| where isempty(ErrorCode)
+| sort by TopicArn asc, TimeGenerated asc
+| extend PrevKind  = prev(Kind),
+         PrevKey   = prev(KeyValue),
+         PrevTopic = prev(TopicArn),
+         PrevTime  = prev(TimeGenerated)
+| extend PrevKind = iff(PrevTopic == TopicArn, PrevKind, "unknown-outside-window"),
+         PrevKey  = iff(PrevTopic == TopicArn, PrevKey,  ""),
+         PrevTime = iff(PrevTopic == TopicArn, PrevTime, datetime(null));
+//
+WithPrevious
+| where Kind == "aws-managed"
+| extend Verdict = case(
+    PrevKind == "customer-managed-or-opaque",
+        "DOWNGRADE — a customer-managed key was replaced by the AWS-managed key. You can no longer restrict use by key policy, revoke by disabling the key, or grant the key to another account or service, P1",
+    PrevKind == "none",
+        "IMPROVEMENT, not an incident — the topic was previously UNENCRYPTED and is now encrypted with the AWS-managed key. This is the case the source rule alerts on wrongly, P4",
+    PrevKind == "aws-managed",
+        "NO CHANGE — the topic was already on the AWS-managed key; this is a re-apply, typically infrastructure-as-code, P4",
+    "PREVIOUS KEY UNKNOWN — no earlier attribute write for this topic inside the window. Read the live key with kms:DescribeKey before rating; do NOT assume it was unencrypted, P2")
+| project TimeGenerated, PrevTime, TopicArn, EventName, PrevKind, PrevKey, KeyValue,
+          Actor, ActorIP, AwsRegion, Verdict
+| order by TimeGenerated desc
+//
+// ============================================================================
+// WHAT THIS QUERY CANNOT SEE
+// ============================================================================
+// 1. A DOWNGRADE EXPRESSED BY KEY ID OR KEY ARN. The AWS-managed key can be named by its
+//    key id or ARN as well as by the alias/aws/sns alias, and those forms are opaque
+//    strings — `Kind` classifies them as "customer-managed-or-opaque" and the row is missed.
+//    Resolving them needs kms:DescribeKey and KeyMetadata.KeyManager == "AWS", which is an
+//    API call, not a log field. Query 2 of the playbook does it; no log query can.
+// 2. THE PREVIOUS KEY OUTSIDE THE WINDOW. `PrevKind` of "unknown-outside-window" is a real
+//    and common state — key changes are months apart — and it must never be read as "the
+//    topic was unencrypted". That inversion is exactly the source rule's defect.
+// 3. WHETHER PUBLISHERS BROKE. This is the consequence specific to the downgrade, and it is
+//    invisible here. An AWS-managed key policy cannot be edited, so cross-account and
+//    cross-service publishers that were granted the customer-managed key start failing.
+//    Route to CloudWatch AWS/SNS NumberOfNotificationsFailed by TopicName, and to the
+//    publishers' own KMSAccessDenied errors.
+// 4. WHAT SSE PROTECTS EITHER WAY. AWS: SSE encrypts the message BODY only — never topic
+//    metadata, message metadata (subject, message id, timestamp, message attributes), the
+//    data protection policy or per-topic metrics. A downgrade does not change that scope; it
+//    changes who controls the key.
+//
+// PREVENTION: the control is on the SNS side. A KMS key policy cannot stop this — nothing
+// here touches the key, only the topic's pointer to it. Deny sns:SetTopicAttributes outside
+// the deployment role, and diff GetTopicAttributes against a per-topic expected-key baseline
+// on a schedule.

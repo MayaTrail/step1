@@ -1,0 +1,111 @@
+// High Number of SSM Parameters Retrieval (T1555.006)
+//
+// Two signals, and the second is the one that matters:
+//   1. A recursive, decrypting GetParametersByPath — an entire hierarchy drained
+//      in one call, with the parameter names absent from the event.
+//   2. The count of DISTINCT parameters actually decrypted, taken from the
+//      PARAMETER_ARN encryption context on each kms:Decrypt rather than from the
+//      number of ssm API calls. GetParameters accepts 10 names per call and
+//      GetParametersByPath returns up to 10 parameters per page, so an SSM event
+//      count under-reports the secrets exposed by up to a factor of ten.
+//
+// CloudTrail records the parameter NAME and never the VALUE. That is enough to
+// enumerate exactly what was taken and rotate precisely — a blanket rotation is
+// not required and is usually the wrong response.
+//
+// Field casing: the SSM API Reference documents the wire format (WithDecryption,
+// Recursive); AWS's published ssm.amazonaws.com CloudTrail examples render request
+// keys with a lower-case initial. Both spellings are read below so the query does
+// not silently return nothing if your trail renders the other form.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "ssm.amazonaws.com"
+| where EventName in ("GetParameter", "GetParameters", "GetParametersByPath")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend WithDecryption = tobool(coalesce(Req.withDecryption, Req.WithDecryption, false))
+| extend Recursive      = tobool(coalesce(Req.recursive, Req.Recursive, false))
+| extend TargetPath     = tostring(coalesce(Req.path, Req.Path, ""))
+| extend TargetName     = tostring(coalesce(Req.name, Req.Name, ""))
+| extend NameCount      = array_length(todynamic(coalesce(Req.names, Req.Names, dynamic([]))))
+| extend ParametersTouched = case(
+    EventName == "GetParameter",         1,
+    EventName == "GetParameters",        iff(NameCount > 0, NameCount, 1),
+    10)                                          // ByPath: MaxResults ceiling, a floor on truth
+| where WithDecryption
+| summarize
+    Calls           = count(),
+    PathDrains      = countif(EventName == "GetParametersByPath" and Recursive),
+    MinParameters   = sum(ParametersTouched),    // LOWER BOUND, see note below
+    Paths           = make_set_if(TargetPath, isnotempty(TargetPath), 10),
+    Names           = make_set_if(TargetName, isnotempty(TargetName), 25),
+    SourceIPs       = make_set(SourceIpAddress, 5),
+    Agents          = make_set(UserAgent, 3),
+    Regions         = make_set(AwsRegion, 5),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 5m)
+| where MinParameters >= 30 or PathDrains > 0
+| extend Verdict = case(
+    PathDrains > 0,
+        "RECURSIVE DECRYPTED PATH DRAIN — names are NOT in the event, reconstruct from the path, P0",
+    MinParameters >= 100,
+        "BULK SECURESTRING DECRYPTION — treat every named parameter as disclosed, P0",
+    "ELEVATED DECRYPTED READ VOLUME — confirm the caller is a configuration loader, P1")
+| project FirstSeen, LastSeen, UserIdentityArn, Calls, MinParameters, PathDrains,
+          Paths, Names, SourceIPs, Agents, Regions, Verdict
+| order by LastSeen desc
+//
+// ============================================================================
+// THE COUNT THAT IS ACTUALLY TRUE — distinct parameters decrypted
+// ============================================================================
+// MinParameters above is a lower bound: for GetParametersByPath the response is
+// not logged, so the query assumes the MaxResults ceiling of 10 per call. The
+// KMS side gives the exact set, one Decrypt per SecureString value, each naming
+// its parameter. Run this to size the incident and to build the rotation list.
+//
+// AWSCloudTrail
+// | where TimeGenerated > ago(7d)
+// | where EventSource == "kms.amazonaws.com" and EventName == "Decrypt"
+// | where isempty(ErrorCode)
+// | extend Ctx = parse_json(RequestParameters).encryptionContext
+// | extend ParameterArn = tostring(Ctx.PARAMETER_ARN)
+// | where ParameterArn contains ":parameter/"
+// | summarize
+//     DistinctParameters = dcount(ParameterArn),
+//     ParameterArns      = make_set(ParameterArn, 200),
+//     KeyIds             = make_set(tostring(parse_json(RequestParameters).keyId), 5),
+//     FirstSeen          = min(TimeGenerated),
+//     LastSeen           = max(TimeGenerated)
+//     by UserIdentityArn, bin(TimeGenerated, 5m)
+// | where DistinctParameters >= 30
+// | order by DistinctParameters desc
+//
+// ParameterArns is the rotation work-list. Every ARN in it had its plaintext
+// returned to the caller.
+//
+// ============================================================================
+// WHAT NEITHER QUERY CAN SEE
+// ============================================================================
+// GetParameter on a name that does not exist is NOT logged at all: AWS documents
+// that "For the DeleteParameter and GetParameter actions, if the specified
+// parameter doesn't exist, the ParameterNotFound exception is not recorded in AWS
+// CloudTrail event logs." Name-guessing through GetParameter is therefore
+// invisible. GetParameters (plural) does the opposite — unknown names come back in
+// the 200-response InvalidParameters list with no ErrorCode — so enumeration
+// through the plural call looks like clean success. Neither shape can be
+// distinguished by an error filter; the signal is a caller whose read set has an
+// unusually low hit rate against DescribeParameters, which has to be computed
+// against the parameter inventory rather than against the log.
+//
+// IAM DENY BYPASS, DOCUMENTED: "if a user has access to a path, then the user can
+// access all levels of that path... Even if a user has explicitly been denied
+// access in IAM for parameter /a/b, they can still call the GetParametersByPath
+// API operation recursively for /a and view /a/b." A per-parameter Deny is not a
+// containment control. Scope the Allow on the path instead.
+//
+// The aws/ssm AWS managed key cannot carry a key policy of its own, so an
+// encryption-context condition on kms:Decrypt is only enforceable when the
+// parameters use a customer managed key.

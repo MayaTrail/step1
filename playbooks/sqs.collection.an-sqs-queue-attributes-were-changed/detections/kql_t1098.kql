@@ -1,0 +1,156 @@
+// SQS Queue Attribute Manipulation (T1098 / T1213)
+//
+// Signal: a SetQueueAttributes call whose Attributes map carries a resource policy naming
+// a principal outside the organisation or a bare wildcard, a redrive policy pointing at a
+// queue in another account, or a retention period low enough to expire the backlog.
+//
+// The event name carries no signal — the SAME eventName also covers the encryption
+// disable (see ../../sqs.impact.server-side-encryption-for-aws-sqs-queue-was-disabled/)
+// and every routine visibility-timeout tweak. Everything discriminating lives inside
+// requestParameters.attributes.
+//
+// This query does what the Sigma rules structurally cannot: it parses the policy document
+// and evaluates it as a STRUCTURE — normalising Statement, Principal and Action, each of
+// which IAM-style policy JSON permits as either a scalar or an array — instead of testing
+// the serialised text for substrings. It also extracts the redrive target's account ID
+// and compares it against the organisation set.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE OrgAccounts BELOW, and the queue-administration ARNs further down, BEFORE
+// DEPLOYING. Left as shipped, every cross-account redrive target reads as external and
+// every pipeline apply reads as an unauthorised rewrite — noisy in the direction that
+// surfaces the change rather than hiding it.
+let OrgAccounts = dynamic(["000000000000", "111111111111"]);
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "sqs.amazonaws.com"
+| where EventName == "SetQueueAttributes"
+| where isempty(ErrorCode)
+//
+// RequestParameters is typed `string` in this table, not dynamic — parse_json is required
+// before any field access. Top-level parameter names arrive lower-camel (queueUrl,
+// attributes); the KEYS INSIDE the attributes map are data and keep their documented
+// casing (Policy, RedrivePolicy, MessageRetentionPeriod).
+| extend Req   = parse_json(RequestParameters)
+| extend Attrs = Req.attributes
+| extend QueueUrl  = tostring(Req.queueUrl)
+| extend QueueName = tostring(split(QueueUrl, "/")[-1])
+//
+// Policy and RedrivePolicy are JSON STRINGS nested inside the attributes map. Reaching
+// into them without this second parse_json yields empty for every field — the same
+// response-shape trap the Lambda resource-policy note records for responseElements.
+| extend PolicyText   = tostring(Attrs.Policy)
+| extend Policy       = parse_json(PolicyText)
+| extend RedriveText  = tostring(Attrs.RedrivePolicy)
+| extend Redrive      = parse_json(RedriveText)
+| extend RetentionSec = toint(Attrs.MessageRetentionPeriod)
+//
+// Statement is legal as a single object OR an array. Iterating it without normalising
+// drops every single-statement policy — which is the common shape for a queue policy and
+// therefore the shape an attacker writes.
+//
+// Statement is legal as a single object OR an array. pack_array() around the scalar case
+// normalises both into one array before mv-expand; expanding without it drops every
+// single-statement policy — the common shape for a queue policy, and therefore the shape
+// an attacker writes.
+| mv-expand Stmt = iff(gettype(Policy.Statement) == "array", Policy.Statement, pack_array(Policy.Statement))
+    to typeof(dynamic)
+| extend StmtEffect = tostring(Stmt.Effect)
+//
+// Principal is legal as the bare string "*", as {"AWS": "<arn or id>"} and as
+// {"AWS": ["<id>", ...]}. All three are flattened to one array so that a single test
+// covers them; comparing the object form against a string silently misses the array form.
+| extend PrincipalNode = Stmt.Principal
+| extend PrincipalList = case(
+        gettype(PrincipalNode) == "string",  pack_array(tostring(PrincipalNode)),
+        gettype(PrincipalNode.AWS) == "array", PrincipalNode.AWS,
+        isnotempty(tostring(PrincipalNode.AWS)), pack_array(tostring(PrincipalNode.AWS)),
+        dynamic([]))
+// Action is legal as a string or an array — same normalisation, same reason.
+| extend ActionList = iff(gettype(Stmt.Action) == "array", Stmt.Action,
+                          pack_array(tostring(Stmt.Action)))
+| extend HasCondition = isnotempty(tostring(Stmt.Condition))
+//
+// set_has_element, never a strcat_array-and-compare: joining the array strips the quotes,
+// so a text test for a wildcard becomes dead code and ["sqs:ReceiveMessage","*"] — an
+// unconditioned grant hiding behind a plausible first element — reads as clean.
+| extend IsWildcardPrincipal = set_has_element(PrincipalList, "*")
+| extend WildcardAction      = set_has_element(ActionList, "*") or set_has_element(ActionList, "sqs:*")
+//
+// `contains` throughout, never `has`. Every operand below is punctuated — an ARN, a role
+// path, a 12-digit ID inside an ARN — and `has` is whole-term matching that breaks on all
+// of them.
+| extend PrincipalAccounts = set_difference(
+        todynamic(extract_all(@"(?<!\d)(\d{12})(?!\d)", tostring(PrincipalList))), OrgAccounts)
+| extend RedriveTargetArn  = tostring(Redrive.deadLetterTargetArn)
+| extend RedriveAccount    = extract(@"arn:aws[a-z-]*:sqs:[a-z0-9-]+:(\d{12}):", 1, RedriveTargetArn)
+| extend RedriveIsExternal = isnotempty(RedriveAccount)
+                             and not(set_has_element(OrgAccounts, RedriveAccount))
+// POPULATE: one `contains` per queue-administration principal. Written inline rather than
+// as a list because `contains` takes a scalar — a dynamic list would need mv-apply, and the
+// substring semantics are the point (an assumed-role ARN carries a session suffix).
+| extend CallerIsQueueAdmin = (UserIdentityArn contains ":role/iac-deploy")
+                           or (UserIdentityArn contains ":role/BreakGlassAdmin")
+//
+// The findings. An Allow to a wildcard principal with no Condition is public; an Allow to
+// an account outside the organisation is a cross-account grant; a redrive target outside
+// the organisation is message diversion; a retention period at or near the 60-second floor
+// expires the backlog.
+| extend PublicGrant      = StmtEffect =~ "Allow" and IsWildcardPrincipal and not(HasCondition)
+| extend ExternalGrant    = StmtEffect =~ "Allow" and array_length(PrincipalAccounts) > 0
+| extend RetentionCollapse = RetentionSec > 0 and RetentionSec <= 3600
+| where PublicGrant or ExternalGrant or RedriveIsExternal or RetentionCollapse
+     or (isnotempty(PolicyText) and not(CallerIsQueueAdmin))
+| summarize
+    Changes        = count(),
+    Queues         = make_set(QueueName, 10),
+    QueueCount     = dcount(QueueName),
+    Callers        = make_set(UserIdentityArn, 5),
+    SourceIPs      = make_set(SourceIpAddress, 5),
+    Actions        = make_set(tostring(ActionList), 5),
+    ExternalPrincipals = make_set(tostring(PrincipalAccounts), 5),
+    RedriveTargets = make_set(RedriveTargetArn, 5),
+    MinRetention   = min(RetentionSec),
+    AnyPublic      = max(PublicGrant),
+    AnyExternal    = max(ExternalGrant),
+    AnyRedriveOut  = max(RedriveIsExternal),
+    AnyRetentionCollapse = max(RetentionCollapse),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated)
+    by UserIdentityArn, UserIdentityType, SessionIssuerUserName, AwsRegion, RecipientAccountId
+| extend Verdict = case(
+    AnyPublic == true,             "PUBLIC QUEUE POLICY - any AWS caller can send to or receive from this queue",
+    AnyExternal == true,           "CROSS-ACCOUNT GRANT - an account outside the organisation was granted queue access",
+    AnyRedriveOut == true,         "MESSAGE DIVERSION - failed messages are being moved to a queue outside the organisation",
+    AnyRetentionCollapse == true,  "RETENTION COLLAPSE - messages older than the new retention expire within 15 minutes",
+                                   "UNAUTHORISED POLICY REWRITE - queue policy replaced by a principal outside the admin allowlist")
+| project FirstSeen, LastSeen, Verdict, UserIdentityArn, UserIdentityType, SessionIssuerUserName,
+          AwsRegion, RecipientAccountId, QueueCount, Queues, Changes, Callers, SourceIPs,
+          Actions, ExternalPrincipals, RedriveTargets, MinRetention
+| order by LastSeen desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// Whether anyone acted on the grant. ReceiveMessage, SendMessage and DeleteMessage are SQS
+// DATA events: off by default, absent from CloudTrail Event history, and invisible to
+// lookup-events forever unless an advanced event selector on AWS::SQS::Queue is configured.
+// So is the read side of the control plane — GetQueueAttributes, GetQueueUrl, ListQueues
+// and ListQueueTags are all data events for SQS, which means an actor can enumerate every
+// queue and read every queue policy in the account without producing one management event.
+// Route the "was it used" question to the AWS/SQS CloudWatch namespace
+// (NumberOfMessagesReceived, NumberOfEmptyReceives, NumberOfMessagesDeleted). Those metrics
+// carry a QueueName dimension and NOTHING ELSE — they prove consumption happened, never who
+// did it. Attribution requires SQS data events to have been on before the incident.
+//
+// Whether the policy is confined. This query treats an Allow to "*" WITH any Condition as
+// not-public, which is the correct default (aws:PrincipalOrgID and aws:SourceArn are the
+// documented ways to bound such a grant) but is not a substitute for reading the condition.
+// A Condition that bounds nothing — a StringLike on a value that is itself "*" — reads as
+// confinement here.
+//
+// PREVENTION. AWS's own sentence for this technique: "To remove the ability to change queue
+// permissions, you must deny permission to the AddPermission, RemovePermission, and
+// SetQueueAttributes actions in your IAM policy." Denying only SetQueueAttributes leaves
+// AddPermission as an unguarded second path to the same resource policy.

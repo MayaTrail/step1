@@ -1,11 +1,54 @@
 """
 DRF permission classes for the infrastructure app.
 
-IsEnterpriseUser  — grants access only to users with a verified AWS IAM role.
+HasAWSConnection  — reads open to any authenticated user; writes need a verified
+                    AWS IAM role.  The default for anything touching AWS.
+IsEnterpriseUser  — grants access only to users with a verified AWS IAM role,
+                    on every method.  Kept for endpoints whose GET is itself
+                    privileged.
 IsDemoUser        — grants access only to users in demo mode.
 """
 
-from rest_framework.permissions import BasePermission
+from rest_framework.permissions import SAFE_METHODS, BasePermission
+
+
+class HasAWSConnection(BasePermission):
+    """
+    Allows reads to any authenticated user; gates writes behind a verified AWS role.
+
+    A signed-up user with no AWS connection ("Explorer") browses the whole
+    product to decide whether connecting is worth it, so the gate belongs on the
+    action rather than on the page.  Every mutating endpoint in the platform
+    ultimately changes something in the tenant's AWS account, which is precisely
+    what an unconnected user has not proven they own.
+
+    Keying on the HTTP method rather than on a per-view list means a newly added
+    endpoint is governed correctly by default: a new POST is gated without its
+    author having to remember to gate it.  That property is the reason this is a
+    single class instead of a classification table.
+
+    Demo users are treated as unconnected for writes, preserving the behaviour
+    IsEnterpriseUser had before this class existed.
+    """
+
+    message = "Connect your AWS account to perform this action."
+
+    def has_permission(self, request, view):
+        """
+        Return True for any authenticated read, or for a write by a connected user.
+
+        Args:
+            request: The incoming DRF request.
+            view:    The view being accessed (unused).
+
+        Returns:
+            bool — True when the request is permitted.
+        """
+        if not (request.user and request.user.is_authenticated):
+            return False
+        if request.method in SAFE_METHODS:
+            return True
+        return bool(request.user.is_verified and not request.user.is_demo)
 
 
 class IsEnterpriseUser(BasePermission):

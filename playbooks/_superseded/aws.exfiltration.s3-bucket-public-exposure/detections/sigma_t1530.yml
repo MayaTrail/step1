@@ -1,0 +1,448 @@
+# S3 Bucket Public Exposure (T1530)
+#
+# Public read reaches a bucket by three routes and the source rules cover one of them
+# badly. Two of the seven rules match event names CloudTrail does not emit: the API
+# operations are PutPublicAccessBlock / DeletePublicAccessBlock, but the CloudTrail
+# eventNames are PutBucketPublicAccessBlock / DeleteBucketPublicAccessBlock at bucket
+# level and PutAccountPublicAccessBlock / DeleteAccountPublicAccessBlock at account
+# level. A rule keyed on the API name never fires. The rule that does carry a correct
+# name inverts its own condition and alerts on the HARDENING direction. The bucket-policy
+# rule keys on `requestParameters.bucketPolicy.bucket_made_public`, which is not a field
+# CloudTrail writes. The ACL rule matches every PutBucketAcl by name with no grantee
+# check at all.
+#
+# The distinguishing property of this technique: Block Public Access OVERRIDES both a
+# public bucket policy and a public ACL, and removing it does not touch either. So a
+# bucket carrying a `Principal:"*"` policy under an enabled PAB is not public, and the
+# same bucket becomes public the instant DeleteBucketPublicAccessBlock runs — with no
+# policy or ACL event in that window. Any rule set that watches only PutBucketPolicy
+# misses the most common real exposure. The three rules below cover all three routes and
+# two `temporal` correlations tie the grant to the unblock in EITHER order, because both
+# orders occur and each is a completed exposure.
+#
+# What these rules CANNOT do: prove that an Allow, a wildcard Principal and the absence
+# of a Condition sit in the SAME statement — CloudTrail records bucketPolicy as a nested
+# object, so a multi-statement policy flattens to multi-valued fields and the match is
+# per-document, not per-statement. A Condition confining the policy to fixed values of
+# the keys S3 accepts makes a `Principal:"*"` policy non-public. Treat a hit as the
+# trigger for the decode in `kql_t1530.kql` or Query 2 of the playbook, not as a
+# disposition.
+#
+# And they cannot be checked against current state by reading the ACL back. AWS: "Calls to
+# GetBucketAcl and GetObjectAcl always return the effective permissions in place for the
+# specified bucket or object... In this case, GetBucketAcl returns an ACL that reflects the
+# access permissions that Amazon S3 is enforcing, rather than the actual ACL that is
+# associated with the bucket." So with IgnorePublicAcls enabled a public ACL grant is
+# INVISIBLE to the read that is meant to find it, and goes live the moment the block is
+# removed. The CloudTrail PutBucketAcl event is then the only record that the grant exists.
+# See `detection_note_t1530.md`.
+title: S3 bucket policy granting a wildcard principal
+id: 3f8b2c17-9d4a-4e61-8b05-c7a1e2f60d93
+name: s3_bucket_policy_public_principal
+status: experimental
+description: >-
+  A bucket policy was written whose Allow statement names a wildcarded principal. Under
+  S3's own definition a policy is non-public only when it grants to fixed values, so any
+  wildcard in Principal makes the bucket public unless a confining Condition applies.
+references:                                                                       # retrieved 2026-08-27
+  - https://attack.mitre.org/techniques/T1530/
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketPolicy.html
+tags:
+  - attack.collection
+  - attack.t1530
+  - attack.exfiltration
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketPolicy'
+  allow_effect:
+    requestParameters.bucketPolicy.Statement.Effect: 'Allow'
+  # `\*` is an ESCAPED literal asterisk; a bare `*` is a Sigma wildcard and would match every
+  # policy ever written. `|contains` is deliberate — AWS treats a principal that is not a FIXED
+  # value as public, so `arn:aws:iam::*:root` counts too. Principal is the bare string "*" OR
+  # the object {"AWS":"*"}: different flattened paths that cannot co-occur in one statement, so
+  # sibling blocks ORed in the condition, never two keys in one block.
+  principal_bare:
+    requestParameters.bucketPolicy.Statement.Principal|contains: '\*'
+  principal_aws:
+    requestParameters.bucketPolicy.Statement.Principal.AWS|contains: '\*'
+  success:
+    errorCode: null
+  condition: selection and allow_effect and (principal_bare or principal_aws) and success
+falsepositives:
+  - A deliberately public static-website or public-dataset bucket; filter those names once
+    they are on the allowlist.
+  - A policy confined by a Condition on a key S3 accepts as making it non-public, pinned to
+    a FIXED value — one carrying no wildcard and no IAM policy variable. AWS gives that set
+    as an OPEN category ("An AWS principal, user, role, or service principal (e.g.
+    aws:PrincipalOrgID)") plus aws:SourceArn, aws:SourceVpc, aws:SourceVpce, aws:SourceOwner,
+    aws:SourceAccount, aws:userid outside AROLEID:*, s3:DataAccessPointArn,
+    s3:DataAccessPointAccount and aws:SourceIp at /8 or narrower excluding RFC1918 ranges.
+    Do not hard-code that as a closed key list. Also a multi-statement policy whose Allow and
+    wildcard Principal sit in different statements — though one public statement renders the
+    whole policy public, so a confined statement beside a public one is no defence. All are
+    invisible to a field match; the rule over-matches rather than under-matches and the
+    decode resolves it.
+level: high
+---
+# The ACL route. Independent of the policy route and of Block Public Access removal: a
+# bucket with no policy at all is public the moment an ACL grants AllUsers READ.
+#
+# AuthenticatedUsers is included deliberately and is NOT a lesser case. S3's own test is
+# group membership, not the name of the canned ACL: "Amazon S3 considers a bucket or
+# object ACL public if it grants any permissions to members of the predefined AllUsers or
+# AuthenticatedUsers groups." So a detector keyed on the `public-` PREFIX misses
+# authenticated-read, which grants READ to AuthenticatedUsers. AWS body text on that
+# group: "This group represents all AWS accounts. Access permission to this group allows
+# any AWS account to access the resource. However, all requests must be signed
+# (authenticated)." And, in a separate Warning admonition on the same page: "When you
+# grant access to the Authenticated Users group, any AWS authenticated user in the world
+# can access your resource." An AWS account is free to create, so the practical exposure
+# is the same as AllUsers with one extra step.
+#
+# PutBucketAcl carries the grant in ONE OF THREE mutually exclusive request shapes:
+#   1. the canned header requestParameters['x-amz-acl'];
+#   2. the XML body under AccessControlPolicy.AccessControlList.Grant[].Grantee.URI;
+#   3. explicit x-amz-grant-* headers naming a grantee as `uri=`, `id=` or
+#      `emailAddress=` — five of them: -read, -write, -read-acp, -write-acp,
+#      -full-control.
+# AWS: "You cannot specify access permission using both the body and the request headers",
+# and "You can use either a canned ACL or specify access permissions explicitly. You
+# cannot do both." Shape 3 is not a corner case: AWS's own worked example makes a bucket
+# world-readable with it and no canned ACL and no body —
+#   x-amz-grant-read: uri="http://acs.amazonaws.com/groups/global/AllUsers"
+# A rule checking two shapes is blind to the third. All three are matched, as sibling
+# blocks ORed in the condition.
+#
+# CAVEAT on shape 3, and it is the reason this block is worth reading before deploying:
+# the five header NAMES are from the PutBucketAcl API reference, but the key CloudTrail
+# writes them under in requestParameters is not documented by AWS for any request header,
+# including x-amz-acl. Confirm the exact key against a real PutBucketAcl event in your own
+# trail and adjust if it differs. The field paths here are the header names verbatim.
+#
+# The URIs are punctuated (scheme, slashes) — this is `|contains`, which is substring in
+# Sigma. The KQL companion uses `contains` for the same reason; `has` is whole-term and
+# would never match them.
+title: S3 bucket ACL granting a public predefined group
+id: 5c1a7e04-2b83-4f57-9a6d-18e0b4c39f27
+name: s3_bucket_acl_public_grant
+status: experimental
+description: >-
+  A bucket ACL was written that grants a permission to the AllUsers or AuthenticatedUsers
+  predefined group — by grantee URI in the XML body, by a public canned-ACL header, or by
+  an explicit x-amz-grant-* header naming the group by uri=. Any of the three makes the
+  bucket readable outside the account unless Block Public Access is suppressing ACLs.
+references:
+  - https://attack.mitre.org/techniques/T1530/                                    # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/acl-overview.html       # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketAcl.html         # retrieved 2026-08-27
+tags:
+  - attack.collection
+  - attack.t1530
+  - attack.exfiltration
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketAcl'
+  acl_grantee_uri:
+    requestParameters.AccessControlPolicy.AccessControlList.Grant.Grantee.URI|contains:
+      - 'acs.amazonaws.com/groups/global/AllUsers'
+      - 'acs.amazonaws.com/groups/global/AuthenticatedUsers'
+  # x-amz-acl on PutBucketAcl accepts exactly four values — "private | public-read |
+  # public-read-write | authenticated-read" — not the eight in the user guide's canned-ACL
+  # table, which covers object ACLs and CreateBucket too. THREE of the four are public.
+  # Enumerated, never prefix-matched: `public-` would silently drop authenticated-read.
+  acl_canned_public:
+    'requestParameters.x-amz-acl':
+      - 'public-read'
+      - 'public-read-write'
+      - 'authenticated-read'
+  # Shape 3. A LIST of maps is ORed. The five grant headers are independent and a request
+  # normally carries one or two, so they must never be ANDed into a single map — that
+  # would require all five on one event and the block would never match.
+  acl_grant_header:
+    - 'requestParameters.x-amz-grant-read|contains':
+        - 'acs.amazonaws.com/groups/global/AllUsers'
+        - 'acs.amazonaws.com/groups/global/AuthenticatedUsers'
+    - 'requestParameters.x-amz-grant-write|contains':
+        - 'acs.amazonaws.com/groups/global/AllUsers'
+        - 'acs.amazonaws.com/groups/global/AuthenticatedUsers'
+    - 'requestParameters.x-amz-grant-read-acp|contains':
+        - 'acs.amazonaws.com/groups/global/AllUsers'
+        - 'acs.amazonaws.com/groups/global/AuthenticatedUsers'
+    - 'requestParameters.x-amz-grant-write-acp|contains':
+        - 'acs.amazonaws.com/groups/global/AllUsers'
+        - 'acs.amazonaws.com/groups/global/AuthenticatedUsers'
+    - 'requestParameters.x-amz-grant-full-control|contains':
+        - 'acs.amazonaws.com/groups/global/AllUsers'
+        - 'acs.amazonaws.com/groups/global/AuthenticatedUsers'
+  success:
+    errorCode: null
+  condition: selection and (acl_grantee_uri or acl_canned_public or acl_grant_header) and success
+falsepositives:
+  - None benign that are also unintentional. A public ACL is always a deliberate act;
+    the question is whether the actor was authorised, not whether the grant is real.
+  - Log-delivery grants use the s3/LogDelivery URI, not the global groups, and do not
+    match — in the body, in x-amz-acl, or in an x-amz-grant-write header. AWS's own
+    header example carries a LogDelivery grant and an AllUsers grant on the same request;
+    only the AllUsers half matches, which is the intended behaviour.
+level: high
+---
+# The Block Public Access route — the one the source set rates P3/P4 and the one that
+# most often turns a latent misconfiguration into a live exposure.
+#
+# AWS: "Block public access settings don't alter existing policies or ACLs. Therefore,
+# removing a block public access setting causes a bucket or object with a public policy
+# or ACL to again be publicly accessible." No PutBucketPolicy and no PutBucketAcl occurs
+# in that window. This is the event.
+#
+# Account level is covered alongside bucket level. S3 applies "the most restrictive
+# combination" of account and bucket settings, so an account-level removal exposes every
+# bucket that was relying on it and has no bucket-level block of its own — one call,
+# whole-account blast radius.
+#
+# eventSource carries both values. AWS documents the account-level operations on the
+# Amazon S3 CloudTrail events page (so `s3.amazonaws.com`), while the request itself is
+# addressed to the S3 Control endpoint. ORing both costs nothing and fails safe;
+# confirm which your own trail carries and prune the other.
+title: S3 Block Public Access removed or weakened
+id: 9e6d0b45-4c72-4a18-b3f9-6d20a5e81c34
+name: s3_public_access_block_removed
+status: experimental
+description: >-
+  The S3 Block Public Access configuration was deleted, or written with at least one of
+  its four settings false, at bucket or account level. Any existing public bucket policy
+  or public ACL becomes effective immediately, with no policy or ACL event of its own.
+references:
+  - https://attack.mitre.org/techniques/T1530/                                                     # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html   # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html           # retrieved 2026-08-27
+tags:
+  - attack.collection
+  - attack.t1530
+  - attack.defense-impairment
+  - attack.t1685
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection_delete:
+    eventSource:
+      - 's3.amazonaws.com'
+      - 's3-control.amazonaws.com'
+    eventName:
+      - 'DeleteBucketPublicAccessBlock'
+      - 'DeleteAccountPublicAccessBlock'
+  selection_put:
+    eventSource:
+      - 's3.amazonaws.com'
+      - 's3-control.amazonaws.com'
+    eventName:
+      - 'PutBucketPublicAccessBlock'
+      - 'PutAccountPublicAccessBlock'
+  # A LIST of maps is ORed. The four settings are independent and any one of them going
+  # false weakens the block, so they must never be ANDed into a single map — that is the
+  # shape of the source rule's inverted condition, which fires only when none is false
+  # and therefore alerts on somebody turning protection ON.
+  pab_weakened:
+    - requestParameters.PublicAccessBlockConfiguration.BlockPublicAcls: false
+    - requestParameters.PublicAccessBlockConfiguration.IgnorePublicAcls: false
+    - requestParameters.PublicAccessBlockConfiguration.BlockPublicPolicy: false
+    - requestParameters.PublicAccessBlockConfiguration.RestrictPublicBuckets: false
+  success:
+    errorCode: null
+  condition: (selection_delete or (selection_put and pab_weakened)) and success
+falsepositives:
+  - A bucket being deliberately opened for static-website hosting or a public dataset.
+    That is a change-managed event with a ticket; treat an unticketed one as an incident.
+  - An account bootstrap that sets three of four settings. Alert, then baseline the
+    intended combination per account rather than suppressing the rule.
+level: high
+---
+# A completed exposure: one principal both created a public grant and removed the block
+# that would have held it. Either half alone is already `high` above; together they are a
+# finished job, and there is no configuration in which the pair is an accident.
+#
+# WHY TWO CORRELATIONS, NOT ONE OVER THREE RULES. A correlation with no explicit
+# `condition:` requires ALL of its listed rules to match. One document naming the policy
+# rule, the ACL rule and the block-removal rule would therefore fire only if an actor used
+# BOTH grant routes AND unblocked — never on the canonical single-route sequence. That is a
+# rule that cannot fire, not a strict one. One correlation per grant route.
+#
+# WHY `temporal` AND NOT `temporal_ordered`. Both orderings occur, and each is a completed
+# exposure. Block Public Access is four independent settings, and they split by function:
+# BlockPublicAcls and BlockPublicPolicy govern whether a new public grant is ACCEPTED,
+# IgnorePublicAcls and RestrictPublicBuckets govern whether an existing one is ENFORCED.
+#   * GRANT then UNBLOCK — the bucket had BlockPublicPolicy false and RestrictPublicBuckets
+#     true (or BlockPublicAcls false and IgnorePublicAcls true), so the public document was
+#     accepted and stored while being suppressed. Removing the enforcing half makes a
+#     document written days or months earlier live, with no grant event in that window.
+#   * UNBLOCK then GRANT — the bucket had the accepting half enabled, so the first attempt
+#     was REFUSED: an AccessDenied naming BlockPublicPolicy, which is the P2 blocked-attempt
+#     row in the playbook's own trigger table. The actor removes the block and retries. This
+#     ordering is what the block's own enforcement PRODUCES, and `temporal_ordered` in the
+#     grant-then-unblock direction is precisely blind to it.
+# `temporal` covers both directions in one document. Ordering is not the discriminator here
+# — co-occurrence by one principal is — and the exposure time is recovered from Query 1's
+# timeline, not from the correlation.
+#
+# NEITHER CORRELATION IS THE FLOOR. Where Block Public Access was already absent, a single
+# grant is live on arrival: one event, no second half, and no correlation can fire. The
+# `high` base rules above are the entire signal for that case, which is the common one on an
+# account with no account-level block. Do not gate them behind these correlations and do not
+# demote them once these are deployed.
+#
+# Grouped by userIdentity.arn, not by bucket name: an account-level Block Public Access
+# removal carries no bucketName, so grouping on the bucket silently drops the whole-account
+# case — the worst one. The cost is that the two halves may touch DIFFERENT buckets, which
+# is why the playbook rates this P1 and routes it to Query 3 for confirmation rather than
+# treating it as a disposition.
+#
+# 24h timespan, tuning basis: this is not a rate threshold, it is a staging window. The two
+# halves are separate deliberate acts and an actor holding both permissions has no reason to
+# wait; a legitimate open-a-bucket change lands both inside one change window. 24h is one
+# working day — wide enough to survive an approval step between the halves, narrow enough
+# that two unrelated changes by one principal rarely collide. Widen it if your change process
+# routinely spans days. Derived from technique behaviour, not from an observed baseline;
+# baseline against your own account before deploying.
+title: S3 bucket policy made public and Block Public Access removed by the same principal
+id: b47c9a28-0e51-4d36-95f7-2af6c1038be5
+status: experimental
+description: >-
+  Within 24 hours one principal both wrote a bucket policy granting a wildcard principal
+  and removed or weakened Block Public Access, in either order. The block was the only
+  thing holding the exposure back; the bucket is public now.
+references:
+  - https://attack.mitre.org/techniques/T1530/                                                     # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html   # retrieved 2026-08-27
+tags:
+  - attack.collection
+  - attack.t1530
+  - attack.exfiltration
+correlation:
+  type: temporal
+  rules:
+    - s3_bucket_policy_public_principal
+    - s3_public_access_block_removed
+  group-by:
+    - userIdentity.arn
+  timespan: 24h
+level: critical
+---
+# The ACL twin of the correlation above. Separate document for the reason given there: one
+# correlation naming both grant routes would require BOTH to have happened. Also `temporal`,
+# and the ACL route makes the reverse ordering even plainer — with BlockPublicAcls enabled a
+# public PutBucketAcl is refused outright, so unblock-then-grant is the only order available
+# to an actor who meets the block first.
+title: S3 bucket ACL made public and Block Public Access removed by the same principal
+id: e91f36b2-7d58-4c04-a6b3-15c8079de24f
+status: experimental
+description: >-
+  Within 24 hours one principal both granted a bucket ACL to AllUsers or AuthenticatedUsers
+  and removed or weakened Block Public Access, in either order. Same completed exposure as
+  its policy twin, by the mechanism a bucket-policy rule never sees.
+references:
+  - https://attack.mitre.org/techniques/T1530/                              # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/acl-overview.html  # retrieved 2026-08-27
+tags:
+  - attack.collection
+  - attack.t1530
+  - attack.exfiltration
+correlation:
+  type: temporal
+  rules:
+    - s3_bucket_acl_public_grant
+    - s3_public_access_block_removed
+  group-by:
+    - userIdentity.arn
+  timespan: 24h
+level: critical
+---
+# Not an exposure event — an evidence-destruction event, and it is scoped here because
+# server access logs are one of only three places a read of a public object can be
+# recorded, and the only one that records ANONYMOUS reads by IP. Disabling it before
+# opening the bucket is what makes "was it used" permanently unanswerable.
+#
+# The disable is expressed as an ABSENCE: PutBucketLogging with a BucketLoggingStatus
+# that carries only its xmlns and no LoggingEnabled child. `field: null` in Sigma matches
+# when the field is ABSENT, which is exactly the shape needed — this is `and` a null
+# match, not `and not`.
+title: S3 server access logging disabled on a bucket
+id: c02f5d76-8a34-4b90-a1e7-53bd9f2470ac
+name: s3_server_access_logging_disabled
+status: experimental
+description: >-
+  PutBucketLogging was called with no LoggingEnabled element, which turns server access
+  logging off for the bucket. Object-level reads of that bucket stop being recorded
+  anywhere unless a CloudTrail data-event trail also covers it.
+references:
+  - https://attack.mitre.org/techniques/T1685/002/                              # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/ServerLogs.html       # retrieved 2026-08-27
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+  - attack.t1530
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketLogging'
+  logging_removed:
+    requestParameters.BucketLoggingStatus.LoggingEnabled: null
+  success:
+    errorCode: null
+  condition: selection and logging_removed and success
+falsepositives:
+  - Retiring a bucket, or moving log delivery to a CloudTrail data-event trail. Both are
+    ticketed; correlate against the change record rather than suppressing.
+level: medium
+---
+# Deleting a bucket policy usually REDUCES access, which is why the source set rates it
+# P4 — and why it is kept at `medium` here rather than promoted. It is in scope for one
+# reason: an explicit Deny is also a bucket policy. A policy whose only job was to deny
+# non-TLS access, or to fence the bucket to aws:PrincipalOrgID, is the control keeping
+# that bucket private, and DeleteBucketPolicy removes it in one call with no record of
+# what it said.
+#
+# Bucket policies are NOT versioned and DeleteBucketPolicy is not reversible from S3. The
+# only copy of the deleted document is the requestParameters of the PutBucketPolicy event
+# that last wrote it, so this alert's value is that it starts the clock on recovering that
+# event before CloudTrail retention ages it out.
+title: S3 bucket policy deleted
+id: 7a35e918-6c40-42db-8f13-9e04c7d5b6a1
+name: s3_bucket_policy_deleted
+status: experimental
+description: >-
+  A bucket policy was deleted. Where that policy carried an explicit Deny — non-TLS
+  access, an organisation fence, a public-access guard — its removal widens access, and
+  the deleted document is recoverable only from the earlier PutBucketPolicy event.
+references:
+  - https://attack.mitre.org/techniques/T1530/                                          # retrieved 2026-08-27
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucketPolicy.html          # retrieved 2026-08-27
+tags:
+  - attack.collection
+  - attack.t1530
+  - attack.defense-impairment
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'DeleteBucketPolicy'
+  success:
+    errorCode: null
+  condition: selection and success
+falsepositives:
+  - Decommissioning a bucket, or replacing a policy where DeleteBucketPolicy is followed
+    within seconds by PutBucketPolicy on the same bucket. Check for the pairing first.
+level: medium

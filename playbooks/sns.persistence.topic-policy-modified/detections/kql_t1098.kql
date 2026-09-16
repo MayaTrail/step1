@@ -1,0 +1,78 @@
+// SNS topic policy modified after creation (T1098)
+//
+// The source rule is called *SNS Access Policy Has Changed* and matches `PutDataProtectionPolicy` — a
+// policy that de-identifies sensitive data inside message BODIES, not one that decides who may
+// publish or subscribe. AWS has also closed that feature to new customers, so in most accounts the
+// rule cannot fire at all while the rule list reports the access policy as covered.
+//
+// The access policy has THREE paths. CreateTopic with a public Policy attribute is matched by two
+// sibling rules; SetTopicAttributes(Policy) and AddPermission are matched by nothing. AddPermission
+// is the call to expect — an account id and an action name, no JSON document.
+//
+// `contains` throughout, never `has` — topic ARNs and policy documents are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+let WINDOW = 30m;
+let ThisAccount = "111122223333";   // POPULATE with this account id.
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "sns.amazonaws.com"
+| where EventName in ("SetTopicAttributes", "AddPermission", "RemovePermission",
+                      "PutDataProtectionPolicy", "CreateTopic", "Subscribe")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+| extend TopicArn = tostring(Req.topicArn)
+| extend IsProvisioner = UserIdentityArn contains "PlatformAutomation"
+                      or UserIdentityArn contains "iac-deploy"
+| extend AttrName = tostring(Req.attributeName)
+// SetTopicAttributes carries the full policy document as a raw JSON string in attributeValue on the
+// REQUEST side — no percent-decoding step, which is a response-element convention.
+| extend PolicyDoc = tostring(Req.attributeValue)
+| extend PolicyChanged = EventName == "SetTopicAttributes" and AttrName == "Policy"
+| extend Wildcard = PolicyChanged and (PolicyDoc contains '"AWS":"*"' or PolicyDoc contains '"Principal":"*"')
+| extend NamesExternal = PolicyChanged and PolicyDoc contains "arn:aws:iam::"
+                         and not(PolicyDoc contains strcat("arn:aws:iam::", ThisAccount))
+// AddPermission grants by account id directly. This is the simplest opening and it is unmatched
+// anywhere in the source set.
+| extend GrantedAccounts = tostring(Req.aWSAccountId)
+| extend Permissioned = EventName == "AddPermission"
+| extend PermissionExternal = Permissioned and isnotempty(GrantedAccounts)
+                              and not(GrantedAccounts contains ThisAccount)
+| extend DataProtection = EventName == "PutDataProtectionPolicy"
+// A new subscriber whose endpoint is outside the account is what an opened policy is for.
+| extend Subscribed = EventName == "Subscribe"
+| extend SubEndpoint = tostring(Req.endpoint)
+| summarize
+    PolicyChanges     = countif(PolicyChanged),
+    WildcardPolicies  = countif(Wildcard),
+    ExternalInPolicy  = countif(NamesExternal),
+    Permissions       = countif(Permissioned),
+    ExternalGrants    = countif(PermissionExternal),
+    DataProtChanges   = countif(DataProtection),
+    NewSubscriptions  = countif(Subscribed),
+    TopicsTouched     = dcount(TopicArn),
+    Topics            = make_set(TopicArn, 20),
+    Endpoints         = make_set(iff(Subscribed, SubEndpoint, ""), 20),
+    FirstSeen         = min(TimeGenerated),
+    LastSeen          = max(TimeGenerated)
+    by bin(TimeGenerated, WINDOW), UserIdentityArn, SourceIpAddress, IsProvisioner
+| where PolicyChanges > 0 or Permissions > 0 or DataProtChanges > 0
+| extend Verdict = case(
+    WildcardPolicies > 0,
+        "CRITICAL - topic policy names a wildcard principal; anyone may act on this topic",
+    ExternalGrants > 0 and NewSubscriptions > 0,
+        "CRITICAL - external account granted and a subscription created in the same window",
+    ExternalGrants > 0,
+        "HIGH - AddPermission granted an account outside this one; no policy document was needed",
+    ExternalInPolicy > 0,
+        "HIGH - replaced policy names a principal outside this account",
+    TopicsTouched >= 3 and not(IsProvisioner),
+        "HIGH - policies changed across several topics outside provisioning",
+    DataProtChanges > 0,
+        "MEDIUM - message data protection changed; unredacts message bodies for existing subscribers",
+    "MEDIUM - topic access policy replaced")
+| project TimeGenerated, Verdict, UserIdentityArn, SourceIpAddress, IsProvisioner,
+          PolicyChanges, WildcardPolicies, ExternalInPolicy, Permissions, ExternalGrants,
+          DataProtChanges, NewSubscriptions, TopicsTouched, Topics, Endpoints, FirstSeen, LastSeen
+| order by WildcardPolicies desc, ExternalGrants desc, TimeGenerated desc

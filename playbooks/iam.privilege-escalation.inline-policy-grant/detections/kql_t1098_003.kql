@@ -1,0 +1,157 @@
+// IAM Privilege Escalation via Inline Policy Grant (T1098.003)
+//
+// Two signals: an escalation primitive granted in an INLINE policy document, and the
+// self-grant case where the caller is also the grantee. Denied attempts are surfaced
+// separately as probing — never folded into the same verdict as a completed grant.
+//
+// The managed-policy route (CreatePolicyVersion -> SetDefaultPolicyVersion, and
+// Attach*Policy of AdministratorAccess) has a different blast radius and is reversible;
+// its queries ship in ../../_superseded/aws.privilege-escalation.iam-managed-policy-escalation/
+//
+// This query does the thing the Sigma rules structurally cannot: it PARSES the policy
+// document, so Effect, Action, Resource and NotAction are read from the SAME statement
+// rather than matched as independent substrings. Everything below the parse is exact;
+// the Sigma rules are the substring approximation of it.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "iam.amazonaws.com"
+| where EventName in ("PutUserPolicy", "PutRolePolicy", "PutGroupPolicy")
+| where isempty(ErrorCode)
+| extend Req = parse_json(RequestParameters)
+//
+// ARN part extraction. For an assumed-role ARN the LAST segment is the session name
+// and the SECOND is the role name — do not use the last segment for both.
+//   arn:aws:sts::<acct>:assumed-role/<RoleName>/<SessionName>
+//   arn:aws:iam::<acct>:user/<UserName>
+| extend ArnParts     = split(UserIdentityArn, "/")
+| extend CallerLast   = tostring(ArnParts[array_length(ArnParts) - 1])
+| extend CallerRole   = iff(UserIdentityArn contains ":assumed-role/", tostring(ArnParts[1]), "")
+| extend CallerName   = iff(UserIdentityArn contains ":assumed-role/", CallerRole, CallerLast)
+| extend TargetName   = tostring(coalesce(Req.userName, Req.roleName, Req.groupName))
+| extend PolicyName   = tostring(Req.policyName)
+//
+// NO DECODE. `requestParameters.policyDocument` is RAW JSON, in whatever whitespace the
+// client sent. Percent-encoding is a property of what IAM RETURNS — `responseElements`
+// and the Get*Policy APIs. url_decode() here would be actively harmful: it turns a
+// literal "%2F" in an S3 key-prefix condition into "/" and corrupts the document.
+| extend Doc = parse_json(tostring(Req.policyDocument))
+//
+// SHAPE GUARD. IAM permits Statement as a single object OR an array, and Action and
+// Resource as a string OR an array. mv-expand over a bare object expands its
+// PROPERTIES, not the statement — normalise to an array before expanding or the
+// sweep silently evaluates the wrong thing.
+| extend Stmts = iff(gettype(Doc.Statement) == "array", Doc.Statement, pack_array(Doc.Statement))
+| mv-expand Stmt = Stmts
+| extend Effect   = tostring(Stmt.Effect)
+| extend Actions  = iff(gettype(Stmt.Action)   == "array", Stmt.Action,   pack_array(Stmt.Action))
+| extend Res      = iff(gettype(Stmt.Resource) == "array", Stmt.Resource, pack_array(Stmt.Resource))
+| extend NotActions   = iff(gettype(Stmt.NotAction) == "array", Stmt.NotAction, pack_array(Stmt.NotAction))
+| extend HasNotAction = array_length(NotActions) > 0 and isnotnull(Stmt.NotAction)
+// isnotnull, not isnotempty: an empty Condition object {} stringifies to "{}" and would
+// read as present.
+| extend HasCondition = isnotnull(Stmt.Condition)
+//
+// Only Allow statements can escalate. This is the test the substring rules cannot make.
+| where Effect =~ "Allow"
+| extend ActionStr = tostring(strcat_array(Actions, ","))
+| extend ResStr    = tostring(strcat_array(Res, ","))
+//
+// `contains` throughout, never `has`. `has` is whole-term and breaks on every one of
+// these operands — "iam:*", "arn:aws:iam::*", "*" are all punctuated.
+// set_has_element tests the ARRAY, not a joined string. strcat_array strips quotes, so
+// a `contains "\"*\""` test is dead code, and `ActionStr == "*"` silently drops
+// ["s3:GetObject","*"] — an unconditioned administrator grant.
+| extend UnrestrictedAction   = set_has_element(Actions, "*")
+| extend UnrestrictedResource = set_has_element(Res, "*")
+| extend EscalationPrimitive  = ActionStr contains "CreateAccessKey"
+                             or ActionStr contains "CreateLoginProfile"
+                             or ActionStr contains "UpdateLoginProfile"
+                             or ActionStr contains "AttachUserPolicy"
+                             or ActionStr contains "AttachRolePolicy"
+                             or ActionStr contains "AttachGroupPolicy"
+                             or ActionStr contains "PutUserPolicy"
+                             or ActionStr contains "PutRolePolicy"
+                             or ActionStr contains "PutGroupPolicy"
+                             or ActionStr contains "CreatePolicyVersion"
+                             or ActionStr contains "SetDefaultPolicyVersion"
+                             or ActionStr contains "AddUserToGroup"
+                             or ActionStr contains "UpdateAssumeRolePolicy"
+                             or ActionStr contains "PassRole"
+                             or ActionStr contains "iam:*"
+                             or ActionStr contains "sts:*"
+| where UnrestrictedAction or EscalationPrimitive or HasNotAction
+//
+// Self-grant: the caller wrote the policy onto itself. Unambiguous — there is no
+// legitimate workflow in which a principal widens its own permissions.
+| extend SelfGrant = TargetName =~ CallerName and isnotempty(TargetName)
+| summarize
+    Grants        = count(),
+    GrantedTo     = make_set(TargetName, 5),
+    PolicyNames   = make_set(PolicyName, 5),
+    ActionsSeen   = make_set(ActionStr, 5),
+    ResourcesSeen = make_set(ResStr, 5),
+    AnySelfGrant  = max(SelfGrant),
+    AnyFullAdmin  = max(UnrestrictedAction and UnrestrictedResource and not(HasCondition)),
+    SourceIPs     = make_set(SourceIpAddress, 5),
+    Events        = make_set(EventName, 5),
+    FirstSeen     = min(TimeGenerated),
+    LastSeen      = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 10m)
+| extend Verdict = case(
+    AnySelfGrant and AnyFullAdmin,
+        "SELF-GRANTED FULL ADMIN — account takeover, contain now, P0",
+    AnySelfGrant,
+        "PRINCIPAL WIDENED ITS OWN PERMISSIONS — no legitimate workflow does this, P0",
+    AnyFullAdmin,
+        "UNCONDITIONED Action:* on Resource:* GRANTED — administrator-equivalent, P0",
+    "ESCALATION PRIMITIVE GRANTED — grantee can reach admin unaided, P1")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, GrantedTo, PolicyNames,
+          ActionsSeen, ResourcesSeen, Grants, Events, SourceIPs
+| order by LastSeen desc
+//
+// ============================================================================
+// COMPANION — denied IAM writes, kept SEPARATE from the success path
+// ============================================================================
+// A principal collecting AccessDenied across IAM write calls is mapping its own
+// permission boundary. That is reconnaissance and must not share a verdict with a
+// completed grant. The original rules had no errorCode filter, so both fired the same
+// P2 and an analyst could not tell a failed probe from a real takeover.
+//
+// AWSCloudTrail
+// | where TimeGenerated > ago(1d)
+// | where EventSource == "iam.amazonaws.com"
+// | where ErrorCode contains "AccessDenied"
+// | where EventName in ("PutUserPolicy","PutRolePolicy","PutGroupPolicy","CreatePolicyVersion",
+//                       "SetDefaultPolicyVersion","AttachUserPolicy","AttachRolePolicy",
+//                       "AttachGroupPolicy","AddUserToGroup","CreateAccessKey",
+//                       "CreateLoginProfile","UpdateAssumeRolePolicy")
+// | summarize Denials = count(), Attempted = make_set(EventName, 12),
+//             FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated)
+//             by UserIdentityArn, bin(TimeGenerated, 10m)
+// | where Denials > 5
+// | order by Denials desc
+//
+// ============================================================================
+// FIELD SHAPE AND ERROR STRINGS — easy to get wrong, fails silently
+// ============================================================================
+// PutUserPolicy / PutRolePolicy / PutGroupPolicy return NO responseElements. The
+// grant is recorded entirely in requestParameters; there is no response object to
+// pivot from.
+//
+// (CreatePolicyVersion's nested responseElements.policyVersion.versionId is documented
+// in the managed-policy sibling; it does not arise on this path.)
+//
+// Denials on this path: AccessDenied. Other codes the same calls throw, which are
+// NOT denials and must not be counted as probing: MalformedPolicyDocument,
+// LimitExceeded (inline-policy size cap, or the hard limit of five managed-policy
+// versions), NoSuchEntity, InvalidInput.
+//
+// ============================================================================
+// PREVENTION
+// ============================================================================
+// A permissions boundary on every non-admin principal caps what any policy written
+// onto it can actually confer, which makes this technique structurally ineffective
+// rather than merely detectable. It is the only control here that holds when the
+// granting principal is legitimately allowed to write IAM policy.

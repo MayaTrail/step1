@@ -1,0 +1,151 @@
+# CloudTrail delivery silently failing (T1685.002)
+#
+# ABSENCE CANNOT BE DETECTED BY AN EVENT-DRIVEN ENGINE — nothing evaluates when nothing arrives, so
+# an absence rule reports clean forever. The heartbeat is a SCHEDULED check, specified in
+# ../PLAYBOOK.md §1, not a rule.
+#
+# What CAN be detected are the silent causes no CloudTrail-scoped rule covers: the destination
+# bucket's policy, its deletion, a lifecycle expiry, and the KMS key being disabled or scheduled for
+# deletion. Each leaves IsLogging true.
+# Full rationale: detections/detection_note_t1685_002.md.
+title: KMS key used by a CloudTrail trail disabled or scheduled for deletion
+id: 0a7d3e51-96c8-4b24-a70f-51c8e4b0d937
+name: cloudtrail_destination_key_disabled
+status: experimental
+description: >-
+  A KMS key was disabled or scheduled for deletion. Where that key encrypts a trail's log files,
+  delivery fails or the delivered objects become unreadable while the trail continues to report
+  IsLogging true — which is the silence the "no logs" rule notices hours later, arriving here as an
+  actionable event instead. Populate the key list with the keys your trails actually use; without
+  that this fires on ordinary key lifecycle.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-concepts.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'kms.amazonaws.com'
+    eventName:
+      - 'DisableKey'
+      - 'ScheduleKeyDeletion'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the KMS key IDs or aliases your trails encrypt with. Deployed
+  # empty this alerts on every key disabled anywhere in the account.
+  trail_keys:
+    requestParameters.keyId|contains:
+      - 'alias/cloudtrail'
+      - 'alias/audit-logs'
+  condition: selection and success and trail_keys
+falsepositives:
+  - >-
+    A planned key rotation that disables the old key after the trail has been moved to a new one.
+    The UpdateTrail changing kmsKeyId should appear first; its absence is what makes this a finding.
+level: critical
+---
+title: CloudTrail destination bucket policy or lifecycle changed
+id: b41f7092-e6a3-4d18-95c7-2a80d6f4e31b
+name: cloudtrail_destination_bucket_altered
+status: experimental
+description: >-
+  The policy or lifecycle configuration of a bucket that receives trail logs was changed. Removing
+  the statement that allows cloudtrail.amazonaws.com to write makes delivery fail, and a lifecycle
+  rule with a short expiry deletes the logs after they arrive. In both cases the trail keeps
+  reporting as logging and LatestDeliveryError is the only field that moves — and it is not an
+  event, so nothing alerts on it.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketPolicy.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName:
+      - 'PutBucketPolicy'
+      - 'DeleteBucketPolicy'
+      - 'PutLifecycleConfiguration'
+      - 'PutBucketVersioning'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the buckets your trails deliver to.
+  trail_buckets:
+    requestParameters.bucketName|contains:
+      - 'cloudtrail'
+      - 'audit-logs'
+  condition: selection and success and trail_buckets
+falsepositives:
+  - >-
+    Routine lifecycle management on the log archive. It should be rare on this bucket specifically,
+    and a shortened expiry is worth reading every time — it is indistinguishable from evidence
+    destruction on a delay.
+level: high
+---
+title: CloudTrail destination bucket deleted
+id: 6c5b28ea-70d4-41f9-83b6-e9027a4c1d58
+name: cloudtrail_destination_bucket_deleted
+status: experimental
+description: >-
+  A bucket that receives trail logs was deleted. Delivery fails from that moment and the historical
+  log files are gone with it — which is the one way the past record is actually destroyed, since
+  deleting the trail itself explicitly leaves the bucket and its contents intact.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucket.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'DeleteBucket'
+  success:
+    errorCode: null
+  trail_buckets:
+    requestParameters.bucketName|contains:
+      - 'cloudtrail'
+      - 'audit-logs'
+  condition: selection and success and trail_buckets
+falsepositives:
+  - >-
+    Decommissioning an archive bucket that no trail still points at. Confirm against describe-trails
+    before closing, because a trail pointing at a deleted bucket keeps reporting as logging.
+level: critical
+---
+title: Any CloudTrail management event
+id: 3d80c17f-4a52-4e69-b1c3-750f9e2b8a46
+name: cloudtrail_any_management_event
+status: experimental
+description: >-
+  Base rule — NOT a detection and not routable. It exists to define the heartbeat signal that the
+  scheduled delivery check in ../PLAYBOOK.md §1 monitors. Absence cannot be detected by an
+  event-driven engine, because nothing evaluates when nothing arrives; the check has to be a
+  scheduled alarm on this stream's freshness, and this rule names the stream.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-concepts.html
+tags:
+  - attack.defense-evasion
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # justified: this is deliberately unrestricted. The rule's purpose is to define "a CloudTrail
+  # event arrived at all" for a freshness alarm, so any narrowing would defeat it. It is shipped at
+  # informational and must never be routed to a human.
+  selection:
+    eventVersion|exists: true
+  condition: selection
+level: informational

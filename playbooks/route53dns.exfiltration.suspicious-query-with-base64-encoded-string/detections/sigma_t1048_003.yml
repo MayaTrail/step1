@@ -1,0 +1,155 @@
+# DNS tunnelling and exfiltration through encoded subdomains (T1048.003 / T1071.004)
+#
+# THE SOURCE RULE LOOKS FOR A CHARACTER DNS DOES NOT CARRY. It matches base64 PADDING —
+# `query_name` ending in one or two `=` signs, or containing them before a dot. But `=` is not a
+# character of the DNS preferred syntax (RFC 1035: letters, digits and hyphens), which is exactly
+# why every tool that stuffs base64 into DNS strips the padding first. The rule therefore matches
+# essentially nothing a working tunnel produces, and what it does match is malformed queries.
+# A regex is not wrong here; the character class is.
+#
+# WHAT TUNNELLING ACTUALLY STRAINS IS THE LABEL LIMITS. A DNS label is at most 63 octets and a
+# full name at most 255. An encoder maximising payload per query pushes against both, so the
+# signals that work are structural rather than lexical:
+#   - a label at or near 63 characters
+#   - a total name at or near 255 characters
+#   - MANY DISTINCT SUBDOMAINS under ONE registered domain — the strongest of the set, because
+#     payload is encoded in the name, so each query is a new name by construction
+#   - query_type TXT or NULL, which carry the most response payload
+#   - rcode NXDOMAIN, from a nameserver that answers only for encoded names
+#   - transport TCP, unusual for ordinary lookups and used for larger exchanges
+#
+# THE CACHE LIMITATION IS AN ADVANTAGE HERE, AND IT IS WORTH STATING PLAINLY. AWS logs only unique
+# queries, not cache hits — which makes volume reasoning about ordinary domains meaningless across
+# this whole source. Tunnelling encodes data in unique subdomains BY CONSTRUCTION, so every
+# tunnelling query is a cache miss and every one is logged. The one traffic class the cache hides
+# is the class nobody needed to see, and the cardinality rule below is close to complete.
+#
+# THE SOURCE RULE ALSO HAS NO group_by AT ALL. With a threshold of zero and no grouping, every
+# single match is an alert with no aggregation and no actor. The correlations below group by the
+# registered domain, which is the thing to block, and carry the source alongside it.
+title: DNS query with a label at the protocol maximum
+id: 7a3e14cb-58f0-42d9-b6a7-90c25e3f8471
+name: r53dns_oversized_label
+status: experimental
+description: >-
+  A DNS query carried a label at or near the 63-octet limit, or a total name near the 255-octet
+  limit. Ordinary hostnames are far below both; an encoder maximising payload per query sits at
+  them. This is a base rule for the correlation below and a weak signal alone — one long label is
+  a hash in a CDN name as often as it is a tunnel — which is why it carries a low level and feeds
+  a cardinality test rather than alerting directly.
+references:
+  - https://www.rfc-editor.org/rfc/rfc1035
+  - https://attack.mitre.org/techniques/T1048/003/
+tags:
+  - attack.exfiltration
+  - attack.t1048.003
+logsource:
+  product: aws
+  service: route53resolver
+detection:
+  long_label:
+    query_name|re: '(^|\.)[A-Za-z0-9-]{45,63}\.'
+  condition: long_label
+falsepositives:
+  - >-
+    Content delivery networks, object storage and telemetry endpoints that embed hashes or
+    identifiers in hostnames. Extremely common, which is why this rule alerts on nothing by itself.
+level: low
+---
+title: Many distinct subdomains queried under one registered domain
+id: b0947f26-3ac1-4e58-81d3-6f207ce5b9a4
+status: experimental
+description: >-
+  One source resolved an unusual number of DISTINCT names under a single registered domain. This is
+  the strongest available signal for DNS tunnelling and it does not depend on how the payload is
+  encoded — base64, base32, hex or a custom alphabet all produce the same shape, because the data
+  IS the subdomain. It is also unusually reliable in this log source: tunnelling generates a new
+  name every query, so every query is a cache miss and is logged, while the caching that hides
+  repeat lookups of ordinary domains does not apply. group-by is the registered domain because
+  that is what gets blocked at the DNS Firewall; the source is carried in the matched records.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-query-logs.html
+  - https://attack.mitre.org/techniques/T1071/004/
+tags:
+  - attack.command-and-control
+  - attack.exfiltration
+  - attack.t1071.004
+  - attack.t1048.003
+correlation:
+  type: value_count
+  rules:
+    - r53dns_oversized_label
+  group-by:
+    - srcaddr
+  timespan: 1h
+  condition:
+    field: query_name
+    gte: 100
+falsepositives:
+  - >-
+    Service discovery, certificate transparency monitors and security scanners legitimately resolve
+    many distinct names. They are a small, nameable set of sources — exclude by srcaddr, and keep
+    the threshold rather than raising it.
+level: high
+---
+title: DNS query type associated with payload transport
+id: e5c86031-92b7-4d40-a71e-38504bfc2d69
+name: r53dns_payload_query_type
+status: experimental
+description: >-
+  A TXT or NULL query. TXT records carry arbitrary text and are the standard downstream channel for
+  DNS tunnelling; NULL has essentially no legitimate modern use and its presence is notable on its
+  own. Neither is alarming in isolation — TXT underpins SPF, DKIM, DMARC and domain-verification
+  checks, all of which are routine — so this ships as a component rather than an alert, and becomes
+  interesting when the same source is also driving subdomain cardinality.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/ResourceRecordTypes.html
+  - https://attack.mitre.org/techniques/T1071/004/
+tags:
+  - attack.command-and-control
+  - attack.t1071.004
+logsource:
+  product: aws
+  service: route53resolver
+detection:
+  payload_type:
+    query_type:
+      - 'TXT'
+      - 'NULL'
+  condition: payload_type
+falsepositives:
+  - >-
+    SPF, DKIM, DMARC and domain-ownership verification are all TXT lookups and are constant in any
+    estate that sends mail. This is background; it earns attention only alongside cardinality.
+level: informational
+---
+title: Repeated NXDOMAIN responses to one source
+id: 1f62d4a9-70e3-4b81-95c0-2ae8137bd506
+name: r53dns_nxdomain_volume
+status: experimental
+description: >-
+  A source accumulated responses for names that do not exist. A tunnelling client talking to a
+  nameserver that answers only for encoded names produces these steadily, and so does malware
+  cycling a domain generation algorithm looking for a live controller. It is also what a typo, a
+  decommissioned service or a misconfigured search domain produces, which is why it is a
+  medium-level component rather than a finding — its value is as the second signal beside high
+  subdomain cardinality, where the pair is very hard to explain innocently.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-query-logs-format.html
+  - https://attack.mitre.org/techniques/T1568.001/
+tags:
+  - attack.command-and-control
+  - attack.t1568.001
+logsource:
+  product: aws
+  service: route53resolver
+detection:
+  nxdomain:
+    rcode: 'NXDOMAIN'
+  condition: nxdomain
+falsepositives:
+  - >-
+    Search-domain suffixing, which produces a failed lookup for every suffix tried before the right
+    one. Endemic on Kubernetes nodes in particular, where the default resolv.conf produces several
+    NXDOMAIN responses for every external name resolved.
+level: medium

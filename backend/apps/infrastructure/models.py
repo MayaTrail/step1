@@ -12,6 +12,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class Stack(models.Model):
@@ -150,6 +151,19 @@ class Stack(models.Model):
         ),
     )
 
+    status_history = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=(
+            "Every status this stack has entered, oldest first, as "
+            "[{'status': str, 'at': ISO-8601, 'detail': str}]. Appended by "
+            "transition_to. Recorded because status is overwritten in place and "
+            "updated_at moves on every save, so without this there is no way to "
+            "tell how long a deploy spent in any phase, which is the question a "
+            "stuck deploy actually raises."
+        ),
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -162,6 +176,40 @@ class Stack(models.Model):
     def __str__(self) -> str:
         """Return stack name and status as the string representation."""
         return f"{self.name} [{self.status}]"
+
+    def transition_to(self, status: str, detail: str = "", *, save: bool = True) -> None:
+        """
+        Move the stack to a new status and record when it happened.
+
+        Every status change must go through here rather than assigning
+        `status` directly, because the timeline is built from what this
+        appends. A pre_save signal was considered and rejected: most callers
+        save with `update_fields`, which a signal cannot extend, so the history
+        would have been appended in memory and silently dropped on exactly the
+        paths that matter.
+
+        Re-entering the same status is ignored, so a task that saves twice does
+        not create a phase of zero length.
+
+        Args:
+            status: The new status, from Stack.Status.
+            detail: Optional reason, recorded for a failure.
+            save: Set False when the caller will save the row itself, in which
+                case it must include "status" and "status_history".
+        """
+        if self.status == status and self.status_history:
+            return
+
+        history = list(self.status_history or [])
+        history.append({
+            "status": status,
+            "at": timezone.now().isoformat(),
+            "detail": detail,
+        })
+        self.status = status
+        self.status_history = history
+        if save:
+            self.save(update_fields=["status", "status_history", "updated_at"])
 
     @property
     def tier(self) -> str:

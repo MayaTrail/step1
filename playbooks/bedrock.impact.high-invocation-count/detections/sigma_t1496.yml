@@ -1,0 +1,158 @@
+# Stolen credentials used for model compute — "LLMjacking" (T1496 / T1078.004)
+#
+# THE SOURCE RULE CARRIES NO LOGIC. All four Bedrock entries in the source pack are BUILDING BLOCKS
+# with no query, no threshold and no group-by — CloudWatch metric alarms for cost and availability
+# rather than detections. There is therefore nothing to correct here, and this file does not pretend
+# otherwise: it is a new security use case built on the service's actual exposure, and the
+# Issue/Impact/Correction table in ../PLAYBOOK.md §2 says so rather than inventing defects.
+#
+# THE EXPOSURE IS REAL AND SPECIFIC. A credential with bedrock:InvokeModel is a credential that
+# spends money at the account owner's expense and produces text on demand. Unlike stolen compute for
+# mining, this leaves the instance count unchanged and the bill in a service nobody watches — and
+# unlike data theft, nothing is exfiltrated, so data-loss controls see nothing at all.
+#
+# MODEL INVOCATION LOGGING IS OFF BY DEFAULT. AWS: "Model invocation logging is disabled by
+# default." Without it, CloudTrail records THAT a model was invoked and by whom, and the prompt and
+# response exist nowhere. Both planes are shipped below because they answer different questions and
+# most accounts have only the CloudTrail one.
+#
+# identity.arn IS THE ACTOR FIELD AND requestMetadata IS NOT. AWS: identity.arn is "captured
+# automatically", while requestMetadata is "the only field supplied by the caller". Caller-supplied
+# means attacker-supplied when the caller is the attacker, so it must never be a grouping key or a
+# trust signal in a security rule. It is projected for context and nothing else.
+#
+# THE 100 KB RULE MATTERS FOR THE NEXT RULE IN THIS SET AND IS NOTED HERE ONCE. Input and output
+# bodies over 100 KB, and all binary data, are stored as separate S3 objects rather than inline —
+# so any rule inspecting prompt text misses exactly the large prompts that carry bulk data.
+title: Bedrock model invoked by a principal with no invocation history
+id: 5c81f2a4-9de0-4736-b1a5-27309ce4b8d6
+name: bedrock_new_principal_invocation
+status: experimental
+description: >-
+  A principal invoked a foundation model. Shipped as a base rule for the correlations below and as
+  the inventory of who calls Bedrock at all, which most accounts do not have. The security question
+  is not that an invocation happened but that a principal which has never invoked a model before
+  starts doing so at volume — the shape of a credential leaked into a repository or a phishing kit
+  and then monetised. group-by in the correlations is identity.arn because AWS captures it
+  automatically and names it as the attribution field; requestMetadata is caller-supplied and is
+  never used for grouping.
+references:
+  - https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html
+  - https://attack.mitre.org/techniques/T1496/
+tags:
+  - attack.impact
+  - attack.t1496
+logsource:
+  product: aws
+  service: bedrock
+detection:
+  invocation:
+    operation:
+      - 'InvokeModel'
+      - 'InvokeModelWithResponseStream'
+      - 'Converse'
+      - 'ConverseStream'
+  condition: invocation
+level: informational
+---
+title: Sustained Bedrock invocation volume from one principal
+id: a0374e91-6b28-4c5d-83f7-1e069b5ca247
+status: experimental
+description: >-
+  One principal drove an unusual number of model invocations in a short window. This is the volume
+  signal for a stolen credential being used for model compute — the attacker pays nothing, the
+  account owner pays per token, and no instance is launched so no compute-oriented control notices.
+  The threshold is deliberately expressed as a count over a window rather than as a cost figure,
+  because token pricing varies by model and a cost threshold ages badly. Compare against the
+  principal's own history rather than against a fleet average: a batch pipeline legitimately makes
+  thousands of calls and a human-facing application does not.
+references:
+  - https://attack.mitre.org/techniques/T1496/
+tags:
+  - attack.impact
+  - attack.t1496
+correlation:
+  type: event_count
+  rules:
+    - bedrock_new_principal_invocation
+  group-by:
+    - identity.arn
+  timespan: 1h
+  condition:
+    gte: 1000
+falsepositives:
+  - >-
+    Batch inference, evaluation harnesses and load tests, all of which are legitimately high volume
+    and all of which run on a schedule somebody can name. Exclude by principal, not by raising the
+    threshold — raising it only moves the line an attacker has to stay under.
+level: high
+---
+title: One principal invoking an unusual number of distinct models
+id: 7e2b0d63-45fa-49c1-a806-3d5187ce9024
+status: experimental
+description: >-
+  Model breadth rather than call volume. A legitimate workload uses one model, or a small fixed set
+  chosen at design time; a credential being explored is used against everything it can reach, to
+  find which models are enabled and which give the most capable output for the price. This fires
+  earlier than the volume rule and on a much smaller number of calls, which makes it the better of
+  the two for a credential that has just been picked up.
+references:
+  - https://attack.mitre.org/techniques/T1526/
+tags:
+  - attack.discovery
+  - attack.t1526
+correlation:
+  type: value_count
+  rules:
+    - bedrock_new_principal_invocation
+  group-by:
+    - identity.arn
+  timespan: 6h
+  condition:
+    field: modelId
+    gte: 5
+falsepositives:
+  - >-
+    A model evaluation or routing layer that deliberately compares outputs across models. Real, and
+    a small named set of principals — the same exclusion list as the volume rule.
+level: high
+---
+title: Bedrock model invoked from outside the expected Regions
+id: 91cd48b7-30e6-42a9-b57d-6f0821eac935
+name: bedrock_unexpected_region_invocation
+status: experimental
+description: >-
+  An invocation recorded in a Region the organisation does not use for Bedrock. Model access is
+  enabled per Region and per model, so an actor exploring a stolen credential naturally spreads
+  across Regions looking for one where a capable model is already enabled — and a Region nobody
+  operates in is a Region nobody watches the bill for. This needs no threshold: one invocation in an
+  unused Region is the finding, and the tuning surface is the short list of Regions actually in use.
+references:
+  - https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html
+  - https://attack.mitre.org/techniques/T1078/004/
+tags:
+  - attack.defense-impairment
+  - attack.t1078.004
+logsource:
+  product: aws
+  service: bedrock
+detection:
+  invocation:
+    operation:
+      - 'InvokeModel'
+      - 'InvokeModelWithResponseStream'
+      - 'Converse'
+      - 'ConverseStream'
+  # POPULATE BEFORE DEPLOYING with the Regions this organisation actually uses for Bedrock. The
+  # list is short and stable, and leaving it as the example makes the rule fire on everything —
+  # which is the correct failure direction for a coverage rule but noisy on day one.
+  expected_regions:
+    region:
+      - 'us-east-1'
+      - 'eu-west-1'
+  condition: invocation and not expected_regions
+falsepositives:
+  - >-
+    A team adopting a model only available in a new Region, which is a real and frequent reason to
+    expand. It should arrive with a request; the alert is how you find out it did not.
+level: medium

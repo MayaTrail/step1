@@ -1,0 +1,156 @@
+// Failed User Authentication From a Single Source IP (T1110.003 / T1110.004)
+//
+// Signal: a source address failing user-pool authentication at volume, and the three things the
+// Sigma correlations structurally cannot express - the number of DISTINCT accounts behind the
+// count, whether a following success lands on an account the run was failing against, and
+// whether the address is simply holding accounts in AWS's exponential lockout.
+//
+// The distinct-account count is what turns one alert into three different incidents. Many
+// attempts on one sub is guessing and that account is locked out. One attempt on each of many
+// subs is spraying, nothing is locked, and the directory has been mapped. A few attempts each
+// across many subs with a handful of successes is credential stuffing against a reused-password
+// list, and the successes are the incident.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+//
+// POPULATE KnownEgress BELOW BEFORE DEPLOYING. Corporate NAT and mobile carrier CGNAT put
+// hundreds of unrelated users behind one address; unallowlisted, they are this query's dominant
+// false positive and no threshold makes them go away.
+let Lookback = 7d;
+let FailThreshold = 15;
+let LockoutThreshold = 10;
+// CIDR ranges, evaluated with ipv4_is_in_any_range. Never a whole-term operator on an address:
+// terms break on the dots and the slash, so term matching does not work on IPs or CIDRs (C1).
+let KnownEgress = dynamic(["203.0.113.0/24", "198.51.100.0/24"]);
+let Auth =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "cognito-idp.amazonaws.com"
+    // eventType AwsApiCall only. Managed login and the classic hosted UI emit AwsServiceEvent
+    // records under entirely different names (login_POST, Login_GET, Token_POST ...) and are NOT
+    // covered here - see the closing note.
+    | where EventName in ("InitiateAuth", "RespondToAuthChallenge")
+    // RequestParameters is typed `string` in this table, not dynamic - parse_json is required.
+    // AWS publishes NO example CloudTrail event for any cognito-idp management operation, so
+    // every field read below is best-effort and none of them is used as a FILTER.
+    | extend Req = parse_json(RequestParameters)
+    | extend AuthFlow = tostring(Req.authFlow)
+    | extend ClientId = tostring(Req.clientId)
+    | extend PoolId   = tostring(Req.userPoolId)
+    // CloudTrail records UserSub, never UserName, for user-specific requests, and obscures
+    // private fields with the literal HIDDEN_DUE_TO_SECURITY_REASONS - which covers the
+    // AuthParameters map holding USERNAME, PASSWORD and SRP_A.
+    | extend TargetSub = coalesce(tostring(Req.userSub), tostring(Req.sub), "")
+    // column_ifexists degrades to "" rather than failing the query where the workspace connector
+    // does not carry ErrorMessage. Without it the lockout form is invisible and a sustained
+    // single-account attack undercounts by design.
+    | extend ErrMsg = tostring(column_ifexists("ErrorMessage", ""))
+    | extend IsKnownEgress = ipv4_is_in_any_range(SourceIpAddress, KnownEgress) == true
+    | extend Outcome = case(
+        isempty(ErrorCode),                                   "SUCCESS",
+        ErrMsg contains "Password attempts exceeded",         "LOCKED_OUT",
+        ErrorCode == "NotAuthorizedException",                "BAD_PASSWORD_OR_HIDDEN_USER",
+        ErrorCode == "UserNotFoundException",                 "NO_SUCH_USER",
+        ErrorCode == "UserNotConfirmedException",             "USER_EXISTS_UNCONFIRMED",
+        ErrorCode == "PasswordResetRequiredException",        "USER_EXISTS_RESET_REQUIRED",
+        // ForbiddenException on cognito-idp can only be an AWS WAF block, and WAF inspects
+        // public operations only - so it cannot appear on the AdminInitiateAuth path at all.
+        ErrorCode == "ForbiddenException",                    "WAF_BLOCKED",
+        ErrorCode == "TooManyRequestsException",              "ACCOUNT_RPS_QUOTA_THROTTLE",
+                                                              strcat("OTHER:", ErrorCode));
+let Failures = Auth
+    | where Outcome in ("BAD_PASSWORD_OR_HIDDEN_USER", "NO_SUCH_USER",
+                        "USER_EXISTS_UNCONFIRMED", "USER_EXISTS_RESET_REQUIRED", "LOCKED_OUT");
+let Successes = Auth
+    | where Outcome == "SUCCESS"
+    | summarize SuccessCount = count(), SuccessSubs = make_set(TargetSub, 20),
+                LastSuccess = max(TimeGenerated), FirstSuccess = min(TimeGenerated)
+      by SourceIp = SourceIpAddress;
+// WAF blocks are reported alongside, never counted as authentication failures: a request WAF
+// rejected never reached the authentication path and never touched an account's lockout counter.
+// AWS: "Requests blocked by AWS WAF do not count towards the request rate quota."
+let WafBlocks = Auth
+    | where Outcome == "WAF_BLOCKED"
+    | summarize WafBlocked = count() by SourceIp = SourceIpAddress;
+Failures
+| summarize
+    Failures       = count(),
+    FirstFailure   = min(TimeGenerated),
+    LastFailure    = max(TimeGenerated),
+    DistinctSubs   = dcountif(TargetSub, isnotempty(TargetSub)),
+    TargetSubs     = make_set_if(TargetSub, isnotempty(TargetSub), 25),
+    SubsSeen       = countif(isnotempty(TargetSub)),
+    Lockouts       = countif(Outcome == "LOCKED_OUT"),
+    Enumerations   = countif(Outcome in ("NO_SUCH_USER", "USER_EXISTS_UNCONFIRMED",
+                                         "USER_EXISTS_RESET_REQUIRED")),
+    AuthFlows      = make_set(AuthFlow, 5),
+    Clients        = make_set(ClientId, 5),
+    Pools          = make_set(PoolId, 5),
+    Agents         = make_set(UserAgent, 5),
+    Regions        = make_set(AwsRegion, 3),
+    Outcomes       = make_set(Outcome, 8),
+    OnKnownEgress  = max(iff(IsKnownEgress, 1, 0))
+  by SourceIp = SourceIpAddress
+| where Failures >= FailThreshold or Lockouts >= LockoutThreshold
+| join kind=leftouter Successes on SourceIp
+| join kind=leftouter WafBlocks on SourceIp
+| extend SuccessInsideRun = isnotempty(LastSuccess)
+                            and LastSuccess between (FirstFailure .. (LastFailure + 15m))
+| extend SuccessOnTargetedSub = SuccessInsideRun
+                                and array_length(set_intersect(TargetSubs, SuccessSubs)) > 0
+// SubsSeen is the anti-false-negative guard on the shape verdicts below. Where requestParameters
+// carries no usable sub - which is possible, since the field shape is unverified - DistinctSubs
+// is 0 and "one attempt each against many accounts" would read as "many attempts on one". Those
+// verdicts are gated on SubsSeen so an unknown never masquerades as a finding.
+| extend Verdict = case(
+    SuccessOnTargetedSub,
+        "CONFIRMED COMPROMISE - a sub this address was failing against then authenticated successfully; ID, access and refresh tokens are issued for that account",
+    SuccessInsideRun and OnKnownEgress == 1,
+        "SUCCESS INSIDE THE RUN, ON KNOWN EGRESS - almost certainly an unrelated user behind the same NAT. Confirm the sub before escalating",
+    SuccessInsideRun,
+        "FAILURES THEN A SUCCESS - same address, overlapping window, DIFFERENT sub. Confirm by hand",
+    SubsSeen > 0 and DistinctSubs >= 10 and Failures / DistinctSubs <= 3,
+        "PASSWORD SPRAYING OR CREDENTIAL STUFFING - few attempts against each of many accounts; nothing is locked out and the directory has been enumerated",
+    Lockouts >= LockoutThreshold,
+        "ACCOUNT LOCKOUT ATTACK - accounts are being held in AWS's exponential lockout. No password need ever be guessed; the impact is that real users cannot sign in",
+    SubsSeen > 0 and DistinctSubs <= 2,
+        "PASSWORD GUESSING - sustained attempts against one or two accounts, which are now inside a lockout of up to fifteen minutes",
+    SubsSeen == 0,
+        "SHAPE UNKNOWN - no target sub was present in requestParameters, so guessing and spraying cannot be told apart from CloudTrail alone. Confirm the field shape in your own trail",
+    OnKnownEgress == 1,
+        "VOLUME ON KNOWN EGRESS - expected on a shared NAT address; triage the distinct-sub count, not the raw failure count",
+        "REPEATED AUTHENTICATION FAILURES FROM ONE ADDRESS - threshold met, shape not decisive")
+| project FirstFailure, LastFailure, Verdict, SourceIp, OnKnownEgress, Failures, DistinctSubs,
+          SubsSeen, Lockouts, Enumerations, Outcomes, TargetSubs, AuthFlows, Clients, Pools,
+          SuccessCount, SuccessSubs, WafBlocked, Agents, Regions
+| order by LastFailure desc
+
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// Managed login and the classic hosted UI, which on a consumer-facing pool is where the users
+// are. Browser sign-in produces no InitiateAuth at all; it produces AwsServiceEvent records under
+// login_POST, login_continue_POST, selectChallenge_POST, mfa_totp_POST, Login_GET,
+// CognitoAuthentication, Token_POST and the rest. A credential-stuffing run driven at the hosted
+// pages is invisible to every rule in this technique's sigma file and to the source rule. Its
+// absence from this output is not evidence it did not happen.
+//
+// The username. AWS: "Amazon Cognito records UserSub but not UserName in CloudTrail logs for
+// requests that are specific to a user." Resolve each sub with
+// `aws cognito-idp list-users --user-pool-id <pool> --filter "sub = \"<sub>\""`.
+//
+// Whether the password was already known to be breached, and the device or geolocation of the
+// attempt. That is Cognito threat protection, which requires the Plus feature plan, exposes the
+// per-user history through AdminListUserAuthEvents with two-year retention, and - AWS - "doesn't
+// have access to passwords in USER_SRP_AUTH sign-in, and doesn't monitor or act on events with
+// this flow". It also "doesn't apply rate limits" and cannot be used with federated sign-in.
+//
+// PREVENTION. AWS WAF is the control here and an IAM deny is not: InitiateAuth is documented as
+// an operation for which "you can't grant IAM permissions in policies". WAF's scope explicitly
+// includes "public API operations ... like InitiateAuth, RespondToAuthChallenge, and GetUser",
+// plus the managed-login endpoints this query cannot see - which is the strongest argument for
+// deploying it. Two documented limits to design around: WAF "can't configure web ACL rules to
+// match on personally identifiable information ... usernames, passwords", so a per-username rate
+// limit is not available; and AWSManagedRulesATPRuleSet cannot be used with a user pool. Identify
+// Cognito traffic in WAF logs by the headers x-amzn-cognito-client-id and
+// x-amzn-cognito-operation-name.

@@ -1,0 +1,153 @@
+# SNS topic encryption downgraded to the AWS-managed key (T1600)
+#
+# THE ORIGINAL RULE HAS NO BEFORE-STATE, AND THAT INVERTS IT HALF THE TIME. It fires on
+# `SetTopicAttributes` setting KmsMasterKeyId to `alias/aws/sns`, and calls that a "less
+# secure encryption policy". Whether it IS less secure depends entirely on what the topic
+# had a moment earlier:
+#     customer-managed key  ->  alias/aws/sns   = a real downgrade
+#     no encryption at all  ->  alias/aws/sns   = encryption being TURNED ON
+# CloudTrail records the NEW value only — there is no `oldValue` field and no attribute
+# version history — so the single event cannot tell those apart, and the rule as written
+# alerts on somebody improving the account's posture. That is the defect worth fixing, and
+# it is fixed structurally: the single-event rule is demoted to `medium`, and a correlation
+# supplies the before-state by requiring a customer-managed key to have been set on the SAME
+# topic first.
+#
+# Two case errors, both fatal on a case-sensitive keyword field: the original matched
+# `eventName:"settopicattributes"` and `attributeName:"kmsmasterkeyid"`. CloudTrail writes
+# `SetTopicAttributes`, and SNS validates the attribute name case-sensitively as
+# `KmsMasterKeyId`.
+#
+# WHAT THIS RULE SET STRUCTURALLY CANNOT SEE: the AWS-managed key can also be named by key
+# id or key ARN rather than by the `alias/aws/sns` alias, and those forms are opaque strings
+# with nothing to match on. Distinguishing them requires `kms:DescribeKey` and reading
+# `KeyMetadata.KeyManager == "AWS"`, which is an API call, not a log field. Query 2 of the
+# playbook does it; no Sigma rule can.
+title: SNS topic encryption changed to the AWS-managed key
+id: 2484a22e-3632-4160-9988-e5c44a6264b3
+name: sns_sse_set_aws_managed
+status: experimental
+description: >-
+  SetTopicAttributes pointing a topic's KmsMasterKeyId at the AWS-managed SNS key. On its
+  own this is ambiguous — it is a downgrade only if the topic previously used a
+  customer-managed key, and an improvement if it was previously unencrypted — so it is
+  medium, and the correlation below supplies the missing before-state.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_SetTopicAttributes.html
+  - https://docs.aws.amazon.com/sns/latest/dg/sns-server-side-encryption.html
+  - https://attack.mitre.org/techniques/T1600/
+tags:
+  - attack.defense-impairment
+  - attack.impact
+  - attack.t1600
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sns.amazonaws.com'
+    eventName: 'SetTopicAttributes'
+  kms_attribute:
+    requestParameters.attributeName: 'KmsMasterKeyId'
+  aws_managed:
+    requestParameters.attributeValue|re: '(?i)(^|[:/])alias/aws/sns$'
+  success:
+    errorCode: null
+  condition: selection and kms_attribute and aws_managed and success
+falsepositives:
+  - A topic being encrypted for the FIRST time with the AWS-managed key. This is an
+    improvement, not an incident, and it is the majority of this rule's matches — which is
+    why it is medium and why the correlation exists. Triage by reading the previous key.
+level: medium
+---
+title: SNS topic encryption set to a customer-managed key
+id: 1008b98f-cec3-4305-8d63-0c08b970b6cd
+name: sns_sse_set_customer_managed
+status: experimental
+description: >-
+  Base rule — sequence component only, not for direct alerting. SetTopicAttributes setting
+  KmsMasterKeyId to anything that is not the AWS-managed SNS alias and is not empty. It
+  exists to establish the BEFORE-state the downgrade correlation needs, and it carries the
+  success filter so a denied key change cannot satisfy the first half of that sequence.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_SetTopicAttributes.html
+  - https://attack.mitre.org/techniques/T1600/
+tags:
+  - attack.defense-impairment
+  - attack.t1600
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sns.amazonaws.com'
+    eventName: 'SetTopicAttributes'
+  kms_attribute:
+    requestParameters.attributeName: 'KmsMasterKeyId'
+  has_value:
+    requestParameters.attributeValue|re: '\S'
+  aws_managed:
+    requestParameters.attributeValue|re: '(?i)(^|[:/])alias/aws/sns$'
+  success:
+    errorCode: null
+  condition: selection and kms_attribute and has_value and success and not aws_managed
+level: low
+---
+title: SNS topic downgraded from a customer-managed key to the AWS-managed key
+id: e8190bdb-5313-474e-adb2-e09c3e7c755b
+status: experimental
+description: >-
+  The same topic given a customer-managed key and then moved to the AWS-managed SNS key.
+  This is the real finding the single-event rule cannot express: it supplies the before-state
+  CloudTrail omits, so it separates a genuine downgrade from a topic being encrypted for the
+  first time. Timespan basis — 30 days is a retention-shaped figure, not a behavioural one:
+  the two events are usually months apart, and the window is set to the longest span a
+  correlation engine will realistically hold rather than to any property of the technique.
+  Treat a non-match as "no evidence in the window", never as "not a downgrade", and read the
+  live key with kms:DescribeKey instead. Grouped on requestParameters.topicArn, which both
+  component rules emit — the CreateTopic path is deliberately excluded, because it carries
+  the topic ARN in responseElements and would silently never group.
+references:
+  - https://docs.aws.amazon.com/sns/latest/dg/sns-server-side-encryption.html
+  - https://attack.mitre.org/techniques/T1600/
+tags:
+  - attack.defense-impairment
+  - attack.impact
+  - attack.t1600
+correlation:
+  type: temporal_ordered
+  rules:
+    - sns_sse_set_customer_managed
+    - sns_sse_set_aws_managed
+  group-by:
+    - requestParameters.topicArn
+  timespan: 30d
+level: high
+---
+title: Repeated SNS topic encryption changes across distinct topics
+id: 2a38ef25-1600-4b6e-8188-2ac62c436a01
+status: experimental
+description: >-
+  Two or more DISTINCT topics moved to the AWS-managed key by the same principal inside an
+  hour. Threshold basis — a key change is a deliberate, individually justified act, so the
+  legitimate baseline for one principal in one hour is exactly one topic; `gte: 2` fires on
+  the first event that exceeds that baseline rather than falling through it. A bulk
+  migration will trip this; suppress the migration's role for its window rather than raising
+  the count, because raising it hides the sweep this exists to catch.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_SetTopicAttributes.html
+  - https://attack.mitre.org/techniques/T1600/
+tags:
+  - attack.defense-impairment
+  - attack.t1600
+correlation:
+  type: value_count
+  rules:
+    - sns_sse_set_aws_managed
+  group-by:
+    - userIdentity.arn
+  field: requestParameters.topicArn
+  timespan: 1h
+  condition:
+    gte: 2
+level: medium

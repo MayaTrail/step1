@@ -1,0 +1,132 @@
+# High-severity stateful firewall alert on traffic that was not blocked (T1071 / T1190)
+#
+# SURICATA SEVERITY IS INVERTED AND THE SOURCE PACK GETS THIS RIGHT. severity 1 is the MOST severe,
+# ascending to less severe. The source rules map 1 to high, 2 to medium and 3/4 to low, which is
+# correct — stated here explicitly because a reviewer's instinct is to "fix" it in the wrong
+# direction, and doing so would silently invert the entire alert hierarchy.
+#
+# THE ACTION FILTER DISCARDS HALF THE PICTURE. The source rule keeps only
+# `action:"allowed" OR NOT action:"blocked"` — so a high-severity signature that the firewall
+# BLOCKED never fires. That is defensible for paging and wrong for situational awareness: it
+# removes the ability to distinguish "nobody is attacking us" from "everything is being blocked",
+# and it hides the run-up in which an attacker probes and is refused before finding something that
+# passes. The corrected set keeps both and separates them by rule level rather than by filter, so
+# the blocked stream goes to a dashboard and the unblocked stream to a person.
+#
+# `verdict.action` IS THE PACKET'S FATE; `alert.action` IS THE RULE'S REPORT. AWS's own examples
+# carry `"action":"allowed"` on one record and `"action":"blocked"` with `"verdict":{"action":"drop"}`
+# on another. Where both are present and disagree, the verdict is what happened. The rules below
+# read alert.action because it is the field the source rule uses and the one always present, and
+# the KQL projects both so a responder can see a disagreement rather than inherit one.
+#
+# ONLY DROP, ALERT AND REJECT PRODUCE ALERT LOGS. AWS: "A stateful rule sends alerts for the rule
+# actions DROP, ALERT, and REJECT." A `PASS` rule produces no alert entry at all, so the alert log
+# is a filtered view by design and never a record of everything the firewall saw. Anything reading
+# it as complete coverage is reading a subset.
+#
+# AND THE STATELESS ENGINE IS INVISIBLE HERE. AWS: "Firewall logging is only available for traffic
+# that you forward to the stateful rules engine." Traffic a stateless rule dropped produces no log
+# of any kind. The absence of an alert is therefore not evidence the traffic did not arrive — it
+# may have been handled before the stateful engine ever saw it.
+#
+# `group_by: []` ON THE SOURCE MEDIUM RULE WITH A THRESHOLD OF ZERO means every single alert pages,
+# with no aggregation and no actor. The correlation below groups by source address and signature,
+# which is the pair that distinguishes one noisy signature from one determined host.
+title: High-severity stateful rule alert, not blocked
+id: 6b3d2f81-95a4-4c07-b6e2-71095fa3d84c
+name: netfw_high_severity_unblocked
+status: experimental
+description: >-
+  A stateful rule with Suricata severity 1 — the most severe level — alerted on traffic the firewall
+  did not block. This is the case that needs a person: the signature fired and the packet
+  proceeded, either because the rule's action was ALERT rather than DROP or because the policy
+  ordered a pass ahead of it. Read aws_metadata.resource_arn to identify which rule group produced
+  it; that is the fastest route to whether the pass was intended.
+references:
+  - https://docs.aws.amazon.com/network-firewall/latest/developerguide/firewall-logging-contents.html
+  - https://attack.mitre.org/techniques/T1071/
+tags:
+  - attack.command-and-control
+  - attack.t1071
+logsource:
+  product: aws
+  service: networkfirewall
+detection:
+  alert_event:
+    event.event_type: 'alert'
+  most_severe:
+    event.alert.severity: 1
+  not_blocked:
+    event.alert.action: 'allowed'
+  condition: alert_event and most_severe and not_blocked
+falsepositives:
+  - >-
+    A managed rule group running in alert-only mode during evaluation, which is the normal way to
+    introduce one. Expect volume for as long as that lasts; the finding is a severity-1 signature
+    still in alert mode after the evaluation period ended.
+level: high
+---
+title: High-severity stateful rule alert, blocked
+id: e0715a3c-4826-4d9f-83b1-2c690847ef52
+name: netfw_high_severity_blocked
+status: experimental
+description: >-
+  The same signature and severity, blocked. Shipped at low and deliberately kept rather than
+  filtered away: the source rule discards these entirely, which removes the ability to distinguish
+  "nobody is attacking" from "everything is being blocked", and hides the probing run-up in which an
+  attacker is refused repeatedly before finding a path that passes. Route to a dashboard, not to a
+  person — and note that a sudden stop in this stream is itself worth reading, because it means
+  either the attacker left or the blocking did.
+references:
+  - https://docs.aws.amazon.com/network-firewall/latest/developerguide/firewall-logging-contents.html
+  - https://attack.mitre.org/techniques/T1071/
+tags:
+  - attack.command-and-control
+  - attack.t1071
+logsource:
+  product: aws
+  service: networkfirewall
+detection:
+  alert_event:
+    event.event_type: 'alert'
+  most_severe:
+    event.alert.severity: 1
+  blocked:
+    event.alert.action: 'blocked'
+  condition: alert_event and most_severe and blocked
+falsepositives:
+  - >-
+    Background internet scanning against a public endpoint, continuously. That is what this stream
+    mostly is, which is why it is at low and why its VOLUME rather than its presence is the signal.
+level: low
+---
+title: One source triggering many distinct high-severity signatures
+id: 9c48b607-13ae-4520-9f7d-58e2c130ba69
+status: experimental
+description: >-
+  A single source address matched an unusual number of DISTINCT severity-1 signatures. Signature
+  breadth separates a determined actor from a noisy rule: an ordinary scanner trips the same
+  signature repeatedly, while an actor working through an estate trips different ones as they move
+  through reconnaissance, exploitation and command-and-control. group-by is the source address
+  because that is the actor; the signatures are read off the matched records and tell you what they
+  were trying.
+references:
+  - https://attack.mitre.org/techniques/T1190/
+tags:
+  - attack.initial-access
+  - attack.t1190
+correlation:
+  type: value_count
+  rules:
+    - netfw_high_severity_blocked
+  group-by:
+    - event.src_ip
+  timespan: 1h
+  condition:
+    field: event.alert.signature_id
+    gte: 5
+falsepositives:
+  - >-
+    A vulnerability scanner you own, which trips many signatures by design and is the single most
+    likely cause of this firing. Exclude by source address, and confirm the schedule matches.
+level: medium

@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { Navigate, Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import { ThemeProvider } from './context/ThemeContext'
 import { PlatformProvider } from './context/PlatformContext'
@@ -7,8 +7,9 @@ import { UiModeProvider } from './context/UiModeContext'
 import { ProtectedRoute } from './components/auth/ProtectedRoute'
 import { AppLayout } from './components/layout/AppLayout'
 import { LoginPage } from './components/auth/LoginPage'
-import { ConnectorPage } from './components/auth/ConnectorPage'
 import { DashboardPage } from './components/dashboard/DashboardPage'
+import { ThreatFeedPage } from './components/threatfeed/ThreatFeedPage'
+import { WorkflowsPage } from './components/workflows/WorkflowsPage'
 import { ProfilePage } from './components/profile/ProfilePage'
 import { SettingsPage } from './components/settings/SettingsPage'
 import { StacksPage } from './components/stacks/StacksPage'
@@ -22,6 +23,18 @@ import { GuardrailsPage } from './components/guardrails/GuardrailsPage'
 import { EmulationsHub } from './components/emulations/EmulationsHub'
 import { DetectionsHub } from './components/detections/DetectionsHub'
 import { PlaybooksHub } from './components/playbooks/PlaybooksHub'
+import { LibraryPlaybookPage } from './components/playbooks/LibraryPlaybookPage'
+import { GuardrailsHub } from './components/guardrails/GuardrailsHub'
+import { ComingSoon } from './components/common/ComingSoon'
+import { ActiveRunsPage } from './components/operations/ActiveRunsPage'
+import { ResultsPage } from './components/operations/ResultsPage'
+import { SchedulesPage } from './components/operations/SchedulesPage'
+import { ReportsPage } from './components/reports/ReportsPage'
+import { RunReportPage } from './components/reports/RunReportPage'
+import { RunComparePage } from './components/reports/RunComparePage'
+import { PlatformOverviewPage } from './components/platforms/PlatformOverviewPage'
+import { IconBook } from './components/ui/Icons'
+
 // Lazy-loaded: the block editor is only reached from the playbooks hub, so it
 // stays out of the initial bundle that every page including login pays for.
 const PlaybookEditorPage = lazy(() =>
@@ -48,16 +61,6 @@ function EditorFallback() {
     </div>
   )
 }
-import { ReportsPage } from '@/components/reports/ReportsPage'
-import { RunReportPage } from '@/components/reports/RunReportPage'
-import { RunComparePage } from '@/components/reports/RunComparePage'
-import { GuardrailsHub } from './components/guardrails/GuardrailsHub'
-import { ComingSoon } from './components/common/ComingSoon'
-import { ActiveRunsPage } from './components/operations/ActiveRunsPage'
-import { ResultsPage } from './components/operations/ResultsPage'
-import { SchedulesPage } from './components/operations/SchedulesPage'
-import { PlatformOverviewPage } from './components/platforms/PlatformOverviewPage'
-import { IconBook } from './components/ui/Icons'
 
 export default function App() {
   return (
@@ -67,15 +70,16 @@ export default function App() {
           <UiModeProvider>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/connector" element={<ConnectorPage />} />
             <Route element={<ProtectedRoute />}>
               <Route element={<AppLayout />}>
                 <Route index element={<DashboardPage />} />
                 <Route path="me" element={<ProfilePage />} />
                 <Route path="settings" element={<SettingsPage />} />
+                <Route path="threat-feed" element={<ThreatFeedPage />} />
                 <Route path="stacks" element={<StacksPage />} />
 
                 {/* Operations */}
+                <Route path="workflows" element={<WorkflowsPage />} />
                 <Route path="runs" element={<ActiveRunsPage />} />
                 <Route path="results" element={<ResultsPage />} />
                 <Route path="schedules" element={<SchedulesPage />} />
@@ -103,6 +107,9 @@ export default function App() {
                   }
                 />
                 <Route path="playbooks" element={<PlaybooksHub />} />
+                {/* The shipped library. Declared before the :playbookId route
+                    below, which addresses a user's own authored playbook. */}
+                <Route path="playbooks/library/:playbookId" element={<LibraryPlaybookPage />} />
                 <Route
                   path="playbooks/new"
                   element={
@@ -152,6 +159,10 @@ export default function App() {
                 <Route path=":platformId/emulations/:emulationId/logging/:runId" element={<DetectionCoveragePage />} />
                 <Route path=":platformId/guardrails" element={<GuardrailsPage />} />
                 <Route path=":platformId/guardrails/:guardrailId" element={<GuardrailsPage />} />
+                {/* Unknown paths fall back to the dashboard. Without this a removed
+                    route such as the old /connector renders the shell with an empty
+                    content area, which reads as a broken page rather than a dead link. */}
+                <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Route>
           </Routes>

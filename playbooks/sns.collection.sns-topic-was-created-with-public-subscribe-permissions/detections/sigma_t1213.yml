@@ -1,0 +1,171 @@
+# SNS topic opened for public subscribe (T1213 / T1098)
+#
+# The original rule matched `eventName:"createtopic"` — lower case, against a field
+# CloudTrail writes as `CreateTopic` — then phrase-matched the policy against the literal
+# `Principal:{AWS:*},Action:[SNS:Subscribe]`. That literal occurs in no real event:
+# CloudTrail carries `requestParameters.attributes.Policy` as a RAW JSON string, so the
+# bytes are `"Principal":{"AWS":"*"}` with quotes, in whatever key order and whitespace the
+# client sent. It also covered only CreateTopic, missing the SetTopicAttributes rewrite.
+#
+# The discriminator is NOT the wildcard principal. AWS's own default topic policy is
+# `Principal {"AWS":"*"}` over eight SNS actions including Subscribe — every console-created
+# topic carries it — and what makes it safe is the confining Condition. A rule keyed on
+# `Principal:*` alone fires on every topic in the account.
+#
+# WHAT MAKES SUBSCRIBE DIFFERENT FROM PUBLISH, and why these rules do not stop at the grant:
+# a subscription OUTLIVES the grant. Removing the public statement does not detach anything
+# already attached, so the exposure persists after the obvious fix. Worse, the moment the
+# subscription becomes live is INVISIBLE: AWS documents that ConfirmSubscription invoked in
+# unauthenticated mode — the emailed or POSTed confirmation link, which is how every HTTP/S
+# and email subscription is confirmed — is NOT logged to CloudTrail. So the last rule below
+# alerts on the Subscribe call itself, and the correlation ties the grant to its exercise.
+title: SNS topic created with an unconditioned public subscribe grant
+id: f375c9c0-37b1-401a-9941-513a3df8cbd3
+name: sns_public_subscribe_at_create
+status: experimental
+description: >-
+  CreateTopic storing a policy that allows a subscribe-granting action to Principal "*"
+  with no principal-scoping Condition. Any internet caller can attach their own endpoint
+  and receive every message the topic carries from then on.
+references:
+  - https://docs.aws.amazon.com/sns/latest/dg/sns-access-policy-use-cases.html
+  - https://attack.mitre.org/techniques/T1213/
+tags:
+  - attack.collection
+  - attack.persistence
+  - attack.t1213
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sns.amazonaws.com'
+    eventName: 'CreateTopic'
+  public_principal:
+    requestParameters.attributes.Policy|re: '"(AWS|Principal)"\s*:\s*(\[[^\]]{0,400})?"\*"'
+  subscribe_action:
+    requestParameters.attributes.Policy|re: '(?i)("NotAction"|"[^"]{0,40}:(subscribe|receive)"|"sns:\*"|"action"\s*:\s*(\[[^\]]{0,400})?"\*")'
+  confined:
+    requestParameters.attributes.Policy|re: '(?i)(source(owner|account|arn|vpce?|ip)|principal(orgid|orgpaths|account|arn)|aws:userid|sns:(protocol|endpoint))'
+  success:
+    errorCode: null
+  condition: selection and public_principal and subscribe_action and success and not confined
+falsepositives:
+  - A deliberately public fan-out topic — allowlist by name, never mute the rule.
+level: high
+---
+title: SNS topic policy replaced with an unconditioned public subscribe grant
+id: 17aefb34-3d16-4923-b79d-b8a415d1c715
+name: sns_public_subscribe_via_set_attributes
+status: experimental
+description: >-
+  SetTopicAttributes rewriting the Policy attribute of an existing topic to allow a
+  subscribe-granting action to Principal "*" with no confining Condition. The original
+  rule missed this path entirely — the topic was created correctly and opened afterwards,
+  so no CreateTopic event carries the exposure.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_SetTopicAttributes.html
+  - https://attack.mitre.org/techniques/T1213/
+tags:
+  - attack.collection
+  - attack.persistence
+  - attack.t1213
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sns.amazonaws.com'
+    eventName: 'SetTopicAttributes'
+  policy_attribute:
+    requestParameters.attributeName: 'Policy'
+  public_principal:
+    requestParameters.attributeValue|re: '"(AWS|Principal)"\s*:\s*(\[[^\]]{0,400})?"\*"'
+  subscribe_action:
+    requestParameters.attributeValue|re: '(?i)("NotAction"|"[^"]{0,40}:(subscribe|receive)"|"sns:\*"|"action"\s*:\s*(\[[^\]]{0,400})?"\*")'
+  confined:
+    requestParameters.attributeValue|re: '(?i)(source(owner|account|arn|vpce?|ip)|principal(orgid|orgpaths|account|arn)|aws:userid|sns:(protocol|endpoint))'
+  success:
+    errorCode: null
+  condition: selection and policy_attribute and public_principal and subscribe_action and success and not confined
+falsepositives:
+  - Infrastructure-as-code re-applying an intentionally public fan-out topic's policy.
+level: high
+---
+title: SNS subscription created to an endpoint outside AWS identity control
+id: 540e8b0f-870e-4fe0-8967-e3e2edb49e45
+name: sns_subscribe_offaccount_endpoint
+status: experimental
+description: >-
+  A successful Subscribe whose protocol delivers outside AWS identity control — http,
+  https, email, email-json or sms — by a principal outside the deployment allowlist. These
+  endpoints are the exfiltration shape: unlike sqs, lambda and firehose they need no IAM
+  identity in any account, so the subscriber is whoever controls the URL, mailbox or
+  handset. AWS requires ConfirmSubscription for exactly these protocols, and documents
+  that an unauthenticated confirmation is NOT logged — so this Subscribe event is the last
+  observable moment before the subscription may silently go live.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_Subscribe.html
+  - https://docs.aws.amazon.com/sns/latest/dg/logging-using-cloudtrail.html
+  - https://attack.mitre.org/techniques/T1213/
+tags:
+  - attack.collection
+  - attack.exfiltration
+  - attack.t1213
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sns.amazonaws.com'
+    eventName: 'Subscribe'
+  offaccount_protocol:
+    requestParameters.protocol:
+      - 'http'
+      - 'https'
+      - 'email'
+      - 'email-json'
+      - 'sms'
+  known_admins:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'
+      - ':role/ci-cd'
+      - ':role/BreakGlassAdmin'
+  success:
+    errorCode: null
+  condition: selection and offaccount_protocol and success and not known_admins
+falsepositives:
+  - Operators self-subscribing to an alerting topic by email. Common and legitimate — tune
+    by comparing the endpoint against the corporate mail domain, not by dropping the rule.
+level: medium
+---
+title: Public subscribe grant followed by a subscription on the same topic
+id: 37c19526-864f-44b7-b379-e4b795d2a4a3
+status: experimental
+description: >-
+  A topic policy opened to an unconfined wildcard subscribe grant, and then a subscription
+  created on that same topic within the hour. The grant alone is a misconfiguration; the
+  grant followed by its exercise is an incident. Timespan basis — an actor who opens a
+  topic in order to read it subscribes immediately, because the whole point is to be
+  attached before anyone notices; an hour is generous for that and short enough that an
+  unrelated legitimate subscription is unlikely to land inside it. Grouped on
+  requestParameters.topicArn, which BOTH component rules emit; the CreateTopic rule is
+  deliberately not a component, because it carries the topic ARN in responseElements
+  instead and would silently never group.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_Subscribe.html
+  - https://attack.mitre.org/techniques/T1213/
+tags:
+  - attack.collection
+  - attack.t1213
+correlation:
+  type: temporal_ordered
+  rules:
+    - sns_public_subscribe_via_set_attributes
+    - sns_subscribe_offaccount_endpoint
+  group-by:
+    - requestParameters.topicArn
+  timespan: 1h
+level: high

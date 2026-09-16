@@ -1,0 +1,103 @@
+// Domain registration hijack — Route 53 Domains (T1584.001)
+//
+// AWS documents that domain-registration actions appear in CloudTrail with a LOWERCASE first
+// letter ("UpdateDomainContact appears as updateDomainContact in the logs"), and its published
+// sample event confirms it. Every comparison below is on tolower(EventName) so the rule is
+// correct under either convention. A rule written against the API's own casing may never fire.
+//
+// `contains` is used throughout, never `has` — `has` matches whole terms and the event names,
+// domain names and ARNs here are punctuated, so `has` silently misses.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+let RegistrarEvents = AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "route53domains.amazonaws.com"
+| extend Ev = tolower(EventName)
+| extend Req = parse_json(RequestParameters)
+// AWS's one published domains sample nests the parameter — {"domainName": {"name": "example.com"}}
+// — rather than carrying a flat string. Whether that shape is universal is UNVERIFIED, so read
+// both and take whichever is populated. A query that reads only one shape reports clean forever.
+| extend Domain = coalesce(tostring(Req.domainName.name), tostring(Req.domainName),
+                           tostring(Req.DomainName.name), tostring(Req.DomainName), "<not-in-event>")
+| extend Refused = isnotempty(ErrorCode);
+//
+// ---------------------------------------------------------------------------
+// VIEW 1 — the registrar timeline, per principal. Read this first.
+// ---------------------------------------------------------------------------
+RegistrarEvents
+| where Ev in ("disabledomaintransferlock", "enabledomaintransferlock", "retrievedomainauthcode",
+               "transferdomaintoanotherawsaccount", "updatedomaincontact", "updatedomainnameservers",
+               "transferdomain", "deletedomain")
+| summarize
+    Events      = count(),
+    LockOff     = countif(Ev == "disabledomaintransferlock" and not(Refused)),
+    LockOn      = countif(Ev == "enabledomaintransferlock" and not(Refused)),
+    AuthCode    = countif(Ev == "retrievedomainauthcode" and not(Refused)),
+    InternalXfer= countif(Ev == "transferdomaintoanotherawsaccount" and not(Refused)),
+    ContactChg  = countif(Ev == "updatedomaincontact" and not(Refused)),
+    NsChg       = countif(Ev == "updatedomainnameservers" and not(Refused)),
+    Denials     = countif(Refused),
+    Domains     = make_set(Domain, 20),
+    Actions     = make_set(EventName, 12),
+    SourceIPs   = make_set(SourceIpAddress, 5),
+    ErrorCodes  = make_set(ErrorCode, 6),
+    FirstSeen   = min(TimeGenerated),
+    LastSeen    = max(TimeGenerated)
+    by UserIdentityArn
+| extend Verdict = case(
+    LockOff > 0 and AuthCode > 0,
+        "DOMAIN PREPARED FOR TRANSFER OUT OF AWS — lock removed and auth code taken. The request itself happens at the gaining registrar and produces NO event here. Act now, P0",
+    LockOff > 0 and ContactChg > 0,
+        "VETO REDIRECTED THEN LOCK REMOVED — the transfer-approval email may no longer reach anyone who would refuse it, P0",
+    AuthCode > 0,
+        "TRANSFER AUTHORIZATION CODE RETRIEVED — there is no benign background use of this call, P0",
+    InternalXfer > 0,
+        "DOMAIN MOVED TO ANOTHER AWS ACCOUNT — read the destination account ID in the request, P0",
+    LockOff > 0,
+        "TRANSFER LOCK REMOVED — AWS advises against this unless a transfer is intended, P0",
+    NsChg > 0,
+        "REGISTRAR NAMESERVERS CHANGED — resolution for the whole domain moves without any hosted-zone record changing, P1",
+    ContactChg > 0,
+        "REGISTRANT CONTACT CHANGED — CloudTrail redacts the new value, so this shows the redirection and never its destination, P1",
+    Denials > 0,
+        "REGISTRAR CHANGE REFUSED — intent observed; the next domain may not refuse, P2",
+    "Registrar activity — confirm against change management")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, Domains, Actions,
+          LockOff, LockOn, AuthCode, InternalXfer, ContactChg, NsChg, Denials, ErrorCodes, SourceIPs
+| order by LastSeen desc
+//
+// ---------------------------------------------------------------------------
+// VIEW 2 — the ordered pair, on its own. Uncomment to run.
+// ---------------------------------------------------------------------------
+// Grouped by principal rather than by domain, for the reason in the Sigma: the domain-name
+// field's shape is unverified and an account holds at most 20 registered domains, so the
+// principal is the bounded, reliable key and the domain is read off the matched rows.
+//
+// RegistrarEvents
+// | where Ev in ("disabledomaintransferlock", "retrievedomainauthcode") and not(Refused)
+// | summarize LockAt = minif(TimeGenerated, Ev == "disabledomaintransferlock"),
+//             CodeAt = maxif(TimeGenerated, Ev == "retrievedomainauthcode"),
+//             Domains = make_set(Domain, 20)
+//           by UserIdentityArn
+// | where isnotempty(LockAt) and isnotempty(CodeAt) and CodeAt >= LockAt and CodeAt - LockAt <= 24h
+// | extend Gap = CodeAt - LockAt
+// | project LockAt, CodeAt, Gap, UserIdentityArn, Domains
+//
+// ---------------------------------------------------------------------------
+// WHAT THIS CANNOT TELL YOU — and it is the whole point of the playbook
+// ---------------------------------------------------------------------------
+// THE TRANSFER-OUT ITSELF IS NOT AN AWS API CALL. AWS's documented procedure ends with "Use the
+// process that is provided by the new registrar to request a transfer of the domain." That step
+// happens at the gaining registrar. There is no CloudTrail event for it, in any account, ever.
+// The definitive check is live state, not a log:
+//
+//     aws route53domains list-operations --type TRANSFER_OUT_DOMAIN --region us-east-1
+//     aws route53domains list-domains --region us-east-1   # per-domain TransferLock boolean
+//
+// SILENCE APPROVES. AWS: "If you don't take action, the transfer will proceed automatically on
+// the specified date." The confirmation email is a veto, not a consent, and UpdateDomainContact
+// can move where it lands. Elapsed time since the lock came off is the urgency, not the volume.
+//
+// CONTACT DETAIL IS REDACTED AT SOURCE. "Personally-identifying contact information is not
+// logged in the request." A ContactChg row proves a redirection happened and cannot show where.

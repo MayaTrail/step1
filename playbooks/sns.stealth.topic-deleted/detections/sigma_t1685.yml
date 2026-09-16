@@ -1,0 +1,145 @@
+# SNS topic deleted (T1685)
+#
+# DELETING A TOPIC IS DEFENCE IMPAIRMENT, NOT AN OUTAGE. AWS: "CloudWatch doesn't test or validate the
+# actions that you specify, nor does it detect any ... Amazon SNS errors resulting from an attempt to
+# invoke nonexistent actions." The alarm still evaluates, still transitions to ALARM, still shows as
+# healthy — and the notification is dropped silently. One topic is frequently the path for CloudWatch
+# alarms, GuardDuty notifications, Config rules and Security Hub at once.
+#
+# THE CALL CANNOT FAIL. AWS: "This action is idempotent, so deleting a topic that does not exist does
+# not result in an error." With the source rule's `NOT _exists_:errorCode` filter, an actor spraying
+# guessed ARNs produces a stream of alerts that all look like successful deletions.
+#
+# AND IT TAKES THE SUBSCRIPTIONS WITH IT. Recovery is not recreating the topic: every subscription
+# must be recreated and email and HTTP/S endpoints RE-CONFIRMED BY THE SUBSCRIBER.
+# See ../../_ground-truth/sns.md §3 and §4.
+title: SNS alerting topic deleted
+id: 555d1b3f-2ec9-4a25-84e2-aaaae41c3cdf
+status: experimental
+description: >-
+  A topic whose name identifies it as an alerting or security notification path was deleted. Every
+  CloudWatch alarm, GuardDuty notification and Config rule publishing to it now fails silently —
+  CloudWatch does not validate alarm actions and reports nothing when the target is gone.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_DeleteTopic.html
+  - https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html
+  - https://attack.mitre.org/techniques/T1685/
+tags:
+  - attack.defense-evasion
+  - attack.t1685
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: sns.amazonaws.com
+    eventName: DeleteTopic
+    errorCode: null
+  # POPULATE with this account's naming conventions for notification topics. Name matching is a proxy
+  # for "this topic is an alarm target" and it is imperfect — the authoritative test is the CloudWatch
+  # alarm inventory, which a rule cannot reach. §5 of the playbook rebuilds that inventory properly.
+  selection_alerting:
+    requestParameters.topicArn|contains:
+      - 'alarm'
+      - 'alert'
+      - 'security'
+      - 'guardduty'
+      - 'oncall'
+      - 'incident'
+  condition: selection and selection_alerting
+falsepositives:
+  - Decommissioning a retired alerting path, which should be identifiable from a change record and
+    from the alarms having been removed first
+level: critical
+---
+name: sns_topic_deleted
+title: SNS topic deleted
+id: 383c591a-c0be-4d5a-a55d-8c65de008242
+status: experimental
+description: >-
+  DeleteTopic returned success outside the provisioning path. Note that the call is idempotent, so a
+  success is not evidence the topic existed — a sprayed ARN produces the same event. Base rule for the
+  correlation below.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_DeleteTopic.html
+  - https://attack.mitre.org/techniques/T1685/
+tags:
+  - attack.defense-evasion
+  - attack.t1685
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: sns.amazonaws.com
+    eventName: DeleteTopic
+    errorCode: null
+  filter_provisioning:
+    userIdentity.arn|contains:
+      - 'PlatformAutomation'
+      - 'iac-deploy'
+  condition: selection and not filter_provisioning
+falsepositives:
+  - Environment teardown, which is the common explanation and is confirmed by a change record rather
+    than by the event
+  - An actor spraying guessed topic ARNs, every one of which succeeds
+level: low
+---
+# Three or more in thirty minutes is a sweep. The source rule has no threshold at all, so a single
+# decommission and a walk across every topic in the account produce the same alert.
+title: SNS topics deleted in bulk by one principal
+id: 4c021ab6-abc7-49d7-b27f-e17d6aa51e8e
+status: experimental
+description: >-
+  One principal deleted three or more distinct topics within thirty minutes. Because DeleteTopic is
+  idempotent, some of these ARNs may never have existed — the count is an upper bound on the damage
+  and a lower bound on the intent.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_DeleteTopic.html
+  - https://attack.mitre.org/techniques/T1685/
+tags:
+  - attack.defense-evasion
+  - attack.t1685
+correlation:
+  type: value_count
+  rules:
+    - sns_topic_deleted
+  group-by:
+    - userIdentity.arn
+  timespan: 30m
+  condition:
+    gte: 3
+    field: requestParameters.topicArn
+falsepositives:
+  - A planned decommission of an entire environment, identifiable from a change record naming the same
+    topic ARNs
+level: high
+---
+# The refused case. The source rule excludes errors, so a deletion the permissions caught leaves no
+# alert — and this is one of the few SNS calls where refusal genuinely means the guardrail worked.
+title: SNS topic deletion refused
+id: 4514e46b-48cf-4839-a589-ec269431f5e2
+status: experimental
+description: >-
+  DeleteTopic returned an error. Since the call is idempotent against a non-existent topic, an error
+  here is almost always authorization — a principal that tried to remove a topic and was stopped.
+references:
+  - https://docs.aws.amazon.com/sns/latest/api/API_DeleteTopic.html
+  - https://attack.mitre.org/techniques/T1685/
+tags:
+  - attack.defense-evasion
+  - attack.t1685
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: sns.amazonaws.com
+    eventName: DeleteTopic
+  filter_success:
+    errorCode: null
+  condition: selection and not filter_success
+falsepositives:
+  - A teardown pipeline racing itself, where a second worker deletes a topic already removed — though
+    that case returns success rather than an error, so it is rarer than it sounds
+level: medium

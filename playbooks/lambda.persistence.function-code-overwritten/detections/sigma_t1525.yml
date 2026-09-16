@@ -1,0 +1,158 @@
+# Lambda function code overwritten (T1525)
+#
+# THE RULE MATCHES `userIdentity.type:"IAMUser"` ONLY, WHICH EXCLUDES ALMOST EVERY MODERN PRINCIPAL.
+# SSO users, federated identities, EC2 instance roles, Lambda execution roles, CI/CD roles and every
+# cross-account path arrive as `AssumedRole`. A compromised role session — the normal shape of a
+# cloud intrusion, and the shape a compromised deployment pipeline takes — overwrites the function's
+# code without this rule firing once. Two of the four rules in the same pack carry this filter and
+# two do not, so the pack is inconsistent with itself about who counts as a principal.
+#
+# RATED P4, FOR CERTAIN CODE EXECUTION UNDER THE FUNCTION'S ROLE.
+# Unlike a configuration change, this replaces the deployment package: the new code IS the handler
+# and it runs on every invocation, with the function's execution role. There is no second act
+# required and no window in which to intervene.
+#
+# THE EVENT-NAME WILDCARD IS CORRECT AND WORTH RECORDING. CloudTrail emits
+# `UpdateFunctionCode20150331v2`, and this rule's `/UpdateFunctionCode.*/` handles it. Two sibling
+# rules in the same pack match `AddPermission` without the suffix and therefore cannot fire — the
+# suffix was known here and dropped there.
+#
+# AND IT MAPS TO `T1584` — Compromise Infrastructure, a RESOURCE DEVELOPMENT technique about
+# adversaries compromising third-party infrastructure to use in their own operations. Overwriting
+# your own function's code is not that. All four rules in the pack carry it.
+#
+# WHAT THIS DIRECTORY DELIBERATELY DOES NOT REPEAT: the full treatment of the technique, its
+# CodeSha256 drift baseline and its rollback procedure are the kit's worked example in
+# `reference/PLAYBOOK.md`. The complementary blind spot is
+# ../../lambda.defense-evasion.function-configuration-modified/ — a handler or layer change
+# redirects execution while leaving CodeSha256 UNCHANGED, so a defender watching only the code hash
+# and a defender watching only the configuration are each blind to the other half.
+title: Lambda function code overwritten outside the deployment path
+id: 7e40c2b8-15da-4f67-90b3-2c8517ae6d94
+name: lambda_function_code_overwritten
+status: experimental
+description: >-
+  UpdateFunctionCode succeeded from a principal that is not a recorded deployment identity. The
+  deployment package is replaced, so the new code runs on every invocation under the function's
+  execution role — certain code execution, with no second act needed. All identity types are
+  matched, because AssumedRole is what a compromised pipeline or federated session looks like.
+references:
+  - https://docs.aws.amazon.com/lambda/latest/api/API_UpdateFunctionCode.html
+  - https://attack.mitre.org/techniques/T1525/
+tags:
+  - attack.persistence
+  - attack.t1525
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  # CloudTrail appends a date and version to Lambda event names — `UpdateFunctionCode20150331v2` is
+  # the documented form. Match by PREFIX, never by equality.
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName|startswith: 'UpdateFunctionCode'
+  success:
+    errorCode: null
+  service_invoked:
+    userIdentity.invokedBy|exists: true
+  # POPULATE BEFORE DEPLOYING with the roles that own Lambda deployment. This is the entire
+  # discriminator — the call itself is what every deploy does.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not service_invoked and not known_provisioners
+falsepositives:
+  - >-
+    A deployment role that is not on the allowlist. That is the list being incomplete rather than
+    the rule being wrong, and completing it is the single thing that makes this rule usable.
+level: high
+---
+title: Lambda code overwrite rejected by code signing
+id: b93e510f-27c4-4a86-b0d1-e64837f2c50a
+name: lambda_code_signing_rejected
+status: experimental
+description: >-
+  An UpdateFunctionCode that failed code-signature validation. AWS returns
+  CodeVerificationFailedException when the signature mismatches or has expired and the policy is set
+  to ENFORCE, and InvalidCodeSignatureException when the signature fails the integrity check —
+  which AWS notes blocks deployment "even if the code signing policy is set to WARN". Either is a
+  control working, and an attempt is still an attempt. Any rule filtering on success discards this
+  entirely.
+references:
+  - https://docs.aws.amazon.com/lambda/latest/api/API_UpdateFunctionCode.html
+  - https://attack.mitre.org/techniques/T1525/
+tags:
+  - attack.persistence
+  - attack.t1525
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName|startswith: 'UpdateFunctionCode'
+  signing_errors:
+    errorCode:
+      - 'CodeVerificationFailedException'
+      - 'InvalidCodeSignatureException'
+      - 'CodeSigningConfigNotFoundException'
+  condition: selection and signing_errors
+falsepositives:
+  - >-
+    A genuine signing-pipeline misconfiguration, which produces the same errors. Worth reading every
+    time, because the two are indistinguishable at the event and only one is benign.
+level: high
+---
+title: Lambda code overwritten across multiple functions by one principal
+id: 4a17d8e6-3b09-42c5-971f-8e05a3d1b7c2
+status: experimental
+description: >-
+  One principal replaced the code of three or more functions within an hour. A single overwrite has
+  a deployment reading; a sweep across functions does not, and it is the shape of an actor
+  establishing execution broadly rather than a pipeline updating one service.
+references:
+  - https://attack.mitre.org/techniques/T1525/
+tags:
+  - attack.persistence
+  - attack.t1525
+correlation:
+  type: value_count
+  rules:
+    - lambda_function_code_changed
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+  condition:
+    gte: 3
+    field: requestParameters.functionName
+falsepositives:
+  - >-
+    A monorepo deployment updating several functions in one run, which is exactly this shape.
+    Allowlist the pipeline role on the base rule rather than raising the threshold.
+level: high
+---
+title: Lambda function code changed
+id: 2d6f9a41-c058-4e73-b912-40ae7c56d183
+name: lambda_function_code_changed
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. Any successful
+  UpdateFunctionCode, including every ordinary deployment. Matched by prefix because CloudTrail
+  appends a date and version to Lambda event names.
+references:
+  - https://docs.aws.amazon.com/lambda/latest/api/API_UpdateFunctionCode.html
+tags:
+  - attack.persistence
+  - attack.t1525
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'lambda.amazonaws.com'
+    eventName|startswith: 'UpdateFunctionCode'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational

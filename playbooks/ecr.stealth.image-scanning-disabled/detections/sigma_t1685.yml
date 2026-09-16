@@ -1,0 +1,180 @@
+# ECR image vulnerability scanning disabled (T1685)
+#
+# THE RULE CANNOT FIRE. It matches `eventName:"putimagescanningconfiguration"`. CloudTrail emits
+# `PutImageScanningConfiguration`, and on a case-sensitive field the lowercase form matches nothing.
+# This is the second event name in the ECR set spelled in lowercase, alongside two identity-type
+# values — see ../../_ground-truth/ecr.md §3.
+#
+# AND IT COVERS ONE SETTING OF ONE TIER. ECR has two scanning types:
+#   BASIC    — AWS native, CVE database, OS packages only. Configured PER REPOSITORY by
+#              PutImageScanningConfiguration, which is what this rule watches.
+#   ENHANCED — Amazon Inspector, OS *and* language packages, with CONTINUOUS rescanning as new
+#              vulnerabilities appear. Configured REGISTRY-WIDE by PutRegistryScanningConfiguration,
+#              which the source pack watches nowhere.
+#
+# THE REGISTRY-LEVEL SWITCH IS THE ONE THAT DESTROYS EVIDENCE. AWS: "Switching between Enhanced
+# scanning and Basic scanning will cause previously established scans to no longer be available."
+# So moving Enhanced -> Basic discards every existing finding across the whole registry, in one call,
+# while scanning remains nominally ENABLED — `scanOnPush` may still read true afterwards. A rule
+# testing `scanOnPush: false` sees nothing, and a console check shows scanning on.
+#
+# ARCHIVING IS A THIRD PATH AND CHANGES NO SCANNING CONFIGURATION AT ALL. AWS: "Archived images
+# cannot be scanned. Archived images must be restored before they can be scanned." That is stated in
+# ../PLAYBOOK.md as a residual gap rather than pretended closed.
+title: ECR repository scanning turned off
+id: 1e7c3b04-9f28-4d61-a530-86b2ef70914c
+name: ecr_repository_scanning_disabled
+status: experimental
+description: >-
+  PutImageScanningConfiguration set scanOnPush to false on a repository. Images pushed from this
+  point are not scanned on arrival, so a malicious or vulnerable image enters with no finding
+  attached to it. This is the basic tier and one repository — the registry-wide switch is a
+  different API and is covered by the sibling rule below.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-scanning.html
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_PutImageScanningConfiguration.html
+  - https://attack.mitre.org/techniques/T1685/
+tags:
+  - attack.defense-evasion
+  - attack.t1685
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecr.amazonaws.com'
+    eventName: 'PutImageScanningConfiguration'
+  success:
+    errorCode: null
+  scanning_off:
+    requestParameters.imageScanningConfiguration.scanOnPush: false
+  # POPULATE BEFORE DEPLOYING with the roles that own repository configuration.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and scanning_off and not known_provisioners
+falsepositives:
+  - >-
+    A repository moving to Enhanced scanning, where the basic per-repository setting becomes
+    irrelevant and is sometimes turned off as part of the migration. The registry configuration is
+    what confirms it, and the sibling rule below sees that call.
+level: high
+---
+title: ECR registry scanning configuration changed
+id: 8a40d951-2673-4e0b-95c8-f13e02a7bd46
+name: ecr_registry_scanning_changed
+status: experimental
+description: >-
+  PutRegistryScanningConfiguration succeeded. This sets the scanning type for the entire registry,
+  and switching between Enhanced and Basic discards every previously established scan result — AWS
+  states so explicitly. Scanning remains nominally enabled throughout, so a rule testing scanOnPush
+  sees nothing and a console check looks healthy. The source pack watches this API nowhere.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-scanning.html
+  - https://attack.mitre.org/techniques/T1685/
+tags:
+  - attack.defense-evasion
+  - attack.t1685
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecr.amazonaws.com'
+    eventName: 'PutRegistryScanningConfiguration'
+  success:
+    errorCode: null
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    A deliberate migration between scanning tiers, which is a real and reasonable change. It should
+    be a recorded decision, because it silently discards the finding history for the whole registry
+    and that consequence is rarely the intent.
+level: high
+---
+title: ECR scanning disabled and an image then pushed
+id: 4f16b28d-70ae-4c53-8912-d0e5a3671fb8
+status: experimental
+description: >-
+  Scanning was turned off and an image pushed afterwards by the same principal. The ordering is the
+  finding: disabling scanning before a push means the image arrives with no finding attached, and
+  nothing downstream has a reason to question it. The reverse order is an ordinary configuration
+  change on a repository that happened to be updated.
+references:
+  - https://attack.mitre.org/techniques/T1685/
+  - https://attack.mitre.org/techniques/T1525/
+tags:
+  - attack.defense-evasion
+  - attack.persistence
+  - attack.t1685
+  - attack.t1525
+correlation:
+  type: temporal_ordered
+  rules:
+    - ecr_scanning_config_changed
+    - ecr_image_pushed_any
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+falsepositives:
+  - >-
+    A repository being created, configured and populated in one deployment run. Allowlist the
+    pipeline role on the base rules rather than shortening the timespan.
+level: critical
+---
+title: ECR scanning configuration changed
+id: 3d820ce6-51b7-4a94-b06f-7e2418ad5c39
+name: ecr_scanning_config_changed
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. Any successful change to
+  scanning configuration at either the repository or the registry level.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-scanning.html
+tags:
+  - attack.defense-evasion
+  - attack.t1685
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ecr.amazonaws.com'
+    eventName:
+      - 'PutImageScanningConfiguration'
+      - 'PutRegistryScanningConfiguration'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational
+---
+title: Container image pushed to ECR
+id: 62b17f4a-c380-49de-a715-0f9c26538be1
+name: ecr_image_pushed_any
+status: experimental
+description: >-
+  Base rule — correlation component only, never for direct alerting. Any successful PutImage. The
+  rated detections for pushing are in ../../ecr.stealth.malicious-image-pushed/.
+references:
+  - https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_PutImage.html
+tags:
+  - attack.persistence
+  - attack.t1525
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource:
+      - 'ecr.amazonaws.com'
+      - 'ecr-public.amazonaws.com'
+    eventName: 'PutImage'
+  success:
+    errorCode: null
+  condition: selection and success
+level: informational

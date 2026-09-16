@@ -100,7 +100,7 @@ MANIFEST = {
             "phase": 3,
             "name": "Discovery",
             "techniques": [
-                {"id": "T1087.004", "name": "Cloud Account Discovery"},
+                {"id": "T1087.004", "name": "Account Discovery: Cloud Account"},
                 {"id": "T1552.001", "name": "Credentials In Files"},
             ],
         },
@@ -108,7 +108,7 @@ MANIFEST = {
             "phase": 4,
             "name": "Defense Evasion",
             "techniques": [
-                {"id": "T1562.008", "name": "Disable Cloud Logs"},
+                {"id": "T1685.002", "name": "Disable or Modify Tools: Disable or Modify Cloud Log"},
             ],
         },
         {
@@ -152,7 +152,7 @@ MANIFEST = {
         },
         {
             "id": "T1087.004",
-            "name": "Cloud Account Discovery",
+            "name": "Account Discovery: Cloud Account",
             "tactic": "Discovery",
             "platform": "AWS IAM",
             "description": (
@@ -171,8 +171,8 @@ MANIFEST = {
             ),
         },
         {
-            "id": "T1562.008",
-            "name": "Disable Cloud Logs",
+            "id": "T1685.002",
+            "name": "Disable or Modify Tools: Disable or Modify Cloud Log",
             "tactic": "Defense Evasion",
             "platform": "AWS CloudTrail",
             "description": (
@@ -261,9 +261,9 @@ MANIFEST = {
         },
         {
             "icon": "#",
-            "title": "MITRE ATT&CK — T1562.008: Disable Cloud Logs",
+            "title": "MITRE ATT&CK — T1685.002: Disable Cloud Logs",
             "source": "MITRE ATT&CK · attack.mitre.org",
-            "url": "https://attack.mitre.org/techniques/T1562/008/",
+            "url": "https://attack.mitre.org/techniques/T1685/002/",
             "type": "MITRE",
             "color": "purple",
         },

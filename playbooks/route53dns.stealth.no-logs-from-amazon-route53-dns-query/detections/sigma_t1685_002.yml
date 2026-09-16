@@ -1,0 +1,140 @@
+# Route 53 Resolver query logging stopped (T1685.002)
+#
+# THE SOURCE RULE GROUPS BY THE INGESTION PLATFORM'S OWN LABELS, NOT BY AN AWS RESOURCE. Its
+# group_by is the log pipeline's application and subsystem names, so it can tell you that records
+# stopped arriving from a shipper — and never which VPC stopped being logged. Resolver query
+# logging is configured per VPC, so the resource that went dark is the only useful unit and it is
+# the one the rule cannot name.
+#
+# THREE PROPERTIES OF THIS TELEMETRY MAKE AN ABSENCE RULE WEAK, EACH DOCUMENTED BY AWS:
+#
+#   1. LOGGING IS OPT-IN PER VPC, AND ASSOCIATION IS A SEPARATE STEP FROM CREATION. A query log
+#      configuration is created once and then ASSOCIATED with each VPC. A VPC that was never
+#      associated produces nothing at all, which is indistinguishable from one whose association
+#      was removed — and only one of those is an incident.
+#   2. ONLY UNIQUE QUERIES ARE LOGGED. "VPC Resolver query logging logs only unique queries, not
+#      queries that VPC Resolver is able to respond to from the cache." A VPC with a small, stable
+#      set of destinations legitimately produces very few records once its caches are warm, so low
+#      volume is a normal state rather than a fault.
+#   3. DELIVERY DELAY IS A DOCUMENTED STATE. additional_properties carries `is_delayed` — "If there
+#      is a delay in delivering the logs" — with no published maximum. A gap is therefore never
+#      conclusive on its own.
+#
+# AND THE COMMON CASE IS DISASSOCIATION, NOT DELETION. DisassociateResolverQueryLogConfig stops one
+# VPC's logging while the configuration itself survives, so a rule watching only
+# DeleteResolverQueryLogConfig misses the surgical version of this entirely — the one that leaves
+# every other VPC logging and the console showing a healthy configuration.
+title: Resolver query log configuration disassociated from a VPC
+id: 2c9f4b71-6d08-4e35-a917-83e04c2f65db
+name: r53resolver_query_log_disassociated
+status: experimental
+description: >-
+  DisassociateResolverQueryLogConfig removed a VPC from a query logging configuration. This is the
+  surgical form of the technique and the one an account-wide absence rule cannot see: the
+  configuration still exists, every other VPC keeps logging, and the console shows a healthy
+  resource. Only the named VPC goes dark. It is also the AWS event that identifies which VPC — the
+  question the source rule's grouping structurally cannot answer.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-query-logging-configurations-managing.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53resolver.amazonaws.com'
+    eventName: 'DisassociateResolverQueryLogConfig'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the infrastructure-as-code roles that own Resolver
+  # configuration. An empty list reports every disassociation once, which is how the list is built.
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    A VPC being decommissioned. Real, and it should be visible — a disassociation with no
+    corresponding VPC deletion shortly afterwards is the finding.
+level: high
+---
+title: Resolver query log configuration deleted
+id: 8e51a2c6-4703-4b9d-86f2-1c790de35b48
+name: r53resolver_query_log_deleted
+status: experimental
+description: >-
+  DeleteResolverQueryLogConfig removed a query logging configuration outright, taking every VPC
+  associated with it. Louder than disassociation and correspondingly rarer. Note that AWS requires
+  associations to be removed before a configuration can be deleted, so this event is usually
+  preceded by one or more DisassociateResolverQueryLogConfig calls — which means the rule above
+  fires first, and a deletion arriving without those preceding events is worth reading closely.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-query-logging-configurations-managing.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53resolver.amazonaws.com'
+    eventName: 'DeleteResolverQueryLogConfig'
+  success:
+    errorCode: null
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    Consolidating several configurations into one. Legitimate, and it should be accompanied by
+    fresh associations for every affected VPC within minutes.
+level: high
+---
+title: DNS Firewall protection removed from a VPC
+id: 4a08c73e-91b5-42f0-b8d6-57e21649ac30
+name: r53resolver_firewall_disassociated
+status: experimental
+description: >-
+  DisassociateFirewallRuleGroup or DeleteFirewallRule removed DNS Firewall coverage. This is the
+  companion to losing the logs and it is worse in one specific way: the firewall fields in the
+  query log are the only place AWS states a verdict, so removing the rule group both stops the
+  blocking and empties the field that would have shown it. An analyst reading an empty
+  firewall_rule_action afterwards sees "no match", which is true and reads like "allowed".
+references:
+  - https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-dns-firewall-rule-groups.html
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense-impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53resolver.amazonaws.com'
+    eventName:
+      - 'DisassociateFirewallRuleGroup'
+      - 'DeleteFirewallRule'
+      - 'DeleteFirewallRuleGroup'
+      - 'UpdateFirewallRuleGroupAssociation'
+  success:
+    errorCode: null
+  known_provisioners:
+    userIdentity.arn|contains:
+      - ':role/PlatformAutomation'
+      - ':role/iac-deploy'
+  condition: selection and success and not known_provisioners
+falsepositives:
+  - >-
+    Rule group priority changes during tuning, which arrive as UpdateFirewallRuleGroupAssociation.
+    Common enough to be worth reading rather than muting — a priority change can move a permissive
+    group in front of a blocking one without deleting anything.
+level: medium

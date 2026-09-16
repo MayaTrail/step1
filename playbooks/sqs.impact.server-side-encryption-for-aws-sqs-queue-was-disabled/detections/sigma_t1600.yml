@@ -1,0 +1,219 @@
+# SQS Server-Side Encryption Disabled (T1600 / T1098)
+#
+# WHAT "DISABLED" ACTUALLY MEANS. AWS states it outright: "Amazon SQS allows you to turn off
+# all queue encryption. Therefore, turning off KMS-SSE, will not automatically enable
+# SQS-SSE. If you wish to enable SQS-SSE after turning off KMS-SSE, you must add an
+# attribute change in the request." Clearing `KmsMasterKeyId` does NOT fall back to the
+# SQS-managed key — the queue ends up with no encryption at all. The default SSE-SQS option
+# applies only "when you create a queue without specifying encryption attributes", so it is
+# no safety net for a queue whose attributes are being set deliberately.
+#
+# THE SOURCE RULE HAS TWO DEFECTS AND BOTH ARE VISIBLE WITHOUT LEAVING THE QUERY.
+# (1) It matches `eventName:"setqueueattributes"` in lower case where every sibling rule in
+#     the same set matches `SetQueueAttributes`. Against a case-sensitive keyword field that
+#     is zero events, forever.
+# (2) It requires `KmsMasterKeyId` to be present and empty. A call that turns off SSE-SQS
+#     sends `SqsManagedSseEnabled=false` and does not carry `KmsMasterKeyId` at all, so the
+#     condition cannot be met and the whole SSE-SQS path is uncovered. Rule 1 below carries
+#     BOTH paths as sibling blocks, OR-ed — they are alternative shapes of one event and
+#     must never be ANDed into a single block.
+# The rule's one correct instinct is kept: `SqsManagedSseEnabled=true` in the SAME call is a
+# MIGRATION from SSE-KMS to SSE-SQS, and the queue stays encrypted. That exclusion is why
+# `migrating_to_sse_sqs` exists below.
+#
+# WHY IT MATTERS BEYOND "DATA AT REST". AWS: "With SSE enabled, anonymous SendMessage and
+# ReceiveMessage requests to the encrypted queue will be rejected... If you wish to send
+# anonymous requests to an Amazon SQS queue, make sure you disable SSE." Encryption is
+# therefore also an authentication control on this service, and turning it off is the
+# precondition for anonymous access. Paired with a wildcard queue policy it makes the queue
+# readable with no credential at all — the `sqs_sse_disabled_then_opened` correlation.
+#
+# FIELD SHAPE. `{"Attributes": {"<Name>": "<value>"}, "QueueUrl": "..."}`. CloudTrail
+# lower-cases the first character of top-level parameter names (AWS's own SQS CloudTrail
+# example shows `requestParameters.queueUrl`); the KEYS INSIDE the map keep their documented
+# casing. Attribute values are always STRINGS, so `SqsManagedSseEnabled` is `'false'`, not
+# the boolean false. AWS publishes no management-event example for SetQueueAttributes —
+# confirm the path against one real event before deploying.
+title: SQS queue encryption turned off
+id: 1adf398e-7301-45cc-bbab-847f58f1c4a0
+name: sqs_sse_disabled
+status: experimental
+description: >-
+  A queue's server-side encryption was removed — either by clearing `KmsMasterKeyId` without
+  enabling the SQS-managed key in the same call, or by setting `SqsManagedSseEnabled` to
+  false. Messages written from this moment on are stored unencrypted, and anonymous
+  `SendMessage`/`ReceiveMessage` requests, which SSE rejects, become possible.
+references:
+  - https://attack.mitre.org/techniques/T1600/  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-server-side-encryption.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_SetQueueAttributes.html  # retrieved 2026-08-29
+tags:
+  - attack.defense_impairment
+  - attack.t1600
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sqs.amazonaws.com'
+    eventName: 'SetQueueAttributes'
+  # The two disable paths. They are ALTERNATIVE shapes of the same event, so they are
+  # sibling blocks OR-ed in the condition. Putting them in one block would AND them and the
+  # rule would fire on neither.
+  kms_key_cleared:
+    requestParameters.attributes.KmsMasterKeyId: ''
+  sqs_managed_sse_off:
+    requestParameters.attributes.SqsManagedSseEnabled: 'false'
+  # Clearing the KMS key WHILE enabling the SQS-managed key is a migration between two
+  # encryption schemes, not a disable. Excluded from the KMS path only.
+  migrating_to_sse_sqs:
+    requestParameters.attributes.SqsManagedSseEnabled: 'true'
+  success:
+    errorCode: null
+  condition: selection and success and ((kms_key_cleared and not migrating_to_sse_sqs) or sqs_managed_sse_off)
+falsepositives:
+  - >-
+    A deliberate move to anonymous access — AWS documents disabling SSE as the prerequisite
+    for it. That is a true positive about an unauthenticated queue, not a false one.
+  - >-
+    An IaC drift correction where the encryption attribute was never in the template. The
+    queue is still unencrypted afterwards; fix the template rather than filtering the rule.
+level: high
+---
+# The default SSE-SQS option is "only effective when you create a queue without specifying
+# encryption attributes". A CreateQueue that explicitly passes SqsManagedSseEnabled=false
+# opts out of it at birth, and no SetQueueAttributes event ever exists for that queue — so
+# the rule above never fires and the queue is unencrypted for its whole life.
+title: SQS queue created with encryption explicitly disabled
+id: 13c72d3d-3031-4ebe-bdad-a185ac7469e0
+name: sqs_queue_created_unencrypted
+status: experimental
+description: >-
+  A queue was created with `SqsManagedSseEnabled` explicitly false, opting out of the
+  default SQS-managed encryption that would otherwise have applied.
+references:
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-sqs-sse-queue.html  # retrieved 2026-08-29
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_CreateQueue.html  # retrieved 2026-08-29
+tags:
+  - attack.defense_impairment
+  - attack.t1600
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sqs.amazonaws.com'
+    eventName: 'CreateQueue'
+  sse_opted_out:
+    requestParameters.attributes.SqsManagedSseEnabled: 'false'
+  success:
+    errorCode: null
+  condition: selection and sse_opted_out and success
+falsepositives:
+  - >-
+    A queue intended to receive anonymous or cross-account traffic from a service that
+    cannot use SSE. Record it in the §1 baseline so the next one remains signal.
+level: medium
+---
+# Swapping a customer-managed key for the AWS-managed key `alias/aws/sqs` leaves the queue
+# encrypted and reads as harmless, but it removes the two controls that made the CMK worth
+# having: you no longer own the key policy, and you can no longer disable or schedule
+# deletion of the key to cut off access to the ciphertext. It is a downgrade dressed as a
+# configuration change.
+title: SQS queue downgraded from a customer-managed key to the AWS-managed key
+id: 807352c3-9605-4767-80fa-da5b17e129f0
+name: sqs_kms_key_downgraded
+status: experimental
+description: >-
+  A queue's `KmsMasterKeyId` was set to the AWS-managed SQS key. The queue stays encrypted,
+  but the key policy and the ability to revoke access by disabling the key both move out of
+  your control.
+references:
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-server-side-encryption.html  # retrieved 2026-08-29
+tags:
+  - attack.defense_impairment
+  - attack.t1600
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sqs.amazonaws.com'
+    eventName: 'SetQueueAttributes'
+  # The alias of the AWS-managed key for SQS is documented as always `alias/aws/sqs`; the
+  # key ARN and key ID forms are also accepted, so this matches the alias form only and the
+  # analyst confirms the resolved key in Query 2.
+  aws_managed_key:
+    requestParameters.attributes.KmsMasterKeyId: 'alias/aws/sqs'
+  success:
+    errorCode: null
+  condition: selection and aws_managed_key and success
+falsepositives:
+  - A queue being moved off a CMK for cost reasons. Legitimate, and still a control downgrade.
+level: medium
+---
+# Base rule — sequence component only, not for direct alerting. Carries the success filter so
+# a denied policy write cannot compose into the high-severity correlation below.
+#
+# This duplicates the primary rule of ../../sqs.collection.an-sqs-queue-attributes-were-changed/
+# under a distinct name and id, because a Sigma correlation resolves its components by `name:`
+# within the same file. Deploy this one at `informational`; the sibling directory's copy is the
+# one that alerts.
+title: SQS queue policy opened to a wildcard principal
+id: 4c34e550-6817-4f9c-ae8e-6c97ec63d41c
+name: sqs_queue_policy_wildcard_for_anon_access
+status: experimental
+description: Base rule — sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_SetQueueAttributes.html  # retrieved 2026-08-29
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sqs.amazonaws.com'
+    eventName: 'SetQueueAttributes'
+  # The `\\?` groups make the escaping optional so the pattern matches whether the platform
+  # indexes the parsed field or the raw serialised event.
+  wildcard_principal:
+    requestParameters.attributes.Policy|re: '\\?"Principal\\?"\s*:\s*(\{\s*\\?"AWS\\?"\s*:\s*)?(\[\s*)?\\?"\*\\?"'
+  success:
+    errorCode: null
+  condition: selection and wildcard_principal and success
+level: informational
+---
+# Threshold basis — derived from documented behaviour, not an observed count. There is no
+# count to tune: this is an ORDERED PAIR and the technique's baseline is one of each. AWS
+# documents that SSE rejects anonymous SendMessage and ReceiveMessage, so removing encryption
+# and then admitting a wildcard principal are the two halves of ONE move — making the queue
+# readable with no credential. Thirty minutes spans a hand-driven two-step without spanning
+# an unrelated change later in the day; shorten it if one IaC apply legitimately does both,
+# which would otherwise make every such apply a hit. Ordering is conveyed by the correlation
+# TYPE — do not add an `ordered:` key.
+title: SQS queue encryption removed and then opened to anonymous access
+id: 5e9d47d5-0358-4429-ba5f-c5bd94b5d91c
+status: experimental
+description: >-
+  One principal turned a queue's encryption off and then admitted a wildcard principal to its
+  access policy inside thirty minutes. Encryption is what rejects anonymous requests on this
+  service, so together these two changes make the queue readable and writable with no
+  credential at all.
+references:
+  - https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-server-side-encryption.html  # retrieved 2026-08-29
+tags:
+  - attack.defense_impairment
+  - attack.t1600
+correlation:
+  type: temporal_ordered
+  rules:
+    - sqs_sse_disabled
+    - sqs_queue_policy_wildcard_for_anon_access
+  group-by:
+    - userIdentity.arn
+  timespan: 30m
+level: high

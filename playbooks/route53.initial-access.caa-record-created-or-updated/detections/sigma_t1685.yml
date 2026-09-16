@@ -1,0 +1,236 @@
+# CAA policy weakened — a certificate-issuance restriction changed in a hosted zone (T1685)
+#
+# WHAT CAA IS, AND WHY RESTORING IT DOES NOT FIX ANYTHING. CAA is a PREVENTATIVE control read by
+# a certificate authority at issuance time and by nobody afterwards. RFC 8659 §1: "A set of CAA
+# records describes only current grants of authority to issue certificates... it is possible that
+# a certificate that is not conformant with the CAA records currently published was conformant
+# with the CAA records published at the time that the certificate was issued. Relying Parties
+# MUST NOT use CAA records as part of certificate validation." So a certificate issued while the
+# policy was weak stays valid after the policy is restored.
+#
+# THE MALICIOUS CHANGE IS AN ADDITION, NOT A DELETION. Authorizations are additive, and AWS's own
+# documentation supplies the example: "If you create a CAA record for example.com and specify both
+# of the following values, a CA that is using the value ca.example.net can issue the certificate:
+#   0 issue ";"
+#   0 issue "ca.example.net"
+# So adding one issue value beside a deny-all opens issuance to that CA, and the record still
+# EXISTS afterwards. A rule keyed on the CAA record being absent does not fire. This is why the
+# core rule below matches CREATE and UPSERT and reads the VALUES, not the record's existence.
+#
+# A PERMISSIVE SUBDOMAIN RECORD SILENTLY OVERRIDES A STRICT APEX. RFC 8659 §3: "The search for a
+# CAA RRset climbs the DNS name tree from the specified label up to, but not including, the DNS
+# root '.' until a CAA RRset is found." A nearer RRset shadows a further one — so publishing
+# `0 issue "attacker-ca.example"` at `pay.example.com` defeats a deny-all at `example.com` for
+# that subdomain, while leaving the apex record untouched and every review of it clean.
+#
+# THE WINDOW IS AT LEAST EIGHT HOURS AND THE TTL EXTENDS IT. CA/Browser Forum Baseline
+# Requirements v2.2.9 (6 Aug 2026) §4.2.2.1: "If the CA issues a certificate after processing a
+# CAA record, it MUST do so within the TTL of the CAA record, or 8 hours, whichever is greater."
+# A CAA record whose tTL was raised shortly before it was weakened is a deliberate extension of
+# the exploit window, which is why TTL is projected in the KQL rather than ignored.
+#
+# FIELD SHAPES — verified against AWS's published CloudTrail sample for ChangeResourceRecordSets:
+#   requestParameters.changeBatch.changes[] holds the change objects DIRECTLY. There is no
+#   intermediate `change` key; changes[].change.resourceRecordSet matches nothing.
+#   The TTL member is `tTL` — lower t, upper TL. Not `ttl`, not `TTL`.
+#   resourceRecordSet.name carries a TRAILING DOT and is stored normalised.
+#   The response is changeInfo-wrapped: responseElements.changeInfo.status, values PENDING|INSYNC.
+#   ONE EVENT CAN CARRY MANY CHANGES OF MANY TYPES. Matching `type: 'CAA'` proves a CAA change is
+#   somewhere in the batch; it does not say which name, and nothing in Sigma can walk the array.
+#   The investigation queries in ../PLAYBOOK.md do that walk, and §2 says so rather than implying
+#   the rule resolves it.
+#
+# THE ARRAY-CONJUNCTION APPROXIMATION, STATED RATHER THAN HIDDEN. Because changes[] is an array,
+# matching `type: CAA` and `action: CREATE|UPSERT` as two keys in one block means "this batch
+# contains a CAA record somewhere AND contains a CREATE or UPSERT somewhere" — NOT "one change is
+# a CAA CREATE". A batch that deletes a CAA record and creates an A record satisfies both keys and
+# fires. Sigma has no per-element conjunction and inventing one would be worse than the
+# approximation: the alternative is dropping the action filter, which loses the distinction from
+# the CAA-deletion use case entirely. So the rule is a deliberate SUPERSET, the element-level walk
+# lives in kql_t1685.kql (mv-expand) and in Query 1 of ../PLAYBOOK.md, and the triage step is
+# "read which element actually changed" rather than "trust the match". Recall is preserved;
+# precision is bought back by the analyst in one look.
+#
+# REGIONALITY. route53.amazonaws.com events carry awsRegion us-east-1 and AWS states the console
+# rule outright: "To view events for Route 53 API requests, you must choose US East (N. Virginia)
+# in the Region selector." A lookup in any other Region returns zero. No rule here filters on
+# awsRegion — the queries pin the Region instead, and an empty result is INCONCLUSIVE.
+title: CAA certificate-issuance policy created or updated
+id: 6f3c81b0-49d7-4e25-8a16-b2705e94cd83
+name: route53_caa_record_changed
+status: experimental
+description: >-
+  A CAA record was created or replaced in a hosted zone. CAA is the only DNS-level control over
+  which certificate authorities may issue for a name, and weakening it is the precondition for
+  obtaining a valid certificate for a domain you do not own. UPSERT is the dangerous action: it
+  replaces the record set outright, the event carries only the NEW values, and Route 53 keeps no
+  version history — so "what was it before?" is answerable only from IaC state or from an earlier
+  event that set it. Matches at BATCH granularity, not per change element — see the header note on
+  the array-conjunction approximation before triaging a hit.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resource-record-sets-values.html
+  - https://www.rfc-editor.org/rfc/rfc8659
+  - https://attack.mitre.org/techniques/T1685/
+tags:
+  - attack.defense-impairment
+  - attack.t1685
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53.amazonaws.com'
+    eventName: 'ChangeResourceRecordSets'
+  caa_write:
+    requestParameters.changeBatch.changes.resourceRecordSet.type: 'CAA'
+    requestParameters.changeBatch.changes.action:
+      - 'CREATE'
+      - 'UPSERT'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the roles that own DNS through infrastructure-as-code. CAA
+  # changes are rare and planned; if this allowlist is empty the rule still works and simply has
+  # no exclusions, which is the right default for a record type most zones never touch.
+  known_dns_automation:
+    userIdentity.arn|contains:
+      - ':role/iac-deploy'
+      - ':role/PlatformAutomation'
+  condition: selection and caa_write and success and not known_dns_automation
+falsepositives:
+  - >-
+    Onboarding a new certificate authority. Legitimate, planned, and it should already be a
+    change ticket — confirm against the ticket, not against the actor's seniority.
+  - >-
+    A batch that changes several record types at once and happens to include a CAA record.
+    Real: the rule matches the batch, and the walk in the playbook's Query 1 resolves which name.
+level: high
+---
+title: CAA record published naming a certificate authority outside the approved set
+id: 2a94d76e-5b03-41f8-97c2-e60d38b1a45f
+name: route53_caa_unapproved_authority
+status: experimental
+description: >-
+  A CAA change was published whose values name no approved certificate authority. This is the
+  tuning surface of the whole use case and it inverts the usual allowlist: the organisation's own
+  CAs are enumerated below, and a CAA record that authorises anything else is the finding. Note
+  the two shapes that both mean "restriction removed" — an issue value naming an unfamiliar CA,
+  and an issuewild value, which governs wildcard certificates separately and is frequently
+  forgotten when a deny-all is written. Batch granularity applies here too: the unapproved value
+  and the CAA type are matched across the batch, not proven to belong to the same element.
+references:
+  - https://www.rfc-editor.org/rfc/rfc8659
+  - https://attack.mitre.org/techniques/T1588/004/
+tags:
+  - attack.resource-development
+  - attack.t1588.004
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53.amazonaws.com'
+    eventName: 'ChangeResourceRecordSets'
+  caa_write:
+    requestParameters.changeBatch.changes.resourceRecordSet.type: 'CAA'
+    requestParameters.changeBatch.changes.action:
+      - 'CREATE'
+      - 'UPSERT'
+  success:
+    errorCode: null
+  # POPULATE BEFORE DEPLOYING with the CA domains this organisation actually uses. The values
+  # below are placeholders and the rule is INERT until they are replaced — an allowlist that
+  # matches nothing marks every change unapproved, and an allowlist left as an example matches
+  # the example. Deny-all is `0 issue ";"`, which is why the semicolon form is listed as approved.
+  approved_authorities:
+    requestParameters.changeBatch.changes.resourceRecordSet.resourceRecords.value|contains:
+      - 'amazon.com'
+      - 'amazontrust.com'
+      - 'awstrust.com'
+      - 'amazonaws.com'
+      - 'letsencrypt.org'
+      - '";"'
+  condition: selection and caa_write and success and not approved_authorities
+falsepositives:
+  - >-
+    An approved CA missing from the list above. Expect exactly one round of these when the rule
+    is first deployed; enumerate the organisation's CAs once and it goes quiet.
+level: critical
+---
+title: Route 53 record change submitted with request parameters omitted
+id: e8517b3d-0c46-4a92-b1f5-73d9e2604a8c
+name: route53_change_parameters_omitted
+status: experimental
+description: >-
+  A successful ChangeResourceRecordSets whose requestParameters are absent. CloudTrail's field
+  contract is omit-not-truncate — "This field has a maximum size of 100 KB. When the field size
+  exceeds 100 KB, the requestParameters content is omitted" — so there is no partial-array case:
+  a detection reading changeBatch.changes[] on an oversized batch sees ZERO changes, not a short
+  list. Route 53 permits 1,000 ResourceRecord elements and 32,000 Value characters per request,
+  and a batch that size plausibly clears 100 KB. This rule exists because it is the exact blind
+  spot of every other rule in this file: a CAA change buried in a bulk zone rewrite is invisible
+  to a type match and visible here. Absence of parameters is treated as a signal, not as a
+  parsing gap.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-record-contents.html
+  - https://attack.mitre.org/techniques/T1685/
+tags:
+  - attack.defense-impairment
+  - attack.t1685
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53.amazonaws.com'
+    eventName: 'ChangeResourceRecordSets'
+  success:
+    errorCode: null
+  parameters_present:
+    requestParameters.changeBatch.changes.resourceRecordSet.type|exists: true
+  condition: selection and success and not parameters_present
+falsepositives:
+  - >-
+    A genuine bulk zone import or a large IaC apply. Both are real, both are rare, and both are
+    worth confirming — a zone rewrite nobody planned is a finding whatever record types it holds.
+level: medium
+---
+title: CAA record change refused
+id: 4b06e29f-8d51-4730-a6c8-1f92e5470bd3
+name: route53_caa_change_refused
+status: experimental
+description: >-
+  A CAA change was submitted and rejected. Base rule, and intent observed. Route 53 change
+  batches are transactional — "Route 53 validates the changes in the request and then either
+  makes all or none of the changes in the change batch request" — so an InvalidChangeBatch means
+  nothing was applied and the operator got the syntax wrong on the first try. AccessDenied means
+  a principal without DNS write permission attempted it. Both are worth reading before the second
+  attempt succeeds; the whole error set for this API is closed and short, and it is listed here.
+  Batch granularity applies: the CAA type is matched anywhere in the rejected batch.
+references:
+  - https://docs.aws.amazon.com/Route53/latest/APIReference/API_ChangeResourceRecordSets.html
+  - https://attack.mitre.org/techniques/T1685/
+tags:
+  - attack.defense-impairment
+  - attack.t1685
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'route53.amazonaws.com'
+    eventName: 'ChangeResourceRecordSets'
+    requestParameters.changeBatch.changes.resourceRecordSet.type: 'CAA'
+  refused:
+    errorCode:
+      - 'AccessDenied'
+      - 'AccessDeniedException'
+      - 'InvalidChangeBatch'
+      - 'InvalidInput'
+      - 'NoSuchHostedZone'
+      - 'PriorRequestNotComplete'
+  condition: selection and refused
+falsepositives:
+  - >-
+    A malformed CAA value from an operator learning the `flags tag "value"` syntax. Common, and
+    still worth one look — the second attempt is the one that lands.
+level: medium

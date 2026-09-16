@@ -1,0 +1,89 @@
+// SQS Queue Purged (T1485 / T1070)
+//
+// Signal: PurgeQueue succeeding - once, repeatedly on one queue, or across several queues by
+// one principal - plus the PurgeQueueInProgress error, which AWS returns only when the same
+// queue was already purged inside the last 60 seconds and which therefore cannot occur by
+// accident.
+//
+// This query does what the Sigma rules structurally cannot: it correlates each purge with the
+// queue's own backlog metric so the analyst sees HOW MUCH was destroyed, and it reports
+// successes and denials as separate columns so a principal probing its boundary is never
+// counted as a principal destroying data.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let Lookback = 30d;
+let Purges =
+    AWSCloudTrail
+    | where TimeGenerated > ago(Lookback)
+    | where EventSource == "sqs.amazonaws.com"
+    | where EventName == "PurgeQueue"
+    // RequestParameters is typed `string` in this table, not dynamic - parse_json first.
+    // PurgeQueue returns HTTP 200 with an empty body, so there is no ResponseElements to read.
+    | extend Req = parse_json(RequestParameters)
+    | extend QueueUrl  = tostring(Req.queueUrl)
+    | extend QueueName = tostring(split(QueueUrl, "/")[-1])
+    // `contains` throughout, never `has`: the error code is dotted in its query-protocol form
+    // (AWS.SimpleQueueService.PurgeQueueInProgress) and role ARNs are punctuated, both of
+    // which whole-term matching breaks on.
+    | extend RepeatAttempt = ErrorCode contains "PurgeQueueInProgress"
+    | extend Denied        = isnotempty(ErrorCode) and not(RepeatAttempt)
+    | extend Succeeded     = isempty(ErrorCode)
+    | extend IsBreakGlass  = UserIdentityArn contains ":role/BreakGlassAdmin";
+Purges
+| summarize
+    Successes      = countif(Succeeded),
+    RepeatAttempts = countif(RepeatAttempt),
+    DeniedAttempts = countif(Denied),
+    DeniedCodes    = make_set_if(ErrorCode, Denied, 5),
+    QueueCount     = dcountif(QueueName, Succeeded),
+    Queues         = make_set_if(QueueName, Succeeded, 20),
+    AttemptedOnly  = make_set_if(QueueName, not(Succeeded), 20),
+    SourceIPs      = make_set(SourceIpAddress, 5),
+    Agents         = make_set(UserAgent, 3),
+    BreakGlass     = max(IsBreakGlass),
+    FirstSeen      = min(TimeGenerated),
+    LastSeen       = max(TimeGenerated)
+    by UserIdentityArn, UserIdentityType, SessionIssuerUserName, AwsRegion, RecipientAccountId
+| extend SpanMinutes = max_of(1.0, datetime_diff('second', LastSeen, FirstSeen) / 60.0)
+| extend Verdict = case(
+    QueueCount >= 3 and SpanMinutes <= 15.0,
+        "ESTATE PURGE - three or more distinct queues emptied by one principal inside fifteen minutes",
+    RepeatAttempts > 0,
+        "REPEATED PURGE - PurgeQueueInProgress means the caller asked again inside the 60-second window; this error has no accidental cause",
+    Successes > 0 and DeniedAttempts > 0,
+        "PURGE WITH BOUNDARY MAPPING - the principal succeeded on some queues and was refused on others; the denials are attempts, not destruction",
+    Successes > 0,
+        "QUEUE PURGED - every message destroyed while the queue, its policy and its metrics were left intact",
+    DeniedAttempts > 0,
+        "PURGE ATTEMPTED AND DENIED - no data was destroyed; treat as intent",
+        "PURGE ACTIVITY - review")
+| project FirstSeen, LastSeen, Verdict, UserIdentityArn, UserIdentityType, SessionIssuerUserName,
+          AwsRegion, RecipientAccountId, QueueCount, Queues, Successes, RepeatAttempts,
+          DeniedAttempts, DeniedCodes, AttemptedOnly, SourceIPs, Agents, BreakGlass
+| order by LastSeen desc
+
+//
+// SIZING THE LOSS - and the trap in doing it
+//
+// The purge event carries no count and has no response object. The only surviving measure is
+// the AWS/SQS CloudWatch metric ApproximateNumberOfMessagesVisible for that QueueName, read at
+// its LAST DATAPOINT BEFORE the purge time. Unlike a deleted queue, a purged queue still
+// exists and keeps emitting metrics, so a post-purge read returns a perfectly valid ZERO -
+// and reporting that zero as "no messages were lost" inverts the finding. Always bound the
+// metric query to end at the purge timestamp.
+//
+// If SQS metrics are in this workspace, join on QueueName; otherwise pull the datapoints with
+// cloudwatch get-metric-statistics ending at LastSeen, as Query 2 of ../PLAYBOOK.md does.
+//
+// WHAT THIS QUERY CANNOT SEE
+//
+// What the messages were. Message bodies are never in CloudTrail: even with SQS data events
+// enabled - an advanced event selector on AWS::SQS::Queue, off by default - AWS's published
+// example carries requestParameters.messageBody as HIDDEN_DUE_TO_SECURITY_REASONS. And
+// ReceiveMessage is itself a data event, so whether the actor READ the messages before
+// purging them is unanswerable in a default trail. Both destruction and prior exfiltration
+// look identical from the management plane.
+//
+// PREVENTION. sqs:PurgeQueue is needed by no workload at runtime. An SCP denying it outside a
+// break-glass role is reachable, and it is one of the few AWS actions with no legitimate
+// production use at all.

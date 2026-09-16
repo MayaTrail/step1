@@ -10,7 +10,7 @@
 | Platform | aws |
 | Severity | High, exposes SSH on every instance in the group to the entire internet, enabling brute-force and direct access |
 | MITRE Tactics | Defense Evasion (MANIFEST tags Exfiltration, see mapping note in §6) |
-| MITRE Techniques | T1562.007 |
+| MITRE Techniques | T1686.001 |
 | Services in Scope | EC2 (Security Groups), CloudTrail, GuardDuty, AWS Config, VPC Flow Logs |
 | Infrastructure Created | 1 EC2 Security Group with no initial ingress (via `infra/`) |
 
@@ -62,20 +62,20 @@
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
-| P0 | `AuthorizeSecurityGroupIngress`/`ModifySecurityGroupRules` opening an admin port (22/3389), or a range containing one, to `0.0.0.0/0` or `::/0` | CloudTrail | T1562.007 |
-| P0 | Any ingress rule opening **all ports** (`0-65535` or `-1`) to `0.0.0.0/0` | CloudTrail | T1562.007 |
-| P1 | GuardDuty `UnauthorizedAccess:EC2/SSHBruteForce` on an instance in the newly-exposed group | GuardDuty | T1562.007 |
-| P1 | World-open ingress rule added by a principal not on the network-admin/IaC allowlist | CloudTrail | T1562.007 |
-| P1 | AWS Config `restricted-ssh` flips to NON_COMPLIANT | AWS Config | T1562.007 |
+| P0 | `AuthorizeSecurityGroupIngress`/`ModifySecurityGroupRules` opening an admin port (22/3389), or a range containing one, to `0.0.0.0/0` or `::/0` | CloudTrail | T1686.001 |
+| P0 | Any ingress rule opening **all ports** (`0-65535` or `-1`) to `0.0.0.0/0` | CloudTrail | T1686.001 |
+| P1 | GuardDuty `UnauthorizedAccess:EC2/SSHBruteForce` on an instance in the newly-exposed group | GuardDuty | T1686.001 |
+| P1 | World-open ingress rule added by a principal not on the network-admin/IaC allowlist | CloudTrail | T1686.001 |
+| P1 | AWS Config `restricted-ssh` flips to NON_COMPLIANT | AWS Config | T1686.001 |
 
 #### MEDIUM-CONFIDENCE: May Indicate Compromise
 
 | Priority | Event / Signal | Source | MITRE |
 |----------|---------------|--------|-------|
-| P2 | World-open ingress on a non-admin but sensitive port (databases: 3306/5432/6379/27017/9200) | CloudTrail | T1562.007 |
-| P2 | Inbound SSH connections on the exposed port from many distinct external IPs (scanning/brute force) | VPC Flow Logs | T1562.007 |
-| P2 | `AuthorizeSecurityGroupIngress` denied at volume (`errorCode = Client.UnauthorizedOperation`), permission probing | CloudTrail | T1562.007 |
-| P3 | World-open ingress on 80/443 (often legitimate for public web tiers), review against baseline | CloudTrail | T1562.007 |
+| P2 | World-open ingress on a non-admin but sensitive port (databases: 3306/5432/6379/27017/9200) | CloudTrail | T1686.001 |
+| P2 | Inbound SSH connections on the exposed port from many distinct external IPs (scanning/brute force) | VPC Flow Logs | T1686.001 |
+| P2 | `AuthorizeSecurityGroupIngress` denied at volume (`errorCode = Client.UnauthorizedOperation`), permission probing | CloudTrail | T1686.001 |
+| P3 | World-open ingress on 80/443 (often legitimate for public web tiers), review against baseline | CloudTrail | T1686.001 |
 
 ### Detection Rule Quality Notes
 
@@ -380,7 +380,7 @@ CONNECTED_INSTANCE="<i-with-successful-inbound-ssh>"
 for VOL in $(aws ec2 describe-instances --instance-ids "$CONNECTED_INSTANCE" --region "$REGION" \
   --query 'Reservations[0].Instances[0].BlockDeviceMappings[*].Ebs.VolumeId' --output text); do
   aws ec2 create-snapshot --volume-id "$VOL" --region "$REGION" \
-    --description "IR-T1562.007-$CONNECTED_INSTANCE-$(date -u +%Y%m%dT%H%M%SZ)" --query 'SnapshotId' --output text
+    --description "IR-T1686.001-$CONNECTED_INSTANCE-$(date -u +%Y%m%dT%H%M%SZ)" --query 'SnapshotId' --output text
 done
 echo "[OK] Snapshot started for $CONNECTED_INSTANCE, apply quarantine SG next"
 ```
@@ -572,7 +572,7 @@ echo "fire on the benign RevokeSecurityGroupIngress cleanup."
 
 | Type | Value |
 |------|-------|
-| MITRE technique | T1562.007 - Impair Defenses: Disable or Modify Cloud Firewall |
+| MITRE technique | T1686.001 - Disable or Modify System Firewall: Cloud Firewall |
 | MITRE tactic | Defense Evasion (TA0005) |
 | Primary API | `ec2:AuthorizeSecurityGroupIngress` (also `ec2:ModifySecurityGroupRules`); `Revoke...` on cleanup |
 | Event source | `ec2.amazonaws.com` |
@@ -584,7 +584,7 @@ echo "fire on the benign RevokeSecurityGroupIngress cleanup."
 | Resources created | 1 EC2 security group (no initial ingress) |
 | Follow-on to watch for | SSH brute force / successful login through the opened port → host compromise |
 
-**MITRE mapping note:** T1562.007 is correctly the *technique* (Disable or Modify
+**MITRE mapping note:** T1686.001 is correctly the *technique* (Disable or Modify
 Cloud Firewall), but its canonical **tactic is Defense Evasion**, not Exfiltration
 as the MANIFEST/Stratus catalogue tags it. Opening SSH to the world impairs a
 network defense to enable access; it is not itself exfiltration. Treat the

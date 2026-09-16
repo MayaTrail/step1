@@ -1,0 +1,80 @@
+// DynamoDB table configuration modified (T1685.002)
+//
+// The source rule is named "Multiple Update Operation Performed" and matches UpdateTable — a
+// control-plane call that has nothing to do with UpdateItem. It has no content check on a call that
+// changes seven different things, so a throughput adjustment and a stream being switched off arrive
+// identically.
+//
+// `contains` throughout, never `has` — table names and user agents are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "dynamodb.amazonaws.com"
+| where EventName in ("UpdateTable", "UpdateContinuousBackups", "UpdateTimeToLive", "DeleteTable")
+| where isempty(ErrorCode)
+// Application Auto Scaling calls UpdateTable continuously to adjust provisioned capacity. The
+// source rule excludes it, which is correct and is the only considered filter in that rule set.
+| where not(UserAgent contains "autoscaling.amazonaws.com")
+| extend Req = parse_json(RequestParameters)
+| extend Table = tostring(Req.tableName)
+| extend ReqText = tostring(RequestParameters)
+// Streams is frequently the ONLY record of what an item held before a modification — CloudTrail
+// records that UpdateItem happened, never the previous values.
+| extend StreamsDisabled = tostring(Req.streamSpecification.streamEnabled) == "false"
+| extend StreamsEnabled = tostring(Req.streamSpecification.streamEnabled) == "true"
+| extend EncryptionChanged = ReqText contains "sSESpecification" or ReqText contains "SSESpecification"
+| extend ThroughputOnly = ReqText contains "provisionedThroughput" and not(StreamsDisabled)
+                          and not(EncryptionChanged)
+| extend IndexChange = ReqText contains "globalSecondaryIndexUpdates"
+| extend ProtectionOff = tostring(Req.deletionProtectionEnabled) == "false"
+| summarize
+    StreamsOff      = countif(StreamsDisabled),
+    EncryptionEdits = countif(EncryptionChanged),
+    ProtectionRemoved = countif(ProtectionOff),
+    IndexChanges    = countif(IndexChange),
+    ThroughputEdits = countif(ThroughputOnly),
+    TotalChanges    = count(),
+    Tables          = make_set(Table, 20),
+    DistinctTables  = dcount(Table),
+    SourceIps       = make_set(SourceIpAddress, 5),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated)
+    by UserIdentityArn, bin(TimeGenerated, 10m)
+| where StreamsOff > 0 or EncryptionEdits > 0 or ProtectionRemoved > 0 or TotalChanges >= 5
+| extend Verdict = case(
+    StreamsOff > 0 and ProtectionRemoved > 0,
+        "STREAMS DISABLED AND DELETION PROTECTION REMOVED — the change record for item writes is gone and the table itself can now be deleted, P0",
+    StreamsOff > 0,
+        "DYNAMODB STREAMS DISABLED — Streams is usually the only record of what an item held BEFORE a modification, since CloudTrail never carries previous values. Future item changes become unreconstructable, P0",
+    EncryptionEdits > 0,
+        "TABLE ENCRYPTION CONFIGURATION CHANGED — moving off a customer-managed key removes the ability to revoke access by disabling the key, and removes the KMS grant trail. The table stays 'encrypted' and a compliance check still passes, P1",
+    ProtectionRemoved > 0,
+        "DELETION PROTECTION REMOVED — see ../../dynamodb.impact.table-items-modified-or-destroyed/, which owns this event, P1",
+    TotalChanges >= 5,
+        strcat("TABLE CONFIGURATION WORKED THROUGH — ", tostring(TotalChanges),
+               " changes by one principal in ten minutes, excluding autoscaling, P2"),
+    "table configuration change")
+| project FirstSeen, LastSeen, UserIdentityArn, Verdict, StreamsOff, EncryptionEdits,
+          ProtectionRemoved, IndexChanges, ThroughputEdits, TotalChanges, DistinctTables,
+          Tables, SourceIps
+| order by StreamsOff desc, EncryptionEdits desc
+//
+// ============================================================================
+// WHY STREAMS BEING DISABLED IS THE ONE THAT MATTERS
+// ============================================================================
+// CloudTrail records that UpdateItem happened. It does not record what the item held before. For a
+// data-manipulation incident, DynamoDB Streams with a view type of OLD_IMAGE or NEW_AND_OLD_IMAGES
+// is frequently the only source of the previous values — and that view type was chosen when the
+// stream was created, long before it was needed.
+//   aws dynamodb describe-table --table-name <t> --query 'Table.StreamSpecification'
+// Disabling the stream does not delete records already in it; the stream's own retention (24 hours)
+// governs those, which is a much shorter window than most investigations.
+//
+// ============================================================================
+// THE AUTOSCALING EXCLUSION IS LOAD-BEARING
+// ============================================================================
+// Application Auto Scaling calls UpdateTable continuously on any table with provisioned capacity and
+// scaling policies. Without the userAgent exclusion this query is dominated by it. The source rule
+// gets this right and it is worth keeping rather than reimplementing.

@@ -1,0 +1,229 @@
+// FILE: kql_T1686.001_assume_role.kql
+// T1686.001 - Step 1: Attacker role assumption via STS AssumeRole
+// AWS CloudTrail table in Microsoft Sentinel: AWSCloudTrail
+//
+// Detects STS AssumeRole events that are NOT from automated tooling (Terraform, Pulumi).
+// The emulation-specific IOC is RoleSessionName = "atomic-rds-public-access-session"
+// embedded in requestParameters. Broaden or remove the session name filter for hunting.
+//
+// TUNING:
+//   - Add known automation user ARNs to the exclusion list to reduce false positives.
+//   - Narrow TimeRange to correlate with follow-on RDS events within 10 minutes.
+
+AWSCloudTrail
+| where EventName == "AssumeRole"
+| where EventSource == "sts.amazonaws.com"
+// Exclude common automation agents; extend list to match your environment
+| where UserAgent !contains "Terraform"
+    and UserAgent !contains "pulumi"
+    and UserAgent !contains "aws-sdk-java"
+// Optional: narrow to the emulation IOC role session name
+// | where RequestParameters contains "atomic-rds-public-access-session"
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    RequestParameters,
+    AWSRegion,
+    ErrorCode,
+    ErrorMessage
+| sort by TimeGenerated desc
+
+// ======================================================================
+
+// FILE: kql_T1686.001_authorize_sg_ingress.kql
+// T1686.001 - Step 4: Security group opened for MySQL port 3306
+// AWS CloudTrail table in Microsoft Sentinel: AWSCloudTrail
+//
+// Detects AuthorizeSecurityGroupIngress adding an inbound rule for port 3306
+// (MySQL / Aurora / MariaDB). In the emulation, the CIDR is 10.99.254.0/24
+// (non-routable); real attacks typically use 0.0.0.0/0 or a specific threat actor IP.
+//
+// The filter_internal_cidr block suppresses additions scoped to known-safe ranges.
+// Adjust the exclusion list to match your VPC CIDR allocations.
+//
+// Correlation: run kql_T1686.001_correlated_rds_exposure.kql to join this event
+// with ModifyDBInstance publiclyAccessible=true from the same session within 10 min.
+
+AWSCloudTrail
+| where EventName == "AuthorizeSecurityGroupIngress"
+| where EventSource == "ec2.amazonaws.com"
+// Match rules touching port 3306 in either fromPort or toPort position
+| where RequestParameters contains '"fromPort":3306'
+    or RequestParameters contains '"toPort":3306'
+    or RequestParameters contains '"fromPort": 3306'
+    or RequestParameters contains '"toPort": 3306'
+// Suppress additions scoped only to RFC-1918 management ranges already approved
+// Extend this list with your internal CIDR allocations
+| where not (
+    RequestParameters contains '"cidrIp":"10.0.'
+    or RequestParameters contains '"cidrIp":"10.1.'
+    or RequestParameters contains '"cidrIp":"172.16.'
+    or RequestParameters contains '"cidrIp":"192.168.'
+)
+| extend
+    GroupId = extract('"groupId":"([^"]+)"', 1, RequestParameters),
+    CIDR = extract('"cidrIp":"([^"]+)"', 1, RequestParameters)
+| project
+    TimeGenerated,
+    EventName,
+    GroupId,
+    CIDR,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RequestParameters,
+    ErrorCode
+| sort by TimeGenerated desc
+
+// ======================================================================
+
+// FILE: kql_T1686.001_correlated_rds_exposure.kql
+// T1686.001 - Correlated: ModifyDBInstance publiclyAccessible + SG port 3306 opened
+// Same IAM session performing both actions within 10 minutes = critical severity
+// AWS CloudTrail table in Microsoft Sentinel: AWSCloudTrail
+//
+// This query joins the two primary attack steps (steps 3 and 4) on the same
+// UserIdentityArn within a 10-minute window. A single principal doing both actions
+// has no legitimate single-session use case and is high-confidence malicious.
+
+let CorrelationWindow = 10m;
+let LookbackHours = 24h;
+let RDSPublicEvents =
+    AWSCloudTrail
+    | where TimeGenerated > ago(LookbackHours)
+    | where EventName == "ModifyDBInstance"
+    | where EventSource == "rds.amazonaws.com"
+    | where RequestParameters contains '"publiclyAccessible":true'
+        or RequestParameters contains '"publiclyAccessible": true'
+    | project
+        RDSTime = TimeGenerated,
+        ActorArn = UserIdentityArn,
+        DBInstanceId = extract('"dBInstanceIdentifier":"([^"]+)"', 1, RequestParameters),
+        SourceIP = SourceIpAddress,
+        AWSRegion;
+let SGOpenEvents =
+    AWSCloudTrail
+    | where TimeGenerated > ago(LookbackHours)
+    | where EventName == "AuthorizeSecurityGroupIngress"
+    | where EventSource == "ec2.amazonaws.com"
+    | where RequestParameters contains '"fromPort":3306'
+        or RequestParameters contains '"toPort":3306'
+        or RequestParameters contains '"fromPort": 3306'
+        or RequestParameters contains '"toPort": 3306'
+    | project
+        SGTime = TimeGenerated,
+        ActorArn = UserIdentityArn,
+        GroupId = extract('"groupId":"([^"]+)"', 1, RequestParameters),
+        CIDR = extract('"cidrIp":"([^"]+)"', 1, RequestParameters),
+        AWSRegion;
+RDSPublicEvents
+| join kind=inner SGOpenEvents on ActorArn
+| where abs(datetime_diff('second', RDSTime, SGTime)) < totimespan(CorrelationWindow) / 1s
+| extend
+    AlertSeverity = "Critical",
+    AlertTitle = "RDS Instance Exposed: publiclyAccessible=true AND SG port 3306 opened by same principal",
+    TimeGapSeconds = abs(datetime_diff('second', RDSTime, SGTime))
+| project
+    EarliestEvent = min_of(RDSTime, SGTime),
+    AlertTitle,
+    AlertSeverity,
+    ActorArn,
+    DBInstanceId,
+    GroupId,
+    CIDR,
+    SourceIP,
+    AWSRegion,
+    TimeGapSeconds
+| sort by EarliestEvent desc
+
+// ======================================================================
+
+// FILE: kql_T1686.001_get_secret_value.kql
+// T1686.001 - Step 2: Production secret enumeration before RDS exposure
+// AWS CloudTrail table in Microsoft Sentinel: AWSCloudTrail
+//
+// Detects GetSecretValue on production-named secrets from any principal,
+// including AccessDenied outcomes (denied access is still a detection signal).
+// In the attack chain, this simulates an attacker enumerating DB credentials
+// before making the RDS instance publicly accessible.
+//
+// TUNING:
+//   - Replace "prod-rds-master-secret" with your naming convention for production secrets.
+//   - Add legitimate application role ARNs to the exclusion filter.
+//   - Set lookback to match your mean-time-to-alert target (default: 1 hour).
+
+let LookbackHours = 1h;
+let ProductionSecretPattern = "prod";         // adjust to your secret naming convention
+let LegitimateRoles = dynamic([               // application service roles that read secrets routinely
+    "app-service-role",
+    "lambda-execution-role"
+]);
+AWSCloudTrail
+| where TimeGenerated > ago(LookbackHours)
+| where EventName == "GetSecretValue"
+| where EventSource == "secretsmanager.amazonaws.com"
+// Match production-named secrets (both allowed and denied)
+| where RequestParameters contains ProductionSecretPattern
+// Exclude known legitimate role ARNs
+| where not (array_length(LegitimateRoles) > 0 and UserIdentityArn has_any (LegitimateRoles))
+| extend
+    OutcomeType = iif(isempty(ErrorCode), "Allowed", strcat("Denied - ", ErrorCode)),
+    SecretId = extract('"secretId":"([^"]+)"', 1, RequestParameters)
+| project
+    TimeGenerated,
+    EventName,
+    OutcomeType,
+    SecretId,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    ErrorCode,
+    ErrorMessage
+| sort by TimeGenerated desc
+
+// ======================================================================
+
+// FILE: kql_T1686.001_modify_db_instance.kql
+// T1686.001 - Step 3: RDS instance made publicly accessible (primary detection target)
+// AWS CloudTrail table in Microsoft Sentinel: AWSCloudTrail
+//
+// Detects ModifyDBInstance with publiclyAccessible=true. This is the primary
+// T1686.001 action: toggling the RDS flag exposes the DB endpoint to the internet.
+// ApplyImmediately=true means the change takes effect without a maintenance window.
+//
+// Pair with kql_T1686.001_authorize_sg_ingress.kql for correlated alerting.
+// See kql_T1686.001_correlated_rds_exposure.kql for the multi-event correlation query.
+//
+// SEVERITY: HIGH - any production ModifyDBInstance setting publiclyAccessible=true
+// warrants immediate investigation regardless of principal.
+
+AWSCloudTrail
+| where EventName == "ModifyDBInstance"
+| where EventSource == "rds.amazonaws.com"
+// Filter to calls that explicitly set publiclyAccessible to true
+| where RequestParameters contains '"publiclyAccessible":true'
+    or RequestParameters contains '"publiclyAccessible": true'
+| extend
+    DBInstanceId = extract('"dBInstanceIdentifier":"([^"]+)"', 1, RequestParameters),
+    ApplyImmediately = extract('"applyImmediately":([^,}]+)', 1, RequestParameters)
+| project
+    TimeGenerated,
+    EventName,
+    DBInstanceId,
+    ApplyImmediately,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RequestParameters,
+    ErrorCode
+| sort by TimeGenerated desc

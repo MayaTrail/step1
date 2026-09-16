@@ -1,0 +1,65 @@
+// SNS topic deleted (T1685)
+//
+// DeleteTopic is IDEMPOTENT: "deleting a topic that does not exist does not result in an error". With
+// the source rule's error filter, an actor spraying guessed ARNs produces a stream of alerts that all
+// look like successful deletions.
+//
+// And CloudWatch "doesn't test or validate the actions that you specify, nor does it detect any ...
+// Amazon SNS errors resulting from an attempt to invoke nonexistent actions" — so every alarm
+// publishing to a deleted topic keeps evaluating, keeps transitioning, and reports healthy.
+//
+// `contains` throughout, never `has` — topic ARNs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. NOT CloudWatch Logs Insights.
+let LOOKBACK = 30d;
+let WINDOW = 30m;
+// The alerting-name test below is a proxy for "is an alarm target" — the authoritative answer is the
+// CloudWatch alarm inventory, which a query over CloudTrail cannot reach. POPULATE the substrings
+// with this account's naming conventions for notification topics.
+AWSCloudTrail
+| where TimeGenerated > ago(LOOKBACK)
+| where EventSource == "sns.amazonaws.com"
+| where EventName in ("DeleteTopic", "CreateTopic", "Unsubscribe", "SetTopicAttributes")
+| extend Req = parse_json(RequestParameters)
+| extend TopicArn  = tostring(Req.topicArn)
+| extend TopicName = tostring(split(TopicArn, ":")[-1])
+| extend IsProvisioner = UserIdentityArn contains "PlatformAutomation"
+                      or UserIdentityArn contains "iac-deploy"
+| extend Deleted  = EventName == "DeleteTopic" and isempty(ErrorCode)
+| extend Refused  = EventName == "DeleteTopic" and isnotempty(ErrorCode)
+| extend Recreated = EventName == "CreateTopic" and isempty(ErrorCode)
+// `contains` throughout. Topic names are punctuated with hyphens and dots, and the tokenising
+// operators split on those separators — so a token match for the word alarm misses
+// `prod-alarms-critical`, while a substring match does not.
+| extend IsAlerting = Deleted and (TopicName contains "alarm" or TopicName contains "alert"
+                               or TopicName contains "security" or TopicName contains "guardduty"
+                               or TopicName contains "oncall" or TopicName contains "incident")
+| summarize
+    Deletions       = countif(Deleted),
+    AlertingDeleted = countif(IsAlerting),
+    Refusals        = countif(Refused),
+    Recreations     = countif(Recreated),
+    TopicsDeleted   = dcountif(TopicArn, Deleted),
+    Deleted_Topics  = make_set(iff(Deleted, TopicName, ""), 20),
+    Recreated_Names = make_set(iff(Recreated, tostring(Req.name), ""), 20),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated)
+    by bin(TimeGenerated, WINDOW), UserIdentityArn, SourceIpAddress, IsProvisioner
+| where Deletions > 0 or Refusals > 0
+| extend Verdict = case(
+    AlertingDeleted > 0,
+        "CRITICAL - an alerting topic was deleted; alarms publishing to it now fail silently",
+    TopicsDeleted >= 3 and not(IsProvisioner),
+        "HIGH - topics deleted in bulk outside provisioning",
+    Deletions > 0 and Recreations == 0 and not(IsProvisioner),
+        "HIGH - topic deleted and not recreated outside provisioning",
+    Refusals > 0,
+        "MEDIUM - deletion refused; since the call is idempotent, an error is almost always authorization",
+    "LOW - topic deleted")
+// Delete-then-create in the same window is usually a redeploy — but SNS delays reuse of a recently
+// deleted ARN, so a same-name recreation immediately afterwards may itself have failed.
+| extend LikelyRedeploy = Deletions > 0 and Recreations > 0
+| project TimeGenerated, Verdict, LikelyRedeploy, UserIdentityArn, SourceIpAddress, IsProvisioner,
+          Deletions, AlertingDeleted, TopicsDeleted, Refusals, Recreations,
+          Deleted_Topics, Recreated_Names, FirstSeen, LastSeen
+| order by AlertingDeleted desc, TopicsDeleted desc, TimeGenerated desc

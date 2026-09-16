@@ -72,7 +72,7 @@ api.interceptors.response.use(
       err.response?.status === 403 &&
       err.response?.data?.code === 'DEMO_EXPIRED'
     ) {
-      window.location.href = '/connector?upgrade=1'
+      window.location.href = '/me'
       return Promise.reject(err)
     }
 

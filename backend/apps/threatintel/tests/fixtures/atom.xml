@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example Releases</title>
+  <link href="https://example.test/releases"/>
+  <updated>2025-08-13T18:00:00Z</updated>
+  <entry>
+    <title>v2.4.0 — breaking change to the default EBS encryption flag</title>
+    <link href="https://example.test/releases/v2.4.0"/>
+    <id>tag:example.test,2025:Repository/1/v2.4.0</id>
+    <updated>2025-08-13T18:00:00Z</updated>
+    <author><name>release-bot</name></author>
+    <content type="html">&lt;p&gt;The &lt;code&gt;--encrypted&lt;/code&gt; default flipped.&lt;/p&gt;</content>
+    <summary>The --encrypted default flipped for new volumes.</summary>
+  </entry>
+  <entry>
+    <title>v2.3.1</title>
+    <link href="https://example.test/releases/v2.3.1"/>
+    <id>tag:example.test,2025:Repository/1/v2.3.1</id>
+    <updated>2025-07-02T08:15:00Z</updated>
+    <summary>Patch release.</summary>
+  </entry>
+</feed>

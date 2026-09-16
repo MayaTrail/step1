@@ -1,0 +1,20 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: Server-Side Encryption for AWS SQS Queue Was Disabled
+  priority: P4
+  type: logs_immediate
+  mitre: T1565/TA0040
+  query: |
+    eventSource:"sqs.amazonaws.com" AND eventName:"setqueueattributes" AND requestParameters.attributes.KmsMasterKeyId.keyword:"" AND NOT requestParameters.attributes.SqsManagedSseEnabled:"true" AND NOT _exists_:errorCode
+  group_by: []
+

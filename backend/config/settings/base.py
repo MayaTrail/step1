@@ -55,6 +55,8 @@ LOCAL_APPS = [
     "apps.logs",
     "apps.metrics",
     "apps.ai",
+    "apps.threatintel",
+    "apps.workflows",
     "apps.playbooks",
     "apps.authored_detections",
 ]
@@ -152,6 +154,10 @@ REST_FRAMEWORK = {
     # it cannot be used to probe provider key validity at volume; 'ai_chat'
     # bounds how often a user can spend their provider key on chat turns.
     "DEFAULT_THROTTLE_RATES": {
+        # 'alert_webhook' bounds the only unauthenticated route in the platform.
+        # A busy SIEM sends a handful of alerts per emulation, so this is
+        # generous for real use and still caps what an unsigned flood can cost.
+        "alert_webhook": "120/min",
         "ai_test": "20/min",
         "ai_chat": "60/min",
     },
@@ -199,13 +205,29 @@ CELERY_TIMEZONE = "UTC"
 # of the worker services consume.
 CELERY_TASK_DEFAULT_QUEUE = "default"
 
-# Celery Beat schedule — runs every 15 minutes to destroy expired stacks.
+# Celery Beat schedule. Both tasks are pinned to the enterprise queue in their
+# own modules, since that is the only queue any worker consumes.
 from celery.schedules import crontab  # noqa: E402
 
 CELERY_BEAT_SCHEDULE = {
     "auto-destroy-expired-stacks": {
         "task": "emulations.auto_destroy_expired_stacks",
         "schedule": crontab(minute="*/15"),
+    },
+    # Publishers in the subscription list post a few times a week at most, so
+    # polling more often than daily would spend 40 outbound requests to find
+    # nothing. 06:00 UTC puts fresh items in place before the European morning.
+    "refresh-threat-feed": {
+        "task": "threatintel.refresh_threat_feeds",
+        "schedule": crontab(hour="6", minute="0"),
+    },
+    # Drives every workflow transition. A workflow spends almost all of its
+    # life waiting, on Pulumi, on the attack, then on a SIEM that evaluates on
+    # its own schedule, so the state lives in the database and a tick advances
+    # it rather than a task holding a worker slot for the duration.
+    "advance-workflows": {
+        "task": "workflows.advance_workflows",
+        "schedule": crontab(minute="*/2"),
     },
     # Fires due ScheduledRun rows. Every 15 minutes is fine: schedules are
     # daily/weekly/monthly, so the granularity only bounds how late a run can
@@ -226,6 +248,11 @@ CELERY_BEAT_SCHEDULE = {
 # registry and tasks so that `import emulations.*` resolves correctly.
 
 EMULATIONS_BASE_DIR = config("EMULATIONS_BASE_DIR", default="")
+
+# Standalone IR playbook library (playbooks/), served read-only as documentation.
+# Empty disables the library endpoints; they then return an empty list rather
+# than failing, so a deployment without the content mounted still works.
+PLAYBOOKS_BASE_DIR = config("PLAYBOOKS_BASE_DIR", default="")
 
 # Artificial pause held between attack phases, in seconds.
 # Attack modules that complete in under a second give the live view nothing to
@@ -269,6 +296,26 @@ DETECTION_CHECK_DELAY_SECONDS = config(
 # In docker-compose, ./guardrails is mounted at /opt/guardrails.
 
 GUARDRAILS_BASE_DIR = config("GUARDRAILS_BASE_DIR", default="")
+
+# Threat feed storage.
+# Directory holding latest.json, the single document the daily ingest writes
+# and the API reads back. The worker needs it writable; the backend only reads.
+# Empty disables ingestion and makes the endpoints serve an empty feed, so a
+# deployment without the volume still works.
+
+THREATINTEL_DIR = config("THREATINTEL_DIR", default="")
+
+# Workflows.
+# How long a workflow keeps collecting SIEM alerts after its attack ends.
+# SIEMs evaluate on a schedule, commonly every 5 to 15 minutes, so a window of
+# seconds would score a working detection as silent. The default spans at least
+# two evaluation cycles for the slowest common cadence.
+WORKFLOW_ALERT_WAIT_MINUTES = config("WORKFLOW_ALERT_WAIT_MINUTES", default=30, cast=int)
+
+# Fernet key encrypting the HMAC secrets a client's SIEM signs alerts with.
+# Separate from LLM_FERNET_KEY: the two secrets have different owners and
+# lifecycles, and accepting alerts must not require the AI feature to be set up.
+WORKFLOW_FERNET_KEY = config("WORKFLOW_FERNET_KEY", default="")
 
 # ---------------------------------------------------------------------------
 # Email

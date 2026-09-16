@@ -1,0 +1,98 @@
+// Server-side request forgery, seen from the network side (T1190 / T1046)
+//
+// THE ADDRESS THE SOURCE RULE LOOKS FOR IS NOT IN THIS TABLE AND NEVER WILL BE.
+// AWS, Flow log limitations: "Traffic to and from 169.254.169.254 for instance metadata" is
+// listed among the traffic flow logs do not capture. Nothing below matches that address, and a
+// query that does is a query guaranteed to return empty. What IS here is every other destination
+// the same primitive reaches.
+//
+// `contains` throughout, never `has` — addresses and interface IDs are punctuated.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL. Table name depends on how flow logs are ingested;
+// AWSVPCFlow is the Sentinel AWS connector's. Adjust, do not assume.
+let LOOKBACK = 7d;
+// The window must not be shorter than the flow log's aggregation interval. AWS: the default
+// maximum aggregation interval is 10 minutes, 1 minute on Nitro-attached interfaces, and delivery
+// is "about 5 minutes" to CloudWatch Logs and "about 10 minutes" to S3, best effort. 30m is
+// chosen for a default-format subscription; shorten it only if the subscription is 1-minute.
+let WINDOW = 30m;
+let FANOUT_THRESHOLD = 50;
+let SensitivePorts = dynamic([3306, 5432, 1433, 1521, 5439, 27017, 6379, 11211, 9200, 2379, 6443, 8500, 9000]);
+AWSVPCFlow
+| where TimeGenerated > ago(LOOKBACK)
+// pkt-srcaddr / pkt-dstaddr are VERSION 3 fields and flow-direction is VERSION 5; the default
+// format is version 2 only, and the format cannot be changed after the subscription is created.
+// coalesce falls back to the version 2 fields so the query degrades to something rather than to
+// nothing — but a fallback row is the INTERFACE's view, not the packet's, and behind a NAT
+// gateway that is one address for the whole VPC. The Degraded column says which you are reading.
+| extend PktDst = coalesce(column_ifexists("pkt_dstaddr", ""), tostring(DstAddr))
+| extend PktSrc = coalesce(column_ifexists("pkt_srcaddr", ""), tostring(SrcAddr))
+| extend Direction = coalesce(column_ifexists("flow_direction", ""), "")
+| extend Degraded = isempty(column_ifexists("pkt_dstaddr", "")) or isempty(Direction)
+| extend Proto = toint(Protocol)          // IANA NUMBER. 6 = TCP, 17 = UDP, 1 = ICMP.
+| extend Dport = toint(DstPort)
+| where Proto == 6
+| where Direction == "egress" or Degraded
+| extend Internal = PktDst startswith "10." or PktDst startswith "192.168."
+                 or (PktDst matches regex @"^172\.(1[6-9]|2[0-9]|3[01])\.")
+| where Internal
+| summarize
+    Flows        = count(),
+    Accepted     = countif(Action == "ACCEPT"),
+    Rejected     = countif(Action == "REJECT"),
+    DistinctDsts = dcount(PktDst),
+    SensitiveHits= countif(set_has_element(SensitivePorts, Dport) and Action == "ACCEPT"),
+    PortsTouched = make_set(Dport, 25),
+    Destinations = make_set(PktDst, 20),
+    AnyDegraded  = max(Degraded),
+    FirstSeen    = min(TimeGenerated),
+    LastSeen     = max(TimeGenerated)
+    by InterfaceId = tostring(InterfaceId), SrcHost = PktSrc, bin(TimeGenerated, WINDOW)
+| where DistinctDsts >= FANOUT_THRESHOLD or SensitiveHits > 0
+| extend Verdict = case(
+    SensitiveHits > 0 and DistinctDsts >= FANOUT_THRESHOLD,
+        "FAN-OUT PLUS BACKEND ACCESS — one host enumerated the VPC and reached database or control-plane ports. This is an SSRF primitive being driven, P0",
+    SensitiveHits > 0,
+        "APPLICATION TIER REACHED A BACKEND PORT — a web server has no client library for a port it has never used. Confirm against the service's dependencies, P0",
+    Rejected > Accepted * 5,
+        "WIDE FAN-OUT, MOSTLY REFUSED — enumeration from inside the VPC. Note that REJECT also covers packets arriving after a connection closed, so read the ratio and not the raw count, P1",
+    "WIDE FAN-OUT FROM ONE INTERFACE — service meshes and health checkers do this legitimately; confirm the interface is one of them, P1")
+| project FirstSeen, LastSeen, InterfaceId, SrcHost, Verdict, DistinctDsts, SensitiveHits,
+          Accepted, Rejected, PortsTouched, Destinations, AnyDegraded
+| order by SensitiveHits desc, DistinctDsts desc
+//
+// ============================================================================
+// THE CONTROL-PLANE HALF — a different table, and the only part CloudTrail records
+// ============================================================================
+// AWSCloudTrail
+// | where TimeGenerated > ago(30d)
+// | where EventSource == "ec2.amazonaws.com" and EventName == "ModifyInstanceMetadataOptions"
+// | where isempty(ErrorCode)
+// | extend Req = parse_json(RequestParameters)
+// | extend Tokens = tostring(Req.httpTokens), Hop = toint(Req.httpPutResponseHopLimit)
+// | where Tokens == "optional" or Hop > 1
+// | project TimeGenerated, UserIdentityArn, SourceIpAddress,
+//           instance = tostring(Req.instanceId), Tokens, Hop
+//
+// IMDSv1 answers an unauthenticated GET, so a forged request reaches it. IMDSv2 requires a token
+// from a prior PUT presented in a header a server-side forgery cannot set. A hop limit above 1
+// lets a container reach the metadata service through the host's namespace — the same weakening
+// by another route.
+//
+// ============================================================================
+// WHAT THIS CANNOT TELL YOU
+// ============================================================================
+// WHETHER THE METADATA SERVICE WAS REACHED. Not from this table, at all. The evidence that the
+// SSRF succeeded is the resulting role session being used somewhere the instance is not, and that
+// is CloudTrail — see ../../ec2.credential-access.imds-credential-theft/. The inbound request
+// carrying the metadata signature is in the web ACL logs — see
+// ../../waf.credential-access.crs-ssrf-ec2-metadata/. Three disjoint views; this is the network one.
+//
+// WHAT HAPPENED INSIDE AN ACCEPTED FLOW. Flow logs are 5-tuple counters. A connection to port
+// 3306 that was accepted tells you the reachability existed; it says nothing about whether a
+// query ran. Database audit logs answer that and nothing here does.
+//
+// WHETHER ANY RECORD IS MISSING. log-status SKIPDATA means AWS dropped records it had, "because
+// of an internal capacity constraint, or an internal error". Absence of a flow is not evidence
+// the flow did not happen — filter on log-status == "OK" before making a negative claim, and say
+// so when you make one.

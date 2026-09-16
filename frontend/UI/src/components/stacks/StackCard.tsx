@@ -27,11 +27,11 @@ import {
     isTtlExpired,
 } from '@/components/dashboard/stackHelpers'
 import { DeploymentProgress } from './DeploymentProgress'
-import { LifecycleTimeline } from './LifecycleTimeline'
+import { LifecycleTrack } from './LifecycleTrack'
 import { SecurityContextTab } from './SecurityContextTab'
 import { ResourceMapModal } from '@/components/modals/ResourceMapModal'
 
-export type StackDetailView = 'details' | 'lifecycle' | 'security' | 'graph'
+export type StackDetailView = 'details' | 'security' | 'graph'
 
 /** Statuses where an emulation stack may hold live AWS resources to force-destroy. */
 const EMULATION_DESTROYABLE = new Set<StackStatus>([
@@ -234,6 +234,17 @@ export function StackCard({
                         {actionMsg}
                     </div>
                 )}
+
+                {/* Measured progress, on the card rather than behind a tab. The
+                    question it answers, where is this stuck and for how long, is
+                    the reason someone opens this page at all. Absent entirely
+                    for a stack with no recorded phases, since a sentence
+                    explaining the absence reads as the card breaking in half. */}
+                {stack.lifecycle?.length > 0 && (
+                    <div className="mt-5 pt-4 border-t border-border">
+                        <LifecycleTrack stack={stack} />
+                    </div>
+                )}
             </div>
 
             {/* Expanded detail panel */}
@@ -242,7 +253,6 @@ export function StackCard({
                     {/* Tabs */}
                     <div className="flex items-center gap-1 mb-4">
                         <DetailTab label="Details" active={detailView === 'details'} onClick={() => onDetailViewChange('details')} />
-                        <DetailTab label="Lifecycle" active={detailView === 'lifecycle'} onClick={() => onDetailViewChange('lifecycle')} />
                         <DetailTab label="Security" active={detailView === 'security'} onClick={() => onDetailViewChange('security')} />
                         <DetailTab label="Resource Graph" active={detailView === 'graph'} onClick={() => onDetailViewChange('graph')} />
                         <div className="flex-1 h-px bg-border ml-2" />
@@ -255,6 +265,14 @@ export function StackCard({
                             <DetailRow label="Region" value={stack.region} />
                             <DetailRow label="Status" value={stack.status.toUpperCase()} />
                             <DetailRow label="Owner" value={stack.owner} />
+                            <DetailRow
+                                label="Phase history"
+                                value={
+                                    stack.lifecycle?.length
+                                        ? `${stack.lifecycle.length} transitions recorded`
+                                        : 'Not recorded. This stack predates phase timing; it is captured from the next status change onwards.'
+                                }
+                            />
                             <DetailRow label="Created" value={new Date(stack.created_at).toLocaleString()} />
                             <DetailRow label="Updated" value={new Date(stack.updated_at).toLocaleString()} />
                             <DetailRow
@@ -263,10 +281,6 @@ export function StackCard({
                                 mono
                             />
                         </div>
-                    )}
-
-                    {detailView === 'lifecycle' && (
-                        <LifecycleTimeline stack={stack} failureReason={stack.last_error} />
                     )}
 
                     {detailView === 'security' && <SecurityContextTab emulationType={stack.emulation_type} />}

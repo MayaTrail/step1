@@ -1,0 +1,53 @@
+# Source rules — de-identified extract
+#
+# The originals are internal alert definitions in a proprietary packaging format.
+# Everything below is DETECTION LOGIC only: name, priority, type, query, threshold,
+# window and group-by. Platform scaffolding has been stripped — payload field lists,
+# entity labels, product-specific field prefixes, internal enums and packaging
+# metadata — because none of it bears on whether the rules are correct and it
+# identifies the source.
+#
+# This is the artifact the 'Detection Rule Quality Notes' table in ../PLAYBOOK.md
+# is auditable against.
+
+- name: AWS Secrets Manager - Unfamiliar IAM User Retrieved Secrets
+  priority: P3
+  type: logs_new_value
+  mitre: T1555/TA0006
+  group_by: []
+
+- name: AWS Secrets Manager - Building Block - Secrets Listed
+  priority: building-block
+  type: logs_threshold
+  mitre: T1552/TA0006
+  query: |
+    eventName:"ListSecrets" AND eventSource:"secretsmanager.amazonaws.com" AND NOT _exists_:errorCode
+  threshold: 0.0  window: 10m
+  group_by: ['userIdentity.arn']
+
+- name: AWS Secrets Manager - Building Block - Multiple Password Retrieval Using GetSecretValue
+  priority: building-block
+  type: logs_threshold
+  mitre: T1552/TA0006
+  query: |
+    eventSource:"secretsmanager.amazonaws.com" AND eventName:GetSecretValue
+  threshold: 5.0  window: 5m
+  group_by: ['userIdentity.arn']
+
+- name: AWS Secrets Manager - Retrieve a High Number of Secrets Manager Secrets
+  priority: P2
+  type: logs_threshold
+  mitre: T1552/TA0006
+  query: |
+    eventSource:"secretsmanager.amazonaws.com" AND eventName:BatchGetSecretValue
+  threshold: 0.0  window: 5m
+  group_by: ['userIdentity.arn']
+
+- name: AWS Secrets Manager - High Number of Secrets Retrievals From Single User
+  priority: P2
+  type: flow
+  mitre: T1552/TA0006
+  flow_stage: (8)  timeframeMs: 0
+  flow_stage: (9)  timeframeMs: 1800000
+  group_by: ['userIdentity.arn']
+
