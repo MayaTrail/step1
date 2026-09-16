@@ -18,3 +18,14 @@ google-auth==2.29.0
 requests==2.32.3
 django-celery-beat==2.9.0
 PyYAML==6.0.2
+
+# Sigma compilation. Runtime, not dev-only: the product converts the shipped
+# detection rules into a customer's SIEM dialect on request
+# (apps/emulations/sigma_convert.py), so the backends have to be in the image.
+#
+# The backends are pinned deliberately. An unpinned upgrade can drop support for
+# a construct the rule corpus uses, which would turn a working export into a
+# skipped rule with no code change on our side.
+pysigma==0.11.23
+pySigma-backend-splunk==1.1.3
+pySigma-backend-opensearch==1.0.4

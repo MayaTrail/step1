@@ -29,6 +29,11 @@ Five checks, each covering a defect class seen in review:
   4. Unique ids across the corpus. pySigma checks id format, not collisions.
   5. Filenames. detections.py groups the trio by prefix and technique key; a
      misnamed file is silently dropped from the API response.
+  6. Convertibility. Every base rule compiles to each shipped SIEM target via
+     sigma_convert. A rule that stops compiling fails the build here rather
+     than failing in a customer's Splunk. Correlations a backend cannot express
+     are reported as skipped, not as failures: that is a known limit of the
+     backend, not a defect in the rule.
 """
 
 from __future__ import annotations
@@ -47,6 +52,7 @@ except ImportError:
     sys.exit("pySigma is required: pip install -r backend/requirements-dev.txt")
 
 from apps.emulations.detections import parse_sigma, parse_sigma_documents
+from apps.emulations.sigma_convert import available_targets, convert
 from apps.emulations.sigma_eval import is_evaluable
 
 DEFAULT_PATTERN = "emulations/*/detections/sigma_*.yml"
@@ -110,6 +116,32 @@ def check_evaluability(text: str) -> list[str]:
     return problems
 
 
+def check_convertibility(text: str, targets: list[str]) -> tuple[list[str], list[str]]:
+    """
+    Confirm the file compiles for every SIEM target available in this job.
+
+    Returns (failures, notes). A failure means the file produced no queries for
+    a target, which is a rule defect. A note records a correlation the backend
+    cannot express, which is a backend limit worth printing but not worth
+    failing a pull request over.
+
+    Targets are discovered rather than hard-coded, so this degrades to a no-op
+    when the backends are not installed instead of failing the whole run.
+    """
+    failures: list[str] = []
+    notes: list[str] = []
+    for target in targets:
+        result = convert(text, target)
+        if not result.ok:
+            failures.append(f"does not compile for {target}: {result.error}")
+            continue
+        if not result.queries:
+            failures.append(f"compiles for {target} but yields no query")
+        for skipped in result.skipped:
+            notes.append(f"{target} cannot express '{skipped.title}': {skipped.reason}")
+    return failures, notes
+
+
 def check_filenames(paths: list[str]) -> list[str]:
     """Confirm sibling detection files follow the prefix naming convention."""
     problems = []
@@ -137,14 +169,24 @@ def main() -> int:
 
     failures: list[str] = []
     rule_ids: Counter = Counter()
+    notes: list[str] = []
+
+    targets = available_targets()
+    if targets:
+        print(f"Conversion targets: {', '.join(targets)}\n")
+    else:
+        print("Conversion targets: none installed, skipping the compile check\n")
 
     for path in paths:
         text = Path(path).read_text(encoding="utf-8")
         problems = check_structure(text)
-        # Rendering and evaluability read the parsed documents, so they are
-        # only meaningful once the file is structurally sound.
+        # Rendering, evaluability and conversion all read the parsed documents,
+        # so they are only meaningful once the file is structurally sound.
         if not problems:
             problems = check_rendering(text) + check_evaluability(text)
+            convert_failures, convert_notes = check_convertibility(text, targets)
+            problems += convert_failures
+            notes.extend(f"{path}: {note}" for note in convert_notes)
             for document in parse_sigma_documents(text):
                 if document.get("id"):
                     rule_ids[str(document["id"])] += 1
@@ -165,6 +207,12 @@ def main() -> int:
     failures.extend(check_filenames(paths))
 
     print()
+    if notes:
+        print(f"{len(notes)} correlation(s) no backend can express (not a failure):")
+        for note in notes:
+            print(f"  - {note}")
+        print()
+
     if failures:
         print(f"{len(failures)} problem(s) in {len(paths)} file(s):")
         for failure in failures:

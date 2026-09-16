@@ -55,6 +55,8 @@ LOCAL_APPS = [
     "apps.logs",
     "apps.metrics",
     "apps.ai",
+    "apps.playbooks",
+    "apps.authored_detections",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -203,6 +205,13 @@ from celery.schedules import crontab  # noqa: E402
 CELERY_BEAT_SCHEDULE = {
     "auto-destroy-expired-stacks": {
         "task": "emulations.auto_destroy_expired_stacks",
+        "schedule": crontab(minute="*/15"),
+    },
+    # Fires due ScheduledRun rows. Every 15 minutes is fine: schedules are
+    # daily/weekly/monthly, so the granularity only bounds how late a run can
+    # start, never how often it happens.
+    "run-scheduled-emulations": {
+        "task": "emulations.run_scheduled_emulations",
         "schedule": crontab(minute="*/15"),
     },
 }

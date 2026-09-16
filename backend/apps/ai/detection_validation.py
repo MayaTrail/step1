@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
 from apps.emulations.sigma_eval import SigmaUnsupported, evaluate
@@ -41,23 +42,48 @@ _SUGGESTIONS_MAX_TOKENS = 700
 _SHOULD_MATCH = {"positive": True, "evasion": True, "benign": False}
 
 
+# Hosted models, free tiers especially, return transient 503 (overloaded) and
+# 429 (rate limited) that clear on a retry. Without this, validation fails where
+# generation (which already retries) would have ridden through - and validation
+# makes two model calls, so it is twice as likely to hit a transient blip.
+_RETRY_ATTEMPTS = 3
+_RETRY_BACKOFF_S = (2, 5)
+
+
+def _is_retryable(detail: str) -> bool:
+    """True when a provider error is a transient overload worth retrying."""
+    text = (detail or "").lower()
+    return "503" in text or "429" in text or "overload" in text or "rate limit" in text
+
+
 def _complete(
     provider: str, creds: dict, model: str, system: str, user: str, max_tokens: int
 ) -> tuple[str | None, str | None]:
     """
-    Run one non-streaming completion by collecting the streamed deltas.
+    Run one non-streaming completion by collecting the streamed deltas, retrying
+    on transient provider errors.
 
     Returns (text, None) on success or (None, error_detail) on a provider error.
     """
-    chunks: list[str] = []
-    for chunk in stream_chat(
-        provider, creds, model, system,
-        [{"role": "user", "content": user}], max_tokens=max_tokens,
-    ):
-        if chunk.startswith(STREAM_ERROR_PREFIX):
-            return None, chunk[len(STREAM_ERROR_PREFIX):]
-        chunks.append(chunk)
-    return "".join(chunks).strip(), None
+    last_error: str | None = None
+    for attempt in range(_RETRY_ATTEMPTS):
+        chunks: list[str] = []
+        error: str | None = None
+        for chunk in stream_chat(
+            provider, creds, model, system,
+            [{"role": "user", "content": user}], max_tokens=max_tokens,
+        ):
+            if chunk.startswith(STREAM_ERROR_PREFIX):
+                error = chunk[len(STREAM_ERROR_PREFIX):]
+                break
+            chunks.append(chunk)
+        if error is None:
+            return "".join(chunks).strip(), None
+        last_error = error
+        if not _is_retryable(error) or attempt == _RETRY_ATTEMPTS - 1:
+            break
+        time.sleep(_RETRY_BACKOFF_S[min(attempt, len(_RETRY_BACKOFF_S) - 1)])
+    return None, last_error
 
 
 def _extract_json(text: str) -> Any:

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useDetections } from '@/hooks/usePlatformData'
 import type { PlatformId, DetectionRuleSummary } from '@/types'
+import { DetectionExport } from '@/components/detections/DetectionExport'
 import { CodeBlock } from '@/components/ui/CodeBlock'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { severityDotClass, severityTextClass } from './severity'
@@ -87,6 +88,20 @@ export function DetectionsPage() {
           </Link>
         )}
       </div>
+
+      {/* Take the whole rule set away in the team's own query language. The
+          run-scoped export on the coverage page is the sharper tool; this is
+          for stocking a detection repo before anything has run. */}
+      {emulationId && (
+        <div className="mb-4 bg-surface-card border border-border rounded-card p-4">
+          <DetectionExport
+            scope="emulation"
+            emulationType={emulationId}
+            heading="Export these detections to your SIEM"
+            blurb="Compile every rule below into Splunk SPL or OpenSearch/Wazuh Lucene, ready to deploy."
+          />
+        </div>
+      )}
 
       {/* Master-detail shell */}
       <div className="grid grid-cols-1 lg:grid-cols-[290px_1fr] gap-4 items-start">

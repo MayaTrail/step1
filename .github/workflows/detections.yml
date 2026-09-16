@@ -5,6 +5,12 @@ name: Detections
 # emulations/, because the validator also checks that apps/emulations/
 # detections.py can still render the rules: a backend change can break the
 # detection library without touching a single rule file.
+#
+# Since the compile check landed this also gates the rules on compiling for
+# every SIEM target in requirements-dev.txt, so a rule that stops converting
+# fails here rather than in a customer's Splunk. That is why the pySigma
+# backends are pinned there: an unpinned backend upgrade could drop support for
+# a construct the corpus uses and turn a green build red without a code change.
 on:
   pull_request:
   push:
@@ -26,6 +32,31 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Sigma pins match between dev and runtime
+        run: |
+          # pySigma and its backends are installed twice: requirements-dev.txt
+          # keeps this job fast, requirements.txt ships them in the image
+          # because conversion is a product feature. If the two drift, CI
+          # validates the rule corpus against a different compiler than the one
+          # serving customers, and a rule could pass here and fail in product.
+          for pkg in pysigma pySigma-backend-splunk pySigma-backend-opensearch; do
+            dev=$(grep -i "^$pkg==" backend/requirements-dev.txt || true)
+            run=$(grep -i "^$pkg==" backend/requirements.txt || true)
+            if [ -z "$dev" ] || [ -z "$run" ]; then
+              echo "FAIL: $pkg missing from one of the requirements files"
+              echo "  dev: ${dev:-<absent>}"
+              echo "  run: ${run:-<absent>}"
+              exit 1
+            fi
+            if [ "$dev" != "$run" ]; then
+              echo "FAIL: $pkg pin drift"
+              echo "  requirements-dev.txt: $dev"
+              echo "  requirements.txt:     $run"
+              exit 1
+            fi
+            echo "OK: $dev"
+          done
 
       - name: Install validation toolchain
         run: pip install -r backend/requirements-dev.txt

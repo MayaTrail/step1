@@ -1,12 +1,14 @@
 import { lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
+import { useUiMode } from '@/context/UiModeContext'
 import { getCoverageSummary } from '@/services/metrics.service'
 import { useCachedResource } from '@/hooks/useCachedResource'
 import { Card } from '@/components/ui/Card'
 import { MetricCard } from '@/components/ui/MetricCard'
 import { ActivityFeed } from './ActivityFeed'
 import { PlatformHealth } from './PlatformHealth'
+import { CommandCenter } from './CommandCenter'
 
 // Lazy-loaded: these pull in Recharts, which we keep out of the initial/login
 // bundle since the charts only appear on the dashboard.
@@ -51,9 +53,115 @@ export function DashboardPage() {
     // Stale-while-revalidate: seeds from cache on revisit (no flash), never blanks.
     const { data: summary, loading } = useCachedResource('coverage-summary', getCoverageSummary)
 
+    // Global UI mode — the same switch reframes the nav and coverage report too.
+    // 'new' is the plain-language command-center experience; 'classic' is the
+    // original (byte-identical, for rollback). Kept in context so the sidebar
+    // footer toggle and this header toggle stay in lockstep.
+    const { mode, setMode } = useUiMode()
+    const assurance = mode === 'new'
+
     const hour = new Date().getHours()
     const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
     const firstName = user?.name?.trim().split(' ')[0] || user?.username || 'there'
+
+    // The existing widgets, split into the three bands so Simple mode can give
+    // them a hierarchy. Classic composes them in the original flat order and
+    // renders byte-identically; only Simple adds the band headings and the KPI
+    // drill-down cues.
+    const kpiGrid = (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <MetricCard
+                accent="red"
+                value={summary ? `${summary.aptCoverageScore}%` : '—'}
+                label="APT Coverage Score"
+                loading={loading}
+                caption={
+                    summary
+                        ? `${summary.coveredTechniques}/${summary.totalTechniques} techniques · ATT&CK v${summary.attackVersion}`
+                        : undefined
+                }
+                /* Simple mode makes every tile a door and says so; Classic left
+                   this one inert, which is half the "which numbers are
+                   clickable?" confusion the critique flagged. */
+                onClick={assurance ? () => navigate('/reports') : undefined}
+                actionLabel={assurance ? 'Full report' : undefined}
+            />
+            <MetricCard
+                accent="blue"
+                value={summary ? summary.emulationsExecuted.toLocaleString() : '—'}
+                label="Emulations Executed"
+                loading={loading}
+                caption="Total emulation runs"
+                onClick={() => navigate('/stacks')}
+                actionLabel={assurance ? 'View stacks' : undefined}
+            />
+            <MetricCard
+                accent="green"
+                value={summary ? summary.detectionCoverage.toLocaleString() : '—'}
+                /* In New, live "% firing" is the hero (command center), so this
+                   KPI is relabelled to what it actually is — a count of rules in
+                   the library, not a health metric. Fixes the critique's
+                   "inventory masquerading as coverage" finding. */
+                label={assurance ? 'Detection Library' : 'Detection Coverage'}
+                loading={loading}
+                caption={assurance ? 'Rules available to deploy' : 'Detection rules available'}
+                onClick={() => navigate('/detections')}
+                actionLabel={assurance ? 'Browse rules' : undefined}
+            />
+            <MetricCard
+                accent="amber"
+                value={summary ? formatRelative(summary.lastSuccessfulRun) : '—'}
+                label="Last Successful Run"
+                loading={loading}
+                caption="Most recent completed emulation"
+                onClick={assurance ? () => navigate('/results') : undefined}
+                actionLabel={assurance ? 'See results' : undefined}
+            />
+        </div>
+    )
+
+    const threatWidgets = (
+        <Suspense
+            fallback={<Card className="px-5 py-16 text-center text-sm text-content-dim">Loading…</Card>}
+        >
+            <MitreCoverageSection />
+            <PlatformThreatCoverage />
+        </Suspense>
+    )
+
+    const opsWidgets = (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
+            <ActivityFeed />
+            <PlatformHealth />
+        </div>
+    )
+
+    // Classic: the original flat stack, unchanged.
+    const technical = (
+        <>
+            {kpiGrid}
+            {threatWidgets}
+            {opsWidgets}
+        </>
+    )
+
+    /* Simple: the same widgets under named bands. Band B previously ran two
+       equal-weight full-width charts with nothing saying which to read first;
+       naming the band and marking the heatmap as the lead gives it a focal
+       point without rewriting either chart. */
+    const technicalBanded = (
+        <>
+            <BandHeading title="Key numbers" hint="Tap any tile to open the detail behind it" />
+            {kpiGrid}
+            <BandHeading
+                title="What we can test for"
+                hint="The heatmap is the headline — the platform breakdown below supports it"
+            />
+            {threatWidgets}
+            <BandHeading title="What's happening now" />
+            {opsWidgets}
+        </>
+    )
 
     return (
         <div className="animate-fadeIn flex flex-col gap-8">
@@ -68,62 +176,68 @@ export function DashboardPage() {
                         {greeting}, {firstName}
                     </h1>
                     <p className="text-sm text-content-dim mt-1">
-                        How much of the threat landscape Mayatrail can emulate and validate.
+                        {assurance
+                            ? 'Whether your detections are still firing — and what changed since last run.'
+                            : 'How much of the threat landscape Mayatrail can emulate and validate.'}
                     </p>
+                </div>
+
+                {/* Before/after toggle — flip live for the team; default is Classic.
+                    Shares global UI mode with the sidebar toggle. */}
+                <div className="inline-flex rounded-btn border border-border bg-surface-base p-0.5 shrink-0">
+                    {(['classic', 'new'] as const).map((m) => (
+                        <button
+                            key={m}
+                            type="button"
+                            onClick={() => setMode(m)}
+                            className={`px-3 py-1.5 rounded-btn text-xs font-medium transition-colors ${
+                                mode === m
+                                    ? 'bg-surface-elevated text-content-primary'
+                                    : 'text-content-dim hover:text-content-secondary'
+                            }`}
+                        >
+                            {m === 'classic' ? 'Technical' : 'Simple'}
+                        </button>
+                    ))}
                 </div>
             </div>
 
-            {/* ── Band A — KPI cards ── */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <MetricCard
-                    accent="red"
-                    value={summary ? `${summary.aptCoverageScore}%` : '—'}
-                    label="APT Coverage Score"
-                    loading={loading}
-                    caption={
-                        summary
-                            ? `${summary.coveredTechniques}/${summary.totalTechniques} techniques · ATT&CK v${summary.attackVersion}`
-                            : undefined
-                    }
-                />
-                <MetricCard
-                    accent="blue"
-                    value={summary ? summary.emulationsExecuted.toLocaleString() : '—'}
-                    label="Emulations Executed"
-                    loading={loading}
-                    caption="Total emulation runs"
-                    onClick={() => navigate('/stacks')}
-                />
-                <MetricCard
-                    accent="green"
-                    value={summary ? summary.detectionCoverage.toLocaleString() : '—'}
-                    label="Detection Coverage"
-                    loading={loading}
-                    caption="Detection rules available"
-                />
-                <MetricCard
-                    accent="amber"
-                    value={summary ? formatRelative(summary.lastSuccessfulRun) : '—'}
-                    label="Last Successful Run"
-                    loading={loading}
-                    caption="Most recent completed emulation"
-                />
-            </div>
+            {assurance ? (
+                <>
+                    {/* New: command center leads; the widgets demote below it. */}
+                    <CommandCenter />
+                    <section className="flex flex-col gap-6">
+                        <div className="flex items-center gap-3">
+                            <span className="font-mono text-2xs uppercase tracking-label text-content-dim">
+                                Technical detail
+                            </span>
+                            <span className="h-px flex-1 bg-border" />
+                        </div>
+                        {technicalBanded}
+                    </section>
+                </>
+            ) : (
+                /* Classic: unchanged — the original dashboard. */
+                technical
+            )}
+        </div>
+    )
+}
 
-            {/* ── Band B — Coverage (the hero zone) ── */}
-            <Suspense
-                fallback={
-                    <Card className="px-5 py-16 text-center text-sm text-content-dim">Loading…</Card>
-                }
-            >
-                <MitreCoverageSection />
-                <PlatformThreatCoverage />
-            </Suspense>
-            {/* ── Band C+D — Activity + Health (side by side) ── */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
-                <ActivityFeed />
-                <PlatformHealth />
+/**
+ * A labelled divider that gives a dashboard band a name and, optionally, a line
+ * saying what to read first. Used only in Simple mode.
+ */
+function BandHeading({ title, hint }: { title: string; hint?: string }) {
+    return (
+        <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-3">
+                <span className="font-mono text-2xs uppercase tracking-label text-content-secondary">
+                    {title}
+                </span>
+                <span className="h-px flex-1 bg-border" />
             </div>
+            {hint && <span className="text-xs text-content-dim">{hint}</span>}
         </div>
     )
 }

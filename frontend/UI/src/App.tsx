@@ -1,7 +1,9 @@
+import { lazy, Suspense } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import { ThemeProvider } from './context/ThemeContext'
 import { PlatformProvider } from './context/PlatformContext'
+import { UiModeProvider } from './context/UiModeContext'
 import { ProtectedRoute } from './components/auth/ProtectedRoute'
 import { AppLayout } from './components/layout/AppLayout'
 import { LoginPage } from './components/auth/LoginPage'
@@ -20,18 +22,49 @@ import { GuardrailsPage } from './components/guardrails/GuardrailsPage'
 import { EmulationsHub } from './components/emulations/EmulationsHub'
 import { DetectionsHub } from './components/detections/DetectionsHub'
 import { PlaybooksHub } from './components/playbooks/PlaybooksHub'
+// Lazy-loaded: the block editor is only reached from the playbooks hub, so it
+// stays out of the initial bundle that every page including login pays for.
+const PlaybookEditorPage = lazy(() =>
+  import('./components/playbooks/PlaybookEditorPage').then((m) => ({
+    default: m.PlaybookEditorPage,
+  })),
+)
+const UserPlaybookViewPage = lazy(() =>
+  import('./components/playbooks/UserPlaybookViewPage').then((m) => ({
+    default: m.UserPlaybookViewPage,
+  })),
+)
+const DetectionStudioPage = lazy(() =>
+  import('./components/detections/DetectionStudioPage').then((m) => ({
+    default: m.DetectionStudioPage,
+  })),
+)
+
+/** Fallback shown while the editor chunk loads. */
+function EditorFallback() {
+  return (
+    <div className="py-16 text-center font-mono text-sm text-content-dim">
+      Loading editor...
+    </div>
+  )
+}
+import { ReportsPage } from '@/components/reports/ReportsPage'
+import { RunReportPage } from '@/components/reports/RunReportPage'
+import { RunComparePage } from '@/components/reports/RunComparePage'
 import { GuardrailsHub } from './components/guardrails/GuardrailsHub'
 import { ComingSoon } from './components/common/ComingSoon'
 import { ActiveRunsPage } from './components/operations/ActiveRunsPage'
 import { ResultsPage } from './components/operations/ResultsPage'
+import { SchedulesPage } from './components/operations/SchedulesPage'
 import { PlatformOverviewPage } from './components/platforms/PlatformOverviewPage'
-import { IconBarChart, IconBook } from './components/ui/Icons'
+import { IconBook } from './components/ui/Icons'
 
 export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
         <PlatformProvider>
+          <UiModeProvider>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/connector" element={<ConnectorPage />} />
@@ -45,6 +78,7 @@ export default function App() {
                 {/* Operations */}
                 <Route path="runs" element={<ActiveRunsPage />} />
                 <Route path="results" element={<ResultsPage />} />
+                <Route path="schedules" element={<SchedulesPage />} />
 
                 {/* Platform overview (discovery entry point) */}
                 <Route path="platforms/:platformId" element={<PlatformOverviewPage />} />
@@ -52,17 +86,55 @@ export default function App() {
                 {/* Security Content hubs (cross-platform) */}
                 <Route path="emulations" element={<EmulationsHub />} />
                 <Route path="detections" element={<DetectionsHub />} />
+                <Route
+                  path="detections/studio/new"
+                  element={
+                    <Suspense fallback={<EditorFallback />}>
+                      <DetectionStudioPage />
+                    </Suspense>
+                  }
+                />
+                <Route
+                  path="detections/studio/:detectionId"
+                  element={
+                    <Suspense fallback={<EditorFallback />}>
+                      <DetectionStudioPage />
+                    </Suspense>
+                  }
+                />
                 <Route path="playbooks" element={<PlaybooksHub />} />
+                <Route
+                  path="playbooks/new"
+                  element={
+                    <Suspense fallback={<EditorFallback />}>
+                      <PlaybookEditorPage />
+                    </Suspense>
+                  }
+                />
+                <Route
+                  path="playbooks/:playbookId"
+                  element={
+                    <Suspense fallback={<EditorFallback />}>
+                      <UserPlaybookViewPage />
+                    </Suspense>
+                  }
+                />
+                <Route
+                  path="playbooks/:playbookId/edit"
+                  element={
+                    <Suspense fallback={<EditorFallback />}>
+                      <PlaybookEditorPage />
+                    </Suspense>
+                  }
+                />
                 <Route path="guardrails" element={<GuardrailsHub />} />
 
                 {/* Administration */}
-                <Route path="reports" element={
-                  <ComingSoon
-                    icon={<IconBarChart size={32} />}
-                    title="Reports coming soon"
-                    body="Exportable coverage and execution reports will be generated here in a future milestone."
-                  />
-                } />
+                {/* "compare" must precede ":runId" — otherwise the param route
+                    swallows it and the page looks for a run with that id. */}
+                <Route path="reports" element={<ReportsPage />} />
+                <Route path="reports/compare" element={<RunComparePage />} />
+                <Route path="reports/:runId" element={<RunReportPage />} />
                 <Route path="docs" element={
                   <ComingSoon
                     icon={<IconBook size={32} />}
@@ -83,6 +155,7 @@ export default function App() {
               </Route>
             </Route>
           </Routes>
+          </UiModeProvider>
         </PlatformProvider>
       </AuthProvider>
     </ThemeProvider>

@@ -26,6 +26,7 @@ class LLMConnector(models.Model):
         """Supported LLM providers."""
 
         OPENAI = "openai", "OpenAI"
+        GEMINI = "gemini", "Google Gemini"
         ANTHROPIC = "anthropic", "Anthropic"
         BEDROCK = "bedrock", "Amazon Bedrock"
 

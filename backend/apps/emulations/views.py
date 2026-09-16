@@ -16,9 +16,12 @@ POST /api/emulations/<stack_id>/destroy/           EmulationDestroyView
 
 import logging
 import os
+import re
 from datetime import timedelta
 from pathlib import Path
 
+from django.core.exceptions import ValidationError
+from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.generics import ListAPIView
@@ -31,8 +34,17 @@ from apps.infrastructure.permissions import IsEnterpriseUser
 from apps.logs.models import LogEntry
 
 from . import command_runner
+from . import coverage_history
+from . import reporting
+from .detection_export import (
+    bundle_to_text,
+    export_rules,
+    rules_with_verdict,
+    target_catalogue,
+)
 from .detections import build_detection_detail, list_detection_summaries
-from .models import EmulationRun
+from .sigma_convert import TARGETS, BackendUnavailable
+from .models import EmulationRun, ScheduledRun
 from .registry import get_emulation, list_emulations
 from .serializers import (
     DeployEmulationSerializer,
@@ -851,3 +863,572 @@ class PlaybookCommandView(APIView):
             "stdout": stdout,
             "stderr": stderr,
         })
+
+
+# ── Detection export ──────────────────────────────────────────────────────────
+
+# Verdicts a caller may filter a run's rules by, matching detection_check.
+_EXPORT_VERDICTS = {"fired", "silent", "no_logs"}
+
+
+def _validate_target(request: Request) -> tuple[str, str, Response | None]:
+    """
+    Pull `target` and `output_format` off the query string and check them.
+
+    The parameter is `output_format`, not `format`, because DRF reserves
+    `format` for content negotiation (URL_FORMAT_OVERRIDE): a request carrying
+    ?format=savedsearches is answered with 404 by the renderer lookup before
+    the view is ever entered.
+
+    Returns:
+        (target, output_format, None) when usable, or ("", "", Response) with
+        the error to return.
+    """
+    target = (request.query_params.get("target") or "").strip().lower()
+    if target not in TARGETS:
+        return "", "", Response(
+            {
+                "detail": "Unknown target '%s'. Available: %s."
+                          % (target or "", ", ".join(sorted(TARGETS))),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    spec = TARGETS[target]
+    output_format = (request.query_params.get("output_format") or "default").strip()
+    if output_format not in spec.output_formats:
+        return "", "", Response(
+            {
+                "detail": "Unknown output_format '%s' for %s. Available: %s."
+                          % (output_format, spec.label, ", ".join(spec.output_formats)),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return target, output_format, None
+
+
+def _unavailable(target: str) -> Response:
+    """The backend for this target is not installed in this deployment."""
+    spec = TARGETS[target]
+    return Response(
+        {
+            "detail": "%s conversion is unavailable on this server: %s is not "
+                      "installed." % (spec.label, spec.install),
+        },
+        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
+def _bundle_response(request: Request, bundle, note: str = "", stem: str = "detections"):
+    """
+    Return a bundle as JSON, or as a file when ?download=1.
+
+    The UI wants JSON so it can render what converted and what did not; the
+    download button wants a file. Same data either way.
+    """
+    if request.query_params.get("download") in ("1", "true", "yes"):
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "", "%s-%s" % (stem, bundle.target)) or "detections"
+        response = HttpResponse(
+            bundle_to_text(bundle, note), content_type="text/plain; charset=utf-8"
+        )
+        response["Content-Disposition"] = 'attachment; filename="%s.txt"' % safe
+        return response
+
+    payload = bundle.as_dict()
+    if note:
+        payload["note"] = note
+    return Response(payload)
+
+
+class DetectionTargetsView(APIView):
+    """
+    List the SIEM dialects this deployment can compile to.
+
+    GET /api/emulations/detection-targets/
+
+    Reports every target with an `installed` flag rather than hiding the ones
+    whose backend is missing, so an operator can tell "we do not support that"
+    apart from "this server is missing a package".
+    """
+
+    permission_classes = [IsEnterpriseUser]
+
+    def get(self, request: Request) -> Response:
+        """Return the conversion target catalogue."""
+        return Response({"targets": target_catalogue()})
+
+
+class EmulationDetectionExportView(APIView):
+    """
+    Compile an emulation's Sigma rules for one SIEM.
+
+    GET /api/emulations/<emulation_type>/detections/export/?target=splunk
+        &output_format=default which of the target's output formats
+        &rule_ids=t1098,t1496  optional subset; default is every rule
+        &download=1            return a file instead of JSON
+    """
+
+    permission_classes = [IsEnterpriseUser]
+
+    def get(self, request: Request, emulation_type: str) -> Response:
+        """Return the compiled bundle for this emulation."""
+        entry, err = _get_emulation_or_404(emulation_type)
+        if err:
+            return err
+
+        target, output_format, err = _validate_target(request)
+        if err:
+            return err
+
+        requested = (request.query_params.get("rule_ids") or "").strip()
+        if requested:
+            rule_ids = [r.strip() for r in requested.split(",") if r.strip()]
+        else:
+            rule_ids = [
+                summary["ruleId"]
+                for summary in list_detection_summaries(entry)
+                if summary.get("formats", {}).get("sigma")
+            ]
+
+        if not rule_ids:
+            return Response(
+                {"detail": f"'{emulation_type}' ships no Sigma rules to export."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            bundle = export_rules(entry, rule_ids, target, output_format)
+        except BackendUnavailable:
+            return _unavailable(target)
+
+        return _bundle_response(request, bundle, stem=emulation_type)
+
+
+class RunDetectionExportView(APIView):
+    """
+    Compile the rules a run judged, filtered by verdict.
+
+    GET /api/emulations/<run_id>/detections/export/?target=splunk
+        &verdict=silent        csv of fired|silent|no_logs; default silent
+        &output_format=default
+        &download=1
+
+    This is the endpoint the run result links to. A run that reports "three
+    rules stayed silent" is a finding with no action attached; handing back
+    exactly those three, in the dialect the customer's SIEM speaks, is the
+    action. Defaulting to `silent` encodes that: fired rules need nothing, and
+    no_logs is a logging problem a query cannot fix.
+    """
+
+    permission_classes = [IsEnterpriseUser]
+
+    def get(self, request: Request, run_id) -> Response:
+        """Return the compiled bundle for this run's matching rules."""
+        run = EmulationRun.objects.filter(id=run_id).select_related("stack").first()
+        if run is None:
+            return Response(
+                {"detail": "Run not found."}, status=status.HTTP_404_NOT_FOUND
+            )
+        if run.stack.owner_id != request.user.id:
+            return Response(
+                {"detail": "Run not found."}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        target, output_format, err = _validate_target(request)
+        if err:
+            return err
+
+        raw = (request.query_params.get("verdict") or "silent").strip().lower()
+        verdicts = {v.strip() for v in raw.split(",") if v.strip()}
+        unknown = verdicts - _EXPORT_VERDICTS
+        if unknown:
+            return Response(
+                {
+                    "detail": "Unknown verdict(s): %s. Available: %s."
+                              % (", ".join(sorted(unknown)), ", ".join(sorted(_EXPORT_VERDICTS))),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        rule_ids = rules_with_verdict(run.detection_check, verdicts)
+        if not rule_ids:
+            return Response(
+                {
+                    "detail": "No rules with verdict %s in this run. The "
+                              "detection check may not have completed."
+                              % "/".join(sorted(verdicts)),
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        entry, err = _get_emulation_or_404(run.emulation_type)
+        if err:
+            return err
+
+        try:
+            bundle = export_rules(entry, rule_ids, target, output_format)
+        except BackendUnavailable:
+            return _unavailable(target)
+
+        note = "Rules this run judged %s. Deploy, then re-run to confirm." % (
+            "/".join(sorted(verdicts))
+        )
+        return _bundle_response(
+            request, bundle, note=note, stem="%s-%s" % (run.emulation_type, raw)
+        )
+
+
+# ── Coverage history & regressions ────────────────────────────────────────────
+
+class CoverageTrendView(APIView):
+    """
+    A user's detection-coverage over time.
+
+    GET /api/emulations/coverage-trend/?emulation_type=ambersquid&limit=50
+
+    Each completed run contributes one point (fired/silent/no_logs and the
+    fired share). Optional emulation_type narrows it to one campaign, which is
+    what makes "am I getting better at detecting AMBERSQUID?" answerable.
+    """
+
+    permission_classes = [IsEnterpriseUser]
+
+    def get(self, request: Request) -> Response:
+        """Return the trend points, oldest first."""
+        runs = (
+            EmulationRun.objects
+            .filter(triggered_by=request.user, status=EmulationRun.Status.COMPLETED)
+        )
+        emulation_type = request.query_params.get("emulation_type")
+        if emulation_type:
+            runs = runs.filter(emulation_type=emulation_type)
+
+        try:
+            limit = min(200, max(1, int(request.query_params.get("limit", "50"))))
+        except ValueError:
+            limit = 50
+        # Newest `limit` runs, then chart oldest-first.
+        runs = list(runs.order_by("-completed_at")[:limit])
+
+        points = coverage_history.coverage_trend(runs)
+        return Response({"points": points, "count": len(points)})
+
+
+class RunRegressionView(APIView):
+    """
+    What changed since the previous run of the same emulation.
+
+    GET /api/emulations/<run_id>/regressions/
+
+    Compares this run's verdicts to the most recent earlier completed run of the
+    same emulation for the same user. A regression is a rule that fired then and
+    is silent now - the alert a detection team acts on.
+    """
+
+    permission_classes = [IsEnterpriseUser]
+
+    def get(self, request: Request, run_id) -> Response:
+        """Return the regression report for this run."""
+        run = (
+            EmulationRun.objects.select_related("stack")
+            .filter(id=run_id).first()
+        )
+        if run is None or run.stack.owner_id != request.user.id:
+            return Response({"detail": "Run not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        previous = (
+            EmulationRun.objects
+            .filter(
+                triggered_by=request.user,
+                emulation_type=run.emulation_type,
+                status=EmulationRun.Status.COMPLETED,
+                completed_at__lt=run.completed_at,
+            )
+            .exclude(id=run.id)
+            .order_by("-completed_at")
+            .first()
+            if run.completed_at else None
+        )
+        return Response(coverage_history.compare_to_previous(run, previous))
+
+
+class RunComparisonView(APIView):
+    """
+    Two runs, side by side.
+
+    GET /api/emulations/compare/?a=<run_id>&b=<run_id>
+
+    The regression endpoint answers "what broke since last time". This answers
+    the question a team asks after acting on that: "I wrote the rule / fixed the
+    trail - did it work?" It puts every rule on one table, including the ones
+    that did not move, with both runs' own figures beside each other.
+
+    `a` is the baseline (before), `b` the run being judged (after). Both must
+    belong to the caller.
+    """
+
+    permission_classes = [IsEnterpriseUser]
+
+    def _owned_run(self, request: Request, run_id: str):
+        """Fetch a run the caller owns, or None."""
+        if not run_id:
+            return None
+        return (
+            EmulationRun.objects
+            .select_related("stack")
+            .filter(id=run_id, triggered_by=request.user)
+            .first()
+        )
+
+    def get(self, request: Request) -> Response:
+        """Return the side-by-side comparison, or 400/404 on bad input."""
+        a_id = request.query_params.get("a")
+        b_id = request.query_params.get("b")
+        if not a_id or not b_id:
+            return Response(
+                {"detail": "Pass two run ids: ?a=<run_id>&b=<run_id>."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if a_id == b_id:
+            return Response(
+                {"detail": "Pick two different runs to compare."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            earlier = self._owned_run(request, a_id)
+            later = self._owned_run(request, b_id)
+        except (ValueError, ValidationError):
+            return Response(
+                {"detail": "Run ids must be UUIDs."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        missing = [i for i, r in ((a_id, earlier), (b_id, later)) if r is None]
+        if missing:
+            return Response(
+                {"detail": f"Run not found: {', '.join(missing)}."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Order by completion so "before" and "after" mean what they say, even
+        # if the caller passed them the other way round.
+        if (
+            earlier.completed_at and later.completed_at
+            and earlier.completed_at > later.completed_at
+        ):
+            earlier, later = later, earlier
+
+        payload = coverage_history.compare_runs(earlier, later)
+        payload["emulationType"] = later.emulation_type
+        payload["sameEmulation"] = earlier.emulation_type == later.emulation_type
+        return Response(payload)
+
+
+class RunReportView(APIView):
+    """
+    The evidence packet for one run.
+
+    GET /api/emulations/<run_id>/report/
+
+    Everything the run proved, in one payload: coverage, every rule's verdict
+    with the evidence behind it, the gaps, the techniques no rule looks for,
+    what changed since the previous run, and the emulation's coverage history.
+    Assembled from data already stored - it cannot disagree with the run page.
+    """
+
+    permission_classes = [IsEnterpriseUser]
+
+    def get(self, request: Request, run_id) -> Response:
+        """Return the report, or 404 when the run is not the caller's."""
+        run = (
+            EmulationRun.objects
+            .select_related("stack", "triggered_by")
+            .filter(id=run_id, triggered_by=request.user)
+            .first()
+        )
+        if run is None:
+            return Response(
+                {"detail": "Emulation run not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        entry = get_emulation(run.emulation_type)
+
+        previous = (
+            EmulationRun.objects
+            .filter(
+                triggered_by=request.user,
+                emulation_type=run.emulation_type,
+                status=EmulationRun.Status.COMPLETED,
+                completed_at__lt=run.completed_at,
+            )
+            .exclude(id=run.id)
+            .order_by("-completed_at")
+            .first()
+            if run.completed_at else None
+        )
+
+        history = (
+            EmulationRun.objects
+            .filter(
+                triggered_by=request.user,
+                emulation_type=run.emulation_type,
+                status=EmulationRun.Status.COMPLETED,
+            )
+            .order_by("-completed_at")[:50]
+        )
+
+        report = reporting.build_report(
+            run,
+            entry,
+            previous_run=previous,
+            trend_points=coverage_history.coverage_trend(list(history)),
+        )
+        report["generatedAt"] = timezone.now().isoformat()
+        return Response(report)
+
+# ── Scheduled runs (continuous assurance) ─────────────────────────────────────
+
+class ScheduledRunListCreateView(APIView):
+    """
+    List the caller's schedules, or create one.
+
+    GET  /api/emulations/schedules/
+    POST /api/emulations/schedules/  { "emulation_type": "ambersquid",
+                                       "cadence": "weekly" }
+
+    A new schedule's first run is one cadence interval out, so creating one does
+    not immediately fire; set an explicit next_run_at to run sooner.
+    """
+
+    permission_classes = [IsEnterpriseUser]
+
+    def get(self, request: Request) -> Response:
+        """Return the caller's schedules."""
+        from .serializers import ScheduledRunSerializer
+
+        qs = ScheduledRun.objects.filter(owner=request.user).select_related("owner")
+        return Response(ScheduledRunSerializer(qs, many=True).data)
+
+    def post(self, request: Request) -> Response:
+        """Create a schedule owned by the caller."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from . import scheduling
+        from .serializers import ScheduledRunSerializer
+
+        emulation_type = (request.data.get("emulation_type") or "").strip()
+        if get_emulation(emulation_type) is None:
+            return Response(
+                {"detail": f"Unknown emulation '{emulation_type}'."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        cadence = (request.data.get("cadence") or "weekly").strip()
+        valid = {c[0] for c in ScheduledRun.Cadence.choices}
+        if cadence not in valid:
+            return Response(
+                {"detail": "cadence must be one of: %s." % ", ".join(sorted(valid))},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        now = timezone.now()
+        # One schedule per (owner, emulation) keeps the model and the Beat task
+        # simple - re-scheduling the same emulation edits the existing row.
+        schedule, created = ScheduledRun.objects.get_or_create(
+            owner=request.user,
+            emulation_type=emulation_type,
+            defaults={"cadence": cadence, "next_run_at": scheduling.next_after(cadence, now)},
+        )
+        if not created:
+            schedule.cadence = cadence
+            schedule.enabled = True
+            schedule.next_run_at = scheduling.next_after(cadence, now)
+            schedule.save(update_fields=["cadence", "enabled", "next_run_at", "updated_at"])
+
+        return Response(
+            ScheduledRunSerializer(schedule).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+class ScheduledRunDetailView(APIView):
+    """Toggle or delete a schedule (owner only)."""
+
+    permission_classes = [IsEnterpriseUser]
+
+    def _get(self, request: Request, schedule_id):
+        schedule = ScheduledRun.objects.filter(id=schedule_id, owner=request.user).first()
+        return schedule
+
+    def patch(self, request: Request, schedule_id) -> Response:
+        """Enable/disable or change the cadence of a schedule."""
+        from . import scheduling
+        from django.utils import timezone
+        from .serializers import ScheduledRunSerializer
+
+        schedule = self._get(request, schedule_id)
+        if schedule is None:
+            return Response({"detail": "Schedule not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        fields = []
+        if "enabled" in request.data:
+            schedule.enabled = bool(request.data["enabled"])
+            fields.append("enabled")
+        if "cadence" in request.data:
+            cadence = str(request.data["cadence"]).strip()
+            valid = {c[0] for c in ScheduledRun.Cadence.choices}
+            if cadence not in valid:
+                return Response(
+                    {"detail": "cadence must be one of: %s." % ", ".join(sorted(valid))},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            schedule.cadence = cadence
+            schedule.next_run_at = scheduling.next_after(cadence, timezone.now())
+            fields += ["cadence", "next_run_at"]
+        if fields:
+            schedule.save(update_fields=[*fields, "updated_at"])
+        return Response(ScheduledRunSerializer(schedule).data)
+
+    def delete(self, request: Request, schedule_id) -> Response:
+        """Delete a schedule."""
+        schedule = self._get(request, schedule_id)
+        if schedule is None:
+            return Response({"detail": "Schedule not found."}, status=status.HTTP_404_NOT_FOUND)
+        schedule.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AssuranceSummaryView(APIView):
+    """
+    Portfolio assurance summary for the dashboard's Assurance band.
+
+    GET /api/emulations/assurance/
+
+    Current coverage across the latest run of each emulation, the regressions
+    since each emulation's previous run, and the user's upcoming schedules -
+    the "is my detection posture holding?" signal, in one call.
+    """
+
+    permission_classes = [IsEnterpriseUser]
+
+    def get(self, request: Request) -> Response:
+        """Return the assurance summary for the caller."""
+        from django.utils import timezone
+
+        runs = list(
+            EmulationRun.objects
+            .filter(triggered_by=request.user, status=EmulationRun.Status.COMPLETED)
+            .order_by("-completed_at")[:200]
+        )
+        schedules = list(ScheduledRun.objects.filter(owner=request.user, enabled=True))
+        # Recent failed runs are a blind spot too - a simulation that never
+        # finished told you nothing. Bounded to the last 20 so an old failure
+        # does not nag forever.
+        recent = EmulationRun.objects.filter(triggered_by=request.user).order_by("-created_at")[:20]
+        failed = sum(1 for r in recent if r.status == EmulationRun.Status.FAILED)
+        return Response(
+            coverage_history.build_assurance(runs, schedules, timezone.now(), failed_run_count=failed)
+        )

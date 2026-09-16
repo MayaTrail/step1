@@ -105,13 +105,24 @@ export function ResultsPage() {
               <RunsCell className="font-mono text-xs whitespace-nowrap" title={run.completed_at ?? ''}>
                 {formatRelative(run.completed_at)}
               </RunsCell>
-              <RunsCell className="text-right">
+              <RunsCell className="text-right whitespace-nowrap">
+                {/* The coverage report is this run's own page: verdict, silent-rule
+                    export, regressions vs the last run, and the coverage trend.
+                    Previously only reachable from a live run, so a past run's
+                    report was effectively unnavigable. */}
+                <Link
+                  to={`/${run.platform}/emulations/${run.emulation_type}/logging/${run.id}`}
+                  title="Coverage report: what fired, what regressed, export the gaps"
+                  className="inline-flex items-center gap-1 text-accent-blue text-xs font-medium no-underline transition-opacity hover:opacity-60"
+                >
+                  Coverage report
+                </Link>
                 <Link
                   to={`/${run.platform}/emulations/${run.emulation_type}?tab=live`}
                   title="Open the Live Emulation view for this run"
-                  className="inline-flex items-center gap-1 text-accent-blue text-xs font-medium no-underline transition-opacity hover:opacity-60"
+                  className="inline-flex items-center gap-1 text-content-dim text-xs font-medium no-underline transition-opacity hover:opacity-60 ml-3"
                 >
-                  Open Live
+                  Live
                 </Link>
               </RunsCell>
             </RunsRow>

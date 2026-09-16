@@ -44,7 +44,7 @@ function slugify(text: string): string {
  * playbook actually declares (graceful degradation across thin and rich
  * playbooks).
  */
-function parsePlaybookMarkdown(content: string): Playbook {
+export function parsePlaybookMarkdown(content: string): Playbook {
   // The leading H1 (if any) is the playbook's own title.
   const titleMatch = content.match(/^#\s+(.+)$/m)
   const title = titleMatch ? titleMatch[1]?.trim() : undefined

@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { useDetectionDetail } from '@/hooks/usePlatformData'
 import type { DetectionDetail, DetectionValidation, ValidationScenario, ValidationVerdict } from '@/types'
 import { CodeBlock } from '@/components/ui/CodeBlock'
+import { DetectionExport } from './DetectionExport'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { severityTextClass } from './severity'
 import { downloadText } from '@/utils/download'
@@ -98,7 +99,7 @@ export function DetectionDetailPage() {
           onRun={runValidation}
         />
       )}
-      {tab === 'source' && <SourcePanel detail={detail} />}
+      {tab === 'source' && <SourcePanel detail={detail} emulationId={emulationId} />}
     </div>
   )
 }
@@ -285,7 +286,7 @@ function OverviewPanel({
   )
 }
 
-function SourcePanel({ detail }: { detail: DetectionDetail }) {
+function SourcePanel({ detail, emulationId }: { detail: DetectionDetail; emulationId?: string }) {
   const available = (['sigma', 'kql'] as RuleFormat[]).filter((f) => detail.formats[f])
   const [format, setFormat] = useState<RuleFormat>(available[0] ?? 'sigma')
   const code = format === 'sigma' ? detail.sigma : detail.kql
@@ -315,6 +316,20 @@ function SourcePanel({ detail }: { detail: DetectionDetail }) {
       ) : (
         <div className="text-center py-12 text-content-dim font-mono text-sm">
           No {format.toUpperCase()} rule for this detection.
+        </div>
+      )}
+
+      {/* Convert this one rule into the customer's SIEM, right where they are
+          reading its source. Only Sigma compiles, so gate on it. */}
+      {detail.formats.sigma && emulationId && (
+        <div className="mt-6 bg-surface-card border border-border rounded-card p-4">
+          <DetectionExport
+            scope="emulation"
+            emulationType={emulationId}
+            ruleIds={[detail.ruleId]}
+            heading="Convert this rule to your SIEM"
+            blurb="Compile this Sigma rule into Splunk SPL or OpenSearch/Wazuh Lucene."
+          />
         </div>
       )}
     </div>

@@ -39,6 +39,11 @@ ROOT_URLCONF = "config.ci_urls"
 # omitting it fails the system check with fields.E300. apps.guardrails has no
 # models and is listed only so its test label resolves. The remaining apps
 # (connectors, logs, ai) are not referenced by any test or by these models.
+#
+# apps.playbooks owns the Playbook model and is the one app in the suite with
+# database-backed tests, so its migrations run against the in-memory sqlite
+# above. Its view tests import DRF and skip themselves when it is absent, the
+# same way the detection-validator test skips without pySigma.
 INSTALLED_APPS = [
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -47,4 +52,6 @@ INSTALLED_APPS = [
     "apps.emulations",
     "apps.metrics",
     "apps.guardrails",
+    "apps.playbooks",
+    "apps.authored_detections",
 ]

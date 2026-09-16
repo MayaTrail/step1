@@ -130,6 +130,7 @@ export function EmulationDetailPage() {
           onOpenAttackPath={() => setActiveTab('path')}
           onOpenReferences={() => setActiveTab('explain')}
           playbookHref={`/${pid}/emulations/${em.id}/playbook`}
+          detectionsHref={`/${pid}/emulations/${em.id}/detections`}
         />
       )}
       {activeTab === 'live' && (

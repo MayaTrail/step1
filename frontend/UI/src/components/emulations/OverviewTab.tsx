@@ -4,6 +4,7 @@ import { useDetections } from '@/hooks/usePlatformData'
 import { Card } from '@/components/ui/Card'
 import { MetricCard } from '@/components/ui/MetricCard'
 import { Button } from '@/components/ui/Button'
+import { ScheduleControl } from './ScheduleControl'
 
 /**
  * Overview tab — the landing surface for an emulation's detail page.
@@ -33,6 +34,7 @@ interface OverviewTabProps {
   onOpenReferences: () => void
   /** Route to the emulation's playbook page. */
   playbookHref: string
+  detectionsHref: string
 }
 
 export function OverviewTab({
@@ -42,6 +44,7 @@ export function OverviewTab({
   onOpenAttackPath,
   onOpenReferences,
   playbookHref,
+  detectionsHref,
 }: OverviewTabProps) {
   // Detection rule count is per-emulation; cached SWR hook so it never blanks.
   const { data: detections } = useDetections(em.id)
@@ -203,12 +206,21 @@ export function OverviewTab({
             />
             <ReadinessCell value={em.techniqueCount} label="MITRE Techniques" caption={`${em.attackPath.length} tactics`} />
           </div>
-          <a
-            href={playbookHref}
-            className="inline-flex items-center gap-2 mt-4 font-mono text-[11px] text-accent-blue no-underline hover:underline"
-          >
-            View the incident-response playbook {'↗'}
-          </a>
+          <div className="flex flex-col gap-1.5 mt-4">
+            <a
+              href={detectionsHref}
+              className="inline-flex items-center gap-2 font-mono text-[11px] text-accent-blue no-underline hover:underline"
+            >
+              View &amp; export these detections to your SIEM {'↗'}
+            </a>
+            <a
+              href={playbookHref}
+              className="inline-flex items-center gap-2 font-mono text-[11px] text-accent-blue no-underline hover:underline"
+            >
+              View the incident-response playbook {'↗'}
+            </a>
+          </div>
+          <ScheduleControl emulationType={em.id} />
         </Card>
       </div>
 

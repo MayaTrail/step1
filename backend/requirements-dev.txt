@@ -12,5 +12,18 @@
 # split keeps this one minimal. The visible consequence is that
 # test_every_rule_passes_the_validator skips under requirements-test.txt alone;
 # install both files to run everything locally.
+#
+# The backends are what make the compile check meaningful: without them
+# validate_detections.py still runs its first five checks and reports the
+# conversion targets as "none installed".
+#
+# These three now also appear in requirements.txt, because conversion became a
+# product feature rather than a build-time check. They stay duplicated here so
+# the validate-detections job keeps installing in about two seconds instead of
+# pulling Django, boto3 and pulumi for a check that needs none of them. Keep the
+# pins in the two files identical: a drift would mean CI validates the corpus
+# against a different compiler than the one that serves customers.
 PyYAML==6.0.2
 pysigma==0.11.23
+pySigma-backend-splunk==1.1.3
+pySigma-backend-opensearch==1.0.4

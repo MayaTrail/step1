@@ -8,18 +8,36 @@ import type {
   PlatformId,
 } from '@/types'
 import { getEmulationRun } from '@/services/emulation.service'
+import { useUiMode } from '@/context/UiModeContext'
 import { Breadcrumb } from '@/components/ui/Breadcrumb'
+import { DetectionExport } from '@/components/detections/DetectionExport'
+import { CoverageTrend, RegressionBanner } from './CoverageHistory'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { IconSearch } from '@/components/ui/Icons'
 
 /** Verdicts in reading order: what worked, what to look at, what is not wired up. */
 const VERDICT_ORDER: DetectionVerdict[] = ['fired', 'silent', 'no_logs']
 
+/**
+ * Two label sets for the same verdict. Technical is the SIEM vocabulary a
+ * detection engineer expects; plain is what the verdict means in English, for
+ * the Simple UI mode: a detection that "fired" caught the attack, one that
+ * stayed "silent" missed it, and "no logs" means we had no data to judge it.
+ */
 const VERDICT_LABEL: Record<DetectionVerdict, string> = {
   fired: 'Fired',
   silent: 'Silent',
   no_logs: 'No logs',
 }
+
+const VERDICT_LABEL_PLAIN: Record<DetectionVerdict, string> = {
+  fired: 'Caught',
+  silent: 'Missed',
+  no_logs: 'No data',
+}
+
+const verdictLabel = (verdict: DetectionVerdict, plain: boolean): string =>
+  (plain ? VERDICT_LABEL_PLAIN : VERDICT_LABEL)[verdict]
 
 /**
  * Colour carries meaning here, not decoration. Green is a working detection,
@@ -61,6 +79,7 @@ export function DetectionCoveragePage() {
     runId: string
   }>()
   const pid = platformId as PlatformId
+  const { plain } = useUiMode()
 
   const [run, setRun] = useState<EmulationRunRecord | null>(null)
   const [loading, setLoading] = useState(true)
@@ -104,23 +123,91 @@ export function DetectionCoveragePage() {
             Detection coverage
           </div>
           <div className="text-[0.9rem] text-content-secondary mt-1.5">
-            Which of this run&apos;s detections actually fired in your logs
+            {plain
+              ? 'Which attacks in this run your defences caught, and which they missed'
+              : "Which of this run's detections actually fired in your logs"}
           </div>
         </div>
-        <Link
-          to={back}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn font-body text-[0.9rem] font-medium cursor-pointer no-underline shrink-0
-            bg-transparent border border-border text-content-primary transition-opacity hover:opacity-60"
-        >
-          &#8592; Back to run
-        </Link>
+        <div className="flex items-center gap-2 shrink-0">
+          {/* The report is this page's output, so it is reachable from here
+              rather than only from the Reports list. */}
+          {runId && (
+            <Link
+              to={`/reports/${runId}`}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn font-body text-[0.9rem] font-medium cursor-pointer no-underline
+                bg-accent-blue text-button-fg transition-opacity hover:opacity-80"
+            >
+              {plain ? 'Get the report' : 'Evidence report'}
+            </Link>
+          )}
+          <Link
+            to={back}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-btn font-body text-[0.9rem] font-medium cursor-pointer no-underline
+              bg-transparent border border-border text-content-primary transition-opacity hover:opacity-60"
+          >
+            &#8592; Back to run
+          </Link>
+        </div>
       </div>
 
       {check === null || check.status !== 'ok' ? (
         <UnavailableState check={check} />
       ) : (
-        <CoveragePanel check={check} />
+        <>
+          <CoveragePanel check={check} plain={plain} />
+          {runId && <RegressionBanner runId={runId} />}
+          {emulationId && <CoverageTrend emulationType={emulationId} />}
+          <SilentRuleExport check={check} runId={runId} plain={plain} />
+        </>
       )}
+    </div>
+  )
+}
+
+/**
+ * Turn the silent verdict into something deployable.
+ *
+ * A silent rule means the activity happened, the logs arrived, and the rule did
+ * not match. That is the finding this whole page exists to produce - and on its
+ * own it is just bad news. Compiling exactly those rules into the query
+ * language the team's SIEM speaks is the part they can act on today.
+ *
+ * Only rendered when there is something to fix. Fired rules need nothing, and
+ * no_logs is a telemetry gap that no query can close, so offering an export
+ * there would send someone down the wrong path.
+ */
+function SilentRuleExport({
+  check,
+  runId,
+  plain,
+}: {
+  check: DetectionCheck
+  runId?: string
+  plain: boolean
+}) {
+  const silent = check.counts?.silent ?? 0
+  if (!runId || silent === 0) return null
+
+  return (
+    <div className="mt-5 bg-surface-card border border-border rounded-card shadow-ring p-5">
+      <div className="mb-3">
+        <div className="text-[0.85rem] font-semibold text-content-primary">
+          Close the gap
+        </div>
+        <div className="text-[0.75rem] text-content-dim mt-0.5">
+          {plain ? (
+            <>{silent} attack{silent === 1 ? '' : 's'} slipped through undetected. Download{' '}
+            {silent === 1 ? 'the detection' : 'these detections'} for your monitoring tool, turn{' '}
+            {silent === 1 ? 'it' : 'them'} on, then run this test again to confirm{' '}
+            {silent === 1 ? "it's caught" : "they're caught"}.</>
+          ) : (
+            <>{silent} rule{silent === 1 ? '' : 's'} stayed silent. Compile{' '}
+            {silent === 1 ? 'it' : 'them'} for your SIEM, deploy, then re-run this
+            emulation to confirm {silent === 1 ? 'it fires' : 'they fire'}.</>
+          )}
+        </div>
+      </div>
+      <DetectionExport scope="run" runId={runId} verdicts={['silent']} />
     </div>
   )
 }
@@ -161,7 +248,7 @@ function UnavailableState({ check }: { check: DetectionCheck | null }) {
 }
 
 /** The fixed-height shell: pinned tally, scrolling rule list, pinned footer. */
-function CoveragePanel({ check }: { check: DetectionCheck }) {
+function CoveragePanel({ check, plain }: { check: DetectionCheck; plain: boolean }) {
   const rules = check.rules ?? []
   const counts = check.counts ?? { fired: 0, silent: 0, no_logs: 0 }
 
@@ -170,9 +257,13 @@ function CoveragePanel({ check }: { check: DetectionCheck }) {
       flex flex-col h-[calc(100vh-300px)] min-h-[520px]">
       <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-4 border-b border-border shrink-0">
         <div>
-          <div className="text-[0.85rem] font-semibold text-content-primary">Detection coverage</div>
+          <div className="text-[0.85rem] font-semibold text-content-primary">
+            {plain ? 'What we caught' : 'Detection coverage'}
+          </div>
           <div className="text-[0.75rem] text-content-dim mt-0.5">
-            {check.ruleCount ?? rules.length} rules evaluated against {check.eventCount ?? 0} events from this run
+            {plain
+              ? `We checked ${check.ruleCount ?? rules.length} detection${(check.ruleCount ?? rules.length) === 1 ? '' : 's'} against ${check.eventCount ?? 0} things this attack did`
+              : `${check.ruleCount ?? rules.length} rules evaluated against ${check.eventCount ?? 0} events from this run`}
           </div>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -182,7 +273,7 @@ function CoveragePanel({ check }: { check: DetectionCheck }) {
                 {counts[verdict] ?? 0}
               </div>
               <div className="font-mono text-[0.55rem] uppercase tracking-[1px] text-content-dim mt-1.5">
-                {VERDICT_LABEL[verdict]}
+                {verdictLabel(verdict, plain)}
               </div>
             </div>
           ))}
@@ -196,7 +287,7 @@ function CoveragePanel({ check }: { check: DetectionCheck }) {
             This emulation ships no Sigma rules to evaluate.
           </div>
         ) : (
-          rules.map((rule) => <RuleRow key={rule.ruleId} rule={rule} />)
+          rules.map((rule) => <RuleRow key={rule.ruleId} rule={rule} plain={plain} />)
         )}
       </div>
 
@@ -216,7 +307,7 @@ function CoveragePanel({ check }: { check: DetectionCheck }) {
 }
 
 /** One rule: verdict stripe, identity, why it landed there, and evidence if it fired. */
-function RuleRow({ rule }: { rule: DetectionRuleOutcome }) {
+function RuleRow({ rule, plain }: { rule: DetectionRuleOutcome; plain: boolean }) {
   const style = VERDICT_CLASS[rule.verdict]
 
   return (
@@ -230,7 +321,7 @@ function RuleRow({ rule }: { rule: DetectionRuleOutcome }) {
           {rule.title || rule.technique?.name || rule.ruleId}
         </div>
         <div className="font-mono text-[0.65rem] text-content-dim mt-1">
-          {ruleReason(rule)}
+          {ruleReason(rule, plain)}
         </div>
         {rule.evidence && (
           <div className="mt-2 px-3 py-2 rounded-btn border border-safe/25 bg-safe-dim
@@ -255,7 +346,7 @@ function RuleRow({ rule }: { rule: DetectionRuleOutcome }) {
         )}
       </div>
       <div className={`font-mono text-[0.58rem] font-bold tracking-[1px] uppercase px-2 py-1 rounded whitespace-nowrap mt-0.5 ${style.chip}`}>
-        {VERDICT_LABEL[rule.verdict]}
+        {verdictLabel(rule.verdict, plain)}
       </div>
     </div>
   )
@@ -267,15 +358,24 @@ function RuleRow({ rule }: { rule: DetectionRuleOutcome }) {
  * Says why the rule landed on its verdict rather than restating the verdict, so
  * a reader can act without opening the rule.
  */
-function ruleReason(rule: DetectionRuleOutcome): string {
+function ruleReason(rule: DetectionRuleOutcome, plain = false): string {
   const sources = rule.requiredSources.join(', ')
   if (rule.verdict === 'fired') {
-    return `${rule.matchCount} matching event${rule.matchCount === 1 ? '' : 's'}`
+    const n = rule.matchCount
+    return plain
+      ? `caught the attack (${n} matching event${n === 1 ? '' : 's'})`
+      : `${n} matching event${n === 1 ? '' : 's'}`
   }
   if (rule.verdict === 'no_logs') {
-    return `needs ${sources || 'an unlisted source'}, none reached the archive`
+    return plain
+      ? `couldn't judge it — no ${sources || 'relevant'} logs came through`
+      : `needs ${sources || 'an unlisted source'}, none reached the archive`
   }
-  return sources ? `${sources} arrived, no match` : 'no declared source, no match'
+  return plain
+    ? `missed it — the activity was logged but nothing matched`
+    : sources
+      ? `${sources} arrived, no match`
+      : 'no declared source, no match'
 }
 
 /** Render an ISO timestamp as HH:MM:SS UTC, which is all the footer needs. */

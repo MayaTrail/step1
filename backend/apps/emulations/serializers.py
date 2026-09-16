@@ -8,7 +8,7 @@ TriggerAttackSerializer  — validates the POST /api/emulations/{id}/attack/ bod
 
 from rest_framework import serializers
 
-from .models import EmulationRun
+from .models import EmulationRun, ScheduledRun
 
 
 class EmulationRunSerializer(serializers.ModelSerializer):
@@ -143,3 +143,19 @@ class DeployEmulationSerializer(serializers.Serializer):
                 "Call GET /api/emulations/ for available types."
             )
         return value
+
+
+class ScheduledRunSerializer(serializers.ModelSerializer):
+    """A recurring scheduled emulation."""
+
+    owner_username = serializers.CharField(source="owner.username", read_only=True)
+
+    class Meta:
+        model = ScheduledRun
+        fields = [
+            "id", "emulation_type", "cadence", "enabled", "next_run_at",
+            "last_run_at", "last_run", "owner_username", "created_at", "updated_at",
+        ]
+        read_only_fields = [
+            "id", "last_run_at", "last_run", "owner_username", "created_at", "updated_at",
+        ]

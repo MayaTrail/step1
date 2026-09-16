@@ -1076,3 +1076,82 @@ def auto_destroy_expired_stacks() -> dict:
 
     logger.info("auto_destroy_expired_stacks: queued enterprise=%d", enterprise_queued)
     return {"enterprise_queued": enterprise_queued}
+
+
+@shared_task(name="emulations.run_scheduled_emulations", queue="enterprise")
+def run_scheduled_emulations() -> dict:
+    """
+    Celery Beat task: launch every scheduled emulation that is due.
+
+    Mirrors EmulationDeployView's deploy path for each due ScheduledRun -
+    creates a Stack and enqueues deploy_emulation_stack against the owner's
+    role - then advances the schedule to its next cadence step.
+
+    Respects the one-active-stack-per-emulation rule: if the owner already has a
+    live stack for that emulation (a previous scheduled or manual run still up),
+    the schedule is advanced but not fired, so schedules never pile stacks on
+    top of each other. The full run then proceeds exactly like a manual one; the
+    detection check and regression comparison happen downstream with no extra
+    wiring.
+    """
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from . import scheduling
+    from .registry import get_emulation
+
+    EmulationRun = apps.get_model("emulations", "EmulationRun")  # noqa: F841
+    ScheduledRun = apps.get_model("emulations", "ScheduledRun")
+    Stack = apps.get_model("infrastructure", "Stack")
+
+    now = timezone.now()
+    active_statuses = [
+        Stack.Status.DEPLOYING,
+        Stack.Status.READY_FOR_ATTACK,
+        Stack.Status.ATTACKING,
+        Stack.Status.ATTACK_COMPLETE,
+        Stack.Status.READY,
+    ]
+
+    launched = 0
+    skipped_active = 0
+
+    due = ScheduledRun.objects.filter(enabled=True, next_run_at__lte=now).select_related("owner")
+    for schedule in due:
+        has_active = Stack.objects.filter(
+            owner=schedule.owner,
+            emulation_type=schedule.emulation_type,
+            status__in=active_statuses,
+        ).exists()
+
+        if has_active:
+            skipped_active += 1
+        else:
+            entry = get_emulation(schedule.emulation_type)
+            manifest = entry.get("manifest", entry) if entry else {}
+            ttl_hours = manifest.get("default_ttl_hours", 4)
+            stack = Stack.objects.create(
+                name="%s-scheduled-%s" % (schedule.emulation_type, now.strftime("%Y%m%d%H%M")),
+                owner=schedule.owner,
+                status=Stack.Status.DEPLOYING,
+                emulation_type=schedule.emulation_type,
+                expires_at=now + timedelta(hours=ttl_hours),
+            )
+            task = deploy_emulation_stack.apply_async(args=[str(stack.id)], queue="enterprise")
+            stack.task_id = task.id
+            stack.save(update_fields=["task_id", "updated_at"])
+            schedule.last_run_at = now
+            launched += 1
+            logger.info(
+                "Scheduled emulation launched: schedule=%s type=%s stack=%s",
+                schedule.id, schedule.emulation_type, stack.id,
+            )
+
+        schedule.next_run_at = scheduling.advance(schedule.next_run_at, schedule.cadence, now)
+        schedule.save(update_fields=["next_run_at", "last_run_at", "updated_at"])
+
+    logger.info(
+        "run_scheduled_emulations: launched=%d skipped_active=%d", launched, skipped_active
+    )
+    return {"launched": launched, "skipped_active": skipped_active}

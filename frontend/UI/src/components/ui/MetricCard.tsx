@@ -22,6 +22,13 @@ interface MetricCardProps {
     /** Icon rendered in the accent chip; falls back to a colored dot. */
     icon?: ReactNode
     onClick?: () => void
+    /**
+     * Verb for the drill-down cue, e.g. "View stacks". The cue renders only
+     * when this is supplied alongside `onClick`, so Simple mode can give every
+     * clickable tile a consistent affordance while Classic - which passes no
+     * label - stays visually identical for rollback.
+     */
+    actionLabel?: string
 }
 
 const chipClass: Record<MetricAccent, string> = {
@@ -40,6 +47,7 @@ export function MetricCard({
     caption,
     icon,
     onClick,
+    actionLabel,
 }: MetricCardProps) {
     return (
         <Card accent={accent === 'neutral' ? null : accent} interactive={!!onClick} onClick={onClick} className="p-5 flex flex-col gap-1.5">
@@ -55,6 +63,12 @@ export function MetricCard({
             </span>
             <span className="font-mono text-2xs uppercase tracking-label text-content-muted">{label}</span>
             {caption && <span className="text-xs text-content-dim mt-0.5">{caption}</span>}
+            {onClick && actionLabel && (
+                <span className="mt-2 inline-flex items-center gap-1 font-mono text-2xs uppercase tracking-label text-accent-blue">
+                    {actionLabel}
+                    <span aria-hidden="true">&rarr;</span>
+                </span>
+            )}
         </Card>
     )
 }

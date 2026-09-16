@@ -1,2 +1,7 @@
 export * from './platform'
 export * from './auth'
+export * from './playbook'
+export * from './detectionExport'
+export * from './authoredDetection'
+export * from './coverageHistory'
+export * from './report'

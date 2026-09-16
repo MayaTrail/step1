@@ -81,7 +81,7 @@ export interface Emulation {
 
 /* ── AI assistant connector (mirrors backend apps.ai) ── */
 
-export type LLMProvider = 'openai' | 'anthropic' | 'bedrock'
+export type LLMProvider = 'openai' | 'gemini' | 'anthropic' | 'bedrock'
 
 /** Masked connector shape returned by GET /api/ai/connector/. Never carries the key. */
 export interface LLMConnector {
