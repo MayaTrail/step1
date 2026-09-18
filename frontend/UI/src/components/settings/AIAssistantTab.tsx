@@ -12,7 +12,7 @@ import { SectionHeader } from './SectionHeader'
 /**
  * AI Assistant settings tab — the bring-your-own-key LLM connector.
  *
- * Key-based providers (OpenAI, Anthropic) store a write-only key, encrypted
+ * Key-based providers (OpenAI, Gemini, Anthropic) store a write-only key, encrypted
  * server-side; the server never returns it, so the input is only for entering a
  * new or replacement key, and an existing key shows as a masked hint. Amazon
  * Bedrock needs a region and takes either: a Bedrock API key stored the same
@@ -22,6 +22,7 @@ import { SectionHeader } from './SectionHeader'
 
 const PROVIDERS: { id: LLMProvider; label: string }[] = [
     { id: 'openai', label: 'OpenAI' },
+    { id: 'gemini', label: 'Google Gemini' },
     { id: 'anthropic', label: 'Anthropic' },
     { id: 'bedrock', label: 'Amazon Bedrock' },
 ]

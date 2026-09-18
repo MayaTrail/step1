@@ -282,7 +282,7 @@ export function Combobox({
       <span
         aria-hidden="true"
         className={`absolute right-3 top-1/2 -translate-y-1/2 text-content-dim
-          transition-transform ${open ? 'rotate-180' : ''}`}
+          transition-transform ${open ? 'rotate-90' : ''}`}
       >
         <IconChevron size={13} />
       </span>

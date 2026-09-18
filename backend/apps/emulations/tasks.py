@@ -49,6 +49,8 @@ from apps.emulations.detection_check import build_report
 from apps.emulations.detections import list_detection_summaries
 from apps.emulations.registry import get_emulation
 from apps.emulations.readiness import requires_http_probe, resolve_readiness
+from apps.logs.models import LogEntry
+from apps.logs.record import record_activity
 
 # Reuse the infrastructure app's persistence helpers so emulation stacks get the
 # same logs / failure reason / resource inventory as generic stacks, without
@@ -592,6 +594,13 @@ def poll_ec2_readiness(self, stack_id: str) -> None:
             readiness["ip_output"], stack_id,
         )
         stack.transition_to(Stack.Status.FAILED)
+        record_activity(
+            LogEntry.Event.STACK_FAILED,
+            f"{stack.name} failed: the instance never reported an address.",
+            actor=stack.owner,
+            stack=stack,
+            level=LogEntry.Level.ERROR,
+        )
         return
 
     try:
@@ -600,6 +609,12 @@ def poll_ec2_readiness(self, stack_id: str) -> None:
         )
         if resp.status_code == 200:
             stack.transition_to(Stack.Status.READY_FOR_ATTACK)
+            record_activity(
+                LogEntry.Event.STACK_DEPLOYED,
+                f"{stack.name} is deployed and ready for attack.",
+                actor=stack.owner,
+                stack=stack,
+            )
             logger.info("EC2 ready for attack: stack=%s ip=%s", stack_id, ip)
             return
     except http_requests.RequestException:
@@ -613,6 +628,13 @@ def poll_ec2_readiness(self, stack_id: str) -> None:
             stack_id,
         )
         stack.transition_to(Stack.Status.FAILED)
+        record_activity(
+            LogEntry.Event.STACK_FAILED,
+            f"{stack.name} failed: the instance did not become reachable within 15 minutes.",
+            actor=stack.owner,
+            stack=stack,
+            level=LogEntry.Level.ERROR,
+        )
 
 
 _PHASE_MARKER = re.compile(r"\bPHASE\s+(\d+)", re.IGNORECASE)
@@ -722,6 +744,10 @@ def run_emulation_attack(self, run_id: str) -> dict:
     # Placeholder so the finally block is safe if setup fails before the real
     # writer (bound to phase_total) is created inside the try below.
     stdout_writer = _ProgressWriter(run, 0)
+    # Set in both branches below and read in `finally`. Initialised here so a
+    # failure inside the except block cannot turn into a NameError that hides
+    # the exception it was handling.
+    outcome: tuple[str, str, str] | None = None
 
     try:
         # Ensure the emulations package is importable.
@@ -763,11 +789,21 @@ def run_emulation_attack(self, run_id: str) -> dict:
         stack.transition_to(Stack.Status.ATTACK_COMPLETE, save=False)
         # A completed run has walked every phase; mark the kill chain full.
         run.phase_current = phase_total
+        outcome = (
+            LogEntry.Event.EMULATION_COMPLETED,
+            f"{run.emulation_type} finished its attack on {stack.name}.",
+            LogEntry.Level.INFO,
+        )
 
     except Exception as exc:
         stderr_buf.write(f"\nTask exception: {exc}\n")
         run.status = EmulationRun.Status.FAILED
         stack.transition_to(Stack.Status.FAILED, save=False)
+        outcome = (
+            LogEntry.Event.EMULATION_FAILED,
+            f"{run.emulation_type} stopped at phase {run.phase_current} on {stack.name}: {exc}",
+            LogEntry.Level.ERROR,
+        )
         logger.error("run_emulation_attack failed for run=%s: %s", run_id, exc)
 
     finally:
@@ -778,6 +814,11 @@ def run_emulation_attack(self, run_id: str) -> dict:
             "status", "stdout", "stderr", "completed_at", "phase_total", "phase_current",
         ])
         stack.save(update_fields=["status", "status_history", "updated_at"])
+        if outcome:
+            record_activity(
+                outcome[0], outcome[1], actor=run.triggered_by or stack.owner,
+                stack=stack, level=outcome[2],
+            )
 
     # Queued for a failed attack as well as a completed one. A failed attack is
     # not an empty window: several attack modules raise rather than catch an

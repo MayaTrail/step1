@@ -14,7 +14,7 @@ import type { Stack, StackPhase, StackStatus } from '@/types'
  */
 
 /** Reader-facing name per status. Longer labels would wrap the track. */
-const PHASE_LABEL: Partial<Record<StackStatus, string>> = {
+export const PHASE_LABEL: Partial<Record<StackStatus, string>> = {
   pending: 'Created',
   deploying: 'Deploying',
   ec2_booting: 'Booting',

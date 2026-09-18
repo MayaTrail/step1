@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { Navigate, Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import { ThemeProvider } from './context/ThemeContext'
@@ -22,12 +23,38 @@ import { EmulationsHub } from './components/emulations/EmulationsHub'
 import { DetectionsHub } from './components/detections/DetectionsHub'
 import { PlaybooksHub } from './components/playbooks/PlaybooksHub'
 import { LibraryPlaybookPage } from './components/playbooks/LibraryPlaybookPage'
+// Lazy-loaded: the block editor pulls TipTap and ProseMirror with it, and is
+// only ever reached from the playbooks hub.
+const PlaybookEditorPage = lazy(() =>
+  import('./components/playbooks/PlaybookEditorPage').then((m) => ({
+    default: m.PlaybookEditorPage,
+  })),
+)
+const UserPlaybookViewPage = lazy(() =>
+  import('./components/playbooks/UserPlaybookViewPage').then((m) => ({
+    default: m.UserPlaybookViewPage,
+  })),
+)
+const DetectionStudioPage = lazy(() =>
+  import('./components/detections/DetectionStudioPage').then((m) => ({
+    default: m.DetectionStudioPage,
+  })),
+)
 import { GuardrailsHub } from './components/guardrails/GuardrailsHub'
 import { ComingSoon } from './components/common/ComingSoon'
 import { ActiveRunsPage } from './components/operations/ActiveRunsPage'
 import { ResultsPage } from './components/operations/ResultsPage'
 import { PlatformOverviewPage } from './components/platforms/PlatformOverviewPage'
 import { IconBarChart, IconBook } from './components/ui/Icons'
+
+/** Fallback shown while the editor chunk loads. */
+function EditorFallback() {
+  return (
+    <div className="py-16 text-center font-mono text-sm text-content-dim">
+      Loading editor…
+    </div>
+  )
+}
 
 export default function App() {
   return (
@@ -55,8 +82,51 @@ export default function App() {
                 {/* Security Content hubs (cross-platform) */}
                 <Route path="emulations" element={<EmulationsHub />} />
                 <Route path="detections" element={<DetectionsHub />} />
+                <Route
+                  path="detections/studio/new"
+                  element={
+                    <Suspense fallback={<EditorFallback />}>
+                      <DetectionStudioPage />
+                    </Suspense>
+                  }
+                />
+                <Route
+                  path="detections/studio/:detectionId"
+                  element={
+                    <Suspense fallback={<EditorFallback />}>
+                      <DetectionStudioPage />
+                    </Suspense>
+                  }
+                />
                 <Route path="playbooks" element={<PlaybooksHub />} />
+                {/* The shipped library. Declared before the :playbookId route
+                    below, which addresses a user's own authored playbook, or
+                    the param route would swallow "library". */}
                 <Route path="playbooks/library/:playbookId" element={<LibraryPlaybookPage />} />
+                <Route
+                  path="playbooks/new"
+                  element={
+                    <Suspense fallback={<EditorFallback />}>
+                      <PlaybookEditorPage />
+                    </Suspense>
+                  }
+                />
+                <Route
+                  path="playbooks/:playbookId"
+                  element={
+                    <Suspense fallback={<EditorFallback />}>
+                      <UserPlaybookViewPage />
+                    </Suspense>
+                  }
+                />
+                <Route
+                  path="playbooks/:playbookId/edit"
+                  element={
+                    <Suspense fallback={<EditorFallback />}>
+                      <PlaybookEditorPage />
+                    </Suspense>
+                  }
+                />
                 <Route path="guardrails" element={<GuardrailsHub />} />
 
                 {/* Administration */}

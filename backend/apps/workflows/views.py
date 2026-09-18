@@ -34,8 +34,17 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.emulations.registry import get_emulation
+from apps.emulations.sigma_convert import BackendUnavailable
+from apps.emulations.views import (
+    _bundle_response,
+    _get_emulation_or_404,
+    _unavailable,
+    _validate_target,
+)
+from apps.emulations.detection_export import export_rules
 
 from .crypto import EncryptionNotConfigured, decrypt, encrypt
+from .export import silent_rule_ids
 from .ingest import (
     SIGNATURE_HEADER,
     TIMESTAMP_HEADER,
@@ -566,3 +575,73 @@ class WorkflowRunDetailView(APIView):
             stack_name or "none",
         )
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class WorkflowDetectionExportView(APIView):
+    """
+    Compile the detections this workflow found silent.
+
+    GET /api/workflows/runs/<workflow_id>/export/?target=splunk&output_format=default
+
+    Where the loop closes. The run reports that two expected detections never
+    reached the client's SIEM; this hands back those two, compiled into the
+    dialect their SIEM speaks, so the finding arrives with the fix attached.
+
+    Only silent rules are offered, and that is not a default but the whole
+    contract: a rule that fired needs nothing, and `not_integrated` means no
+    alert route existed, so the rule was never exercised and shipping a query
+    for it would assert a gap nobody measured.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request, workflow_id) -> Response:
+        """
+        Return the compiled bundle for this workflow's silent rules.
+
+        Args:
+            request: DRF request carrying `target` and `output_format`.
+            workflow_id: UUID of the workflow.
+
+        Returns:
+            200 with the bundle, 404 when the run is not the caller's or
+            nothing was silent, 400 for an unusable target.
+        """
+        workflow = WorkflowRun.objects.filter(id=workflow_id, owner=request.user).first()
+        if workflow is None:
+            return Response({"detail": "Run not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        rule_ids = silent_rule_ids(workflow.score)
+        if not rule_ids:
+            return Response(
+                {
+                    "detail": (
+                        "Nothing to export. Either this run has not settled, every "
+                        "expected detection fired, or no alert endpoint was integrated "
+                        "so no rule was actually exercised."
+                    ),
+                    "reason": "no_silent_rules",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        target, output_format, err = _validate_target(request)
+        if err:
+            return err
+
+        entry, entry_err = _get_emulation_or_404(workflow.emulation_type)
+        if entry_err:
+            return entry_err
+
+        try:
+            bundle = export_rules(entry, rule_ids, target, output_format)
+        except BackendUnavailable:
+            return _unavailable(target)
+
+        note = (
+            "Detections your SIEM did not report during this run. "
+            "Deploy them, then run the workflow again to confirm."
+        )
+        return _bundle_response(
+            request, bundle, note=note, stem=f"{workflow.emulation_type}-silent"
+        )

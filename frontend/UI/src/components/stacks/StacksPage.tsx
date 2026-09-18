@@ -15,15 +15,15 @@
  * from the UI.
  *
  * This page is the orchestrator: it owns all stack state and operations and
- * delegates presentation to StackCard, StackFilters, and DeploymentLogsModal.
+ * delegates presentation to StackRow, StackDrawer, and StackFilters.
  */
 
 import { useSearchParams } from 'react-router-dom'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import type { Stack, StackStatus } from '@/types'
-import { StackCard, type StackDetailView } from './StackCard'
+import { StackRow } from './StackRow'
+import { StackDrawer } from './StackDrawer'
 import { StackFilters, filterStacks, EMPTY_FILTERS, type StackFilterState } from './StackFilters'
-import { DeploymentLogsModal } from './DeploymentLogsModal'
 import {
     listStacks,
     getStack,
@@ -60,9 +60,10 @@ export function StacksPage() {
     const [filters, setFilters] = useState<StackFilterState>(EMPTY_FILTERS)
 
     // Expanded detail row + active tab
-    const [expandedId, setExpandedId] = useState<string | null>(null)
-    const [detailView, setDetailView] = useState<StackDetailView>('details')
-    useEffect(() => { setDetailView('details') }, [expandedId])
+    // The id of the stack whose panel is open, held here rather than in the
+    // router so closing it returns the reader to the same scroll position and
+    // the same filters.
+    const [openId, setOpenId] = useState<string | null>(null)
 
     /*
      * Deep link support: /stacks?stack=<id> opens that stack's detail.
@@ -75,11 +76,8 @@ export function StacksPage() {
     const requestedStack = searchParams.get('stack')
     useEffect(() => {
         if (!requestedStack || loading) return
-        setExpandedId((current) => current ?? requestedStack)
+        setOpenId((current) => current ?? requestedStack)
     }, [requestedStack, loading])
-
-    // Logs modal
-    const [logsStack, setLogsStack] = useState<Stack | null>(null)
 
     // Action feedback / busy tracking
     const [actionMsg, setActionMsg] = useState<Record<string, string>>({})
@@ -105,6 +103,13 @@ export function StacksPage() {
     useEffect(() => () => { abortRefs.current.forEach((c) => c.abort()) }, [])
 
     const filtered = useMemo(() => filterStacks(stacks, filters), [stacks, filters])
+
+    // Resolved from the live list, so a poll or an action refreshes the open
+    // panel rather than leaving it showing the record as it was when opened.
+    const openStack = useMemo(
+        () => stacks.find((stack) => stack.id === openId) ?? null,
+        [stacks, openId],
+    )
 
     // ── Live refresh while any stack is mid-operation ──
     // Depends on the boolean (not the array) so the interval is set up once when
@@ -223,20 +228,16 @@ export function StacksPage() {
         }
     }, [])
 
-    // ── Toggle expand (fetches fresh detail when opening) ──
-    const handleToggleExpand = useCallback(async (stackId: string) => {
-        if (expandedId === stackId) {
-            setExpandedId(null)
-            return
-        }
-        setExpandedId(stackId)
+    // ── Open the panel, fetching fresh detail for it ──
+    const handleOpen = useCallback(async (stackId: string) => {
+        setOpenId(stackId)
         try {
             const fresh = await getStack(stackId)
             setStacks((prev) => prev.map((s) => s.id === fresh.id ? fresh : s))
         } catch {
-            // Keep the existing record if the refresh fails — non-fatal.
+            // Keep the existing record if the refresh fails, it is non-fatal.
         }
-    }, [expandedId])
+    }, [])
 
     // An unconnected user has no stacks and cannot create one, so the grid would
     // render as an unexplained empty state. Say why instead.
@@ -325,39 +326,49 @@ export function StacksPage() {
                             body="No stacks match the current filters. Try clearing or adjusting them."
                         />
                     ) : (
-                        <div className="flex flex-col gap-3">
-                            {filtered.map((stack) => {
-                                const isBusy = BUSY_STATUSES.has(stack.status) || polling.has(stack.id)
-                                return (
-                                    <StackCard
-                                        key={stack.id}
-                                        stack={stack}
-                                        isBusy={isBusy}
-                                        isExpanded={expandedId === stack.id}
-                                        onToggleExpand={() => handleToggleExpand(stack.id)}
-                                        detailView={detailView}
-                                        onDetailViewChange={setDetailView}
-                                        actionMsg={actionMsg[stack.id]}
-                                        onAction={(action) => handleAction(stack.id, action)}
-                                        onOpenLogs={() => setLogsStack(stack)}
-                                        onForceDestroy={() => handleForceDestroy(stack)}
-                                    />
-                                )
-                            })}
+                        <div className="bg-surface-card border border-border rounded-card
+                            shadow-ring overflow-hidden px-5 py-1">
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left border-collapse min-w-[820px]">
+                                    <thead>
+                                        <tr className="font-mono text-2xs uppercase tracking-caps text-content-dim">
+                                            <th className="font-normal pt-3 pb-2 pr-3">Stack</th>
+                                            <th className="font-normal pt-3 pb-2 pr-3">Health</th>
+                                            <th className="font-normal pt-3 pb-2 pr-3">Phase</th>
+                                            <th className="font-normal pt-3 pb-2 pr-3">Region</th>
+                                            <th className="font-normal pt-3 pb-2 pr-3">Owner</th>
+                                            <th className="font-normal pt-3 pb-2 pr-3 text-right">Expires</th>
+                                            <th className="font-normal pt-3 pb-2 text-right">Updated</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {filtered.map((stack) => (
+                                            <StackRow
+                                                key={stack.id}
+                                                stack={stack}
+                                                isBusy={BUSY_STATUSES.has(stack.status) || polling.has(stack.id)}
+                                                onOpen={() => handleOpen(stack.id)}
+                                            />
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     )}
                 </>
             )}
 
-            {/* Deployment logs modal */}
-            {logsStack && (
-                <DeploymentLogsModal
-                    stackId={logsStack.id}
-                    stackName={logsStack.name}
-                    status={logsStack.status}
-                    initialLogs={logsStack.last_logs}
-                    error={logsStack.last_error}
-                    onClose={() => setLogsStack(null)}
+            {/* Detail panel. Resolved from the live list rather than held in
+                state, so a poll or an action updates what is on screen instead
+                of leaving the panel showing a stale record. */}
+            {openStack && (
+                <StackDrawer
+                    stack={openStack}
+                    isBusy={BUSY_STATUSES.has(openStack.status) || polling.has(openStack.id)}
+                    actionMsg={actionMsg[openStack.id]}
+                    onAction={(action) => handleAction(openStack.id, action)}
+                    onForceDestroy={() => handleForceDestroy(openStack)}
+                    onClose={() => setOpenId(null)}
                 />
             )}
         </div>

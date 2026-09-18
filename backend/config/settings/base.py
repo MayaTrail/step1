@@ -57,6 +57,8 @@ LOCAL_APPS = [
     "apps.ai",
     "apps.threatintel",
     "apps.workflows",
+    "apps.playbooks",
+    "apps.authored_detections",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS

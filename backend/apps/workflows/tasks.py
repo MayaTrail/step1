@@ -28,6 +28,8 @@ from django.conf import settings
 from django.utils import timezone
 
 from apps.emulations.registry import get_emulation
+from apps.logs.models import LogEntry
+from apps.logs.record import record_activity
 from apps.emulations.tasks import deploy_emulation_stack, run_emulation_attack
 
 from . import correlate, scoring
@@ -78,6 +80,15 @@ def _fail(workflow: WorkflowRun, detail: str, step: str) -> None:
     workflow.failed_step = step
     workflow.completed_at = timezone.now()
     workflow.save(update_fields=["status", "detail", "failed_step", "completed_at"])
+
+    record_activity(
+        LogEntry.Event.WORKFLOW_FAILED,
+        f"{workflow.emulation_type} validation failed at the {step} step. {detail}",
+        actor=workflow.owner,
+        stack=workflow.stack,
+        level=LogEntry.Level.ERROR,
+    )
+
     logger.warning("Workflow %s failed at %s: %s", workflow.id, step, detail)
 
 
@@ -195,6 +206,13 @@ def _start_deploy(workflow: WorkflowRun) -> None:
     stack.task_id = task.id
     stack.transition_to(Stack.Status.DEPLOYING, save=False)
     stack.save(update_fields=["task_id", "status", "status_history", "updated_at"])
+
+    record_activity(
+        LogEntry.Event.WORKFLOW_STARTED,
+        f"{workflow.emulation_type} validation started. Deploying {stack.name}.",
+        actor=workflow.owner,
+        stack=stack,
+    )
 
     logger.info(
         "Workflow %s: deploying stack %s (%s) task=%s",
@@ -324,6 +342,13 @@ def settle(workflow: WorkflowRun) -> dict[str, Any]:
     workflow.status = WorkflowRun.Status.COMPLETED
     workflow.completed_at = timezone.now()
     workflow.save(update_fields=["report", "score", "status", "completed_at"])
+
+    record_activity(
+        LogEntry.Event.WORKFLOW_COMPLETED,
+        f"{workflow.emulation_type} validation finished. {scoring.headline(score)}",
+        actor=workflow.owner,
+        stack=workflow.stack,
+    )
 
     logger.info(
         "Workflow %s settled: %s (%d alert(s) attributed)",

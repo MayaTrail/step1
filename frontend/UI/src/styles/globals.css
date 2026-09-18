@@ -274,3 +274,168 @@ input:-webkit-autofill:active {
     0 0 0 1000px #1b1c1e inset,
     rgba(255, 99, 99, 0.18) 0px 0px 0px 3px !important;
 }
+
+/* ==========================================================================
+   Playbook editor content (.prose-playbook)
+
+   The reader styles Markdown element by element in React (components/common/
+   Markdown.tsx). The editor cannot: TipTap emits real DOM, and Tailwind's
+   preflight strips headings and lists back to plain text. These rules restore
+   the same design tokens the reader uses, so what an author sees while editing
+   matches what the reader renders.
+   ========================================================================== */
+
+.prose-playbook {
+  color: var(--content-secondary);
+}
+
+.prose-playbook > * + * {
+  margin-top: 0.75rem;
+}
+
+.prose-playbook h1,
+.prose-playbook h2,
+.prose-playbook h3,
+.prose-playbook h4 {
+  color: var(--content-primary);
+  font-weight: 600;
+  line-height: 1.3;
+  margin-top: 1rem;
+}
+
+.prose-playbook h1 { font-size: 1.15rem; }
+.prose-playbook h2 { font-size: 1rem; }
+.prose-playbook h3 { font-size: 0.9rem; }
+.prose-playbook h4 { font-size: 0.85rem; }
+
+.prose-playbook ul,
+.prose-playbook ol {
+  padding-left: 1.25rem;
+}
+.prose-playbook ul { list-style: disc; }
+.prose-playbook ol { list-style: decimal; }
+.prose-playbook li { margin-top: 0.25rem; }
+.prose-playbook li > p { margin: 0; }
+
+.prose-playbook strong { color: var(--content-primary); font-weight: 600; }
+.prose-playbook em { font-style: italic; }
+
+.prose-playbook a {
+  color: var(--accent-blue, #55b3ff);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.prose-playbook code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--surface-deep);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+.prose-playbook pre {
+  background: var(--surface-deep);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 0.75rem 0.875rem;
+  overflow-x: auto;
+}
+.prose-playbook pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 0.8rem;
+}
+
+.prose-playbook blockquote {
+  border-left: 2px solid var(--border-default);
+  padding-left: 0.75rem;
+  color: var(--content-dim);
+  font-style: italic;
+}
+
+.prose-playbook table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.prose-playbook th,
+.prose-playbook td {
+  border: 1px solid var(--border-subtle);
+  padding: 0.35rem 0.6rem;
+  text-align: left;
+}
+.prose-playbook th {
+  background: var(--surface-deep);
+  color: var(--content-primary);
+  font-weight: 600;
+}
+
+/* Placeholder for an empty editor: ProseMirror leaves one empty paragraph
+   behind, so target that rather than the whole editor being empty. */
+.prose-playbook p.is-editor-empty:first-child::before,
+.prose-playbook[data-placeholder]:empty::before {
+  content: attr(data-placeholder);
+  color: var(--content-muted);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+/* ── Print: the evidence report leaves the app and becomes a document ──────
+   A report is meant to be handed to someone — an auditor, a manager, a ticket.
+   On paper the app shell is noise, so the chrome goes and the sheet prints on
+   white with ink-coloured type. Only the report surfaces opt in; every other
+   page keeps the browser default. */
+@media print {
+  .report-sheet {
+    color: #111827;
+    max-width: none;
+  }
+
+  /* Drop the app chrome: nav, rails, and anything marked as on-screen only. */
+  aside,
+  header,
+  nav,
+  .no-print {
+    display: none !important;
+  }
+
+  .report-sheet main,
+  main {
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+
+  /* Flatten surfaces to paper, and keep every rule visible in print. */
+  .report-sheet * {
+    background: transparent !important;
+    box-shadow: none !important;
+    color: #111827 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .report-sheet [class*='border'] {
+    border-color: #9ca3af !important;
+  }
+
+  /* Keep a table's rows and a finding together across a page break. */
+  .report-sheet tr,
+  .report-sheet h1,
+  .report-sheet h2 {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .report-sheet h2 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  a[href]::after {
+    content: '';
+  }
+}

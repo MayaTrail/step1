@@ -177,11 +177,23 @@ export const IconExternalLink = (p: IconProps) => (
     </Icon>
 )
 
-export const IconBell = (p: IconProps) => (
-    <Icon {...p}>
-        <path d="M18 8a6 6 0 1 0-12 0c0 6-2 7-2 7h16s-2-1-2-7" />
-        <path d="M13.7 20a2 2 0 0 1-3.4 0" />
-    </Icon>
+/*
+ * Solid rather than outlined, unlike the rest of the set. At 17px in the top
+ * bar an outlined bell reads as a smudge, and this one carries an unread count
+ * beside it that needs a confident shape to sit against.
+ */
+export const IconBell = ({ size = 18, ...rest }: IconProps) => (
+    <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="currentColor"
+        stroke="none"
+        {...rest}
+    >
+        <path d="M12 2.6a5.9 5.9 0 0 0-5.9 5.9v3.3c0 .9-.35 1.76-.98 2.4l-.72.73a1.2 1.2 0 0 0 .85 2.05h13.5a1.2 1.2 0 0 0 .85-2.05l-.72-.73a3.4 3.4 0 0 1-.98-2.4V8.5A5.9 5.9 0 0 0 12 2.6Z" />
+        <path d="M9.7 19.1a2.45 2.45 0 0 0 4.6 0Z" />
+    </svg>
 )
 
 export const IconCheck = (p: IconProps) => (

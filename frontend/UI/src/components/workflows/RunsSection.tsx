@@ -189,7 +189,7 @@ function RunRow({ run, onOpen }: { run: WorkflowRun; onOpen: () => void }) {
           </span>
           <span className="text-accent-blue opacity-0 -translate-x-1 transition-all
             group-hover:opacity-100 group-hover:translate-x-0">
-            <IconChevron size={12} className="-rotate-90" />
+            <IconChevron size={12} />
           </span>
         </span>
       </td>

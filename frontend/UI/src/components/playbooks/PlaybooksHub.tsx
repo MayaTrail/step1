@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useEmulations, useLibraryPlaybooks } from '@/hooks/usePlatformData'
 import { LibraryCard } from '@/components/common/LibraryCard'
 import { LibraryToolbar } from '@/components/common/LibraryToolbar'
@@ -6,7 +7,8 @@ import { SearchInput } from '@/components/ui/SearchInput'
 import { useLibraryFilter, emulationTactics } from '@/components/common/useLibraryFilter'
 import { LibraryEmpty } from '@/components/emulations/EmulationsHub'
 import { IconClipboard, IconSearch } from '@/components/ui/Icons'
-import type { Severity } from '@/types'
+import { listPlaybooks } from '@/services/playbook.service'
+import type { Severity, UserPlaybookListItem } from '@/types'
 
 /**
  * The two kinds of IR playbook MayaTrail carries.
@@ -43,6 +45,56 @@ function shortTitle(title: string): string {
  * library" lists the standalone playbooks under playbooks/, which are
  * documentation for SOC teams and carry no runnable attack.
  */
+/** A user-authored playbook, as a card. */
+/**
+ * One authored playbook, as a compact card.
+ *
+ * Deliberately small. These sit above a catalogue of 165 shipped playbooks, and
+ * a handful of your own documents is something you return to rather than search,
+ * so the shelf should cost one row of the page rather than a screen of it.
+ */
+function MyPlaybookCard({ pb }: { pb: UserPlaybookListItem }) {
+  return (
+    <Link
+      to={`/playbooks/${pb.id}`}
+      className="block border border-border rounded-card bg-surface-card px-3.5 py-3
+        no-underline transition-opacity hover:opacity-75"
+    >
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <span className="font-mono text-2xs uppercase tracking-caps text-content-muted truncate">
+          {pb.is_fork ? `Fork · ${pb.source_emulation}` : 'Authored'}
+        </span>
+        {pb.is_example && (
+          <span
+            title="A starter example. Edit it or delete it, nothing depends on it."
+            className="font-mono text-2xs uppercase tracking-caps px-1.5 rounded border
+              border-border text-content-muted shrink-0"
+          >
+            example
+          </span>
+        )}
+        <span
+          className={`font-mono text-2xs uppercase tracking-caps px-1.5 rounded border shrink-0
+            ${pb.status === 'published'
+              ? 'text-accent-blue border-accent-blue/30 bg-accent-blue/[0.08]'
+              : 'text-content-dim border-border'}`}
+        >
+          {pb.status}
+        </span>
+      </div>
+
+      <div className="text-[0.85rem] font-semibold text-content-primary leading-snug mb-1.5">
+        {pb.title}
+      </div>
+
+      <div className="font-mono text-2xs text-content-muted truncate">
+        edited {new Date(pb.updated_at).toLocaleDateString()}
+        {pb.visibility === 'organization' ? ' · shared' : ''}
+      </div>
+    </Link>
+  )
+}
+
 export function PlaybooksHub() {
   const [tab, setTab] = useState<Tab>('emulation')
 
@@ -65,6 +117,43 @@ export function PlaybooksHub() {
   const emulationCount = emulations?.length ?? 0
   const libraryCount = library?.length ?? 0
 
+  // The user's own playbooks. Loaded separately from the two shipped
+  // shelves above: those are catalogue content, these are the user's work,
+  // and a failure to load one must not blank the other.
+  const [mine, setMine] = useState<UserPlaybookListItem[]>([])
+  /*
+   * Three states, not two. "Not loaded", "empty" and "refused" look identical
+   * if a failed request is caught into an empty array, and the page then tells
+   * a reader they have written nothing when it simply could not ask.
+   */
+  const [mineError, setMineError] = useState<'denied' | 'failed' | null>(null)
+  const [mineLoading, setMineLoading] = useState(true)
+  /*
+   * The guide is a full-screen slide-over, so it only ever opens on request.
+   * It was previously the empty state for the shelf below and defaulted to
+   * open, which put a black backdrop over the whole hub, shipped library
+   * included, for every user who had not yet written a playbook.
+   */
+  useEffect(() => {
+    let live = true
+    listPlaybooks()
+      .then((rows) => {
+        if (!live) return
+        setMine(rows)
+        setMineError(null)
+        setMineLoading(false)
+      })
+      .catch((err) => {
+        if (!live) return
+        setMine([])
+        setMineError(err?.response?.status === 403 ? 'denied' : 'failed')
+        setMineLoading(false)
+      })
+    return () => {
+      live = false
+    }
+  }, [])
+
   return (
     <div>
       <div className="mb-6">
@@ -77,6 +166,85 @@ export function PlaybooksHub() {
         <div className="text-[0.9rem] text-content-secondary mt-1.5">
           Incident-response and remediation guidance
         </div>
+      </div>
+
+      {/* The user's own playbooks, above the shipped catalogue rather than
+          below it. The library runs to 119 cards, so a shelf underneath it
+          was invisible without scrolling past the entire reference set. A
+          handful of your own documents is what you return to; the catalogue
+          is what you search. */}
+      <div className="mb-8 pb-8 border-b border-border-subtle">
+        <div className="flex items-center justify-between gap-4 mb-4">
+          <h2 className="font-display text-lg font-semibold text-content-primary">
+            Your playbooks
+          </h2>
+          <Link
+            to="/playbooks/new"
+            className="font-mono text-2xs uppercase tracking-label px-3 py-1.5 rounded-btn border border-border-active text-content-primary hover:border-accent-blue transition-colors no-underline"
+          >
+            New playbook
+          </Link>
+        </div>
+        {mineLoading ? (
+          /* Skeletons rather than a claim. The empty and refused states are
+             both assertions about the reader, and neither is knowable until
+             the request answers. */
+          <div className="grid gap-2.5 grid-cols-[repeat(auto-fill,minmax(268px,1fr))]">
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                aria-hidden="true"
+                className="border border-border rounded-card bg-surface-card px-3.5 py-3 animate-pulse"
+              >
+                <div className="h-2 w-2/5 rounded bg-surface-elevated mb-2.5" />
+                <div className="h-3 w-4/5 rounded bg-surface-elevated mb-2.5" />
+                <div className="h-2 w-3/5 rounded bg-surface-elevated" />
+              </div>
+            ))}
+          </div>
+        ) : mineError ? (
+          <div className="border border-border-subtle rounded-card bg-surface-card px-5 py-6 text-center">
+            <p className="text-sm text-content-secondary">
+              {mineError === 'denied'
+                ? 'Connect an AWS account to write playbooks.'
+                : 'Could not load your playbooks.'}
+            </p>
+            <p className="text-xs text-content-dim mt-1.5 leading-relaxed max-w-[52ch] mx-auto">
+              {mineError === 'denied'
+                ? 'Authoring is currently limited to connected accounts. The reference library below stays fully readable.'
+                : 'The request failed. Refresh to try again.'}
+            </p>
+          </div>
+        ) : mine.length === 0 ? (
+          /* An inline prompt, not a modal. Nothing here blocks the shipped
+             library above it. */
+          <div className="border border-border-subtle rounded-card bg-surface-card px-5 py-6 text-center">
+            <p className="text-sm text-content-secondary">
+              You have not written a playbook yet.
+            </p>
+            <p className="text-xs text-content-dim mt-1.5 leading-relaxed max-w-[52ch] mx-auto">
+              Start from scratch, or fork one that ships with an emulation and edit it to match
+              how your team actually responds.
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
+              <Link
+                to="/playbooks/new"
+                className="font-mono text-2xs uppercase tracking-label px-3 py-1.5 rounded-btn
+                  border border-border-active text-content-primary no-underline
+                  transition-opacity hover:opacity-60"
+              >
+                New playbook
+              </Link>
+            </div>
+          </div>
+        ) : (
+          <div className="grid gap-2.5 grid-cols-[repeat(auto-fill,minmax(268px,1fr))]">
+            {mine.map((pb) => (
+              <MyPlaybookCard key={pb.id} pb={pb} />
+            ))}
+          </div>
+        )}
+
       </div>
 
       <div className="flex gap-2 mb-5" role="tablist" aria-label="Playbook source">
@@ -179,6 +347,7 @@ export function PlaybooksHub() {
           )}
         </>
       )}
+
     </div>
   )
 }

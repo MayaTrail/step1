@@ -63,6 +63,7 @@ export async function testLLMConnector(
 
 /** Suggested models per provider (mirrors backend providers.MODELS; custom ids allowed). */
 export const SUGGESTED_MODELS: Record<LLMProvider, string[]> = {
+  gemini: ['gemini-flash-latest', 'gemini-pro-latest', 'gemini-flash-lite-latest'],
   openai: ['gpt-4o', 'gpt-4o-mini', 'o4-mini'],
   anthropic: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   bedrock: [

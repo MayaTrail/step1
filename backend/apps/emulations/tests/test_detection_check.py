@@ -14,6 +14,7 @@ notifier writes is the contract this module reads.
 
 import json
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 
 from django.test import SimpleTestCase
@@ -34,7 +35,22 @@ from apps.emulations.detection_check import (
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 # backend/apps/emulations/tests/ -> repo root is parents[4].
-_EMULATIONS_DIR = Path(__file__).resolve().parents[4] / "emulations"
+def _resolve_emulations_dir() -> Path:
+    """
+    Prefer EMULATIONS_BASE_DIR (what Docker sets); fall back to the repo dir.
+
+    The container mounts the packages at /opt/emulations while the code lives at
+    /app, so a path derived only from __file__ finds nothing there and every
+    test that reads a shipped rule fails on a missing fixture rather than on
+    anything it was written to check.
+    """
+    env_dir = os.environ.get("EMULATIONS_BASE_DIR", "")
+    if env_dir and Path(env_dir).is_dir():
+        return Path(env_dir)
+    return Path(__file__).resolve().parents[4] / "emulations"
+
+
+_EMULATIONS_DIR = _resolve_emulations_dir()
 _SCARLETEEL = _EMULATIONS_DIR / "scarleteel" / "detections"
 
 

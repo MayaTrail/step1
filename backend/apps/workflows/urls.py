@@ -22,6 +22,7 @@ from .views import (
     AlertEndpointView,
     AlertWebhookView,
     WorkflowRunDetailView,
+    WorkflowDetectionExportView,
     WorkflowRunListView,
 )
 
@@ -40,4 +41,9 @@ urlpatterns = [
     ),
     path("runs/", WorkflowRunListView.as_view(), name="workflow-runs"),
     path("runs/<uuid:workflow_id>/", WorkflowRunDetailView.as_view(), name="workflow-run-detail"),
+    path(
+        "runs/<uuid:workflow_id>/export/",
+        WorkflowDetectionExportView.as_view(),
+        name="workflow-detection-export",
+    ),
 ]

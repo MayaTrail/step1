@@ -178,7 +178,7 @@ function EndpointRow({ endpoint, onOpen }: { endpoint: AlertEndpoint; onOpen: ()
         )}
       </td>
       <td className="py-3 text-content-muted transition-colors group-hover:text-content-primary">
-        <span className="block -rotate-90" aria-hidden="true">
+        <span className="block" aria-hidden="true">
           <IconChevron size={13} />
         </span>
       </td>
