@@ -69,6 +69,12 @@ export interface ThreatFeed {
   relatedCount: number
   /** Per-kind sizes, counted before the kind filter so every tab has a number. */
   kindCounts: Partial<Record<FeedKind, number>>
+  /**
+   * Items the last ingest brought in that were not already in the window.
+   * Distinct from how many it downloaded: a run commonly fetches hundreds and
+   * finds none of them new, which is what the sidebar count has to report.
+   */
+  newSinceLastRun: number
   /** Date of the last ingest, or null if it has never run. */
   fetchedOn: string | null
   fetchedAt: string | null

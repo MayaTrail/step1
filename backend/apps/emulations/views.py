@@ -33,7 +33,13 @@ from apps.infrastructure.permissions import HasAWSConnection
 from apps.logs.models import LogEntry
 
 from . import command_runner
+from .detection_export import (
+    bundle_to_text,
+    export_rules,
+    target_catalogue,
+)
 from .detections import build_detection_detail, list_detection_summaries
+from .sigma_convert import TARGETS, BackendUnavailable
 from .models import EmulationRun
 from .registry import get_emulation, list_emulations
 from .serializers import (
@@ -949,3 +955,142 @@ class PlaybookLibraryDetectionsView(APIView):
             ),
             "rules": files,
         })
+
+
+# Detection export helpers, shared by the target, emulation and run views.
+_EXPORT_VERDICTS = {"fired", "silent", "no_logs"}
+
+
+def _validate_target(request: Request) -> tuple[str, str, Response | None]:
+    """
+    Pull `target` and `output_format` off the query string and check them.
+
+    The parameter is `output_format`, not `format`, because DRF reserves
+    `format` for content negotiation (URL_FORMAT_OVERRIDE): a request carrying
+    ?format=savedsearches is answered with 404 by the renderer lookup before
+    the view is ever entered.
+
+    Returns:
+        (target, output_format, None) when usable, or ("", "", Response) with
+        the error to return.
+    """
+    target = (request.query_params.get("target") or "").strip().lower()
+    if target not in TARGETS:
+        return "", "", Response(
+            {
+                "detail": "Unknown target '%s'. Available: %s."
+                          % (target or "", ", ".join(sorted(TARGETS))),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    spec = TARGETS[target]
+    output_format = (request.query_params.get("output_format") or "default").strip()
+    if output_format not in spec.output_formats:
+        return "", "", Response(
+            {
+                "detail": "Unknown output_format '%s' for %s. Available: %s."
+                          % (output_format, spec.label, ", ".join(spec.output_formats)),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return target, output_format, None
+
+
+def _unavailable(target: str) -> Response:
+    """The backend for this target is not installed in this deployment."""
+    spec = TARGETS[target]
+    return Response(
+        {
+            "detail": "%s conversion is unavailable on this server: %s is not "
+                      "installed." % (spec.label, spec.install),
+        },
+        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
+def _bundle_response(request: Request, bundle, note: str = "", stem: str = "detections"):
+    """
+    Return a bundle as JSON, or as a file when ?download=1.
+
+    The UI wants JSON so it can render what converted and what did not; the
+    download button wants a file. Same data either way.
+    """
+    if request.query_params.get("download") in ("1", "true", "yes"):
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "", "%s-%s" % (stem, bundle.target)) or "detections"
+        response = HttpResponse(
+            bundle_to_text(bundle, note), content_type="text/plain; charset=utf-8"
+        )
+        response["Content-Disposition"] = 'attachment; filename="%s.txt"' % safe
+        return response
+
+    payload = bundle.as_dict()
+    if note:
+        payload["note"] = note
+    return Response(payload)
+
+
+class DetectionTargetsView(APIView):
+    """
+    List the SIEM dialects this deployment can compile to.
+
+    GET /api/emulations/detection-targets/
+
+    Reports every target with an `installed` flag rather than hiding the ones
+    whose backend is missing, so an operator can tell "we do not support that"
+    apart from "this server is missing a package".
+    """
+
+    permission_classes = [HasAWSConnection]
+
+    def get(self, request: Request) -> Response:
+        """Return the conversion target catalogue."""
+        return Response({"targets": target_catalogue()})
+
+
+class EmulationDetectionExportView(APIView):
+    """
+    Compile an emulation's Sigma rules for one SIEM.
+
+    GET /api/emulations/<emulation_type>/detections/export/?target=splunk
+        &output_format=default which of the target's output formats
+        &rule_ids=t1098,t1496  optional subset; default is every rule
+        &download=1            return a file instead of JSON
+    """
+
+    permission_classes = [HasAWSConnection]
+
+    def get(self, request: Request, emulation_type: str) -> Response:
+        """Return the compiled bundle for this emulation."""
+        entry, err = _get_emulation_or_404(emulation_type)
+        if err:
+            return err
+
+        target, output_format, err = _validate_target(request)
+        if err:
+            return err
+
+        requested = (request.query_params.get("rule_ids") or "").strip()
+        if requested:
+            rule_ids = [r.strip() for r in requested.split(",") if r.strip()]
+        else:
+            rule_ids = [
+                summary["ruleId"]
+                for summary in list_detection_summaries(entry)
+                if summary.get("formats", {}).get("sigma")
+            ]
+
+        if not rule_ids:
+            return Response(
+                {"detail": f"'{emulation_type}' ships no Sigma rules to export."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            bundle = export_rules(entry, rule_ids, target, output_format)
+        except BackendUnavailable:
+            return _unavailable(target)
+
+        return _bundle_response(request, bundle, stem=emulation_type)
+
+

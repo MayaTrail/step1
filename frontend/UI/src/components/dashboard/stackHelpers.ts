@@ -163,14 +163,6 @@ export function formatAge(createdAt: string): string {
     return shortDuration(Date.now() - new Date(createdAt).getTime())
 }
 
-/** Time until a stack's TTL expires, e.g. "48m"; "expired"/"—" at the edges. */
-export function formatExpiry(expiresAt?: string | null): string {
-    if (!expiresAt) return '—'
-    const ms = new Date(expiresAt).getTime() - Date.now()
-    if (ms <= 0) return 'expired'
-    return shortDuration(ms)
-}
-
 /** Title-case an emulation_type slug for display ("s3_kms" -> "S3 Kms"). */
 export function emulationLabel(slug?: string): string {
     if (!slug) return 'Unknown'

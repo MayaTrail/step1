@@ -8,6 +8,7 @@
 
 /** Lifecycle of a workflow, in the order a run passes through it. */
 export type WorkflowStatus =
+  | 'scheduled'
   | 'pending'
   | 'deploying'
   | 'attacking'
@@ -87,9 +88,17 @@ export interface WorkflowRun {
   /** One-sentence result, empty while the run is still open. */
   summary: string
   alertDeadline: string | null
+  /** When the run is due to start, or null when it was started immediately. */
+  scheduledFor: string | null
   createdAt: string
   startedAt: string | null
   completedAt: string | null
+  /**
+   * When the owner archived this run, or null. Archiving hides a run from the
+   * run list and from coverage history; it is reversible and the report is
+   * kept, and nothing purges archived runs on a schedule.
+   */
+  archivedAt: string | null
 }
 
 /** A workflow with its per-rule verdicts. */

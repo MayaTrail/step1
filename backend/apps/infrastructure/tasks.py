@@ -33,6 +33,9 @@ import boto3
 from botocore.exceptions import ClientError
 from celery import shared_task
 from django.apps import apps
+
+from apps.logs.models import LogEntry
+from apps.logs.record import record_activity
 from pulumi import automation as auto
 
 logger = logging.getLogger(__name__)
@@ -494,6 +497,13 @@ def _persist_failure(stack_id: str, entries: list[dict], exc: Exception) -> None
         record.last_logs = _trim_logs(entries)
         record.last_error = _extract_error(exc)
         record.save(update_fields=["status", "status_history", "last_logs", "last_error", "updated_at"])
+        record_activity(
+            LogEntry.Event.STACK_FAILED,
+            f"{record.name} failed: {record.last_error or 'see the deployment log'}",
+            actor=record.owner,
+            stack=record,
+            level=LogEntry.Level.ERROR,
+        )
     except Exception:
         pass
 
@@ -547,6 +557,12 @@ def deploy_stack(self, stack_id: str) -> dict:
             "status", "status_history", "outputs", "resource_summary",
             "last_logs", "last_error", "updated_at",
         ])
+        record_activity(
+            LogEntry.Event.STACK_DEPLOYED,
+            f"{record.name} finished deploying.",
+            actor=record.owner,
+            stack=record,
+        )
 
         logger.info("Deploy complete: stack=%s outputs_keys=%s", record.name, list(outputs))
         return {"stack_id": stack_id, "status": record.status}
@@ -630,7 +646,16 @@ def destroy_stack(self, stack_id: str) -> dict:
         logger.info("Starting destroy: stack=%s region=%s emulation=%s", record.name, record.region, record.emulation_type)
         destroy_with_lock_recovery(pulumi_stack, on_output, record.name)
 
-        # Success removes the DB record entirely — no logs to retain.
+        record_activity(
+            LogEntry.Event.STACK_DESTROYED,
+            f"{record.name} and its AWS resources were destroyed.",
+            actor=record.owner,
+            stack=record,
+        )
+
+        # Success removes the DB record entirely — no logs to retain. The entry
+        # above survives it: LogEntry.stack is SET_NULL, and the entry stays
+        # visible to its owner through `actor`.
         record.delete()
         logger.info("Destroy complete: stack_id=%s — DB record deleted", stack_id)
         return {"stack_id": stack_id, "status": "destroyed"}

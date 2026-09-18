@@ -19,6 +19,11 @@ export type LogEvent =
   | 'emulation.started'
   | 'emulation.completed'
   | 'emulation.failed'
+  | 'stack.failed'
+  | 'workflow.started'
+  | 'workflow.completed'
+  | 'workflow.failed'
+  | 'playbook.command'
   | (string & {})
 
 export interface LogEntry {

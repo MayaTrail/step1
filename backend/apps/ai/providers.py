@@ -25,6 +25,11 @@ from botocore.eventstream import EventStreamBuffer, ParserError
 from botocore.exceptions import BotoCoreError, ClientError
 
 OPENAI_BASE = "https://api.openai.com/v1"
+# Gemini exposes an OpenAI-compatible surface: same Bearer auth, same
+# /models and /chat/completions shapes, same SSE deltas. That is why the
+# provider below is a thin subclass of _KeyProvider rather than a new
+# transport. Docs: ai.google.dev/gemini-api/docs/openai
+GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
 ANTHROPIC_BASE = "https://api.anthropic.com/v1"
 ANTHROPIC_VERSION = "2023-06-01"
 
@@ -210,6 +215,41 @@ class OpenAIProvider(_KeyProvider):
 
     def _chat_request(self, model, system, messages, max_tokens):
         return f"{OPENAI_BASE}/chat/completions", {
+            "model": model,
+            "max_tokens": max_tokens,
+            "stream": True,
+            "messages": [{"role": "system", "content": system}, *messages],
+        }
+
+    def _extract(self, event: dict) -> str | None:
+        return (event.get("choices") or [{}])[0].get("delta", {}).get("content")
+
+
+class GeminiProvider(_KeyProvider):
+    """
+    Google Gemini through its OpenAI-compatible endpoint.
+
+    Identical to OpenAIProvider bar the base URL: the compat layer speaks the
+    same Bearer auth, the same /chat/completions request, and the same
+    choices[].delta.content SSE events, so the base transport carries it
+    unchanged. The free tier serves the flash models, which is what makes this
+    the zero-cost way to exercise the AI features.
+    """
+
+    name = "gemini"
+    # Rolling aliases, not pinned versions: Gemini retires dated ids fairly
+    # fast (2.5-flash became unavailable to new keys), and an alias always
+    # resolves to the current model, so the dropdown does not rot.
+    models = ["gemini-flash-latest", "gemini-pro-latest", "gemini-flash-lite-latest"]
+
+    def _headers(self, api_key: str) -> dict:
+        return {"Authorization": f"Bearer {api_key}"}
+
+    def _test_url(self) -> str:
+        return f"{GEMINI_BASE}/models"
+
+    def _chat_request(self, model, system, messages, max_tokens):
+        return f"{GEMINI_BASE}/chat/completions", {
             "model": model,
             "max_tokens": max_tokens,
             "stream": True,
@@ -442,7 +482,7 @@ class BedrockProvider(BaseProvider):
 # ── registry ──
 
 PROVIDERS: dict[str, BaseProvider] = {
-    p.name: p for p in (OpenAIProvider(), AnthropicProvider(), BedrockProvider())
+    p.name: p for p in (OpenAIProvider(), GeminiProvider(), AnthropicProvider(), BedrockProvider())
 }
 
 # Suggested models per provider (the Settings UI mirrors this; the `model` field

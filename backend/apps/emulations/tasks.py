@@ -44,11 +44,11 @@ from django.conf import settings
 from django.utils import timezone
 from pulumi import automation as auto
 
-from apps.emulations import detection_logs
-from apps.emulations.detection_check import build_report
 from apps.emulations.detections import list_detection_summaries
 from apps.emulations.registry import get_emulation
 from apps.emulations.readiness import requires_http_probe, resolve_readiness
+from apps.logs.models import LogEntry
+from apps.logs.record import record_activity
 
 # Reuse the infrastructure app's persistence helpers so emulation stacks get the
 # same logs / failure reason / resource inventory as generic stacks, without
@@ -63,11 +63,6 @@ from apps.infrastructure.tasks import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Coverage checks before accepting an empty result. At the default 15s spacing
-# this covers ~45s, comfortably past the worst delivery lag observed (34s),
-# while a run whose logs arrive quickly reports back in about 15.
-DETECTION_CHECK_MAX_ATTEMPTS = 3
 
 # Pulumi state bucket. Each tenant's state lives in that tenant's own AWS
 # account, so the bucket name is resolved per-tenant from the account id (see
@@ -592,6 +587,13 @@ def poll_ec2_readiness(self, stack_id: str) -> None:
             readiness["ip_output"], stack_id,
         )
         stack.transition_to(Stack.Status.FAILED)
+        record_activity(
+            LogEntry.Event.STACK_FAILED,
+            f"{stack.name} failed: the instance never reported an address.",
+            actor=stack.owner,
+            stack=stack,
+            level=LogEntry.Level.ERROR,
+        )
         return
 
     try:
@@ -600,6 +602,12 @@ def poll_ec2_readiness(self, stack_id: str) -> None:
         )
         if resp.status_code == 200:
             stack.transition_to(Stack.Status.READY_FOR_ATTACK)
+            record_activity(
+                LogEntry.Event.STACK_DEPLOYED,
+                f"{stack.name} is deployed and ready for attack.",
+                actor=stack.owner,
+                stack=stack,
+            )
             logger.info("EC2 ready for attack: stack=%s ip=%s", stack_id, ip)
             return
     except http_requests.RequestException:
@@ -613,6 +621,13 @@ def poll_ec2_readiness(self, stack_id: str) -> None:
             stack_id,
         )
         stack.transition_to(Stack.Status.FAILED)
+        record_activity(
+            LogEntry.Event.STACK_FAILED,
+            f"{stack.name} failed: the instance did not become reachable within 15 minutes.",
+            actor=stack.owner,
+            stack=stack,
+            level=LogEntry.Level.ERROR,
+        )
 
 
 _PHASE_MARKER = re.compile(r"\bPHASE\s+(\d+)", re.IGNORECASE)
@@ -722,6 +737,10 @@ def run_emulation_attack(self, run_id: str) -> dict:
     # Placeholder so the finally block is safe if setup fails before the real
     # writer (bound to phase_total) is created inside the try below.
     stdout_writer = _ProgressWriter(run, 0)
+    # Set in both branches below and read in `finally`. Initialised here so a
+    # failure inside the except block cannot turn into a NameError that hides
+    # the exception it was handling.
+    outcome: tuple[str, str, str] | None = None
 
     try:
         # Ensure the emulations package is importable.
@@ -763,11 +782,21 @@ def run_emulation_attack(self, run_id: str) -> dict:
         stack.transition_to(Stack.Status.ATTACK_COMPLETE, save=False)
         # A completed run has walked every phase; mark the kill chain full.
         run.phase_current = phase_total
+        outcome = (
+            LogEntry.Event.EMULATION_COMPLETED,
+            f"{run.emulation_type} finished its attack on {stack.name}.",
+            LogEntry.Level.INFO,
+        )
 
     except Exception as exc:
         stderr_buf.write(f"\nTask exception: {exc}\n")
         run.status = EmulationRun.Status.FAILED
         stack.transition_to(Stack.Status.FAILED, save=False)
+        outcome = (
+            LogEntry.Event.EMULATION_FAILED,
+            f"{run.emulation_type} stopped at phase {run.phase_current} on {stack.name}: {exc}",
+            LogEntry.Level.ERROR,
+        )
         logger.error("run_emulation_attack failed for run=%s: %s", run_id, exc)
 
     finally:
@@ -778,18 +807,11 @@ def run_emulation_attack(self, run_id: str) -> dict:
             "status", "stdout", "stderr", "completed_at", "phase_total", "phase_current",
         ])
         stack.save(update_fields=["status", "status_history", "updated_at"])
-
-    # Queued for a failed attack as well as a completed one. A failed attack is
-    # not an empty window: several attack modules raise rather than catch an
-    # AccessDenied, so an account whose guardrails actually blocked the attack
-    # lands here, and skipping the check hid exactly the accounts whose controls
-    # were working. Delayed rather than chained immediately because the events
-    # this run produced take a few seconds to reach the archive.
-    if run.status in (EmulationRun.Status.COMPLETED, EmulationRun.Status.FAILED):
-        check_detection_coverage.apply_async(
-            args=[run_id],
-            countdown=getattr(settings, "DETECTION_CHECK_DELAY_SECONDS", 60),
-        )
+        if outcome:
+            record_activity(
+                outcome[0], outcome[1], actor=run.triggered_by or stack.owner,
+                stack=stack, level=outcome[2],
+            )
 
     return {
         "run_id": run_id,
@@ -797,92 +819,6 @@ def run_emulation_attack(self, run_id: str) -> dict:
         "stdout": run.stdout,
         "stderr": run.stderr,
     }
-
-
-@shared_task(name="emulations.check_detection_coverage", queue="enterprise")
-def check_detection_coverage(run_id: str, attempt: int = 1) -> dict:
-    """
-    Replay an emulation's detection rules over the archived logs for its window.
-
-    Answers "did my detections catch that" by evaluating each Sigma rule the
-    emulation ships against the events the notifier archived while the attack
-    was running, and separating a rule that stayed quiet from one whose log
-    source never arrived.
-
-    Runs on the enterprise queue, the only queue a worker consumes. Never raises:
-    a logging or archive problem must not turn a completed emulation into a
-    failed one, so every outcome is written to the run as a status the coverage
-    page can render.
-
-    Args:
-        run_id: String UUID of the EmulationRun to check.
-
-    Returns:
-        Dict with the run id and the resulting report status.
-    """
-    EmulationRun = apps.get_model("emulations", "EmulationRun")
-
-    run = EmulationRun.objects.filter(id=run_id).first()
-    if run is None:
-        logger.error("check_detection_coverage: no run %s", run_id)
-        return {"run_id": run_id, "status": "missing_run"}
-
-    if not detection_logs.is_configured():
-        logger.info("check_detection_coverage skipped for run=%s: no archive configured", run_id)
-        run.detection_check = {"status": "not_configured"}
-        run.save(update_fields=["detection_check"])
-        return {"run_id": run_id, "status": "not_configured"}
-
-    entry = get_emulation(run.emulation_type)
-    if entry is None:
-        run.detection_check = {"status": "unknown_emulation"}
-        run.save(update_fields=["detection_check"])
-        return {"run_id": run_id, "status": "unknown_emulation"}
-
-    start = run.started_at or run.created_at
-    end = run.completed_at or timezone.now()
-
-    try:
-        records = detection_logs.read_records(start, end)
-        report = build_report(
-            list_detection_summaries(entry),
-            records,
-            {"start": start.isoformat(), "end": end.isoformat()},
-        )
-    except Exception as exc:  # noqa: BLE001 - report the failure, never fail the run
-        logger.exception("check_detection_coverage failed for run=%s", run_id)
-        run.detection_check = {"status": "error", "detail": f"{type(exc).__name__}: {exc}"}
-        run.save(update_fields=["detection_check"])
-        return {"run_id": run_id, "status": "error"}
-
-    # Finding nothing usually means the logs have not landed yet, not that the
-    # attack went unrecorded: delivery lag is a few seconds typically but has
-    # been seen at 34. Rather than wait out the worst case on every run, check
-    # early and retry, leaving detection_check null so the page keeps showing
-    # "tracking" instead of a zero that would later turn out to be wrong.
-    if report["eventCount"] == 0 and attempt < DETECTION_CHECK_MAX_ATTEMPTS:
-        logger.info(
-            "check_detection_coverage run=%s: no events yet on attempt %d, retrying",
-            run_id, attempt,
-        )
-        check_detection_coverage.apply_async(
-            args=[run_id, attempt + 1],
-            countdown=getattr(settings, "DETECTION_CHECK_DELAY_SECONDS", 15),
-        )
-        return {"run_id": run_id, "status": "retrying", "attempt": attempt}
-
-    run.detection_check = report
-    run.save(update_fields=["detection_check"])
-
-    logger.info(
-        "check_detection_coverage run=%s: %d fired, %d silent, %d without logs, over %d event(s)",
-        run_id,
-        report["counts"]["fired"],
-        report["counts"]["silent"],
-        report["counts"]["no_logs"],
-        report["eventCount"],
-    )
-    return {"run_id": run_id, "status": "ok", **report["counts"]}
 
 
 @shared_task(bind=True, name="emulations.destroy_emulation_stack", queue="enterprise")

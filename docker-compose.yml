@@ -78,8 +78,14 @@ services:
       timeout: 5s
       retries: 15
       start_period: 30s
+    # Migrations are committed, never generated at boot. Generating them here
+    # regenerated 0001_initial on every start, and because the database already
+    # recorded that name as applied, `migrate` became a no-op: a new model or
+    # field would be written into a migration Django believed was already run,
+    # and its table or column would never be created. Nothing failed, the
+    # schema simply never moved.
     command: >
-      sh -c "python manage.py makemigrations users infrastructure emulations logs && python manage.py migrate --noinput &&
+      sh -c "python manage.py migrate --noinput &&
              gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120"
 
   # Enterprise worker — handles emulation deploy/attack/destroy tasks.

@@ -11,6 +11,7 @@ import {
   formatCoverage,
   stepStates,
 } from './workflowMeta'
+import { CloseTheGap } from './CloseTheGap'
 
 /**
  * The body of a workflow: where it is, and what it found.
@@ -32,6 +33,15 @@ export function WorkflowDetailBody({ run }: { run: WorkflowRunDetail }) {
       <PipelineRail run={run} />
 
       {run.score ? <Result run={run} /> : <Pending run={run} />}
+
+      {/* The finding arrives with the fix attached. Rendered only when a rule
+          actually stayed silent: a run where everything fired has nothing to
+          close, and a run with no endpoint measured nothing to close. */}
+      {run.score && (
+        <div className="mt-6 pt-5 border-t border-border">
+          <CloseTheGap workflowId={run.id} silentCount={run.score.counts.silent ?? 0} />
+        </div>
+      )}
     </div>
   )
 }

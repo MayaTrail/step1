@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import mayatrailLogo from '@/assets/mayatrail-logo.svg'
-import { ThreatFeedBell } from './ThreatFeedBell'
+import { NotificationBell } from './NotificationBell'
 
 interface TopNavProps {
   onOpenSearch: () => void
@@ -105,7 +105,7 @@ export function TopNav({ onOpenSearch, onToggleSidebar }: TopNavProps) {
       <div className="flex items-center gap-2.5 flex-1 justify-end">
 
         {/* Threat Feed notifications */}
-        <ThreatFeedBell />
+        <NotificationBell />
 
         {/* Account dropdown */}
         <div className="relative" ref={dropdownRef}>

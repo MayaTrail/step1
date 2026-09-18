@@ -155,6 +155,7 @@ class WorkflowRun(models.Model):
     class Status(models.TextChoices):
         """Lifecycle of a workflow, in the order a run passes through it."""
 
+        SCHEDULED = "scheduled", "Scheduled"
         PENDING = "pending", "Pending"
         DEPLOYING = "deploying", "Deploying infrastructure"
         ATTACKING = "attacking", "Running emulation"
@@ -206,6 +207,14 @@ class WorkflowRun(models.Model):
             "attack step, which had never run."
         ),
     )
+    scheduled_for = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=(
+            "When the run should start. Null means immediately. A scheduled run "
+            "holds at SCHEDULED until the beat tick that finds this time passed."
+        ),
+    )
     window_start = models.DateTimeField(
         null=True,
         blank=True,
@@ -237,6 +246,20 @@ class WorkflowRun(models.Model):
             "Detection coverage and integration health. Separate figures on "
             "purpose: a rule nothing exercised is a connection problem, not a "
             "detection failure, and blending them hides the actionable one."
+        ),
+    )
+    archived_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=(
+            "When the owner archived this run. Archiving hides a run from the "
+            "run list and from coverage history without destroying it, and is "
+            "reversible. Deletion is not offered for a completed run: its "
+            "report and attributed alerts are the evidence behind past "
+            "verdicts, and removing them would raise every reliability figure "
+            "that counted them, so a rule could appear to improve because its "
+            "failures were deleted."
         ),
     )
     created_at = models.DateTimeField(auto_now_add=True)

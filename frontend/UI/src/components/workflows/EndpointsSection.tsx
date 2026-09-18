@@ -3,8 +3,10 @@ import type { AlertEndpoint, AlertEndpointCreated } from '@/types/workflow'
 import { createAlertEndpoint } from '@/services/workflow.service'
 import { Card } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
-import { IconCheck, IconCopy } from '@/components/ui/Icons'
+import { IconChevron } from '@/components/ui/Icons'
 import { formatWhen } from '@/components/threatfeed/feedMeta'
+import { CopyValue, endpointUrl } from './endpointMeta'
+import { EndpointDrawer } from './EndpointDrawer'
 
 /**
  * Where a client wires their SIEM into MayaTrail, on its own tab.
@@ -29,6 +31,7 @@ export function EndpointsSection({ endpoints, loading, onCreated }: EndpointsSec
   const [creating, setCreating] = useState(false)
   const [created, setCreated] = useState<AlertEndpointCreated | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [openId, setOpenId] = useState<string | null>(null)
 
   async function submit() {
     if (!name.trim() || creating) return
@@ -49,6 +52,9 @@ export function EndpointsSection({ endpoints, loading, onCreated }: EndpointsSec
   }
 
   const list = endpoints ?? []
+  // Resolved from the live list rather than held in state, so a rotate or a
+  // refetch updates the open panel instead of leaving it showing stale facts.
+  const open = list.find((endpoint) => endpoint.id === openId) ?? null
 
   return (
     <div className="flex flex-col gap-4">
@@ -80,8 +86,8 @@ export function EndpointsSection({ endpoints, loading, onCreated }: EndpointsSec
           </button>
         </div>
         <p className="text-xs text-content-dim mt-2">
-          The signing secret is shown once, here, and cannot be retrieved afterwards. Copy it
-          into your SIEM before leaving this page.
+          The signing secret is shown below once created. You can read it again later, or
+          rotate it, by opening the endpoint.
         </p>
         {error && <p className="text-xs text-danger mt-2">{error}</p>}
       </Card>
@@ -106,36 +112,53 @@ export function EndpointsSection({ endpoints, loading, onCreated }: EndpointsSec
                   <th className="font-normal pb-2 pr-3">Endpoint URL</th>
                   <th className="font-normal pb-2 pr-3">Created</th>
                   <th className="font-normal pb-2 pr-3">By</th>
-                  <th className="font-normal pb-2">In use</th>
+                  <th className="font-normal pb-2 pr-3">In use</th>
+                  <th className="font-normal pb-2 w-8" aria-label="Open" />
                 </tr>
               </thead>
               <tbody>
                 {list.map((endpoint) => (
-                  <EndpointRow key={endpoint.id} endpoint={endpoint} />
+                  <EndpointRow
+                    key={endpoint.id}
+                    endpoint={endpoint}
+                    onOpen={() => setOpenId(endpoint.id)}
+                  />
                 ))}
               </tbody>
             </table>
           </div>
         )}
       </Card>
+
+      {open && (
+        <EndpointDrawer
+          endpoint={open}
+          onClose={() => setOpenId(null)}
+          onChanged={onCreated}
+        />
+      )}
     </div>
   )
 }
 
 /** One endpoint: what it is, where it lives, and whether anything ever used it. */
-function EndpointRow({ endpoint }: { endpoint: AlertEndpoint }) {
+function EndpointRow({ endpoint, onOpen }: { endpoint: AlertEndpoint; onOpen: () => void }) {
   const url = endpointUrl(endpoint.id)
   const used = endpoint.alertCount > 0
 
   return (
-    <tr className="border-t border-border align-middle">
+    <tr
+      onClick={onOpen}
+      className="group border-t border-border align-middle cursor-pointer
+        transition-opacity hover:opacity-75"
+    >
       <td className="py-3 pr-3">
         <span className="block text-xs text-content-primary tracking-body">{endpoint.name}</span>
         <span className="block font-mono text-2xs text-content-muted mt-0.5">
           secret ends {endpoint.secretHint}
         </span>
       </td>
-      <td className="py-3 pr-3">
+      <td className="py-3 pr-3" onClick={(event) => event.stopPropagation()}>
         <CopyValue value={url} />
       </td>
       <td className="py-3 pr-3 text-xs text-content-secondary whitespace-nowrap">
@@ -154,50 +177,12 @@ function EndpointRow({ endpoint }: { endpoint: AlertEndpoint }) {
           </span>
         )}
       </td>
+      <td className="py-3 text-content-muted transition-colors group-hover:text-content-primary">
+        <span className="block" aria-hidden="true">
+          <IconChevron size={13} />
+        </span>
+      </td>
     </tr>
-  )
-}
-
-/**
- * Build the URL a SIEM posts to.
- *
- * Composed client-side from the current origin, so it is right whether the
- * platform is reached on localhost or a customer's own hostname.
- *
- * @param endpointId - UUID of the endpoint.
- */
-export function endpointUrl(endpointId: string): string {
-  return `${window.location.origin}/api/workflows/alerts/${endpointId}/`
-}
-
-/** A value with a copy button, for things that must be transcribed exactly. */
-function CopyValue({ value, mono = true }: { value: string; mono?: boolean }) {
-  const [copied, setCopied] = useState(false)
-
-  return (
-    <span className="flex items-center gap-1.5">
-      <code className={`min-w-0 truncate bg-surface-base border border-border rounded px-2 py-1
-        text-2xs text-content-secondary ${mono ? 'font-mono' : ''}`}>
-        {value}
-      </code>
-      {/* The confirmation swaps one 12px glyph for another rather than for the
-          word "copied". Text is wider than the icon, so the button grew, shoved
-          the row's neighbours aside, and snapped back a second and a half
-          later. A same-size swap cannot move anything. */}
-      <button
-        type="button"
-        onClick={() => {
-          navigator.clipboard?.writeText(value)
-          setCopied(true)
-          window.setTimeout(() => setCopied(false), 1500)
-        }}
-        aria-label={copied ? 'Copied' : 'Copy'}
-        className={`shrink-0 p-1 rounded-btn transition-colors
-          ${copied ? 'text-safe' : 'text-content-dim hover:text-content-primary'}`}
-      >
-        {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
-      </button>
-    </span>
   )
 }
 

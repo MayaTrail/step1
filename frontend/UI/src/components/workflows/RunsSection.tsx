@@ -11,6 +11,7 @@ import {
   formatCoverage,
   isOpen,
   untilDeadline,
+  untilScheduled,
 } from './workflowMeta'
 
 /**
@@ -25,6 +26,7 @@ import {
 /** The filters, phrased by what the reader is looking for. */
 const FILTERS = [
   { key: 'all', label: 'All' },
+  { key: 'scheduled', label: 'Scheduled' },
   { key: 'active', label: 'Running' },
   { key: 'awaiting', label: 'Waiting for alerts' },
   { key: 'completed', label: 'Completed' },
@@ -38,7 +40,9 @@ type FilterKey = (typeof FILTERS)[number]['key']
  *
  * "Running" deliberately excludes runs waiting on a SIEM: they are open, but
  * nothing is happening and nothing will for tens of minutes, so grouping them
- * with active work would bury the runs that are actually moving.
+ * with active work would bury the runs that are actually moving. A scheduled
+ * run is excluded for the same reason, and gets its own filter because a run
+ * due next Tuesday is otherwise indistinguishable from one that has hung.
  *
  * @param run - The workflow to test.
  * @param filter - The selected filter.
@@ -46,6 +50,8 @@ type FilterKey = (typeof FILTERS)[number]['key']
 function matches(run: WorkflowRun, filter: FilterKey): boolean {
   const active: WorkflowStatus[] = ['pending', 'deploying', 'attacking']
   switch (filter) {
+    case 'scheduled':
+      return run.status === 'scheduled'
     case 'active':
       return active.includes(run.status)
     case 'awaiting':
@@ -62,9 +68,11 @@ function matches(run: WorkflowRun, filter: FilterKey): boolean {
 interface RunsSectionProps {
   runs: WorkflowRun[]
   loading: boolean
+  /** Called after a change the list has to refetch to show. */
+  onChanged: () => void
 }
 
-export function RunsSection({ runs, loading }: RunsSectionProps) {
+export function RunsSection({ runs, loading, onChanged }: RunsSectionProps) {
   const [filter, setFilter] = useState<FilterKey>('all')
   // Held here rather than in the router, so closing the panel returns the
   // reader to the same scroll position and the same filter.
@@ -132,14 +140,30 @@ export function RunsSection({ runs, loading }: RunsSectionProps) {
         </div>
       )}
 
-      {openId && <WorkflowDrawer workflowId={openId} onClose={() => setOpenId(null)} />}
+      {openId && (
+        <WorkflowDrawer
+          workflowId={openId}
+          onClose={() => setOpenId(null)}
+          onDeleted={() => {
+            setOpenId(null)
+            onChanged()
+          }}
+        />
+      )}
     </Card>
   )
 }
 
 /** One workflow on one line. The whole row opens the detail panel. */
 function RunRow({ run, onOpen }: { run: WorkflowRun; onOpen: () => void }) {
-  const waiting = run.status === 'awaiting_alerts' ? untilDeadline(run.alertDeadline) : ''
+  // A scheduled run and a stuck one look identical on a row, so the status
+  // cell has to say when it is due.
+  const waiting =
+    run.status === 'awaiting_alerts'
+      ? untilDeadline(run.alertDeadline)
+      : run.status === 'scheduled'
+        ? untilScheduled(run.scheduledFor)
+        : ''
   const caught = run.score ? `${run.score.counts.fired ?? 0} of ${run.score.ruleCount}` : '—'
 
   return (
@@ -165,7 +189,7 @@ function RunRow({ run, onOpen }: { run: WorkflowRun; onOpen: () => void }) {
           </span>
           <span className="text-accent-blue opacity-0 -translate-x-1 transition-all
             group-hover:opacity-100 group-hover:translate-x-0">
-            <IconChevron size={12} className="-rotate-90" />
+            <IconChevron size={12} />
           </span>
         </span>
       </td>
@@ -187,7 +211,9 @@ function RunRow({ run, onOpen }: { run: WorkflowRun; onOpen: () => void }) {
         {caught}
       </td>
       <td className="py-3 text-right font-mono text-2xs text-content-muted whitespace-nowrap">
-        {formatWhen(run.createdAt)}
+        {run.status === 'scheduled' && run.scheduledFor
+          ? formatWhen(run.scheduledFor)
+          : formatWhen(run.createdAt)}
       </td>
     </tr>
   )

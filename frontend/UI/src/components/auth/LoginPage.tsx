@@ -969,6 +969,7 @@ function GoogleSignInButton({ onCredential }: { onCredential: (idToken: string) 
   const wrapperRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const initializedRef = useRef(false)
+  const renderedRef = useRef(false)
   const lastWidthRef = useRef<number>(0)
   const onCredentialRef = useRef(onCredential)
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined
@@ -1007,6 +1008,15 @@ function GoogleSignInButton({ onCredential }: { onCredential: (idToken: string) 
     let pollingDone = false
 
     const tryInit = () => {
+      /*
+       * Idempotent, because two things race to call this: the 100ms poll and
+       * the script's load event. `pollingDone` only stopped the poll from
+       * scheduling the NEXT attempt; an attempt already queued still ran after
+       * the load event had rendered the button, cleared the container and drew
+       * it again. That second draw is the flicker on this page: the button
+       * appears, blanks for a frame, and reappears.
+       */
+      if (renderedRef.current) return
       if (!containerRef.current || !wrapperRef.current) return
       if (!window.google?.accounts?.id) {
         if (!pollingDone) {
@@ -1027,6 +1037,7 @@ function GoogleSignInButton({ onCredential }: { onCredential: (idToken: string) 
       }
       lastWidthRef.current = 0
       renderBtn()
+      renderedRef.current = true
     }
 
     tryInit()

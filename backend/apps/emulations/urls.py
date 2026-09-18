@@ -28,6 +28,8 @@ greedily matching emulation type strings.
 from django.urls import path
 
 from .views import (
+    DetectionTargetsView,
+    EmulationDetectionExportView,
     EmulationAttackView,
     EmulationDeployView,
     EmulationDestroyView,
@@ -46,6 +48,12 @@ from .views import (
 )
 
 urlpatterns = [
+    path("detection-targets/", DetectionTargetsView.as_view(), name="detection-targets"),
+    path(
+        "<str:emulation_type>/detections/export/",
+        EmulationDetectionExportView.as_view(),
+        name="emulation-detection-export",
+    ),
     path("", EmulationListView.as_view(), name="emulation-list"),
     path("deploy/", EmulationDeployView.as_view(), name="emulation-deploy"),
     # Literal "runs/" must precede the <uuid:run_id>/ route below.

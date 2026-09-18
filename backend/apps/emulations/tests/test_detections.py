@@ -94,7 +94,10 @@ def _load_validator():
     """Import backend/scripts/validate_detections.py by path, or None if pySigma is absent."""
     if importlib.util.find_spec("sigma") is None:
         return None
-    path = _REPO_ROOT / "backend" / "scripts" / "validate_detections.py"
+    # parents[3] is backend/ in the repo and /app in the container, where the
+    # code is mounted without its backend/ parent. Deriving from _REPO_ROOT
+    # instead produced /backend/scripts, which exists in neither.
+    path = Path(__file__).resolve().parents[3] / "scripts" / "validate_detections.py"
     spec = importlib.util.spec_from_file_location("validate_detections", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
