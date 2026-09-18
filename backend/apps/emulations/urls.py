@@ -30,7 +30,6 @@ from django.urls import path
 from .views import (
     DetectionTargetsView,
     EmulationDetectionExportView,
-    RunDetectionExportView,
     EmulationAttackView,
     EmulationDeployView,
     EmulationDestroyView,
@@ -50,14 +49,6 @@ from .views import (
 
 urlpatterns = [
     path("detection-targets/", DetectionTargetsView.as_view(), name="detection-targets"),
-    # Declared before the emulation route below. A <str:emulation_type> matches a
-    # UUID perfectly well, so the emulation export would swallow every run export
-    # and 404 with "unknown emulation <uuid>".
-    path(
-        "<uuid:run_id>/detections/export/",
-        RunDetectionExportView.as_view(),
-        name="run-detection-export",
-    ),
     path(
         "<str:emulation_type>/detections/export/",
         EmulationDetectionExportView.as_view(),

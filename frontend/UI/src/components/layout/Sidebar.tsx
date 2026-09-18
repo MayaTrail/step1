@@ -153,6 +153,7 @@ export function Sidebar({ isOpen }: SidebarProps) {
         <NavItem to="/workflows" icon={<IconLaunch size={17} />} label="Workflows" collapsed={collapsed} />
         <NavItem to="/runs" icon={<IconActivity size={17} />} label="Active Runs" collapsed={collapsed} />
         <NavItem to="/results" icon={<IconClock size={17} />} label="Results" collapsed={collapsed} />
+        <NavItem to="/coverage" icon={<IconBarChart size={17} />} label="Coverage History" collapsed={collapsed} />
         </>
       )}
 

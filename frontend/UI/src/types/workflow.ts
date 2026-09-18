@@ -93,6 +93,12 @@ export interface WorkflowRun {
   createdAt: string
   startedAt: string | null
   completedAt: string | null
+  /**
+   * When the owner archived this run, or null. Archiving hides a run from the
+   * run list and from coverage history; it is reversible and the report is
+   * kept, and nothing purges archived runs on a schedule.
+   */
+  archivedAt: string | null
 }
 
 /** A workflow with its per-rule verdicts. */

@@ -24,6 +24,7 @@ import secrets
 from datetime import timedelta
 
 from cryptography.fernet import InvalidToken
+from django.conf import settings
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rest_framework import status
@@ -42,9 +43,14 @@ from apps.emulations.views import (
     _validate_target,
 )
 from apps.emulations.detection_export import export_rules
+from apps.logs.models import LogEntry
+from apps.infrastructure.permissions import IsEnterpriseUser
+from apps.logs.record import record_activity
 
 from .crypto import EncryptionNotConfigured, decrypt, encrypt
+from .coverage_history import build_history
 from .export import silent_rule_ids
+from .reporting import build_report
 from .ingest import (
     SIGNATURE_HEADER,
     TIMESTAMP_HEADER,
@@ -403,14 +409,20 @@ class WorkflowRunListView(APIView):
         """
         List the caller's workflows, newest first.
 
+        Archived runs are excluded unless `?archived=true` asks for them, so a
+        user who has tidied months of history is not handed it back on every
+        page load. They are hidden, never gone.
+
         Args:
             request: DRF request.
 
         Returns:
             200 with summary rows; the full report is on the detail route.
         """
-        runs = WorkflowRun.objects.filter(owner=request.user)[:100]
-        return Response({"runs": WorkflowRunSerializer(runs, many=True).data})
+        runs = WorkflowRun.objects.filter(owner=request.user)
+        if request.query_params.get("archived", "").lower() != "true":
+            runs = runs.filter(archived_at__isnull=True)
+        return Response({"runs": WorkflowRunSerializer(runs[:100], many=True).data})
 
     def post(self, request: Request) -> Response:
         """
@@ -491,10 +503,18 @@ class WorkflowRunListView(APIView):
 
 class WorkflowRunDetailView(APIView):
     """
-    Return one workflow with its full report, or delete a finished one.
+    Return one workflow, archive or restore it, or delete an unfinished one.
 
     GET    /api/workflows/runs/<workflow_id>/
+    PATCH  /api/workflows/runs/<workflow_id>/   {"archived": true | false}
     DELETE /api/workflows/runs/<workflow_id>/
+
+    Archiving is the way to clear old runs out of the way. It is reversible and
+    keeps the report, which is why deletion of a completed run stays refused:
+    reliability on the coverage history page is a share of judged runs, so
+    destroying the runs where a rule stayed silent would raise that rule's
+    figure. A detection would appear to improve because its failures were
+    deleted, which is the one thing an assurance product cannot let happen.
     """
 
     permission_classes = [IsAuthenticated]
@@ -502,6 +522,14 @@ class WorkflowRunDetailView(APIView):
     # A run in one of these states is over or has not begun, so removing its row
     # cannot interrupt anything. Everything else is mid-flight.
     DELETABLE = (WorkflowRun.Status.FAILED, WorkflowRun.Status.SCHEDULED)
+
+    # Settled runs only. Hiding a run mid-flight would take it off the list
+    # while its deploy or alert window was still live.
+    ARCHIVABLE = (
+        WorkflowRun.Status.COMPLETED,
+        WorkflowRun.Status.FAILED,
+        WorkflowRun.Status.SCHEDULED,
+    )
 
     def get(self, request: Request, workflow_id: str) -> Response:
         """
@@ -519,6 +547,70 @@ class WorkflowRunDetailView(APIView):
         workflow = WorkflowRun.objects.filter(id=workflow_id, owner=request.user).first()
         if workflow is None:
             return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response(WorkflowRunDetailSerializer(workflow).data)
+
+    def patch(self, request: Request, workflow_id: str) -> Response:
+        """
+        Archive a run, or restore an archived one.
+
+        Only a settled run can be archived. Hiding a run that is still
+        deploying or collecting alerts would drop it out of the list while a
+        Pulumi deploy or an alert window was still live, leaving work running
+        with nothing on screen tracking it.
+
+        Args:
+            request: DRF request carrying {"archived": bool}.
+            workflow_id: UUID of the workflow.
+
+        Returns:
+            200 with the updated run, 400 when `archived` is missing or not a
+            boolean, 409 when the run is still in flight, 404 when it is not
+            the caller's.
+        """
+        workflow = WorkflowRun.objects.filter(id=workflow_id, owner=request.user).first()
+        if workflow is None:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        archived = request.data.get("archived")
+        if not isinstance(archived, bool):
+            return Response(
+                {"detail": "Send {\"archived\": true} or {\"archived\": false}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if archived and workflow.status not in self.ARCHIVABLE:
+            return Response(
+                {
+                    "detail": (
+                        "This run is still in progress. Wait for it to finish before "
+                        "archiving it."
+                    ),
+                    "reason": "in_progress",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if bool(workflow.archived_at) != archived:
+            workflow.archived_at = timezone.now() if archived else None
+            workflow.save(update_fields=["archived_at"])
+            record_activity(
+                LogEntry.Event.WORKFLOW_ARCHIVED if archived
+                else LogEntry.Event.WORKFLOW_RESTORED,
+                (
+                    f"{workflow.emulation_type} run from "
+                    f"{workflow.completed_at.date() if workflow.completed_at else 'an open window'} "
+                    f"{'archived' if archived else 'restored to'} coverage history"
+                ),
+                actor=request.user,
+                stack=workflow.stack,
+            )
+            logger.info(
+                "Workflow %s: user=%s %s the run",
+                workflow_id,
+                request.user.username,
+                "archived" if archived else "restored",
+            )
+
         return Response(WorkflowRunDetailSerializer(workflow).data)
 
     def delete(self, request: Request, workflow_id: str) -> Response:
@@ -552,8 +644,9 @@ class WorkflowRunDetailView(APIView):
             return Response(
                 {
                     "detail": (
-                        "A completed run cannot be deleted. Its report is the record of "
-                        "what your SIEM caught."
+                        "A completed run cannot be deleted. Its report is the record "
+                        "of what your SIEM caught, and coverage history counts it. "
+                        "Archive it instead to hide it from the list."
                         if completed else
                         "This run is still in progress. Wait for it to finish or fail "
                         "before deleting it."
@@ -644,4 +737,119 @@ class WorkflowDetectionExportView(APIView):
         )
         return _bundle_response(
             request, bundle, note=note, stem=f"{workflow.emulation_type}-silent"
+        )
+
+
+class WorkflowReportView(APIView):
+    """
+    The evidence packet for one run.
+
+    GET /api/workflows/runs/<workflow_id>/report/
+
+    Assembly over data already stored, never a second opinion, so this can
+    never disagree with the run drawer it came from. The emulations app had an
+    equivalent that read `EmulationRun.detection_check`, which came from
+    CloudTrail in a MayaTrail-owned S3 bucket; that path was retired in
+    September and verdicts now come from the client's own SIEM.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request, workflow_id) -> Response:
+        """
+        Return the packet for one of the caller's runs.
+
+        Args:
+            request: DRF request.
+            workflow_id: UUID of the workflow.
+
+        Returns:
+            200 with the packet, or 404 when it is not the caller's. An
+            unsettled run still returns a packet: it reports that nothing has
+            been measured rather than pretending to a figure.
+        """
+        workflow = (
+            WorkflowRun.objects
+            .filter(id=workflow_id, owner=request.user)
+            .select_related("stack", "owner")
+            .first()
+        )
+        if workflow is None:
+            return Response({"detail": "Run not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(build_report(workflow))
+
+
+class CoverageHistoryView(APIView):
+    """
+    Detection reliability across every run of one emulation.
+
+    GET /api/workflows/coverage/?emulation=<type>&days=<n>
+
+    Enterprise-gated like the rest of the detection tooling: the payload names
+    rule titles and techniques from the client's own environment.
+
+    Only completed runs are read. A failed run never reached the attack, so it
+    measured nothing, and including it would put a gap in the history that
+    looks like a detection problem. Archived runs are excluded as well, which
+    is the whole point of archiving.
+    """
+
+    permission_classes = [IsEnterpriseUser]
+
+    # Windows offered to the caller. Bounded rather than free-form so a single
+    # request cannot be made to walk a user's entire run history.
+    MAX_DAYS = 365
+
+    def get(self, request: Request) -> Response:
+        """
+        Build the coverage history for one of the caller's emulations.
+
+        Args:
+            request: DRF request. `emulation` selects the emulation type;
+                `days` optionally limits how far back to read.
+
+        Returns:
+            200 with the history payload, or 400 when `emulation` is missing.
+            An emulation the caller has never completed a run of returns an
+            empty history rather than a 404: the page is legitimate, there is
+            simply nothing in it yet.
+        """
+        emulation_type = (request.query_params.get("emulation") or "").strip()
+        if not emulation_type:
+            return Response(
+                {"detail": "An emulation type is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        runs = (
+            WorkflowRun.objects
+            .filter(
+                owner=request.user,
+                emulation_type=emulation_type,
+                status=WorkflowRun.Status.COMPLETED,
+                archived_at__isnull=True,
+            )
+            # The gauge reports whether the attack step completed, which reads
+            # through this FK once per run.
+            .select_related("emulation_run")
+            .order_by("completed_at", "created_at")
+        )
+
+        days = request.query_params.get("days")
+        if days:
+            try:
+                window = min(int(days), self.MAX_DAYS)
+            except ValueError:
+                return Response(
+                    {"detail": "days must be a whole number."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            runs = runs.filter(completed_at__gte=timezone.now() - timedelta(days=window))
+
+        return Response(
+            build_history(
+                list(runs),
+                emulation_type,
+                settings.COVERAGE_TARGET_PCT,
+            )
         )

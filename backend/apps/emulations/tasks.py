@@ -44,8 +44,6 @@ from django.conf import settings
 from django.utils import timezone
 from pulumi import automation as auto
 
-from apps.emulations import detection_logs
-from apps.emulations.detection_check import build_report
 from apps.emulations.detections import list_detection_summaries
 from apps.emulations.registry import get_emulation
 from apps.emulations.readiness import requires_http_probe, resolve_readiness
@@ -65,11 +63,6 @@ from apps.infrastructure.tasks import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Coverage checks before accepting an empty result. At the default 15s spacing
-# this covers ~45s, comfortably past the worst delivery lag observed (34s),
-# while a run whose logs arrive quickly reports back in about 15.
-DETECTION_CHECK_MAX_ATTEMPTS = 3
 
 # Pulumi state bucket. Each tenant's state lives in that tenant's own AWS
 # account, so the bucket name is resolved per-tenant from the account id (see
@@ -820,110 +813,12 @@ def run_emulation_attack(self, run_id: str) -> dict:
                 stack=stack, level=outcome[2],
             )
 
-    # Queued for a failed attack as well as a completed one. A failed attack is
-    # not an empty window: several attack modules raise rather than catch an
-    # AccessDenied, so an account whose guardrails actually blocked the attack
-    # lands here, and skipping the check hid exactly the accounts whose controls
-    # were working. Delayed rather than chained immediately because the events
-    # this run produced take a few seconds to reach the archive.
-    if run.status in (EmulationRun.Status.COMPLETED, EmulationRun.Status.FAILED):
-        check_detection_coverage.apply_async(
-            args=[run_id],
-            countdown=getattr(settings, "DETECTION_CHECK_DELAY_SECONDS", 60),
-        )
-
     return {
         "run_id": run_id,
         "status": run.status,
         "stdout": run.stdout,
         "stderr": run.stderr,
     }
-
-
-@shared_task(name="emulations.check_detection_coverage", queue="enterprise")
-def check_detection_coverage(run_id: str, attempt: int = 1) -> dict:
-    """
-    Replay an emulation's detection rules over the archived logs for its window.
-
-    Answers "did my detections catch that" by evaluating each Sigma rule the
-    emulation ships against the events the notifier archived while the attack
-    was running, and separating a rule that stayed quiet from one whose log
-    source never arrived.
-
-    Runs on the enterprise queue, the only queue a worker consumes. Never raises:
-    a logging or archive problem must not turn a completed emulation into a
-    failed one, so every outcome is written to the run as a status the coverage
-    page can render.
-
-    Args:
-        run_id: String UUID of the EmulationRun to check.
-
-    Returns:
-        Dict with the run id and the resulting report status.
-    """
-    EmulationRun = apps.get_model("emulations", "EmulationRun")
-
-    run = EmulationRun.objects.filter(id=run_id).first()
-    if run is None:
-        logger.error("check_detection_coverage: no run %s", run_id)
-        return {"run_id": run_id, "status": "missing_run"}
-
-    if not detection_logs.is_configured():
-        logger.info("check_detection_coverage skipped for run=%s: no archive configured", run_id)
-        run.detection_check = {"status": "not_configured"}
-        run.save(update_fields=["detection_check"])
-        return {"run_id": run_id, "status": "not_configured"}
-
-    entry = get_emulation(run.emulation_type)
-    if entry is None:
-        run.detection_check = {"status": "unknown_emulation"}
-        run.save(update_fields=["detection_check"])
-        return {"run_id": run_id, "status": "unknown_emulation"}
-
-    start = run.started_at or run.created_at
-    end = run.completed_at or timezone.now()
-
-    try:
-        records = detection_logs.read_records(start, end)
-        report = build_report(
-            list_detection_summaries(entry),
-            records,
-            {"start": start.isoformat(), "end": end.isoformat()},
-        )
-    except Exception as exc:  # noqa: BLE001 - report the failure, never fail the run
-        logger.exception("check_detection_coverage failed for run=%s", run_id)
-        run.detection_check = {"status": "error", "detail": f"{type(exc).__name__}: {exc}"}
-        run.save(update_fields=["detection_check"])
-        return {"run_id": run_id, "status": "error"}
-
-    # Finding nothing usually means the logs have not landed yet, not that the
-    # attack went unrecorded: delivery lag is a few seconds typically but has
-    # been seen at 34. Rather than wait out the worst case on every run, check
-    # early and retry, leaving detection_check null so the page keeps showing
-    # "tracking" instead of a zero that would later turn out to be wrong.
-    if report["eventCount"] == 0 and attempt < DETECTION_CHECK_MAX_ATTEMPTS:
-        logger.info(
-            "check_detection_coverage run=%s: no events yet on attempt %d, retrying",
-            run_id, attempt,
-        )
-        check_detection_coverage.apply_async(
-            args=[run_id, attempt + 1],
-            countdown=getattr(settings, "DETECTION_CHECK_DELAY_SECONDS", 15),
-        )
-        return {"run_id": run_id, "status": "retrying", "attempt": attempt}
-
-    run.detection_check = report
-    run.save(update_fields=["detection_check"])
-
-    logger.info(
-        "check_detection_coverage run=%s: %d fired, %d silent, %d without logs, over %d event(s)",
-        run_id,
-        report["counts"]["fired"],
-        report["counts"]["silent"],
-        report["counts"]["no_logs"],
-        report["eventCount"],
-    )
-    return {"run_id": run_id, "status": "ok", **report["counts"]}
 
 
 @shared_task(bind=True, name="emulations.destroy_emulation_stack", queue="enterprise")

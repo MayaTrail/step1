@@ -5,11 +5,10 @@ import {
     deriveHealth,
     STACK_HEALTH,
     formatAge,
-    formatExpiry,
     emulationLabel,
-    isTtlExpired,
 } from '@/components/dashboard/stackHelpers'
 import { formatDuration, PHASE_LABEL } from './LifecycleTrack'
+import { TtlCountdown } from './TtlCountdown'
 
 /**
  * One stack on one line. The whole row opens the detail panel.
@@ -37,7 +36,6 @@ export function StackRow({ stack, isBusy, onOpen }: StackRowProps) {
     const phaseLabel = current ? PHASE_LABEL[current.status] ?? current.status : ''
     const phaseTime = current ? formatDuration(current.seconds) : ''
 
-    const expired = isTtlExpired(stack)
 
     return (
         /*
@@ -101,13 +99,7 @@ export function StackRow({ stack, isBusy, onOpen }: StackRowProps) {
             </td>
 
             <td className="py-3 pr-3 font-mono text-2xs whitespace-nowrap text-right">
-                {stack.expires_at ? (
-                    <span className={expired ? 'text-warning' : 'text-content-secondary'}>
-                        {expired ? 'expired' : formatExpiry(stack.expires_at)}
-                    </span>
-                ) : (
-                    <span className="text-content-muted">&ndash;</span>
-                )}
+                <TtlCountdown expiresAt={stack.expires_at} />
             </td>
 
             <td className="py-3 font-mono text-2xs text-content-muted whitespace-nowrap text-right">

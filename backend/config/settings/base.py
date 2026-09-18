@@ -260,28 +260,6 @@ EMULATION_PHASE_PACING_SECONDS = config(
     "EMULATION_PHASE_PACING_SECONDS", default=0, cast=float
 )
 
-# Archive of detections raised against this account, written by the notifier and
-# partitioned by date. After an attack finishes, the coverage check reads the
-# partitions the run spans and replays the emulation's Sigma rules over them, so
-# a user can see which detections actually fired.
-#
-# The bucket is provisioned out of band; nothing here creates it. Leave
-# DETECTIONS_BUCKET empty to disable the check, in which case the Live Emulation
-# page keeps its plain "check your logging" guidance.
-
-DETECTIONS_BUCKET = config("DETECTIONS_BUCKET", default="")
-DETECTIONS_PREFIX = config("DETECTIONS_PREFIX", default="detections/")
-DETECTIONS_BUCKET_REGION = config("DETECTIONS_BUCKET_REGION", default="")
-
-# Held after an attack completes before reading the archive, and again between
-# retries. Measured delivery lag from the notifier is 3 seconds median and 34 at
-# worst. Rather than wait out the worst case on every run, the check starts
-# early and retries while it finds nothing (see DETECTION_CHECK_MAX_ATTEMPTS),
-# so a fast run reports in about 15 seconds and a slow one is still correct.
-DETECTION_CHECK_DELAY_SECONDS = config(
-    "DETECTION_CHECK_DELAY_SECONDS", default=15, cast=int
-)
-
 # ---------------------------------------------------------------------------
 # Guardrails
 # ---------------------------------------------------------------------------
@@ -312,6 +290,13 @@ WORKFLOW_ALERT_WAIT_MINUTES = config("WORKFLOW_ALERT_WAIT_MINUTES", default=30, 
 # Separate from LLM_FERNET_KEY: the two secrets have different owners and
 # lifecycles, and accepting alerts must not require the AI feature to be set up.
 WORKFLOW_FERNET_KEY = config("WORKFLOW_FERNET_KEY", default="")
+
+# Share of runs a detection is expected to fire in before coverage history
+# treats it as dependable. Deliberately below 100: a SIEM that evaluates on a
+# schedule will occasionally report outside a run's alert window, so demanding
+# every run would mark healthy detections as failing. Platform-wide for now
+# rather than per user, because nobody has asked to tune it yet.
+COVERAGE_TARGET_PCT = config("COVERAGE_TARGET_PCT", default=90, cast=int)
 
 # ---------------------------------------------------------------------------
 # Email

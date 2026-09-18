@@ -36,7 +36,6 @@ from . import command_runner
 from .detection_export import (
     bundle_to_text,
     export_rules,
-    rules_with_verdict,
     target_catalogue,
 )
 from .detections import build_detection_detail, list_detection_summaries
@@ -1095,78 +1094,3 @@ class EmulationDetectionExportView(APIView):
         return _bundle_response(request, bundle, stem=emulation_type)
 
 
-class RunDetectionExportView(APIView):
-    """
-    Compile the rules a run judged, filtered by verdict.
-
-    GET /api/emulations/<run_id>/detections/export/?target=splunk
-        &verdict=silent        csv of fired|silent|no_logs; default silent
-        &output_format=default
-        &download=1
-
-    This is the endpoint the run result links to. A run that reports "three
-    rules stayed silent" is a finding with no action attached; handing back
-    exactly those three, in the dialect the customer's SIEM speaks, is the
-    action. Defaulting to `silent` encodes that: fired rules need nothing, and
-    no_logs is a logging problem a query cannot fix.
-    """
-
-    permission_classes = [HasAWSConnection]
-
-    def get(self, request: Request, run_id) -> Response:
-        """Return the compiled bundle for this run's matching rules."""
-        run = EmulationRun.objects.filter(id=run_id).select_related("stack").first()
-        if run is None:
-            return Response(
-                {"detail": "Run not found."}, status=status.HTTP_404_NOT_FOUND
-            )
-        if run.stack.owner_id != request.user.id:
-            return Response(
-                {"detail": "Run not found."}, status=status.HTTP_404_NOT_FOUND
-            )
-
-        target, output_format, err = _validate_target(request)
-        if err:
-            return err
-
-        raw = (request.query_params.get("verdict") or "silent").strip().lower()
-        verdicts = {v.strip() for v in raw.split(",") if v.strip()}
-        unknown = verdicts - _EXPORT_VERDICTS
-        if unknown:
-            return Response(
-                {
-                    "detail": "Unknown verdict(s): %s. Available: %s."
-                              % (", ".join(sorted(unknown)), ", ".join(sorted(_EXPORT_VERDICTS))),
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        rule_ids = rules_with_verdict(run.detection_check, verdicts)
-        if not rule_ids:
-            return Response(
-                {
-                    "detail": "No rules with verdict %s in this run. The "
-                              "detection check may not have completed."
-                              % "/".join(sorted(verdicts)),
-                },
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        entry, err = _get_emulation_or_404(run.emulation_type)
-        if err:
-            return err
-
-        try:
-            bundle = export_rules(entry, rule_ids, target, output_format)
-        except BackendUnavailable:
-            return _unavailable(target)
-
-        note = "Rules this run judged %s. Deploy, then re-run to confirm." % (
-            "/".join(sorted(verdicts))
-        )
-        return _bundle_response(
-            request, bundle, note=note, stem="%s-%s" % (run.emulation_type, raw)
-        )
-
-
-# ── Coverage history & regressions ────────────────────────────────────────────

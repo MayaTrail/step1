@@ -248,6 +248,20 @@ class WorkflowRun(models.Model):
             "detection failure, and blending them hides the actionable one."
         ),
     )
+    archived_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=(
+            "When the owner archived this run. Archiving hides a run from the "
+            "run list and from coverage history without destroying it, and is "
+            "reversible. Deletion is not offered for a completed run: its "
+            "report and attributed alerts are the evidence behind past "
+            "verdicts, and removing them would raise every reliability figure "
+            "that counted them, so a rule could appear to improve because its "
+            "failures were deleted."
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)

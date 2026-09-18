@@ -4,6 +4,7 @@
  * Endpoints (all require an authenticated user):
  *   GET  POST /api/workflows/runs/          list workflows, or start one
  *   GET  DELETE /api/workflows/runs/<id>/   one run with its verdicts, or remove it
+ *   GET  /api/workflows/runs/<id>/report/   the evidence packet
  *   GET  POST /api/workflows/endpoints/     list webhooks, or create one
  *   GET  DELETE /api/workflows/endpoints/<id>/        read one, or delete it
  *   GET  POST /api/workflows/endpoints/<id>/secret/   reveal, or rotate
@@ -13,6 +14,7 @@
  */
 
 import api from './api'
+import type { WorkflowReport } from '@/types/workflowReport'
 import type {
   AlertEndpoint,
   AlertEndpointCreated,
@@ -20,9 +22,19 @@ import type {
   WorkflowRunDetail,
 } from '@/types/workflow'
 
-/** List the caller's workflows, newest first. */
-export async function listWorkflowRuns(): Promise<WorkflowRun[]> {
-  const { data } = await api.get<{ runs: WorkflowRun[] }>('/workflows/runs/')
+/**
+ * List the caller's workflows, newest first.
+ *
+ * Archived runs are excluded by the server unless asked for. They are hidden,
+ * never deleted, and nothing purges them on a schedule, so this is the only
+ * way back to one.
+ *
+ * @param includeArchived - True to include runs the user has archived.
+ */
+export async function listWorkflowRuns(includeArchived = false): Promise<WorkflowRun[]> {
+  const { data } = await api.get<{ runs: WorkflowRun[] }>('/workflows/runs/', {
+    params: includeArchived ? { archived: 'true' } : undefined,
+  })
   return data.runs
 }
 
@@ -130,4 +142,17 @@ export async function deleteAlertEndpoint(endpointId: string): Promise<void> {
  */
 export async function deleteWorkflowRun(workflowId: string): Promise<void> {
   await api.delete(`/workflows/runs/${workflowId}/`)
+}
+
+/**
+ * Read the evidence packet for one run.
+ *
+ * An unsettled run still returns a packet; it reports that nothing has been
+ * measured rather than pretending to a figure.
+ *
+ * @param workflowId - UUID of the run.
+ */
+export async function getWorkflowReport(workflowId: string): Promise<WorkflowReport> {
+  const { data } = await api.get<WorkflowReport>(`/workflows/runs/${workflowId}/report/`)
+  return data
 }

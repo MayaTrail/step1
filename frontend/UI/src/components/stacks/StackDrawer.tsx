@@ -7,7 +7,6 @@ import {
     deriveHealth,
     STACK_HEALTH,
     formatAge,
-    formatExpiry,
     emulationLabel,
     isTtlExpired,
 } from '@/components/dashboard/stackHelpers'
@@ -15,6 +14,7 @@ import { ResourceMapModal } from '@/components/modals/ResourceMapModal'
 import { DeploymentProgress } from './DeploymentProgress'
 import { DeploymentLogsPanel, isLogLive } from './DeploymentLogsPanel'
 import { LifecycleTrack } from './LifecycleTrack'
+import { TtlCountdown, formatDeadline, ttlUrgency } from './TtlCountdown'
 import { SecurityContextTab } from './SecurityContextTab'
 
 /**
@@ -170,13 +170,17 @@ export function StackDrawer({
                             <Fact label="Created" value={new Date(stack.created_at).toLocaleString()} />
                             <Fact label="Last update" value={`${formatAge(stack.updated_at)} ago`} />
                             {stack.expires_at && (
-                                <Fact
-                                    label={isTtlExpired(stack) ? 'TTL' : 'Expires in'}
-                                    value={isTtlExpired(stack) ? 'expired' : formatExpiry(stack.expires_at)}
-                                    valueClass={isTtlExpired(stack) ? 'text-warning' : ''}
-                                />
+                                <div className="min-w-0">
+                                    <div className="font-mono text-[9px] uppercase tracking-[1px] text-content-dim mb-0.5">
+                                        {isTtlExpired(stack) ? 'TTL' : 'Auto-destroys in'}
+                                    </div>
+                                    <div className="text-xs">
+                                        <TtlCountdown expiresAt={stack.expires_at} showDeadline />
+                                    </div>
+                                </div>
                             )}
                         </div>
+                        {stack.expires_at && <TtlExplainer expiresAt={stack.expires_at} />}
                     </Section>
 
                     <Section title="Resources" aside={
@@ -321,6 +325,49 @@ export function StackDrawer({
 /* ── Sub-components ── */
 
 /** A labelled block within the panel, with an optional right-hand note. */
+/**
+ * Why the lab tears itself down, stated where the countdown is read.
+ *
+ * A stack is deliberately misconfigured AWS infrastructure in the customer's
+ * own account: public buckets, over-permissive roles, disabled logging. Left
+ * running it is a standing liability and a standing bill, so the deadline is a
+ * safety property of the product rather than a quota. Saying so once, next to
+ * the clock, is what turns an unexplained number into something a reader can
+ * plan around.
+ */
+function TtlExplainer({ expiresAt }: { expiresAt: string }) {
+    const urgency = ttlUrgency(expiresAt)
+    const expired = urgency === 'expired'
+
+    return (
+        <div
+            className={`mt-3 rounded-btn border-l-2 bg-surface-elevated px-3.5 py-3 ${
+                urgency === 'critical' || expired
+                    ? 'border-danger'
+                    : urgency === 'soon'
+                      ? 'border-warning'
+                      : 'border-border-active'
+            }`}
+        >
+            <div className="mb-1 text-xs text-content-secondary">
+                {expired
+                    ? 'This stack is past its deadline and is queued for automatic destruction.'
+                    : `Everything in this stack is destroyed automatically at ${formatDeadline(expiresAt)}.`}
+            </div>
+            <p className="text-[11.5px] leading-relaxed text-content-muted">
+                An emulation stack is intentionally vulnerable infrastructure running in your own
+                AWS account. Leaving it up costs money and leaves a deliberately weakened target
+                exposed, so every stack is given a deadline when it deploys, taken from the
+                emulation&apos;s own manifest. Nothing you have already collected is affected:
+                run results, alerts and reports are stored separately and survive the teardown.
+            </p>
+            <p className="mt-1.5 text-[11.5px] leading-relaxed text-content-muted">
+                Destroy it sooner with the Destroy action if you are finished with it.
+            </p>
+        </div>
+    )
+}
+
 function Section({
     title, aside, children,
 }: {

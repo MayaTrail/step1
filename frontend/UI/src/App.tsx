@@ -17,7 +17,6 @@ import { EmulationDetailPage } from './components/emulations/EmulationDetailPage
 import { PlaybookPage } from './components/playbooks/PlaybookPage'
 import { DetectionsPage } from './components/detections/DetectionsPage'
 import { DetectionDetailPage } from './components/detections/DetectionDetailPage'
-import { DetectionCoveragePage } from './components/emulations/DetectionCoveragePage'
 import { GuardrailsPage } from './components/guardrails/GuardrailsPage'
 import { EmulationsHub } from './components/emulations/EmulationsHub'
 import { DetectionsHub } from './components/detections/DetectionsHub'
@@ -42,10 +41,13 @@ const DetectionStudioPage = lazy(() =>
 )
 import { GuardrailsHub } from './components/guardrails/GuardrailsHub'
 import { ComingSoon } from './components/common/ComingSoon'
+import { CoverageHistoryPage } from './components/coverage/CoverageHistoryPage'
+import { ReportsPage } from './components/reports/ReportsPage'
+import { RunReportPage } from './components/reports/RunReportPage'
 import { ActiveRunsPage } from './components/operations/ActiveRunsPage'
 import { ResultsPage } from './components/operations/ResultsPage'
 import { PlatformOverviewPage } from './components/platforms/PlatformOverviewPage'
-import { IconBarChart, IconBook } from './components/ui/Icons'
+import { IconBook } from './components/ui/Icons'
 
 /** Fallback shown while the editor chunk loads. */
 function EditorFallback() {
@@ -130,13 +132,9 @@ export default function App() {
                 <Route path="guardrails" element={<GuardrailsHub />} />
 
                 {/* Administration */}
-                <Route path="reports" element={
-                  <ComingSoon
-                    icon={<IconBarChart size={32} />}
-                    title="Reports coming soon"
-                    body="Exportable coverage and execution reports will be generated here in a future milestone."
-                  />
-                } />
+                <Route path="coverage" element={<CoverageHistoryPage />} />
+                <Route path="reports" element={<ReportsPage />} />
+                <Route path="reports/:runId" element={<RunReportPage />} />
                 <Route path="docs" element={
                   <ComingSoon
                     icon={<IconBook size={32} />}
@@ -151,7 +149,6 @@ export default function App() {
                 <Route path=":platformId/emulations/:emulationId/playbook" element={<PlaybookPage />} />
                 <Route path=":platformId/emulations/:emulationId/detections" element={<DetectionsPage />} />
                 <Route path=":platformId/emulations/:emulationId/detections/:ruleId" element={<DetectionDetailPage />} />
-                <Route path=":platformId/emulations/:emulationId/logging/:runId" element={<DetectionCoveragePage />} />
                 <Route path=":platformId/guardrails" element={<GuardrailsPage />} />
                 <Route path=":platformId/guardrails/:guardrailId" element={<GuardrailsPage />} />
                 {/* Unknown paths fall back to the dashboard. Without this a removed

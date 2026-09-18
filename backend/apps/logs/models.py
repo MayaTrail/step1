@@ -41,6 +41,11 @@ class LogEntry(models.Model):
         WORKFLOW_STARTED = "workflow.started", "Workflow Started"
         WORKFLOW_COMPLETED = "workflow.completed", "Workflow Completed"
         WORKFLOW_FAILED = "workflow.failed", "Workflow Failed"
+        # Archiving hides a run from coverage history, which changes the
+        # figures a client is shown without changing what was measured. Both
+        # directions are recorded so the trail explains a shifted percentage.
+        WORKFLOW_ARCHIVED = "workflow.archived", "Workflow Archived"
+        WORKFLOW_RESTORED = "workflow.restored", "Workflow Restored"
         PLAYBOOK_COMMAND = "playbook.command", "Playbook Command Run"
 
     id = models.UUIDField(

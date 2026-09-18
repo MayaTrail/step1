@@ -43,5 +43,10 @@ jobs:
       - name: Install test dependencies
         run: pip install -r requirements-test.txt
 
+      # Fails when a model was changed without a migration. Today that merges
+      # clean and the column silently never exists in the deployed database.
+      - name: Models and migrations agree
+        run: python manage.py makemigrations --check --dry-run
+
       - name: Run the emulation, metrics, guardrail, threat feed, workflow and infrastructure suites
         run: python manage.py test apps.emulations apps.metrics apps.guardrails apps.threatintel apps.workflows apps.infrastructure
