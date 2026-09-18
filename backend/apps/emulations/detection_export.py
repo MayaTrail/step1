@@ -212,27 +212,6 @@ def export_rules(
     return bundle
 
 
-def rules_with_verdict(detection_check: dict | None, verdicts: set[str]) -> list[str]:
-    """
-    Rule ids from a run's detection check whose verdict is in `verdicts`.
-
-    Args:
-        detection_check: The run's stored detection_check payload.
-        verdicts: Verdict values to keep, e.g. {"silent"}.
-
-    Returns:
-        Matching rule ids, in the order the check reported them - which is
-        already fired, then silent, then no_logs.
-    """
-    if not detection_check or detection_check.get("status") != "ok":
-        return []
-    return [
-        rule["ruleId"]
-        for rule in detection_check.get("rules", [])
-        if rule.get("verdict") in verdicts and rule.get("ruleId")
-    ]
-
-
 def target_catalogue() -> list[dict[str, Any]]:
     """
     Every conversion target, and whether this deployment can serve it.

@@ -19,7 +19,6 @@ from apps.emulations.detection_export import (
     ExportBundle,
     bundle_to_text,
     export_rules,
-    rules_with_verdict,
     target_catalogue,
 )
 from apps.emulations.registry import get_emulation
@@ -56,47 +55,6 @@ class TargetCatalogueTests(SimpleTestCase):
         """
         opensearch = next(t for t in target_catalogue() if t["name"] == "opensearch")
         self.assertIn("Indexer", opensearch["label"])
-
-
-class RulesWithVerdictTests(SimpleTestCase):
-    """Selecting a run's rules by verdict."""
-
-    CHECK = {
-        "status": "ok",
-        "rules": [
-            {"ruleId": "t1078", "verdict": "fired"},
-            {"ruleId": "t1070", "verdict": "silent"},
-            {"ruleId": "t1496", "verdict": "silent"},
-            {"ruleId": "t1525", "verdict": "no_logs"},
-        ],
-    }
-
-    def test_selects_only_the_requested_verdicts(self):
-        """Silent is the default case the run result links to."""
-        self.assertEqual(rules_with_verdict(self.CHECK, {"silent"}), ["t1070", "t1496"])
-
-    def test_accepts_several_verdicts(self):
-        """A caller may ask for more than one."""
-        self.assertEqual(
-            rules_with_verdict(self.CHECK, {"silent", "no_logs"}),
-            ["t1070", "t1496", "t1525"],
-        )
-
-    def test_incomplete_check_yields_nothing(self):
-        """
-        A run whose detection check never completed has no verdicts to act on.
-
-        Returning [] rather than guessing keeps the caller's 404 honest: there
-        is nothing to export, as opposed to an empty export being correct.
-        """
-        self.assertEqual(rules_with_verdict(None, {"silent"}), [])
-        self.assertEqual(rules_with_verdict({"status": "error"}, {"silent"}), [])
-        self.assertEqual(rules_with_verdict({"status": "ok"}, {"silent"}), [])
-
-    def test_ignores_rules_with_no_id(self):
-        """A malformed entry is skipped rather than exported as an empty id."""
-        check = {"status": "ok", "rules": [{"verdict": "silent"}, {"ruleId": "", "verdict": "silent"}]}
-        self.assertEqual(rules_with_verdict(check, {"silent"}), [])
 
 
 class BundleTextTests(SimpleTestCase):
@@ -213,7 +171,7 @@ class ExportRouteResolutionTests(SimpleTestCase):
     """
     URL ordering, which is load-bearing here and easy to break silently.
 
-    Three patterns overlap on this prefix, and a wrong order still resolves - to
+    Two patterns overlap on this prefix, and a wrong order still resolves - to
     the wrong view, with a confusing 404. Checked against the app's own
     urlpatterns rather than the global resolver, because even under full
     settings the root urlconf reaches the whole runtime stack.
@@ -231,18 +189,6 @@ class ExportRouteResolutionTests(SimpleTestCase):
             return resolver.resolve(path)
         except Resolver404:
             return None
-
-    def test_run_export_is_not_captured_by_the_emulation_route(self):
-        """
-        <str:emulation_type> matches a UUID perfectly well. Declared before the
-        uuid route it swallows every run export, which then 404s with
-        "unknown emulation <uuid>".
-        """
-        match = self._resolve(
-            "api/emulations/c4313b27-51fa-4b5f-b6a0-01613d94028d/detections/export/"
-        )
-        self.assertIsNotNone(match)
-        self.assertEqual(match.url_name, "run-detection-export")
 
     def test_emulation_export_still_resolves(self):
         """The uuid route must not shadow a real emulation name."""

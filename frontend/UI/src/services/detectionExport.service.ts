@@ -109,9 +109,9 @@ export async function downloadRunDetections(
  * Compile the detections a workflow found silent.
  *
  * This is the run-scoped export that works on this deployment. The emulation
- * app's equivalent reads a run's `detection_check`, which comes from the
- * CloudTrail-in-S3 path retired in September; a workflow's score comes from the
- * customer's own SIEM, which is where the verdicts now live.
+ * The emulations app had an equivalent that read a run's detection check, built
+ * from CloudTrail in a MayaTrail-owned S3 bucket. That whole path was removed in
+ * September; a workflow's score comes from the customer's own SIEM.
  *
  * Only silent rules are returned, and the server enforces that: a rule that
  * fired needs nothing, and `not_integrated` means no alert route existed, so
