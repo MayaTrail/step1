@@ -158,12 +158,18 @@ class ExportRulesTests(SimpleTestCase):
 
 
 # Importing apps.emulations.urls pulls in apps.emulations.views, which imports
-# apps.logs.models. That app is not in the minimal CI settings (the same reason
-# config.ci_urls is empty), so these route tests can only run under the full
-# settings. They skip in the fast CI job and run under config.settings.local.
-from django.apps import apps as _django_apps  # noqa: E402
+# rest_framework. requirements-test.txt omits DRF so the fast CI job installs
+# four packages, so these route tests can only run where it is present.
+#
+# This used to check whether apps.logs was installed, on the reasoning that the
+# minimal CI settings excluded it. That was a proxy for "running under full
+# settings", not for the dependency that actually matters, and it broke the
+# moment apps.logs was added to the CI settings for an unrelated reason: the
+# guard opened and the tests failed on the import it was meant to avoid.
+# Guard on the real requirement instead.
+from importlib.util import find_spec  # noqa: E402
 
-_ROUTES_IMPORTABLE = _django_apps.is_installed("apps.logs")
+_ROUTES_IMPORTABLE = find_spec("rest_framework") is not None
 
 
 @unittest.skipUnless(_ROUTES_IMPORTABLE, "full app registry not loaded (CI settings)")
