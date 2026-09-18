@@ -52,4 +52,8 @@ INSTALLED_APPS = [
     "apps.guardrails",
     "apps.threatintel",
     "apps.workflows",
+    # Workflows write a LogEntry when a run is archived or restored, so the
+    # workflow suite cannot import without the logs app registered. LogEntry's
+    # foreign keys reach only users and infrastructure, both already here.
+    "apps.logs",
 ]
