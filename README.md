@@ -81,7 +81,11 @@ MayaTrail is built for the people responsible for cloud and cluster security pos
 - **Ships detection rules** — each emulation includes Sigma and KQL rules and an incident-response playbook, ready for your SIEM.
 - **Ephemeral and cost-aware** — environments carry a TTL and are auto-destroyed on a schedule; cost estimates are shown up front.
 - **Plugin-based emulation packages** — drop in a new emulation package and it's auto-discovered, infra and detections included.
-- **Auditable** — an immutable log records every connect, deploy, attack, and destroy.
+- **Validates your SIEM, not ours** — a workflow deploys the emulation, runs the attack, then waits for your SIEM to post alerts to a signed webhook and scores which expected detections actually fired.
+- **Coverage history** — reliability per detection across every run of an emulation, with run-to-run comparison that shows the alert behind each change. A rule no run reached is reported as unmeasured, never as a failure.
+- **Detection authoring and SIEM export** — write or AI-draft Sigma rules, validate them against synthetic events, and compile them to Splunk or OpenSearch.
+- **Playbook authoring** — incident-response playbooks as shipped documentation, plus an editor for writing your own.
+- **Auditable** — an immutable log records every connect, deploy, attack, destroy, and archive.
 
 ## Why now
 
@@ -183,15 +187,24 @@ startup.
 | Variable | Description |
 |---|---|
 | `SECRET_KEY` | Django secret key |
-| `DATABASE_URL` | PostgreSQL connection string |
+| `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | PostgreSQL connection. Read as individual variables, not as a `DATABASE_URL` string |
+| `POSTGRES_HOST` / `POSTGRES_PORT` | Defaults `db` and `5432`, matching docker-compose |
 | `REDIS_URL` | Celery broker + result backend |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Platform AWS credentials (STS AssumeRole + state bucket) |
 | `AWS_DEFAULT_REGION` | Default AWS region (e.g. `ap-south-1`) |
 | `STATE_BUCKET` | S3 bucket for Pulumi state (e.g. `mayatrail-state-bucket`) |
 | `PULUMI_CONFIG_PASSPHRASE` | Passphrase for Pulumi stack secrets |
 | `EMULATIONS_BASE_DIR` | Where emulation packages are mounted (`/opt/emulations`) |
-| `REGISTRATION_INVITE_CODE` | Invite code gating self-registration |
 | `GOOGLE_CLIENT_ID` | Google SSO client ID |
+| `WORKFLOW_FERNET_KEY` | **Required for the alert webhook.** Encrypts the per-endpoint HMAC secrets a SIEM signs with. Empty means alerts cannot be accepted and every rule scores as `not_integrated` |
+| `WORKFLOW_ALERT_WAIT_MINUTES` | How long a run collects SIEM alerts after the attack ends (default `30`). Lower only for demos: a short window makes slow detections look silent |
+| `COVERAGE_TARGET_PCT` | Reliability a detection must reach before coverage history calls it dependable (default `90`) |
+| `LLM_FERNET_KEY` | Encrypts stored AI provider keys. Empty disables the AI connector |
+| `PLAYBOOKS_BASE_DIR` / `GUARDRAILS_BASE_DIR` | Content roots, set by docker-compose. An unset path means that library discovers nothing |
+| `ALLOWED_HOSTS` / `CORS_ALLOWED_ORIGINS` | Production only, comma-separated. `ALLOWED_HOSTS` has no default in `prod.py` |
+
+See `backend/.env.example` for the full set with inline notes. A test keeps the
+two in step, so a new setting cannot ship undocumented.
 
 ### Frontend development
 

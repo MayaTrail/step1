@@ -267,7 +267,7 @@ export async function resendOTP(req: ResendOTPRequest): Promise<ResendOTPRespons
  *
  * Sends the Google ID token to the backend, which verifies it and returns
  * a MayaTrail JWT pair.  Stores the tokens and returns the resolved user.
- * No invite code is required — Google's identity verification acts as the
+ * No OTP verification is required — Google's identity verification acts as the
  * equivalent gate.
  *
  * @param idToken - The credential string from the GIS CredentialResponse.

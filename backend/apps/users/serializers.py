@@ -436,7 +436,7 @@ class GoogleOAuthSerializer(serializers.Serializer):
              a. Returning Google user   — match by google_sub, return directly.
              b. Existing credentials user with same email — link google_sub to
                 their account and return the user.
-             c. Brand-new user — create with is_active=True; no invite code
+             c. Brand-new user — create with is_active=True
                 required because Google's identity verification provides
                 equivalent friction.
 

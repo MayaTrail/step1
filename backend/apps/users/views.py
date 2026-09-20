@@ -165,7 +165,6 @@ class GoogleOAuthView(APIView):
     The ID token is obtained by the frontend from Google Identity Services
     after the user completes the Google sign-in consent screen.  This view
     delegates all token verification and user resolution to
-    GoogleOAuthSerializer.  No invite code is required.
 
     The JWT pair is issued by constructing a RefreshToken directly from the
     resolved user, which runs MayaTrailTokenObtainPairSerializer.get_token()

@@ -73,7 +73,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"username\": \"testuser\",\n  \"email\": \"testuser@example.com\",\n  \"password\": \"SuperSecret123\",\n  \"first_name\": \"Test\",\n  \"last_name\": \"User\",\n  \"invite_code\": \"\"\n}"
+              "raw": "{\n  \"username\": \"testuser\",\n  \"email\": \"testuser@example.com\",\n  \"password\": \"SuperSecret123\",\n  \"first_name\": \"Test\",\n  \"last_name\": \"User\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/auth/register/",
@@ -87,7 +87,7 @@
                 ""
               ]
             },
-            "description": "Create a new (inactive) user account and send an OTP to the provided email address.\n\nThe user cannot log in until they verify the OTP via POST /api/auth/register/verify-otp/.\n\nFields:\n- `invite_code` \u2014 optional; required only when REGISTRATION_INVITE_CODE is set in .env.\n- `first_name` / `last_name` \u2014 optional but recommended.\n\nReturns: 201 { message, email } on success."
+            "description": "Create a new (inactive) user account and send an OTP to the provided email address.\n\nThe user cannot log in until they verify the OTP via POST /api/auth/register/verify-otp/.\n\nFields:\n- `first_name` / `last_name` \u2014 optional but recommended.\n\nReturns: 201 { message, email } on success."
           },
           "response": []
         },
@@ -418,7 +418,7 @@
                 ""
               ]
             },
-            "description": "Authenticate via a Google ID token and receive a MayaTrail JWT pair.\n\nThe `id_token` is obtained by the frontend after the user completes the Google sign-in consent screen via Google Identity Services.\n\nNo invite code or OTP verification is required for Google accounts.\n\nReturns: 200 { access, refresh, user } on success."
+            "description": "Authenticate via a Google ID token and receive a MayaTrail JWT pair.\n\nThe `id_token` is obtained by the frontend after the user completes the Google sign-in consent screen via Google Identity Services.\n\nNo OTP verification is required for Google accounts.\n\nReturns: 200 { access, refresh, user } on success."
           },
           "response": []
         }

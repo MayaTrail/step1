@@ -48,5 +48,7 @@ jobs:
       - name: Models and migrations agree
         run: python manage.py makemigrations --check --dry-run
 
-      - name: Run the emulation, metrics, guardrail, threat feed, workflow and infrastructure suites
-        run: python manage.py test apps.emulations apps.metrics apps.guardrails apps.threatintel apps.workflows apps.infrastructure
+      # apps.users carries the .env.example contract test, which asserts every
+      # setting config/settings/ reads is documented for whoever deploys this.
+      - name: Run the emulation, metrics, guardrail, threat feed, workflow, infrastructure and users suites
+        run: python manage.py test apps.emulations apps.metrics apps.guardrails apps.threatintel apps.workflows apps.infrastructure apps.users
