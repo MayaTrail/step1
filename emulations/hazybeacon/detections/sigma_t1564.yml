@@ -1,0 +1,36 @@
+title: HazyBeacon - Lambda Resource Tagged by IAM User to Blend with Terraform-Managed Infra
+id: f36e7890-23d4-4f3a-0789-1012345c6d78
+status: experimental
+description: >
+  Detects TagResource calls on Lambda functions by an IAM user principal where the tags claim
+  Terraform management (ManagedBy: terraform, Environment, Team). HazyBeacon applies these
+  camouflage tags post-deployment to evade asset inventory and cost-allocation tooling.
+  The key signal is the source identity: legitimate Terraform-managed resources receive tags
+  during CreateFunction via the Terraform service role, not via a subsequent TagResource call
+  from an IAM user key. This temporal and identity mismatch is the detection hook.
+references:
+    - https://attack.mitre.org/techniques/T1564/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1564
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: lambda.amazonaws.com
+        eventName: TagResource20170331
+        userIdentity.type: IAMUser
+    filter_cost_allocation_tools:
+        userAgent|contains:
+            - 'cost-explorer'
+            - 'aws-cost'
+            - 'tag-editor'
+    condition: selection and not filter_cost_allocation_tools
+falsepositives:
+    - Developer manually adding tags to a Lambda they deployed from the CLI
+    - FinOps tagging remediation script running as a user credential to fix untagged resources
+    - Tag policy enforcement tool using an IAM user service account
+level: low
