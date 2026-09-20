@@ -160,4 +160,36 @@ MANIFEST = {
         {"name": "S3 buckets",               "count": 2, "cost_per_hour_usd": 0.00006},
         {"name": "Lambda (attack-time only)", "count": 1, "cost_per_hour_usd": 0.0},
     ],
+
+    # -- Related guardrails (guardrails/ SCP/RCP library) ---------------------
+    # Hand-curated, not derived: each id is a catalogue slug from
+    # guardrails.registry.discover() (backend/apps/guardrails). "blocks" means
+    # the control denies the exact API call the attack chain depends on;
+    # "mitigates" reduces the blast radius or a precondition without stopping
+    # the chain outright; "hardens" is a defense-in-depth control PLAYBOOK.md
+    # recommends but that this specific emulated chain doesn't trip over.
+    "related_guardrails": [
+        {
+            "id": "deny-modification-to-lambda-url-config",
+            "relevance": "blocks",
+            "note": "Denies lambda:CreateFunctionUrlConfig/UpdateFunctionUrlConfig unless "
+                    "FunctionUrlAuthType=AWS_IAM — would have rejected the T1648 step that "
+                    "creates the AuthType:NONE public C2 endpoint outright.",
+        },
+        {
+            "id": "require-mfa-for-sensitive-iam-operations",
+            "relevance": "mitigates",
+            "note": "Denies iam:CreateAccessKey (among other sensitive IAM ops) without MFA. "
+                    "Doesn't stop this emulation, which starts from an already-leaked static "
+                    "key, but blocks the attacker minting a fresh key as a fallback/backdoor.",
+        },
+        {
+            "id": "enforce-imdsv2-on-ec2-instances",
+            "relevance": "hardens",
+            "note": "PLAYBOOK.md's real-world 'what would have prevented this' guidance. Not "
+                    "exercised by this emulation (the leaked credential is planted via EC2 "
+                    "UserData, not read from IMDS by attack.py), but closes the IMDS-theft path "
+                    "real HazyBeacon intrusions have also used.",
+        },
+    ],
 }

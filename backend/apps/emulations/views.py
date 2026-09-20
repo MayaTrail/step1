@@ -70,6 +70,52 @@ def _default_region() -> str:
     return Stack._meta.get_field("region").default
 
 
+def _related_guardrails_for_api(entry: dict) -> list[dict]:
+    """
+    Resolve an emulation's hand-tagged `related_guardrails` MANIFEST entries
+    against the guardrails library, so the frontend gets a usable label
+    (purpose/type) without a follow-up round trip to /api/guardrails/<id>/.
+
+    Lazily imports apps.guardrails.registry (mirrors _default_region()'s lazy
+    import of apps.infrastructure.models) rather than a top-level import, and
+    degrades to the bare manifest entries if the guardrails library fails to
+    load — a missing/broken guardrail library must not break the emulation
+    catalogue.
+
+    Args:
+        entry: A registry catalogue entry (MANIFEST contents plus registry keys).
+
+    Returns:
+        List of {id, relevance, note, purpose, type} dicts. Entries whose id
+        does not resolve in the guardrails catalogue are dropped rather than
+        shipped with blank purpose/type.
+    """
+    tagged = entry.get("related_guardrails") or []
+    if not tagged:
+        return []
+
+    from apps.guardrails.registry import get_guardrail  # noqa: PLC0415
+
+    resolved = []
+    for item in tagged:
+        guardrail_id = item.get("id")
+        guardrail = get_guardrail(guardrail_id) if guardrail_id else None
+        if guardrail is None:
+            logger.warning(
+                "Emulation %s tags unknown guardrail id %r in related_guardrails",
+                entry.get("name"), guardrail_id,
+            )
+            continue
+        resolved.append({
+            "id": guardrail_id,
+            "relevance": item.get("relevance", ""),
+            "note": item.get("note", ""),
+            "purpose": guardrail.get("purpose", ""),
+            "type": guardrail.get("type", ""),
+        })
+    return resolved
+
+
 def _manifest_to_api(entry: dict) -> dict:
     """
     Convert a registry catalogue entry to the camelCase shape expected by the
@@ -105,6 +151,7 @@ def _manifest_to_api(entry: dict) -> dict:
         "attackPath": entry.get("attack_path", []),
         "mitreMappings": entry.get("mitre_mappings", []),
         "references": entry.get("references", []),
+        "relatedGuardrails": _related_guardrails_for_api(entry),
         "phaseCount": entry.get("phase_count", 0),
         # Cost / runtime / footprint metadata — authored statically in each
         # MANIFEST and consumed by the Emulation Details "Overview" tab (key
