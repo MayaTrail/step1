@@ -44,6 +44,7 @@ from django.conf import settings
 from django.utils import timezone
 from pulumi import automation as auto
 
+from apps.connectors.aws import assume_role_arn
 from apps.emulations.detections import list_detection_summaries
 from apps.emulations.registry import get_emulation
 from apps.emulations.readiness import requires_http_probe, resolve_readiness
@@ -179,6 +180,10 @@ def _assume_user_role(user) -> dict[str, str]:
     Credentials are never stored in the database — they are generated per-task
     invocation and discarded once the task completes.
 
+    Delegates to connectors.aws.assume_role_arn so the Scout scan, which
+    assumes a different role under a different session name, shares one
+    implementation rather than a copy of this one.
+
     Args:
         user: Authenticated User instance with a valid aws_role_arn.
 
@@ -189,18 +194,7 @@ def _assume_user_role(user) -> dict[str, str]:
     Raises:
         botocore.exceptions.ClientError if the role cannot be assumed.
     """
-    sts = boto3.client("sts")
-    assumed = sts.assume_role(
-        RoleArn=user.aws_role_arn,
-        RoleSessionName=f"mayatrail-emulation-{user.id}",
-        DurationSeconds=3600,
-    )
-    creds = assumed["Credentials"]
-    return {
-        "AWS_ACCESS_KEY_ID": creds["AccessKeyId"],
-        "AWS_SECRET_ACCESS_KEY": creds["SecretAccessKey"],
-        "AWS_SESSION_TOKEN": creds["SessionToken"],
-    }
+    return assume_role_arn(user.aws_role_arn, f"mayatrail-emulation-{user.id}")
 
 
 def _build_workspace_env(
