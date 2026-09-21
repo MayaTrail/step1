@@ -47,6 +47,12 @@ class LogEntry(models.Model):
         WORKFLOW_ARCHIVED = "workflow.archived", "Workflow Archived"
         WORKFLOW_RESTORED = "workflow.restored", "Workflow Restored"
         PLAYBOOK_COMMAND = "playbook.command", "Playbook Command Run"
+        # An attack graph scan reads the tenant's IAM and nothing else, but it
+        # assumes a role in their account, so it belongs in the same trail as
+        # every other action MayaTrail takes there.
+        SCAN_STARTED = "scan.started", "Attack Graph Scan Started"
+        SCAN_COMPLETED = "scan.completed", "Attack Graph Scan Completed"
+        SCAN_FAILED = "scan.failed", "Attack Graph Scan Failed"
 
     id = models.UUIDField(
         primary_key=True,
