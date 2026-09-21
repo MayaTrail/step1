@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { ConnectCloudDialog } from './ConnectCloudDialog'
+import { ConnectScoutRoleDialog } from './ConnectScoutRoleDialog'
 import {
     IconChevron,
     IconGear,
@@ -31,6 +32,7 @@ export function ProfilePage() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
     const [connectOpen, setConnectOpen] = useState(false)
+    const [scoutConnectOpen, setScoutConnectOpen] = useState(false)
 
     const loadProfile = useCallback(async () => {
         setLoading(true)
@@ -139,6 +141,14 @@ export function ProfilePage() {
                     onConnect={() => setConnectOpen(true)}
                 />
 
+                {/* ── Scout audit role ── */}
+                <ScoutConnectionCard
+                    user={user}
+                    profile={profile}
+                    onConnect={() => setScoutConnectOpen(true)}
+                    onDisconnected={loadProfile}
+                />
+
                 {/* ── Security & access ── */}
                 <Card className="p-2">
                     <div className="px-4 pt-3 pb-1">
@@ -179,6 +189,15 @@ export function ProfilePage() {
                 <ConnectCloudDialog
                     onClose={() => {
                         setConnectOpen(false)
+                        loadProfile()
+                    }}
+                />
+            )}
+
+            {scoutConnectOpen && (
+                <ConnectScoutRoleDialog
+                    onClose={() => {
+                        setScoutConnectOpen(false)
                         loadProfile()
                     }}
                 />
@@ -395,6 +414,144 @@ function ConnectionModeCard({
     }
 
     return null
+}
+
+/* ── Scout audit role card ──────────────────────────────────────────────────
+   A second, separate connection from the AWS emulation connector above. It
+   grants a single IAM read and exists only so the Attack Graph scan can run
+   without widening the emulation role's grant — a security team can review
+   and revoke it independently of the emulation connection. */
+function ScoutConnectionCard({
+    user,
+    profile,
+    onConnect,
+    onDisconnected,
+}: {
+    user: ReturnType<typeof useAuth>['user']
+    profile: UserProfile | null
+    onConnect: () => void
+    onDisconnected: () => void
+}) {
+    const { disconnectAuditRole } = useAuth()
+    const [confirming, setConfirming] = useState(false)
+    const [disconnecting, setDisconnecting] = useState(false)
+    const [disconnectError, setDisconnectError] = useState<string | null>(null)
+
+    if (!user) return null
+
+    const handleDisconnect = async () => {
+        setDisconnectError(null)
+        setDisconnecting(true)
+        try {
+            await disconnectAuditRole()
+            setConfirming(false)
+            onDisconnected()
+        } catch (err: any) {
+            // A 409 lands here naming that a scan is running.
+            setDisconnectError(err.message ?? 'Could not disconnect the audit role')
+        } finally {
+            setDisconnecting(false)
+        }
+    }
+
+    if (!user.hasAuditRole) {
+        return (
+            <Card className="p-6">
+                <div className="flex items-center justify-between gap-4 mb-4">
+                    <div className="flex items-center gap-3">
+                        <span className="w-10 h-10 rounded-btn flex items-center justify-center bg-surface-elevated border border-border text-content-dim">
+                            <IconShield size={20} />
+                        </span>
+                        <div>
+                            <div className="font-mono text-2xs uppercase tracking-label text-content-dim mb-0.5">
+                                Attack Graph
+                            </div>
+                            <div className="font-display text-sm font-semibold text-content-primary">
+                                No Scout audit role connected
+                            </div>
+                        </div>
+                    </div>
+                    <Badge tone="neutral" mono dot>
+                        Not connected
+                    </Badge>
+                </div>
+
+                <p className="text-[0.9rem] leading-relaxed text-content-secondary mb-4">
+                    Read-only. Used only by the Attack Graph scan to read your account&apos;s IAM graph —
+                    it cannot write anything, and it is separate from the AWS connection above, so it
+                    is safe to grant on its own.
+                </p>
+
+                <Button icon={<IconShield size={14} />} onClick={onConnect}>
+                    Connect Scout audit role
+                </Button>
+            </Card>
+        )
+    }
+
+    const maskedArn = profile?.aws_audit_role_arn?.replace(
+        /^(arn:aws:iam::\d{4})\d+(:role\/.{4}).*$/,
+        '$1****$2****',
+    )
+
+    return (
+        <Card accent="blue" className="p-6">
+            <div className="flex items-center justify-between gap-4 mb-4">
+                <div className="flex items-center gap-3">
+                    <span className="w-10 h-10 rounded-btn flex items-center justify-center bg-accent-blue/10 border border-accent-blue/20 text-accent-blue">
+                        <IconShield size={20} />
+                    </span>
+                    <div>
+                        <div className="font-mono text-2xs uppercase tracking-label text-content-dim mb-0.5">
+                            Attack Graph
+                        </div>
+                        <div className="font-display text-sm font-semibold text-content-primary">
+                            Scout Audit Role
+                        </div>
+                    </div>
+                </div>
+                <Badge tone="green" mono dot>
+                    Connected
+                </Badge>
+            </div>
+            {maskedArn && (
+                <div className="bg-surface-elevated rounded-btn px-4 py-3 border border-border">
+                    <div className="font-mono text-2xs uppercase tracking-label text-content-dim mb-1">
+                        Role ARN
+                    </div>
+                    <div className="font-mono text-xs text-accent-blue break-all">{maskedArn}</div>
+                </div>
+            )}
+
+            {disconnectError && (
+                <p className="mt-4 text-[12px] leading-relaxed text-danger">{disconnectError}</p>
+            )}
+
+            <div className="mt-4">
+                {confirming ? (
+                    <div className="flex items-center gap-3 flex-wrap">
+                        <span className="text-[12px] text-danger font-semibold">
+                            Disconnect the Scout audit role?
+                        </span>
+                        <Button variant="danger" onClick={handleDisconnect} disabled={disconnecting}>
+                            {disconnecting ? 'Disconnecting...' : 'Yes, disconnect'}
+                        </Button>
+                        <Button
+                            variant="secondary"
+                            onClick={() => setConfirming(false)}
+                            disabled={disconnecting}
+                        >
+                            Cancel
+                        </Button>
+                    </div>
+                ) : (
+                    <Button variant="secondary" onClick={() => setConfirming(true)}>
+                        Disconnect
+                    </Button>
+                )}
+            </div>
+        </Card>
+    )
 }
 
 /* ── AWS connection form, shown to an unconnected user ────────────────────────

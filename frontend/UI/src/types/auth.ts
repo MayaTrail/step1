@@ -4,6 +4,12 @@ export interface User {
   initials: string
   method: 'credentials' | 'google_sso'
   isVerified: boolean
+  /**
+   * Whether a read-only Scout audit role is connected. Separate from
+   * isVerified, which is the emulation role: an org may connect either one
+   * without the other, and the Attack Graph page gates on this.
+   */
+  hasAuditRole: boolean
 }
 
 export interface LoginRequest {

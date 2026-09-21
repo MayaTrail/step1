@@ -44,6 +44,7 @@ export interface UserProfile {
   date_joined: string
   is_verified: boolean
   aws_role_arn: string
+  aws_audit_role_arn: string
   auth_method: string
 }
 
@@ -142,6 +143,7 @@ async function fetchMe(accessToken?: string): Promise<User> {
     first_name: string
     last_name: string
     is_verified: boolean
+    aws_audit_role_arn?: string
     auth_method: string
   }>('/auth/me/', { headers })
 
@@ -153,6 +155,7 @@ async function fetchMe(accessToken?: string): Promise<User> {
     initials: initials(name),
     method,
     isVerified: data.is_verified ?? false,
+    hasAuditRole: Boolean(data.aws_audit_role_arn),
   }
 }
 
@@ -168,6 +171,7 @@ function mockLogin(req: LoginRequest): AuthResponse {
     initials: initials(entry.name),
     method: 'credentials',
     isVerified: false,
+    hasAuditRole: false,
   }
   const token = createMockToken(user)
   localStorage.setItem(TOKEN_KEY, token)
@@ -337,6 +341,7 @@ export function getStoredUser(): User | null {
       initials: initials(username),
       method: 'credentials',
       isVerified: (jwtPayload.is_verified as boolean) ?? false,
+      hasAuditRole: false,
     }
   }
 
@@ -351,6 +356,7 @@ export function getStoredUser(): User | null {
     initials: payload.initials,
     method: payload.method as User['method'],
     isVerified: payload.isVerified ?? false,
+    hasAuditRole: false,
   }
 }
 
@@ -394,6 +400,18 @@ export async function verifyConnector(req: ConnectorRequest): Promise<ConnectorR
     throw new Error('Unable to reach the server. Please check your connection.')
   }
 }
+
+/** POST /api/connectors/aws/audit/ — verify and store the Scout audit role. */
+export async function verifyAuditRole(req: ConnectorRequest): Promise<ConnectorResponse> {
+  const { data } = await api.post<ConnectorResponse>('/connectors/aws/audit/', req)
+  return data
+}
+
+/** DELETE /api/connectors/aws/audit/ — disconnect it. */
+export async function disconnectAuditRole(): Promise<void> {
+  await api.delete('/connectors/aws/audit/')
+}
+
 export async function refreshUser(): Promise<User> {
   return fetchMe()
 }
