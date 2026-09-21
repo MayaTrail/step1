@@ -22,4 +22,5 @@ urlpatterns = [
     path("api/workflows/", include("apps.workflows.urls")),
     path("api/playbooks/", include("apps.playbooks.urls")),
     path("api/detections/authored/", include("apps.authored_detections.urls")),
+    path("api/attack-graph/", include("apps.attack_graph.urls")),
 ]
