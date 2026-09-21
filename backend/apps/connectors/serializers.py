@@ -44,3 +44,37 @@ class AWSConnectorSerializer(serializers.Serializer):
                 "Invalid ARN format. Expected: arn:aws:iam::<account-id>:role/<role-name>"
             )
         return value.strip()
+
+
+class AWSAuditConnectorSerializer(serializers.Serializer):
+    """
+    Validates the read-only audit role ARN submitted for Scout.
+
+    Format-identical to AWSConnectorSerializer and deliberately a separate
+    class: these two ARNs mean different things, and a shared serializer is
+    how a future field on one quietly appears on the other.
+    """
+
+    role_arn = serializers.CharField(max_length=256)
+
+    def validate_role_arn(self, value: str) -> str:
+        """
+        Ensure the ARN looks like a valid IAM role ARN.
+
+        Format only — assumability and the IAM read permission are both
+        verified against AWS in the view.
+
+        Args:
+            value: The role ARN string from the request body.
+
+        Returns:
+            The ARN unchanged if the pattern matches.
+
+        Raises:
+            serializers.ValidationError: If the format is invalid.
+        """
+        if not _ARN_RE.match(value.strip()):
+            raise serializers.ValidationError(
+                "Invalid ARN format. Expected: arn:aws:iam::<account-id>:role/<role-name>"
+            )
+        return value.strip()
