@@ -42,6 +42,17 @@ class User(AbstractUser):
         default="",
         help_text="ARN of the cross-account role MayaTrail assumes.",
     )
+    aws_audit_role_arn = models.CharField(
+        max_length=256,
+        blank=True,
+        default="",
+        help_text=(
+            "Read-only IAM role the Attack Graph scan assumes. Separate from "
+            "aws_role_arn on purpose: that role performs the writes emulations "
+            "need, this one grants a single IAM read, so a security team can "
+            "review and revoke IAM-graph access without touching emulations."
+        ),
+    )
     is_verified = models.BooleanField(
         default=False,
         help_text="True when the user's IAM role has been verified via STS.",

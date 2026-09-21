@@ -87,6 +87,7 @@ class UserSerializer(serializers.ModelSerializer):
         fields = [
             "id", "username", "email", "first_name", "last_name",
             "date_joined", "is_verified", "is_demo", "aws_role_arn",
+            "aws_audit_role_arn",
             "demo_activated_at", "demo_used", "demo_expires_at", "auth_method",
         ]
         read_only_fields = fields
