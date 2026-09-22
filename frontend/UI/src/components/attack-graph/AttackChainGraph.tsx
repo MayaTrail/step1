@@ -373,14 +373,14 @@ function EntityPanel({
                 <span className="font-mono text-[10px] text-content-dim">score {chain.score}</span>
               )}
             </div>
-            {chain.mitre_techniques.length > 0 && (
+            {(chain.mitre_techniques ?? []).length > 0 && (
               <div className="flex flex-wrap gap-1 mb-2">
                 {chain.mitre_techniques.map((t) => (
                   <span key={t} className="font-mono text-[8.5px] uppercase tracking-[0.6px] px-1.5 py-0.5 rounded-[4px]" style={{ color: CAT_COLOR.iam, background: `${CAT_COLOR.iam}1a` }}>{t}</span>
                 ))}
               </div>
             )}
-            {chain.steps.length === 0 ? (
+            {(chain.steps ?? []).length === 0 ? (
               <div className="pl-2 border-l" style={{ borderColor: DIRECT_COLOR }}>
                 <div className="font-mono text-[10px] font-bold" style={{ color: DIRECT_COLOR }}>
                   Direct access — no escalation step needed
@@ -406,8 +406,11 @@ function EntityPanel({
                 ))}
               </div>
             )}
-            {chain.alternate_mechanisms.length > 0 && (
+            {(chain.alternate_mechanisms ?? []).length > 0 && (
               <div className="font-mono text-[9px] text-content-dim leading-[1.5] mt-1.5">
+                {/* Type says never-omitted (envelope.py always sets it), but a scan
+                    stored before this field existed predates that guarantee — real
+                    API data hit this, not just a theoretical gap. */}
                 +{chain.alternate_mechanisms.length} other route{chain.alternate_mechanisms.length === 1 ? '' : 's'} to the same target: {chain.alternate_mechanisms.join(', ')}
               </div>
             )}
