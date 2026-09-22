@@ -1091,7 +1091,7 @@ graphify update .
   - `query_paths(graph_dict: dict, scan_id: str, src: str, dst: str) -> dict` → the `/graph/path/` response body
   - `reachable(graph_dict: dict, scan_id: str, origin: str) -> dict` (exposed, not wired to UI)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `backend/apps/attack_graph/tests/test_graph_query.py`:
 
@@ -1377,7 +1377,7 @@ class ScoutHelperContractTests(SimpleTestCase):
         )
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 With the dev venv (which has Scout) so they do not merely skip:
 
@@ -1387,7 +1387,7 @@ cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci ./venv-dev/Scripts/pytho
 
 Expected: FAIL at import — `cannot import name 'graph_query'`.
 
-- [ ] **Step 3: Write the module**
+- [x] **Step 3: Write the module**
 
 Create `backend/apps/attack_graph/graph_query.py`:
 
@@ -1656,7 +1656,7 @@ def reachable(graph_dict: dict[str, Any], scan_id: str, origin: str) -> dict[str
     )
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci ./venv-dev/Scripts/python.exe manage.py test apps.attack_graph.tests.test_graph_query -v 2
@@ -1664,7 +1664,7 @@ cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci ./venv-dev/Scripts/pytho
 
 Expected: PASS.
 
-- [ ] **Step 5: Confirm the suite still passes with Scout absent**
+- [x] **Step 5: Confirm the suite still passes with Scout absent**
 
 ```bash
 cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test apps.attack_graph -v 2
@@ -1672,7 +1672,7 @@ cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test ap
 
 Expected: PASS, with `test_graph_query`'s tests skipped and `test_graph_search`'s all running. If anything in `test_graph_query` **errors** rather than skips, a Scout import escaped to module scope — fix that before committing.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/apps/attack_graph/graph_query.py backend/apps/attack_graph/tests/test_graph_query.py
