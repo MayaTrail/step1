@@ -49,6 +49,13 @@ function EntityPicker({
   const [term, setTerm] = useState('')
   const [options, setOptions] = useState<ChainNode[]>([])
   const [open, setOpen] = useState(false)
+  // A failed search is not the same as an empty result — a scan with no
+  // stored graph (GRAPH_UNAVAILABLE/GRAPH_PENDING/GRAPH_FAILED) 404s on
+  // every search, and swallowing that left the picker looking permanently
+  // empty with no explanation. The backend's own message names which of the
+  // three it is; surface it verbatim, the same way QueryPanel.run()'s own
+  // catch already does for the path query itself.
+  const [error, setError] = useState('')
   const timer = useRef<number | undefined>(undefined)
 
   useEffect(() => {
@@ -56,8 +63,13 @@ function EntityPicker({
     window.clearTimeout(timer.current)
     timer.current = window.setTimeout(() => {
       attackGraph.searchGraphNodes(scanId, term)
-        .then(setOptions)
-        .catch(() => setOptions([]))
+        .then((nodes) => { setOptions(nodes); setError('') })
+        .catch((err: unknown) => {
+          setOptions([])
+          const detail = (err as { response?: { data?: { detail?: string } } })
+            ?.response?.data?.detail
+          setError(detail || 'Search failed. Try again.')
+        })
     }, SEARCH_DEBOUNCE_MS)
     return () => window.clearTimeout(timer.current)
   }, [scanId, term, open])
@@ -88,6 +100,9 @@ function EntityPicker({
             </li>
           ))}
         </ul>
+      )}
+      {open && error && !value && (
+        <div className="absolute z-10 mt-1 w-full text-[0.7rem] text-danger">{error}</div>
       )}
     </div>
   )

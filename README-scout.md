@@ -360,10 +360,10 @@ across two modules along that line:
   their password or minting a JWT for them, and the latter was correctly
   blocked as credential materialization. A real click-through against that
   scan is still worth doing by hand.
-- **A real gap, not just an unverified step**: `QueryPanel`'s `EntityPicker`
-  swallows a failed `searchGraphNodes` call (`.catch(() => setOptions([]))`),
-  so on a pre-Phase-4 scan (`graph` still `None`) the picker silently shows no
-  suggestions forever instead of surfacing the backend's "run a new scan to
-  get it" message — the panel reads as blank rather than explained. Not fixed
-  as part of this phase; it's a UI design decision (inline error under the
-  picker? disable the panel for such a scan?) rather than a one-line fix.
+- ~~`QueryPanel`'s `EntityPicker` swallows a failed `searchGraphNodes` call~~
+  **Fixed** (post-Phase-4, same session): `EntityPicker` now keeps the
+  backend's `detail` message in its own `error` state and renders it under
+  the input, the same pattern `QueryPanel.run()`'s own catch already used for
+  the path query itself — so a pre-Phase-4 scan's "run a new scan to get it"
+  (or "still running" / "failed") now surfaces where the picker used to go
+  silently empty.
