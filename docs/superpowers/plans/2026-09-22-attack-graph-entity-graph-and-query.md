@@ -1696,7 +1696,7 @@ git commit -m "feat(attack-graph): on-demand path query with explicit edge types
   - `GET /api/attack-graph/scan/<uuid:scan_id>/graph/path/?src=&dst=` → the `query_paths` body
   - All three 404 with a `code` of `GRAPH_UNAVAILABLE`, `GRAPH_PENDING` or `GRAPH_FAILED`, or a plain "No such scan." — four situations, four messages, because "run a new scan" is wrong advice for three of them.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 DRF is absent in CI, so these read the source — the pattern `test_api_contract.py` already uses and explains. Append to it:
 
@@ -1840,7 +1840,7 @@ class GraphEndpointContractTests(SimpleTestCase):
         self.assertNotIn("import scout", head)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
 cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test apps.attack_graph.tests.test_api_contract -v 2
@@ -1848,7 +1848,7 @@ cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test ap
 
 Expected: FAIL — the routes and view classes do not exist yet.
 
-- [ ] **Step 3: Write the views**
+- [x] **Step 3: Write the views**
 
 Append to `backend/apps/attack_graph/views.py`, and add `from . import graph_query, graph_search` to its imports:
 
@@ -2034,7 +2034,7 @@ class ScoutScanGraphPathView(_ScanGraphView):
         return Response(graph_query.query_paths(graph, str(scan_id), src, dst))
 ```
 
-- [ ] **Step 4: Wire the routes**
+- [x] **Step 4: Wire the routes**
 
 In `backend/apps/attack_graph/urls.py`, extend the import and the list, and add the three lines to the module docstring's route table. While editing that docstring, fix the line already in it: it claims `GET /api/attack-graph/scan/` is `ScoutScanListView`, but the list route is `scan/list/` — `GET scan/` matches nothing.
 
@@ -2064,7 +2064,7 @@ urlpatterns = [
 ]
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 ```bash
 cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test apps.attack_graph -v 2
@@ -2072,7 +2072,7 @@ cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test ap
 
 Expected: PASS.
 
-- [ ] **Step 6: Verify the URLconf actually loads under the real settings**
+- [x] **Step 6: Verify the URLconf actually loads under the real settings**
 
 CI uses an empty URLconf, so it never resolves these. Check by hand:
 
@@ -2082,14 +2082,27 @@ cd backend && ./venv-dev/Scripts/python.exe manage.py check
 
 Expected: "System check identified no issues".
 
-- [ ] **Step 7: Commit**
+**Deviation found and fixed (2026-09-22).** `test_render_path_is_never_used`
+and `test_resolve_arn_tokens_is_never_used` do a literal substring search
+against `graph_query.py` and `views.py`. Both modules' own docstrings — copied
+verbatim from this plan's Task 4 Step 3 and this task's Step 3 — *explain* why
+`render_path`/`resolve_arn_tokens` aren't used, and so contained those exact
+identifiers in prose, tripping the tests they were meant to satisfy: a
+self-contradiction between two pieces of plan-specified content, not a design
+question. Fixed by rewording both docstrings to point at the Scout
+file:line instead of spelling the identifier
+(`backend/apps/attack_graph/graph_query.py`'s module docstring point 1, and
+`ScoutScanGraphPathView`'s docstring) — meaning fully preserved, no behaviour
+changed. Included in this task's commit below.
+
+- [x] **Step 7: Commit**
 
 ```bash
-git add backend/apps/attack_graph/views.py backend/apps/attack_graph/urls.py backend/apps/attack_graph/tests/test_api_contract.py
+git add backend/apps/attack_graph/views.py backend/apps/attack_graph/urls.py backend/apps/attack_graph/graph_query.py backend/apps/attack_graph/tests/test_api_contract.py
 git commit -m "feat(attack-graph): graph node search, entity lookup and path query endpoints"
 ```
 
-- [ ] **Step 8: Refresh the graft index (end of Phase 2)**
+- [x] **Step 8: Refresh the graft index (end of Phase 2)**
 
 ```bash
 graphify update .

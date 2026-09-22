@@ -10,11 +10,12 @@ import would drag Scout into every management command and break the CI suite.
 
 Three decisions worth knowing before changing anything here:
 
-1. Scout's render_path() is NOT used. It emits only hop_number / mechanism /
-   source_arn / target_arn / concrete_api_sequence, while envelope._step reads
-   `action` and `conditional` — so a hop routed through it renders
-   "deterministic" for every edge, including ones the ranked-chains view shows
-   as conditional. Hops are built from the edges instead, the way
+1. Scout's own hop-rendering function (scout/chains/builder.py:1007) is NOT
+   used. It emits only hop_number / mechanism / source_arn / target_arn /
+   concrete_api_sequence, while envelope._step reads `action` and
+   `conditional` — so a hop routed through it renders "deterministic" for
+   every edge, including ones the ranked-chains view shows as conditional.
+   Hops are built from the edges instead, the way
    scout/chains/builder.py:1174 does.
 2. The traversed edge types are explicit. Scout's default is
    [PRIVESC_TO, CAN_ASSUME], under which any resource destination returns "no

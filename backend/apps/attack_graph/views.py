@@ -14,6 +14,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from . import graph_query, graph_search
 from .models import ScoutScan, active_scans
 from .permissions import HasScoutConnection
 from .serializers import ScoutScanDetailSerializer, ScoutScanListSerializer
@@ -134,3 +135,184 @@ class ScoutScanDetailView(APIView):
                 {"detail": "No such scan."}, status=status.HTTP_404_NOT_FOUND,
             )
         return Response(ScoutScanDetailSerializer(scan).data)
+
+
+# Why a scan has no graph, in the user's terms. All four are 404s — the
+# resource genuinely is not there — but they are four different situations and
+# only one of them is fixed by running a new scan. Collapsing them into one
+# string would tell someone watching a scan that is running right now to go run
+# a scan.
+GRAPH_UNAVAILABLE = (
+    "This scan has no stored graph. Scans run before this feature shipped do "
+    "not have one — run a new scan to get it."
+)
+GRAPH_PENDING = "This scan is still running. Its graph is stored when it finishes."
+GRAPH_FAILED = "This scan failed, so no graph was stored."
+
+
+class _ScanGraphView(APIView):
+    """
+    Shared resolution for the three graph endpoints.
+
+    One place that answers "does this user own a scan with a usable graph",
+    because three copies of an ownership check is three places for one of them
+    to drift into a global lookup.
+    """
+
+    permission_classes = [HasScoutConnection]
+
+    def _resolve(self, request: Request, scan_id: str):
+        """
+        Returns (graph_dict, None) or (None, error Response).
+
+        Scoped to the requesting user, matching ScoutScanDetailView: a 404 for
+        someone else's scan is the correct answer and does not confirm the id
+        exists. The ownership filter is inside this method and nowhere else,
+        so there is one place to read to know the three endpoints are scoped.
+
+        The graph itself comes through graph_search's LRU, so a hit skips both
+        the SELECT of a multi-MB jsonb column and psycopg's parse of it. The
+        status row is still read every time — it is three small columns, and
+        it is what decides which of the four 404s to send.
+        """
+        scan = (
+            ScoutScan.objects
+            .filter(id=scan_id, user=request.user)
+            .only("id", "status", "error_message")
+            .first()
+        )
+        if scan is None:
+            return None, Response(
+                {"detail": "No such scan."}, status=status.HTTP_404_NOT_FOUND,
+            )
+
+        graph = graph_search.graph_dict_for_scan(
+            str(scan_id),
+            lambda: (
+                ScoutScan.objects
+                .filter(id=scan_id, user=request.user)
+                .values_list("graph", flat=True)
+                .first()
+            ),
+        )
+        if not graph:
+            if scan.status in (ScoutScan.Status.PENDING, ScoutScan.Status.RUNNING):
+                detail, code = GRAPH_PENDING, "GRAPH_PENDING"
+            elif scan.status == ScoutScan.Status.FAILED:
+                detail = scan.error_message or GRAPH_FAILED
+                code = "GRAPH_FAILED"
+            else:
+                detail, code = GRAPH_UNAVAILABLE, "GRAPH_UNAVAILABLE"
+            return None, Response(
+                {"detail": detail, "code": code},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return graph, None
+
+
+class ScoutScanGraphNodesView(_ScanGraphView):
+    """
+    Search this scan's graph nodes.
+
+    GET /api/attack-graph/scan/<scan_id>/graph/nodes/?q=<term>
+    Returns:
+      200 — { nodes: [...] }, at most graph_search.MAX_NODE_RESULTS
+      404 — no such scan, or the scan has no stored graph
+    """
+
+    def get(self, request: Request, scan_id: str) -> Response:
+        """Return matching nodes. No rehydrate — see graph_search's docstring."""
+        graph, error = self._resolve(request, scan_id)
+        if error is not None:
+            return error
+        return Response(
+            {"nodes": graph_search.search_nodes(graph, request.query_params.get("q", ""))},
+        )
+
+
+class ScoutScanGraphEntityView(_ScanGraphView):
+    """
+    One entity's full record.
+
+    GET /api/attack-graph/scan/<scan_id>/graph/entity/?id=<node id>
+    Returns:
+      200 — the entity
+      400 — `id` missing, or not a node in this graph
+      404 — no such scan, or the scan has no stored graph
+
+    `id` is a query parameter, not a path segment: node ids contain "/" (which
+    Django's default str converter excludes) and are not always ARNs at all —
+    a SERVICE node is "lambda.amazonaws.com" and PUBLIC is "*".
+    """
+
+    def get(self, request: Request, scan_id: str) -> Response:
+        """Return one node's record."""
+        graph, error = self._resolve(request, scan_id)
+        if error is not None:
+            return error
+        node_id = request.query_params.get("id", "")
+        if not node_id:
+            return Response(
+                {"detail": "An 'id' query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        entity = graph_search.get_entity(graph, node_id)
+        if entity is None:
+            return Response(
+                {"detail": f"No entity '{node_id}' in this scan's graph."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(entity)
+
+
+class ScoutScanGraphPathView(_ScanGraphView):
+    """
+    Paths between two entities in this scan's graph.
+
+    GET /api/attack-graph/scan/<scan_id>/graph/path/?src=<id>&dst=<id>
+    Returns:
+      200 — { src, dst, max_depth, edge_types, nodes, paths, truncated, search_capped }
+      400 — src or dst missing, or not a node in this graph
+      404 — no such scan, or the scan has no stored graph
+
+    Exact node ids, not fuzzy tokens: both pickers are backed by
+    /graph/nodes/, so the client already has an exact id. Scout's CLI-side
+    token-matching helper (scout/chains/builder.py) is deliberately not
+    used — its warnings are CLI copy and its suffix match is unbounded.
+    """
+
+    def get(self, request: Request, scan_id: str) -> Response:
+        """Run the query and return its result, truncation flags included."""
+        graph, error = self._resolve(request, scan_id)
+        if error is not None:
+            return error
+
+        src = request.query_params.get("src", "")
+        dst = request.query_params.get("dst", "")
+        if not src or not dst:
+            return Response(
+                {"detail": "Both 'src' and 'dst' query parameters are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        known = graph_search.node_ids(graph)
+        unknown = [i for i in (src, dst) if i not in known]
+        if unknown:
+            return Response(
+                {"detail": f"Not an entity in this scan's graph: {', '.join(unknown)}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # iter_paths' `if node_id == dst and path` never yields a zero-length
+        # path, so this would otherwise come back as an ordinary empty result
+        # and the panel would say "no escalation path found from alice to
+        # alice within 10 hops" — which is true, useless, and reads like a
+        # finding. The pickers do not stop a user choosing the same entity
+        # twice, so it is stopped here.
+        if src == dst:
+            return Response(
+                {"detail": "Pick two different entities — a path needs somewhere to go."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(graph_query.query_paths(graph, str(scan_id), src, dst))
