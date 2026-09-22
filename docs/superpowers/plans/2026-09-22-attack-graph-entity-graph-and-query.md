@@ -2306,7 +2306,7 @@ git commit -m "refactor(attack-graph): extract stepsToGraph from toGraph"
   - `getGraphEntity(scanId, id): Promise<GraphEntity>`
   - `findPaths(scanId, src, dst): Promise<PathQueryResult>`
 
-- [ ] **Step 1: Extend the types**
+- [x] **Step 1: Extend the types**
 
 In `frontend/UI/src/types/attackGraph.ts`, replace the `ChainNode` interface:
 
@@ -2377,7 +2377,7 @@ export interface PathQueryResult {
 }
 ```
 
-- [ ] **Step 2: Add the service functions**
+- [x] **Step 2: Add the service functions**
 
 Append to `frontend/UI/src/services/attackGraph.service.ts`, and extend its import:
 
@@ -2427,7 +2427,7 @@ export async function findPaths(
 
 Also extend the module docstring's route list with the three new paths.
 
-- [ ] **Step 3: Verify the build**
+- [x] **Step 3: Verify the build**
 
 ```bash
 cd frontend/UI && npm run build
@@ -2435,7 +2435,7 @@ cd frontend/UI && npm run build
 
 Expected: no TypeScript errors. `ChainNode`'s two new fields are optional, so nothing that constructs one breaks.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add frontend/UI/src/types/attackGraph.ts frontend/UI/src/services/attackGraph.service.ts
