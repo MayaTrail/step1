@@ -124,8 +124,19 @@ PY
 MEASURED (synthetic, 2026-09-22, backend/venv-dev):
   70 identities  /  300 resources =    89,004 bytes (0.08 MB)
   500 identities / 3000 resources =   770,023 bytes (0.73 MB)
-MEASURED (real account): not run — no audit-role account reachable this session.
+MEASURED (real account, 2026-09-22, account 940482414561, scan 449f3e9d-...):
+  184 nodes / 7,998 edges = 3,324,940 bytes (3.17 MB)
 ```
+
+**Real number confirms the caveat above, not the synthetic estimate.** 184
+nodes is *smaller* than the 500-identity synthetic, but 7,998 edges — vs.
+~500 in the synthetic — pushed the payload to 3.17 MB, over 4x the synthetic's
+0.73 MB at a fraction of the node count. Edges are where a real graph grows,
+exactly as predicted; a node-count-only estimate would have badly
+under-called this. Still under the 4MB gate, but with much less headroom
+than the synthetic number suggested — a somewhat denser account could cross
+4MB on node count alone. Worth re-measuring against a few more real accounts
+before treating the plain-`JSONField` decision as settled long-term.
 
 **Caveat on the synthetic number, which matters more than the number.** The
 script wires `identities - 1` edges — a single chain, one `granted_by` entry
@@ -150,7 +161,7 @@ apply — a migration is cheap to redo at Task 2 and expensive once rows exist.
 
 - [x] **Step 3: Apply the gate**
 
-**Applied: passes on the synthetic at 0.73 MB. `JSONField` on `ScoutScan` is confirmed and Task 1 lands as written.** Re-check against the real number when Task 2 Step 5 produces it; the rungs below stay live until then.
+**Applied: passes on the synthetic at 0.73 MB, and re-confirmed against the real account above at 3.17 MB.** `JSONField` on `ScoutScan` is confirmed, Task 1 lands as written, and no storage rung was needed.
 
 If the real-account measurement (or, absent one, the 500/3000 synthetic) is **at or below 4MB**, proceed: `JSONField` on `ScoutScan` is confirmed, and Task 1 lands as written.
 

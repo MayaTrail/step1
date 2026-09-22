@@ -256,19 +256,26 @@ a plain `JSONField` column. Synthetic measurement (`backend/venv-dev`,
 
 | Shape | Size |
 |---|---|
-| 70 identities / 300 resources | 89,004 bytes (0.08 MB) |
-| 500 identities / 3,000 resources | 770,023 bytes (0.73 MB) |
+| 70 identities / 300 resources (synthetic) | 89,004 bytes (0.08 MB) |
+| 500 identities / 3,000 resources (synthetic) | 770,023 bytes (0.73 MB) |
+| **184 nodes / 7,998 edges (real account 940482414561)** | **3,324,940 bytes (3.17 MB)** |
 
-Both well under the 4MB gate, so the plain column was confirmed and no
-storage rung (own table, or gzip'd `BinaryField`) was needed. **Caveat**: the
-synthetic graph is a single chain with one `granted_by` entry per edge; a
-real account is denser (more `PRIVESC_TO` edges per identity, larger
-`granted_by` arrays, a `CAN_ACCESS_RESOURCE` edge per resolved
-identity/resource pair), so treat 0.73 MB as a floor, not a prediction. No
-real-account measurement was taken this session — no audit-role AWS account
-was reachable — so this stays the one open item on the storage decision;
-retake it against a real completed scan (`payload_bytes(scan.graph)` in
-`graph_search.py`) before assuming the number holds at scale.
+Both synthetics were well under the 4MB gate, so the plain column was
+confirmed and no storage rung (own table, or gzip'd `BinaryField`) was
+needed — and a real-account measurement, taken later the same session against
+a completed scan, **confirms the gate still passes but not by nearly as much
+as the synthetics suggested**. The real account has a *third* as many nodes
+as the 500-identity synthetic but 16x the edges, landing at 3.17 MB — over
+4x the synthetic's 0.73 MB. This is exactly the caveat the synthetic number
+carried from the start: the script wires one edge per identity, while a real
+account has many `PRIVESC_TO` edges per identity, `granted_by` arrays of
+several statements, and a `CAN_ACCESS_RESOURCE` edge per resolved
+identity/resource pair — edges, not nodes, are where a real graph grows.
+3.17 MB still clears the 4MB gate, but with much less headroom than the
+synthetic implied; a denser or larger real account could plausibly cross it.
+Worth re-measuring against a few more real accounts before treating the
+plain-`JSONField` decision as settled for good — `payload_bytes(scan.graph)`
+in `graph_search.py` is the one-liner to take it.
 
 ### The three endpoints
 
@@ -349,17 +356,43 @@ across two modules along that line:
 
 ### Known gaps carried forward from this phase
 
-- **No real-account payload measurement** (see above) — the storage decision
-  rests on the synthetic number until this is retaken.
-- **Frontend visual verification was not done in-browser this session.**
-  Every frontend task (extracting `stepsToGraph`, the entity panel, the query
-  panel) was verified by a clean `npm run build` and, where the plan called
-  for a browser click-through, by a written static trace of the relevant code
-  paths instead — logging in as the one user with a completed scan
-  (`porttest`, scan `af678b61-...`, 19 chains) would have required either
-  their password or minting a JWT for them, and the latter was correctly
-  blocked as credential materialization. A real click-through against that
-  scan is still worth doing by hand.
+- ~~No real-account payload measurement~~ **Done** (see the updated table
+  above) — 3.17 MB against a real 184-node/7,998-edge graph. Gate still
+  passes; less headroom than the synthetic implied.
+- ~~Frontend visual verification was not done in-browser this session.~~
+  **Done in a later session** (2026-09-22, same day): rebuilt `backend` and
+  `worker_enterprise` from a stale docker-compose state (neither had this
+  phase's code — no source volume mount, see "Local dev notes" — and the
+  build needed a `github_token` secret via `docker buildx build --secret`
+  since `docker-compose build` alone can't supply BuildKit secrets), applied
+  the migration, and logged in as `porttest` to click through the real UI.
+  Found and fixed two bugs neither static trace nor `npm run build` could
+  have caught:
+  - A pre-existing crash (not part of this phase, untouched by it) in the
+    ranked-chains `EntityPanel`: `chain.alternate_mechanisms.length` threw on
+    a scan stored before that field existed — the key was entirely absent
+    from the JSON, not just empty. Guarded `mitre_techniques`, `steps` and
+    `alternate_mechanisms` with `?? []` at their three render sites in
+    `AttackChainGraph.tsx`.
+  - A **Scout-side** bug (`scout/reason/engine.py`'s `template_narrative`)
+    that crashed every real scan against this account: it indexes
+    `chain['hops'][0]` unconditionally when no MITRE technique matched,
+    which throws `IndexError` on a zero-hop "already privileged" chain that
+    Scout's own `_is_admin_origin` admin-skip doesn't catch. Worked around in
+    `apps/attack_graph/tasks.py` rather than patched in the vendored
+    package: `annotate_with_narrative` is now called with only the chains
+    that have at least one hop (same dict objects, so Scout's in-place
+    `chain["analysis"] = {...}` mutation still lands on the real report) —
+    zero-hop chains simply get no narrative, which costs nothing the UI
+    shows (they already render "Direct access — no escalation step needed"
+    from `terminal_impact`). The admin-origin canned note Scout would have
+    given some zero-hop chains is lost as a side effect; a nicer fix would
+    preserve it, deferred as a "for now" tradeoff per the author.
+  After both fixes: `EntityPanel`, `QueryPanel` (including the picker fix
+  above), the "Find paths from here"/toolbar buttons, and the real stored
+  graph (name/type/properties, `IAM_ROLE` and resource icons) all confirmed
+  working against a live scan with real AWS data (account `940482414561`,
+  user `porttest`, scan `449f3e9d-...`, 19 chains, 184 nodes, 7,998 edges).
 - ~~`QueryPanel`'s `EntityPicker` swallows a failed `searchGraphNodes` call~~
   **Fixed** (post-Phase-4, same session): `EntityPicker` now keeps the
   backend's `detail` message in its own `error` state and renders it under
