@@ -52,3 +52,27 @@ class ScanPermissionTests(SimpleTestCase):
             source = self._source(module)
             self.assertIn("active_scans", source, module)
             self.assertNotIn("status__in=ACTIVE_SCAN_STATUSES", source, module)
+
+
+class ScanTaskStoresTheGraphTests(SimpleTestCase):
+    """
+    The task keeps Scout's graph instead of discarding it.
+
+    pipeline.run() has always returned (report, graph) and the task bound the
+    second value to `_graph` — the underscore that says "intentionally
+    unused". Reading the source rather than running the task: tasks.py imports
+    boto3 and Scout, neither of which is installed under config.settings.ci.
+    """
+
+    def _tasks_source(self):
+        path = BACKEND_ROOT / "apps/attack_graph/tasks.py"
+        return path.read_text(encoding="utf-8")
+
+    def test_the_graph_return_value_is_no_longer_discarded(self):
+        source = self._tasks_source()
+        self.assertNotIn("report, _graph = pipeline.run", source)
+        self.assertIn("report, graph = pipeline.run", source)
+
+    def test_the_completion_update_writes_the_graph(self):
+        source = self._tasks_source()
+        self.assertIn("graph=graph.to_dict()", source)

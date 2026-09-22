@@ -374,7 +374,7 @@ git commit -m "feat(attack-graph): store Scout's full graph on the scan row"
 - Consumes: `ScoutScan.graph` from Task 1.
 - Produces: a completed scan row whose `graph` is `{"nodes": [...], "edges": [...]}`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `tasks.py` imports Scout and boto3, so CI cannot import it. Follow the source-reading pattern the file already uses. Append to `backend/apps/attack_graph/tests/test_api_contract.py`:
 
@@ -403,7 +403,7 @@ class ScanTaskStoresTheGraphTests(SimpleTestCase):
         self.assertIn("graph=graph.to_dict()", source)
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 ```bash
 cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test apps.attack_graph.tests.test_api_contract -v 2
@@ -411,7 +411,7 @@ cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test ap
 
 Expected: FAIL on both — the source still says `report, _graph`.
 
-- [ ] **Step 3: Make the change**
+- [x] **Step 3: Make the change**
 
 In `backend/apps/attack_graph/tasks.py`, change the unpack:
 
@@ -437,7 +437,7 @@ and add the field to the completion update, which currently reads
 
 Also update the comment above `pipeline.run` that currently explains the underscore, if one is present, so it does not describe behaviour that no longer exists.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 ```bash
 cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test apps.attack_graph -v 2
@@ -445,7 +445,7 @@ cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test ap
 
 Expected: PASS.
 
-- [ ] **Step 5: Prove the write actually succeeds**
+- [x] **Step 5: Prove the write actually succeeds**
 
 The test above reads source. It passes whether or not the `.update()` throws, and
 nothing between here and Task 5 runs a scan — so without this step the first
@@ -482,7 +482,20 @@ sqlite round-trip already produces.
 If no AWS account is reachable, say so here rather than silently skipping, and
 carry it as the one unverified assumption into Task 5's browser check.
 
-- [ ] **Step 6: Commit**
+**Not run this session (2026-09-22).** `backend/venv-dev` has no Postgres
+route (`POSTGRES_HOST=db` only resolves inside the docker network), and the
+running `step1-backend`/`step1-worker_enterprise` containers are built from
+the pre-Task-2 image (`backend/` has no source volume mount in
+`docker-compose.yml` — it is baked in at build time), so they cannot run this
+task's new `graph=graph.to_dict()` line without a rebuild. One user
+(`porttest`) does have `aws_audit_role_arn` set, so a real account is
+reachable in principle, but exercising it here would mean rebuilding and
+restarting the live dev stack and kicking off a several-minute live AWS scan
+unattended, which is more than this automated step should do on its own.
+Carried forward as the one unverified assumption into Task 5's browser check,
+per this step's own instruction above.
+
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/apps/attack_graph/tasks.py backend/apps/attack_graph/tests/test_api_contract.py
