@@ -1,0 +1,26 @@
+// ECScape -- EC2 instance-role credentials used off the container instance (T1552.005)
+// Dialect: Sentinel / Azure Log Analytics KQL (AWSCloudTrail table).
+//
+// ECScape reads the instance role from IMDS and, in a pure run, uses it ON the
+// instance -- so this catches the follow-on case where the stolen instance creds
+// are exfiltrated and reused elsewhere (lateral movement, a second stage), which
+// is the highest-confidence CloudTrail signal for the theft.
+//
+// Maintain a watchlist 'InstanceRoleIPs' (columns: RoleName, AllowedPrivateIp,
+// AllowedNatIp) mapping each ECS container-instance role to its legitimate egress
+// IPs. Here that role is 'ecscape-instance-role'.
+let InstanceRoleIPs = _GetWatchlist('InstanceRoleIPs');   // RoleName, AllowedPrivateIp, AllowedNatIp
+AWSCloudTrail
+| where TimeGenerated > ago(6h)
+| where UserIdentityType == "AssumedRole"
+| where UserIdentityArn has "assumed-role/"
+| extend RoleName = tostring(split(UserIdentityArn, "/")[1])
+| where RoleName endswith "-instance-role"                 // ECS container-instance roles
+| where SourceIpAddress !endswith "amazonaws.com"          // drop AWS-internal service calls
+| join kind=inner (InstanceRoleIPs) on RoleName
+| where SourceIpAddress != AllowedPrivateIp and SourceIpAddress != AllowedNatIp
+| summarize Calls = count(), Events = make_set(EventName, 25),
+            FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated)
+    by RoleName, SourceIpAddress
+| extend Verdict = "INSTANCE-ROLE CREDENTIAL USED OFF-HOST -- exfiltration"
+| order by Calls desc

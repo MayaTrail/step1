@@ -1,14 +1,16 @@
-# ECScape -- ECS agent impersonation via repeated DiscoverPollEndpoint (T1552.007)
+# ECScape -- ECS agent impersonation / container API credential theft (T1552.007)
 #
-# The signal is RATE, not occurrence. ecs:DiscoverPollEndpoint is issued once by
-# the ECS agent (instance role) at container-instance registration. A second or
-# repeated call from the same principal is a task impersonating the agent to open
-# its own ACS WebSocket and harvest co-resident task credentials.
+# ECScape's core: a low-priv task steals the instance role (T1552.005), reads the
+# agent introspection API (:51678), calls ecs:DiscoverPollEndpoint, then opens a
+# SigV4-signed ACS WebSocket with sendCredentials=true so the control plane streams
+# every co-resident task's role + execution-role credentials. The ACS delivery is
+# NOT in CloudTrail, so detection keys on the surrounding calls and on the misuse
+# of the stolen roles.
 #
-# The deployable detection is the correlation document below; the base rule
-# exists only to be referenced by it. The legacy Sigma v1 pipe form
-# (`condition: selection | count() by ... > 1` with `timeframe:`) was removed
-# from the specification -- pySigma rejects it and no current backend compiles it.
+# Rule 1  (base)       : DiscoverPollEndpoint from the instance role -- reference only.
+# Rule 2  (correlation): DiscoverPollEndpoint repeated from one principal (the tell).
+# Rule 3               : execution-role credentials used beyond agent bootstrap.
+# Rule 4               : RunTask from a non-deployer principal (the malicious task).
 title: ECS DiscoverPollEndpoint from EC2 instance role
 id: 3f662813-4f35-4833-9fa6-1ba114c597c3
 name: ecscape_discoverpollendpoint_base
@@ -73,4 +75,78 @@ correlation:
     gt: 1
 falsepositives:
   - Agent re-registration after a network partition producing two calls close together.
+level: medium
+---
+title: ECS task-execution role used beyond agent bootstrap (stolen execution creds)
+id: c0a7e2d4-9b13-4f6a-8e21-ec5cape007003
+status: experimental
+description: >-
+  A task *execution* role is an agent-only identity: ECS uses it at task start to
+  pull the image, ship logs, and resolve secrets, then it is never exposed to
+  application code. ECScape harvests it over ACS and hands it to the attacker.
+  This rule fires when execution-role credentials perform any action outside the
+  small bootstrap set -- a strong indicator the credentials have left the agent.
+  Tune the role-name suffix and the bootstrap allowlist to your environment.
+references:
+  - https://github.com/naorhaziz/ecscape
+  - https://www.sweet.security/blog/ecscape-understanding-iam-privilege-boundaries-in-amazon-ecs
+author: MayaTrail
+date: 2026/09/04
+tags:
+  - attack.credential_access
+  - attack.t1552.007
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    userIdentity.type: AssumedRole
+    userIdentity.arn|contains: ':assumed-role/ecscape-secret-execution-role/'
+  bootstrap_actions:
+    eventName:
+      - 'GetAuthorizationToken'          # ecr
+      - 'BatchGetImage'
+      - 'GetDownloadUrlForLayer'
+      - 'CreateLogStream'                # logs
+      - 'PutLogEvents'
+      - 'GetSecretValue'                 # secretsmanager (at task start)
+      - 'GetParameters'                  # ssm
+      - 'Decrypt'                        # kms
+  condition: selection and not bootstrap_actions
+falsepositives:
+  - A custom execution role legitimately reused for non-bootstrap automation (rare; scope it out).
+level: high
+---
+title: ECS RunTask from a non-deployment principal (ECScape attacker task)
+id: d51f8a90-2c47-4e3b-9a6c-ec5cape007004
+status: experimental
+description: >-
+  ecs:RunTask issued by a principal that is not on the deployment/CI allowlist.
+  ECScape's operator launches its own low-priv (deny-all) task to run the payload
+  in-container. Early, corroborating signal -- pair with the DiscoverPollEndpoint
+  correlation and execution-role misuse. Replace the allowlist with the roles that
+  legitimately deploy tasks in your account.
+references:
+  - https://github.com/naorhaziz/ecscape
+author: MayaTrail
+date: 2026/09/04
+tags:
+  - attack.credential_access
+  - attack.t1552.007
+  - attack.execution
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: ecs.amazonaws.com
+    eventName: RunTask
+  deployment_principals:
+    userIdentity.arn|contains:
+      - ':role/REPLACE-ME-ecs-deployer'
+      - ':role/REPLACE-ME-ci-runner'
+  condition: selection and not deployment_principals
+falsepositives:
+  - New deployment/automation roles not yet added to the allowlist.
+  - Ad-hoc operator task launches during legitimate maintenance.
 level: medium

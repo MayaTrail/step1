@@ -1,37 +1,43 @@
-# Detection note — ECScape (ECS cross-task credential hijack)
+# Detection note — ECScape, ECS agent impersonation (T1552.007)
 
-**Techniques:** T1552.007 (Container API), T1552.005 (Cloud Instance Metadata API), T1134 (agent impersonation)
+**Technique:** T1552.007 — Unsecured Credentials: Container API
+**Role in ECScape:** the core. Using the instance role stolen in step 1
+([T1552.005](detection_note_t1552.005.md)), the attacker container reads the ECS
+**agent introspection API** (`http://<host>:51678/v1/metadata`) for the
+container-instance identity, calls `ecs:DiscoverPollEndpoint`, then opens a
+SigV4-signed **ACS WebSocket** (`wss://ecs-a-*.<region>.amazonaws.com/ws?...&sendCredentials=true`).
+AWS accepts it as the agent and streams the role + execution-role credentials of
+**every task on the host**.
 
 ## Why this is hard
-The credential delivery itself happens over the ECS **ACS WebSocket** and is **not
-recorded in CloudTrail** — the control plane simply streams `IamRoleCredentials`
-to what it believes is the agent. So there is no single "creds stolen" event.
-Detection relies on the *surrounding* API activity and on cross-task credential
-reuse.
+The credential delivery happens over the ACS WebSocket and is **not recorded in
+CloudTrail** — the control plane simply streams `IamRoleCredentials` to what it
+believes is the agent. There is no single "creds stolen" event. Detection relies
+on the *surrounding* API activity and on misuse of the harvested roles.
 
 ## Signals (highest to lowest fidelity)
-1. **Cross-task / off-host credential use** — a task role or execution role used
-   from a principal, task, or source IP that is not the task it was issued to.
-   For task-execution roles this is especially strong: execution-role
-   credentials are agent-only and should *never* appear in application API calls.
-2. **`ecs:DiscoverPollEndpoint` anomaly** — legitimately called only by the ECS
-   agent (instance role) at startup. Alert on unusual **frequency** (a second
-   caller/session beyond the agent), or DiscoverPollEndpoint closely followed by
-   new outbound TLS to an `ecs-a-*.<region>.amazonaws.com` ACS endpoint from a
-   task rather than the agent process.
-3. **`ecs:RunTask` of an unexpected task definition** — here, a task whose task
-   role is deny-all / newly created, started by an unusual principal.
-4. **GuardDuty `UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration`** —
-   fires if the stolen *instance* role credentials are used from off the instance.
+1. **Execution-role credentials used outside agent bootstrap** — a task-execution
+   role is agent-only; ECS uses it at task start (ECR pull, log streams, secret
+   resolution) and never exposes it to app code. Any other use = the credentials
+   left the agent. Highest-fidelity single signal (`sigma_t1552.007.yml` rule 3).
+2. **Cross-task / off-host role use** — a task role appearing from a source IP or
+   task other than the one it was issued to (`kql_t1552.007.kql`).
+3. **`ecs:DiscoverPollEndpoint` rate anomaly** — the agent calls it once per
+   instance boot; a second/repeated call from the same principal is the tell
+   (`sigma_t1552.007.yml` rules 1–2). Pair with new outbound TLS to an
+   `ecs-a-*.<region>.amazonaws.com` ACS endpoint from a task rather than the agent.
+4. **`ecs:RunTask` of an unexpected task** — the operator launching the deny-all
+   attacker task, from a non-deployment principal (`sigma_t1552.007.yml` rule 4).
 
 ## Data sources
-- CloudTrail (management events: `DiscoverPollEndpoint`, `RunTask`, and the API
-  calls made with the stolen roles).
+- CloudTrail (`DiscoverPollEndpoint`, `RunTask`, and the API calls the stolen roles make).
 - VPC Flow Logs / host telemetry for the outbound ACS WebSocket from a task.
-- GuardDuty.
+- GuardDuty (backstop, see [T1552.005](detection_note_t1552.005.md)).
 
 ## Hardening
-- Set the instance IMDS hop limit to 1 and prefer `awsvpc` network mode so tasks
-  cannot reach the host IMDS / introspection port.
-- Scope task-execution roles tightly (only the secrets each task needs).
-- Treat any use of an execution role outside the agent as an incident.
+- Use **`awsvpc` network mode** (per-task ENI) or **Fargate** so a task cannot
+  reach the host IMDS / `:51678` introspection port; set IMDS
+  `HttpPutResponseHopLimit: 1`.
+- Scope task-execution roles tightly (only the secrets each task needs) and treat
+  any use of an execution role outside the agent as an incident.
+- Avoid co-locating high-privilege tasks with untrusted ones on a shared EC2 host.
