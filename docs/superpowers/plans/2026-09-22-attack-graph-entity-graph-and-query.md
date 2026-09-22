@@ -3056,7 +3056,7 @@ git add README-scout.md
 git commit -m "docs: attack graph entity records and path query"
 ```
 
-- [ ] **Step 3: Refresh the graft index (end of Phase 3)**
+- [x] **Step 3: Refresh the graft index (end of Phase 3)**
 
 ```bash
 graphify update .
