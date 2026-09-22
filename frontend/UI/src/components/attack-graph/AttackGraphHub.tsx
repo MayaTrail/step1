@@ -25,12 +25,11 @@ import { lazy, Suspense, useCallback, useState } from 'react'
 
 import { ConnectPrompt, useScoutConnection } from '@/components/common/ConnectGate'
 import { ComingSoon } from '@/components/common/ComingSoon'
-import { Badge } from '@/components/ui/Badge'
 import { IconBroadcast } from '@/components/ui/Icons'
 import { formatWhen } from '@/components/threatfeed/feedMeta'
 import { useCachedResource } from '@/hooks/useCachedResource'
 import * as attackGraph from '@/services/attackGraph.service'
-import type { ScanDetail, ScanEnvelope, ScanStatus, ScanSummary } from '@/types/attackGraph'
+import type { ScanDetail, ScanEnvelope, ScanState, ScanStatus, ScanSummary } from '@/types/attackGraph'
 import { isTooNewToRender } from '@/types/attackGraph'
 
 const AttackChainGraph = lazy(() => import('./AttackChainGraph'))
@@ -46,18 +45,31 @@ const HISTORY_POLL_MS = 10000
 
 const UNFINISHED: ScanStatus[] = ['pending', 'running']
 
-const STATUS_TONE: Record<ScanStatus, 'neutral' | 'blue' | 'green' | 'red'> = {
-  pending: 'neutral',
-  running: 'blue',
-  completed: 'green',
-  failed: 'red',
-}
-
 const STATUS_LABEL: Record<ScanStatus, string> = {
   pending: 'Queued',
   running: 'Scanning',
   completed: 'Completed',
   failed: 'Failed',
+}
+
+// Small colored dots for the history strip's status marker — the strip is a
+// row of past *scans*, not a set of status filters, so status is secondary
+// information here even though it is the headline everywhere else on the page.
+const STATUS_DOT: Record<ScanStatus, string> = {
+  pending: 'bg-content-dim',
+  running: 'bg-accent-blue',
+  completed: 'bg-safe',
+  failed: 'bg-danger',
+}
+
+// What a completed scan's history pill says in place of the status label —
+// the outcome, not just that it finished. A row of four "Completed" pills is
+// what reads as duplicate tabs; "5 findings" / "Clean" / "Partial" makes each
+// one a different scan again.
+const STATE_SUMMARY: Record<ScanState, string> = {
+  findings: 'Findings',
+  clean: 'Clean',
+  partial: 'Partial',
 }
 
 // Chains are evaluated without AWS Organizations policies applied, so a path
@@ -166,23 +178,40 @@ export function AttackGraphHub() {
         </div>
       </div>
 
-      {/* History strip */}
+      {/* History strip — a row of past scans to click through, not a set of
+          status filters. Each pill leads with when it ran (what makes one
+          scan a different pill from another); status is a small dot, and a
+          completed scan says what it found rather than just that it
+          finished — four "Completed" pills in a row is what reads as
+          duplicate tabs. */}
       {scans && scans.length > 0 && (
         <div className="flex items-center gap-2 overflow-x-auto pb-2 mb-4">
-          {scans.map((scan) => (
-            <button
-              key={scan.id}
-              onClick={() => setSelectedId(scan.id)}
-              className={`flex items-center gap-2 shrink-0 rounded-btn border px-3 py-1.5 cursor-pointer
-                bg-surface-card transition-colors hover:border-accent-blue/40
-                ${scan.id === viewingId ? 'border-accent-blue' : 'border-border'}`}
-            >
-              <Badge tone={STATUS_TONE[scan.status]} mono dot pulse={UNFINISHED.includes(scan.status)}>
-                {STATUS_LABEL[scan.status]}
-              </Badge>
-              <span className="font-mono text-[10px] text-content-dim">{formatWhen(scan.created_at)}</span>
-            </button>
-          ))}
+          {scans.map((scan) => {
+            const unfinished = UNFINISHED.includes(scan.status)
+            const outcome =
+              scan.status === 'completed' && scan.state
+                ? STATE_SUMMARY[scan.state]
+                : STATUS_LABEL[scan.status]
+            return (
+              <button
+                key={scan.id}
+                onClick={() => setSelectedId(scan.id)}
+                className={`flex flex-col items-start gap-1 shrink-0 rounded-btn border px-3 py-2 cursor-pointer
+                  bg-surface-card transition-colors hover:border-accent-blue/40
+                  ${scan.id === viewingId ? 'border-accent-blue' : 'border-border'}`}
+              >
+                <span className="font-mono text-[11px] text-content-primary font-semibold">
+                  {formatWhen(scan.created_at)}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[scan.status]} ${unfinished ? 'animate-pulse' : ''}`} />
+                  <span className="font-mono text-[9.5px] text-content-dim uppercase tracking-[0.5px]">
+                    {outcome}
+                  </span>
+                </span>
+              </button>
+            )
+          })}
         </div>
       )}
 

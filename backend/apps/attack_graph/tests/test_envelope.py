@@ -147,6 +147,19 @@ class SerializeScanTests(SimpleTestCase):
         # leaked through and the frontend is now coupled to it.
         json.dumps(_envelope(self.report))
 
+    def test_terminal_impact_is_carried_through_for_zero_hop_chains(self):
+        # Scout reports a chain with zero hops when an identity already holds
+        # the impact directly. Without this field the frontend cannot tell
+        # that case apart from "nothing to say about this node" — both would
+        # render as an isolated box with a score and no explanation.
+        chain = _envelope(self.report)["chains"][0]
+        self.assertEqual(chain["terminal_impact"], "FULL_ACCOUNT_COMPROMISE")
+
+    def test_a_missing_terminal_impact_is_none_not_a_crash(self):
+        report = {"chains": [{**self.report["chains"][0], "terminal_impact": None}]}
+        chain = _envelope(report)["chains"][0]
+        self.assertIsNone(chain["terminal_impact"])
+
     def test_chain_ids_are_serializer_assigned_not_scouts_own(self):
         # Scout's own chain_id (e.g. "CHN-7540184B") is opaque and not
         # guaranteed stable across scans, so it must never surface. A

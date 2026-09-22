@@ -22,6 +22,16 @@ const NODE_WIDTH = 190
 const NODE_HEIGHT = 64
 const NODE_RX = 10
 const ACCENT = '#55b3ff'
+const DIRECT_COLOR = '#ff6b6b'
+
+/** "FULL_ACCOUNT_COMPROMISE" -> "Full Account Compromise". */
+function formatImpact(impact: string): string {
+  return impact
+    .toLowerCase()
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
+}
 
 /**
  * Identity kinds mapped onto the palette InfraGraphView already uses, so a
@@ -99,8 +109,8 @@ function computeLayout(nodes: ChainNode[], edges: GraphEdge[]): Layout {
 // ── SVG node card ─────────────────────────────────────────────────────────────
 
 function SvgNode({
-  node, selected, dimmed, onClick,
-}: { node: LayoutNode; selected: boolean; dimmed: boolean; onClick: () => void }) {
+  node, selected, dimmed, direct, onClick,
+}: { node: LayoutNode; selected: boolean; dimmed: boolean; direct: boolean; onClick: () => void }) {
   const x = node.x - NODE_WIDTH / 2
   const y = node.y - NODE_HEIGHT / 2
   const cat = categorize(node)
@@ -112,7 +122,11 @@ function SvgNode({
       {selected && (
         <rect x={x - 3} y={y - 3} width={NODE_WIDTH + 6} height={NODE_HEIGHT + 6} rx={NODE_RX + 3} fill="none" stroke={ACCENT} strokeOpacity={0.3} strokeWidth={2} />
       )}
-      <rect x={x} y={y} width={NODE_WIDTH} height={NODE_HEIGHT} rx={NODE_RX} fill="#101314" stroke={selected ? ACCENT : color} strokeOpacity={selected ? 1 : 0.5} strokeWidth={selected ? 1.5 : 1} />
+      <rect x={x} y={y} width={NODE_WIDTH} height={NODE_HEIGHT} rx={NODE_RX} fill="#101314" stroke={selected ? ACCENT : direct ? DIRECT_COLOR : color} strokeOpacity={selected ? 1 : direct ? 0.7 : 0.5} strokeWidth={selected ? 1.5 : 1} />
+
+      {direct && (
+        <circle cx={x + NODE_WIDTH - 10} cy={y + 10} r={4} fill={DIRECT_COLOR} />
+      )}
 
       <rect x={x + 11} y={y + 19} width={26} height={26} rx={7} fill={color} fillOpacity={0.14} />
       <text x={x + 24} y={y + 36} textAnchor="middle" fill={color} fontSize={9} fontFamily="Geist Mono, monospace" fontWeight={700}>
@@ -177,14 +191,27 @@ function DetailPanel({
                 ))}
               </div>
             )}
-            <div className="flex flex-col gap-1.5">
-              {chain.steps.map((step, i) => (
-                <div key={`${chain.id}-${i}`} className="pl-2 border-l border-border">
-                  <div className="font-mono text-[10px] text-content-secondary">{step.action || step.mechanism || '—'}</div>
-                  {step.detail && <div className="font-mono text-[9px] text-content-dim leading-[1.5]">{step.detail}</div>}
+            {chain.steps.length === 0 ? (
+              <div className="pl-2 border-l" style={{ borderColor: DIRECT_COLOR }}>
+                <div className="font-mono text-[10px] font-bold" style={{ color: DIRECT_COLOR }}>
+                  Direct access — no escalation step needed
                 </div>
-              ))}
-            </div>
+                <div className="font-mono text-[9px] text-content-dim leading-[1.5]">
+                  {chain.terminal_impact
+                    ? `This identity already holds: ${formatImpact(chain.terminal_impact)}`
+                    : 'Scout did not report what impact this identity already holds.'}
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                {chain.steps.map((step, i) => (
+                  <div key={`${chain.id}-${i}`} className="pl-2 border-l border-border">
+                    <div className="font-mono text-[10px] text-content-secondary">{step.action || step.mechanism || '—'}</div>
+                    {step.detail && <div className="font-mono text-[9px] text-content-dim leading-[1.5]">{step.detail}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -205,11 +232,26 @@ export default function AttackChainGraph({ envelope }: { envelope: ScanEnvelope 
   const selectedChainIds = new Set(selectedChains.map((c) => c.id))
   const cats = Array.from(new Set(layout.nodes.map((n) => categorize(n))))
 
+  // A node is "direct" when at least one chain names it (as source or
+  // target) with zero steps — Scout found it already holds that chain's
+  // impact, not an escalation path leading to it. Those nodes draw no edge,
+  // so without this flag they are indistinguishable from a node the scan
+  // simply had nothing to say about.
+  const directNodeIds = new Set(
+    envelope.chains
+      .filter((c) => c.steps.length === 0)
+      .flatMap((c) => [c.source.id, c.target.id]),
+  )
+  const directCount = envelope.chains.filter((c) => c.steps.length === 0).length
+
   return (
     <div className="flex flex-col gap-2.5">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="font-mono text-[10px] text-content-dim uppercase tracking-[1px]">
           {layout.nodes.length} identities &middot; {envelope.chains.length} chains
+          {directCount > 0 && (
+            <span> &middot; <span style={{ color: DIRECT_COLOR }}>{directCount} already privileged, no hops needed</span></span>
+          )}
         </div>
         <div className="flex items-center gap-3">
           {cats.map((c) => (
@@ -247,6 +289,7 @@ export default function AttackChainGraph({ envelope }: { envelope: ScanEnvelope 
                 dimmed={selected != null && selected !== node.id && !edges.some(
                   (e) => selectedChainIds.has(e.chainId) && (e.from === node.id || e.to === node.id),
                 )}
+                direct={directNodeIds.has(node.id)}
                 onClick={() => setSelected((p) => (p === node.id ? null : node.id))}
               />
             ))}

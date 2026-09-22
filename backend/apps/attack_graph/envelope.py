@@ -143,6 +143,15 @@ def _chain(raw: dict[str, Any], rank: int) -> dict[str, Any]:
         # individual hop (verified in Task 1).
         "mitre_techniques": list(raw.get("mitre_techniques") or []),
         "steps": [_step(hop) for hop in hops],
+        # Scout reports a chain with zero hops when an identity already holds
+        # this impact directly — no escalation step exists to draw. Without
+        # this field the frontend has no way to tell "already privileged"
+        # apart from "found nothing to say about this node"; both would
+        # otherwise render as an isolated box with a number next to it.
+        # Optional: older stored scans and any future Scout release that
+        # drops the field both read as None, which the frontend treats as
+        # "unknown impact" rather than raising.
+        "terminal_impact": raw.get("terminal_impact"),
     }
 
 

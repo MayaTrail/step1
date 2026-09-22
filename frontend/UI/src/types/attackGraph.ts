@@ -53,6 +53,13 @@ export interface AttackChain {
   /** Chain-level, not per-step — Scout attaches MITRE technique ids to the whole chain. */
   mitre_techniques: string[]
   steps: ChainStep[]
+  /**
+   * What this chain ends in (e.g. "FULL_ACCOUNT_COMPROMISE"), or null if
+   * Scout reported none. When `steps` is empty this is the only thing that
+   * explains the chain: a zero-step chain means the identity already holds
+   * this impact directly, not that nothing was found.
+   */
+  terminal_impact: string | null
 }
 
 export interface ScanEnvelope {
@@ -84,6 +91,13 @@ export type ScanStatus = 'pending' | 'running' | 'completed' | 'failed'
 export interface ScanSummary {
   id: string
   status: ScanStatus
+  /**
+   * The completed scan's top-level classification (see ScanState), without
+   * paying for its full result envelope — the history strip needs this to
+   * say "5 findings" or "Partial" next to a past scan. Null for a scan that
+   * hasn't completed, or one that completed with no result recorded.
+   */
+  state: ScanState | null
   error_message: string
   created_at: string
   started_at: string | null
