@@ -1,0 +1,29 @@
+// T1564 - Hide Artifacts: Lambda Resource Tagging Camouflage
+// Detects TagResource calls on Lambda functions by an IAM user principal.
+// HazyBeacon applies ManagedBy: terraform, Environment, Team, and CostCenter tags
+// post-deployment to blend with legitimate Terraform-managed infrastructure.
+// The signal is the identity mismatch: real Terraform-managed functions receive tags
+// during CreateFunction via a service role, never via a subsequent TagResource from
+// a static IAM user key.
+// Table: AWSCloudTrail (Microsoft Sentinel)
+AWSCloudTrail
+| where EventSource == "lambda.amazonaws.com"
+| where EventName == "TagResource20170331"
+| where UserIdentityType == "IAMUser"
+| where UserIdentityArn !contains "terraform"
+| where UserIdentityArn !contains "deploy"
+| where UserIdentityArn !contains "cicd"
+// Extract resource ARN and tags for enrichment
+| extend ResourceArn = tostring(parse_json(RequestParameters).resource)
+| extend Tags = parse_json(RequestParameters).tags
+| project
+    TimeGenerated,
+    EventName,
+    ResourceArn,
+    Tags,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RecipientAccountId
+| sort by TimeGenerated desc

@@ -1,0 +1,31 @@
+// T1069.003 - Permission Groups Discovery: Cloud Groups
+// Detects IAM group and policy self-enumeration from a static IAM user credential.
+// HazyBeacon maps the compromised user's permissions (ListGroups, ListAttachedGroupPolicies,
+// GetPolicy, GetUserPolicy) to verify it has Lambda deployment and iam:PassRole rights
+// before proceeding to execution. This pattern does not appear in normal CI/CD flows.
+// Table: AWSCloudTrail (Microsoft Sentinel)
+AWSCloudTrail
+| where EventSource == "iam.amazonaws.com"
+| where EventName in (
+    "ListGroups",
+    "ListGroupsForUser",
+    "ListAttachedGroupPolicies",
+    "ListGroupPolicies",
+    "GetPolicy",
+    "GetPolicyVersion",
+    "GetUserPolicy"
+)
+| where UserIdentityType == "IAMUser"
+// Exclude AWS Console sessions which commonly browse group/policy views
+| where UserAgent !contains "console.amazonaws.com"
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RequestParameters,
+    RecipientAccountId
+| sort by TimeGenerated desc

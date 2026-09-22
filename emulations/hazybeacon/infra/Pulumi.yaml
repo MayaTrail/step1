@@ -1,0 +1,3 @@
+name: mayatrail-hazybeacon
+runtime: python
+description: HazyBeacon adversary emulation infrastructure - Lambda C2 relay via stolen IAM credentials

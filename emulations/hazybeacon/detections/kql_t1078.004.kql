@@ -1,0 +1,22 @@
+// T1078.004 - Valid Accounts: Cloud Accounts
+// Detects stolen IAM credential validation: GetCallerIdentity and/or GetUser
+// issued by a static IAM user principal. HazyBeacon calls these immediately
+// after obtaining harvested credentials to verify they are still active.
+// Table: AWSCloudTrail (Microsoft Sentinel)
+AWSCloudTrail
+| where EventName in ("GetCallerIdentity", "GetUser")
+| where UserIdentityType == "IAMUser"
+// Exclude AWS Console sessions - web console calls carry this user agent
+| where UserAgent !contains "console.amazonaws.com"
+| where UserAgent !contains "Coral/Jakarta"
+| project
+    TimeGenerated,
+    EventName,
+    EventSource,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RecipientAccountId
+| sort by TimeGenerated desc
