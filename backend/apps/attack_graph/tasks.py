@@ -69,13 +69,6 @@ def run_scout_scan(scan_id: str) -> None:
         import boto3  # noqa: PLC0415
         from scout import pipeline  # noqa: PLC0415
         from scout.aws.collect import gaad  # noqa: PLC0415
-        # Import path verified in Task 1, Step 3: pipeline.run()'s
-        # evaluator=None default resolves internally to
-        # scout.eval.effective.EffectivePermissionEvaluator. envelope.EVALUATOR
-        # names the same evaluator; if Scout ever renames or relocates this
-        # class, both must change together — they are one claim about how a
-        # finding was computed, split across two files.
-        from scout.eval.effective import EffectivePermissionEvaluator  # noqa: PLC0415
 
         creds = _audit_credentials(user)
         session = boto3.Session(
@@ -89,10 +82,16 @@ def run_scout_scan(scan_id: str) -> None:
         # collection["mode"] carries it into the envelope, and the envelope's
         # state keeps it out of the clean-result copy.
         #
-        # self_only and evaluator are passed explicitly rather than left to
-        # their defaults. The envelope records which evaluator produced the
-        # chains, and a default that changes in a Scout release would make
-        # that record false without anything here changing.
+        # self_only is passed explicitly rather than left to its default.
+        # evaluator is left as None deliberately: pipeline.run() builds the
+        # AccountModel internally from gaad and only then can construct
+        # scout.eval.effective.EffectivePermissionEvaluator(model) — this task
+        # has no model to hand it one from outside. evaluator=None resolves to
+        # that same evaluator (verified in Task 1, Step 3), which is what
+        # envelope.EVALUATOR's "effective" literal claims ran. If Scout ever
+        # changes that default, both this comment and envelope.EVALUATOR need
+        # updating together — they are one claim about how a finding was
+        # computed, split across two files.
         #
         # collection["mode"] itself is the one Task 1 assumption not
         # exercised against live AWS (the spike ran offline, against a
@@ -102,7 +101,7 @@ def run_scout_scan(scan_id: str) -> None:
         report, _graph = pipeline.run(
             gaad=raw_gaad,
             account_id=account_id,
-            evaluator=EffectivePermissionEvaluator(),
+            evaluator=None,
         )
 
         envelope = serialize_scan(
