@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from 'react'
 import type {
-  User, LoginRequest, SignupRequest, ConnectorRequest,
+  User, LoginRequest, SignupRequest, ConnectorRequest, AuditConnectorRequest,
   RegisterResponse, VerifyOTPRequest, VerifyOTPResponse,
   ResendOTPRequest, ResendOTPResponse,
 } from '@/types'
@@ -30,6 +30,8 @@ interface AuthContextValue {
   clearError: () => void
   verifyConnector: (req: ConnectorRequest) => Promise<void>
   disconnectConnector: () => Promise<void>
+  verifyAuditRole: (req: AuditConnectorRequest) => Promise<void>
+  disconnectAuditRole: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -182,6 +184,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const verifyAuditRole = useCallback(async (req: AuditConnectorRequest) => {
+    setLoading(true)
+    setError(null)
+    try {
+      await authService.verifyAuditRole(req)
+      const refreshed = await authService.refreshUser()
+      setUser(refreshed)
+    } catch (err: any) {
+      setError(err.message ?? 'Audit role verification failed')
+      throw err
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const disconnectAuditRole = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      await authService.disconnectAuditRole()
+      const refreshed = await authService.refreshUser()
+      setUser(refreshed)
+    } catch (err: any) {
+      setError(err.message ?? 'Could not disconnect the audit role')
+      throw err
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
   const logout = useCallback(async () => {
     setUser(null)
     await authService.logout()
@@ -194,6 +226,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user, loading, initializing, error,
       login, googleSSO, signup, verifyOTP, resendOTP, logout, clearError,
       verifyConnector, disconnectConnector,
+      verifyAuditRole, disconnectAuditRole,
     }}>
       {children}
     </AuthContext.Provider>

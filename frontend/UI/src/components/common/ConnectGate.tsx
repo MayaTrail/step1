@@ -15,6 +15,18 @@ export function useAWSConnection(): { connected: boolean } {
 }
 
 /**
+ * Whether a read-only Scout audit role is connected.
+ *
+ * Deliberately not useAWSConnection(): that reads isVerified, which the
+ * emulation role's verification sets. An org that provisioned only the
+ * auditor role would be told to connect an account it has already connected.
+ */
+export function useScoutConnection(): { connected: boolean } {
+  const { user } = useAuth()
+  return { connected: Boolean(user?.hasAuditRole) }
+}
+
+/**
  * Replaces a page whose content requires an AWS connection.
  *
  * Shown instead of an error or an unexplained empty grid. An unconnected user
@@ -30,9 +42,17 @@ export function useAWSConnection(): { connected: boolean } {
 export function ConnectPrompt({
   title,
   body,
+  cta = 'Connect AWS account',
 }: {
   title: string
   body: string
+  /**
+   * The action's label. Overridden by the Attack Graph page, which needs a
+   * read-only audit role rather than the emulation connection — a user who
+   * has already connected an account and is told to "Connect AWS account"
+   * reads the page as broken.
+   */
+  cta?: string
 }) {
   return (
     <div className="px-5 py-16 text-center">
@@ -48,7 +68,7 @@ export function ConnectPrompt({
         className="mt-5 inline-block rounded-btn border border-border px-4 py-2 text-[13px] font-semibold
           text-accent-blue no-underline transition-opacity hover:opacity-60"
       >
-        Connect AWS account
+        {cta}
       </Link>
     </div>
   )
