@@ -240,3 +240,15 @@ frontend/screens/
 
 mt-app-kyp.pem
 *app-password
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# graphify's local knowledge-graph output — regenerable (`graphify update .`),
+# large, and machine-specific; not committed.
+/graphify-out/
+
+# Named venvs used by this repo's docs/skills (backend/README-scout.md etc.)
+# that don't match the generic venv/.venv patterns above.
+backend/venv-dev/
+backend/venv-ci-test/
