@@ -10,6 +10,8 @@ export interface User {
    * without the other, and the Attack Graph page gates on this.
    */
   hasAuditRole: boolean
+  /** Regions the Scout audit role may collect resources from. Empty means IAM-only. */
+  auditRegions: string[]
 }
 
 export interface LoginRequest {
@@ -63,6 +65,16 @@ export interface TokenPayload {
 
 export interface ConnectorRequest {
   role_arn: string
+}
+
+export interface AuditConnectorRequest extends ConnectorRequest {
+  /**
+   * AWS regions the scan may collect resources from, declared by the tenant.
+   * Empty means IAM-only — the scan still runs, but can only report
+   * identities that already hold an impact directly, never an escalation
+   * path through an actual resource.
+   */
+  regions: string[]
 }
 
 export interface ConnectorResponse {

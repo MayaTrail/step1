@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from 'react'
 import type {
-  User, LoginRequest, SignupRequest, ConnectorRequest,
+  User, LoginRequest, SignupRequest, ConnectorRequest, AuditConnectorRequest,
   RegisterResponse, VerifyOTPRequest, VerifyOTPResponse,
   ResendOTPRequest, ResendOTPResponse,
 } from '@/types'
@@ -30,7 +30,7 @@ interface AuthContextValue {
   clearError: () => void
   verifyConnector: (req: ConnectorRequest) => Promise<void>
   disconnectConnector: () => Promise<void>
-  verifyAuditRole: (req: ConnectorRequest) => Promise<void>
+  verifyAuditRole: (req: AuditConnectorRequest) => Promise<void>
   disconnectAuditRole: () => Promise<void>
 }
 
@@ -184,7 +184,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const verifyAuditRole = useCallback(async (req: ConnectorRequest) => {
+  const verifyAuditRole = useCallback(async (req: AuditConnectorRequest) => {
     setLoading(true)
     setError(null)
     try {

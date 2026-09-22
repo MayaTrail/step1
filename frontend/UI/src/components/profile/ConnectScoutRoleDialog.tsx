@@ -15,15 +15,16 @@ import { Button } from '@/components/ui/Button'
 const ARN_RE = /^arn:aws:iam::\d{12}:role\/.+$/
 
 /**
- * Minimal policy for the Scout audit role — one read action.
+ * Minimal policy for an IAM-only scan — one read action.
  *
- * Stated as a single action on purpose. sts:GetCallerIdentity needs no
- * permission at all, and everything else Scout does is computed locally from
- * the authorization details this one call returns. A security product asking
- * for one read is a far better conversation with a customer's security team
- * than one asking for a broad managed policy.
+ * Only enough for the identity-graph half of a scan: it can prove an
+ * identity already holds an impact directly, never trace a path through an
+ * actual resource (a role a low-privileged user could pass to a Lambda they
+ * can create, say). That needs read access to the services in the selected
+ * regions, which this single action does not grant — see the policy panel's
+ * note once a region is selected.
  */
-const AUDIT_POLICY = `{
+const IAM_ONLY_POLICY = `{
   "Version": "2012-10-17",
   "Statement": [
     {
@@ -35,13 +36,58 @@ const AUDIT_POLICY = `{
   ]
 }`
 
-export function ConnectScoutRoleDialog({ onClose }: { onClose: () => void }) {
-  const { verifyAuditRole, error, clearError } = useAuth()
+/**
+ * Common AWS regions offered for selection.
+ *
+ * Tenant-declared, not auto-detected: this is an authenticated, consented
+ * scan, not adversarial reconnaissance, so there is no reason to probe for
+ * the account's footprint instead of asking. Not exhaustive of every AWS
+ * partition (GovCloud/China excluded) — those need a dedicated connector
+ * this v1 does not offer.
+ */
+const REGIONS: Array<{ id: string; label: string }> = [
+  { id: 'us-east-1', label: 'US East (N. Virginia)' },
+  { id: 'us-east-2', label: 'US East (Ohio)' },
+  { id: 'us-west-1', label: 'US West (N. California)' },
+  { id: 'us-west-2', label: 'US West (Oregon)' },
+  { id: 'ca-central-1', label: 'Canada (Central)' },
+  { id: 'sa-east-1', label: 'South America (São Paulo)' },
+  { id: 'eu-west-1', label: 'EU (Ireland)' },
+  { id: 'eu-west-2', label: 'EU (London)' },
+  { id: 'eu-west-3', label: 'EU (Paris)' },
+  { id: 'eu-central-1', label: 'EU (Frankfurt)' },
+  { id: 'eu-north-1', label: 'EU (Stockholm)' },
+  { id: 'eu-south-1', label: 'EU (Milan)' },
+  { id: 'ap-south-1', label: 'Asia Pacific (Mumbai)' },
+  { id: 'ap-southeast-1', label: 'Asia Pacific (Singapore)' },
+  { id: 'ap-southeast-2', label: 'Asia Pacific (Sydney)' },
+  { id: 'ap-northeast-1', label: 'Asia Pacific (Tokyo)' },
+  { id: 'ap-northeast-2', label: 'Asia Pacific (Seoul)' },
+  { id: 'ap-northeast-3', label: 'Asia Pacific (Osaka)' },
+  { id: 'ap-east-1', label: 'Asia Pacific (Hong Kong)' },
+  { id: 'me-south-1', label: 'Middle East (Bahrain)' },
+  { id: 'af-south-1', label: 'Africa (Cape Town)' },
+]
 
-  const [roleArn, setRoleArn] = useState('')
+export function ConnectScoutRoleDialog({
+  onClose,
+  initialRoleArn = '',
+}: {
+  onClose: () => void
+  /** Pre-fills the ARN when reopened to edit an already-connected role's regions. */
+  initialRoleArn?: string
+}) {
+  const { user, verifyAuditRole, error, clearError } = useAuth()
+
+  const [roleArn, setRoleArn] = useState(initialRoleArn)
+  const [regions, setRegions] = useState<string[]>(user?.auditRegions ?? [])
   const [localError, setLocalError] = useState('')
   const [verifying, setVerifying] = useState(false)
   const [copied, setCopied] = useState(false)
+
+  const toggleRegion = (id: string) => {
+    setRegions((prev) => (prev.includes(id) ? prev.filter((r) => r !== id) : [...prev, id]))
+  }
 
   const arnRef = useRef<HTMLInputElement>(null)
 
@@ -81,7 +127,7 @@ export function ConnectScoutRoleDialog({ onClose }: { onClose: () => void }) {
     try {
       // The context's verifyAuditRole has already re-fetched /auth/me/ by the
       // time this resolves, so the caller sees hasAuditRole=true immediately.
-      await verifyAuditRole({ role_arn: trimmed })
+      await verifyAuditRole({ role_arn: trimmed, regions })
       onClose()
     } catch {
       // Surfaced through AuthContext's error state, rendered verbatim below.
@@ -92,7 +138,9 @@ export function ConnectScoutRoleDialog({ onClose }: { onClose: () => void }) {
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(AUDIT_POLICY)
+      await navigator.clipboard.writeText(
+        regions.length > 0 ? 'arn:aws:iam::aws:policy/SecurityAudit' : IAM_ONLY_POLICY,
+      )
       setCopied(true)
       setTimeout(() => setCopied(false), 1600)
     } catch {
@@ -118,7 +166,7 @@ export function ConnectScoutRoleDialog({ onClose }: { onClose: () => void }) {
         <div className="flex items-start justify-between gap-4 px-6 py-5 border-b border-border shrink-0">
           <div>
             <h2 id="connect-scout-title" className="font-display text-[17px] font-semibold text-content-primary">
-              Connect Scout Audit Role
+              {initialRoleArn ? 'Manage Scout Audit Role' : 'Connect Scout Audit Role'}
             </h2>
             <p className="text-[13px] text-content-dim mt-1">
               Read-only. Used only to scan your account&apos;s IAM graph for privilege-escalation paths.
@@ -146,9 +194,9 @@ export function ConnectScoutRoleDialog({ onClose }: { onClose: () => void }) {
             <ol className="flex flex-col gap-2.5 mb-5">
               {[
                 'Create a separate IAM role in your AWS account — do not reuse the emulation role.',
-                'Attach the policy shown on the right, or the AWS managed SecurityAudit policy if your org standardises on it.',
+                'Attach the policy shown on the right — it changes based on whether you select any regions below.',
                 "Set its trust policy to allow MayaTrail's account to assume it.",
-                'Paste the role ARN below. We assume it and confirm it can read IAM before saving.',
+                'Paste the role ARN and pick the regions your account operates in, then connect. We assume the role and confirm it can read IAM before saving.',
               ].map((step, i) => (
                 <li key={i} className="flex gap-2.5 items-start text-[12.5px] leading-relaxed text-content-secondary">
                   <span className="shrink-0 w-[19px] h-[19px] mt-px rounded-full bg-surface-elevated border border-border
@@ -185,6 +233,44 @@ export function ConnectScoutRoleDialog({ onClose }: { onClose: () => void }) {
                 Format: <span className="font-mono">arn:aws:iam::&lt;12-digit-account-id&gt;:role/&lt;role-name&gt;</span>
               </p>
 
+              <div className="mt-5">
+                <div className="flex items-baseline justify-between mb-1.5">
+                  <label className="block font-mono text-2xs uppercase tracking-label text-content-dim">
+                    Regions to scan
+                  </label>
+                  <span className="text-[10.5px] text-content-dim">
+                    {regions.length === 0 ? 'None selected — IAM only' : `${regions.length} selected`}
+                  </span>
+                </div>
+                <p className="text-[11.5px] text-content-dim leading-relaxed mb-2.5">
+                  Which regions does your account operate in? Scanning only these lets the scan trace
+                  real escalation paths through your actual resources (EC2, Lambda, S3, ...), not just
+                  identities that already hold access directly — and keeps a scan to a few minutes
+                  instead of scanning every AWS region. You can change this anytime; it takes effect on
+                  the next scan.
+                </p>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 bg-surface-deep border border-white/[0.08]
+                  rounded-lg p-3 max-h-[160px] overflow-y-auto">
+                  {REGIONS.map((region) => (
+                    <label
+                      key={region.id}
+                      className="flex items-center gap-2 text-[11.5px] text-content-secondary cursor-pointer
+                        hover:text-content-primary transition-colors"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={regions.includes(region.id)}
+                        onChange={() => toggleRegion(region.id)}
+                        disabled={verifying}
+                        className="accent-accent-blue"
+                      />
+                      <span className="font-mono">{region.id}</span>
+                      <span className="text-content-dim truncate">{region.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
               {displayError && (
                 <div className="flex gap-2 items-start bg-danger/[0.06] border border-danger/[0.22]
                   rounded-lg px-3 py-2.5 mt-4 text-[12px] leading-relaxed text-danger">
@@ -199,7 +285,7 @@ export function ConnectScoutRoleDialog({ onClose }: { onClose: () => void }) {
 
               <div className="mt-auto pt-5 flex items-center gap-3">
                 <Button type="submit" disabled={verifying}>
-                  {verifying ? 'Verifying...' : 'Verify & connect'}
+                  {verifying ? 'Verifying...' : initialRoleArn ? 'Verify & save' : 'Verify & connect'}
                 </Button>
                 {verifying && (
                   <span className="text-[11.5px] text-content-dim">Assuming role and probing IAM...</span>
@@ -215,25 +301,51 @@ export function ConnectScoutRoleDialog({ onClose }: { onClose: () => void }) {
                   strokeLinecap="round" strokeLinejoin="round">
                   <path d="M12 3 5 6v6c0 4 3 7 7 9 4-2 7-5 7-9V6l-7-3Z" />
                 </svg>
-                Required policy
+                {regions.length > 0 ? 'Required policy — with regions' : 'Required policy — IAM only'}
               </div>
               <p className="text-[12px] text-content-secondary leading-relaxed">
-                One read action. Everything Scout reports is computed locally from what this call
-                returns — nothing is written, and nothing else is read.
+                {regions.length > 0
+                  ? 'Scanning the regions you selected needs read access across the services in them (EC2, Lambda, S3, ...), not just IAM.'
+                  : 'One read action. Everything Scout reports is computed locally from what this call returns — nothing is written, and nothing else is read.'}
               </p>
             </div>
 
             <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-3.5 min-h-0">
-              <pre className="bg-surface-card border border-border rounded-lg p-3 font-mono text-[10.5px]
-                leading-relaxed text-content-secondary overflow-auto max-h-[260px] m-0">
-                {AUDIT_POLICY}
-              </pre>
-              <p className="text-[11.5px] text-content-dim leading-relaxed">
-                Already standardised on the AWS managed <span className="font-mono text-content-secondary">SecurityAudit</span> policy?
-                That works too — connecting only checks that the role can call
-                <span className="font-mono text-content-secondary"> iam:GetAccountAuthorizationDetails</span>, whichever
-                policy grants it.
-              </p>
+              {regions.length > 0 ? (
+                <>
+                  <div className="bg-surface-card border border-border rounded-lg p-3">
+                    <div className="font-mono text-2xs uppercase tracking-label text-content-dim mb-1.5">
+                      Attach the AWS managed policy
+                    </div>
+                    <div className="font-mono text-[12px] text-accent-blue break-all">
+                      arn:aws:iam::aws:policy/SecurityAudit
+                    </div>
+                  </div>
+                  <p className="text-[11.5px] text-content-dim leading-relaxed">
+                    Read-only across almost every AWS service — it is what lets Scout inventory the
+                    resources in your selected regions. Connecting checks that the role can still call
+                    <span className="font-mono text-content-secondary"> iam:GetAccountAuthorizationDetails</span>;
+                    a scan will separately fail per-region if the role cannot read a service there.
+                  </p>
+                  <p className="text-[11.5px] text-content-dim leading-relaxed">
+                    Prefer not to grant this broadly? Deselect all regions below to fall back to the
+                    IAM-only policy — the scan still runs, but can only report identities that already
+                    hold access directly, not paths through resources.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <pre className="bg-surface-card border border-border rounded-lg p-3 font-mono text-[10.5px]
+                    leading-relaxed text-content-secondary overflow-auto max-h-[260px] m-0">
+                    {IAM_ONLY_POLICY}
+                  </pre>
+                  <p className="text-[11.5px] text-content-dim leading-relaxed">
+                    No regions selected. The scan will still run, but can only prove an identity already
+                    holds an impact directly — it cannot trace a path through an actual resource. Select
+                    regions above for that, which needs the broader policy shown once you do.
+                  </p>
+                </>
+              )}
             </div>
 
             <div className="px-5 py-3 border-t border-border shrink-0 flex items-center gap-2">
@@ -243,7 +355,7 @@ export function ConnectScoutRoleDialog({ onClose }: { onClose: () => void }) {
                 className="font-mono text-[10.5px] border border-white/[0.12] rounded-btn px-2.5 py-1.5
                   text-content-secondary transition-opacity hover:opacity-60"
               >
-                Copy policy JSON
+                {regions.length > 0 ? 'Copy policy ARN' : 'Copy policy JSON'}
               </button>
               {copied && <span className="text-[11px] text-safe">Copied</span>}
             </div>

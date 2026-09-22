@@ -196,6 +196,7 @@ export function ProfilePage() {
 
             {scoutConnectOpen && (
                 <ConnectScoutRoleDialog
+                    initialRoleArn={profile?.aws_audit_role_arn ?? ''}
                     onClose={() => {
                         setScoutConnectOpen(false)
                         loadProfile()
@@ -523,6 +524,21 @@ function ScoutConnectionCard({
                 </div>
             )}
 
+            <div className="bg-surface-elevated rounded-btn px-4 py-3 border border-border mt-3">
+                <div className="font-mono text-2xs uppercase tracking-label text-content-dim mb-1">
+                    Regions scanned
+                </div>
+                {user.auditRegions.length > 0 ? (
+                    <div className="font-mono text-xs text-content-secondary break-all">
+                        {user.auditRegions.join(', ')}
+                    </div>
+                ) : (
+                    <div className="text-xs text-content-dim">
+                        None — scans are IAM-only and cannot trace paths through actual resources.
+                    </div>
+                )}
+            </div>
+
             {disconnectError && (
                 <p className="mt-4 text-[12px] leading-relaxed text-danger">{disconnectError}</p>
             )}
@@ -545,9 +561,14 @@ function ScoutConnectionCard({
                         </Button>
                     </div>
                 ) : (
-                    <Button variant="secondary" onClick={() => setConfirming(true)}>
-                        Disconnect
-                    </Button>
+                    <div className="flex items-center gap-3">
+                        <Button variant="secondary" onClick={onConnect}>
+                            Manage regions
+                        </Button>
+                        <Button variant="secondary" onClick={() => setConfirming(true)}>
+                            Disconnect
+                        </Button>
+                    </div>
                 )}
             </div>
         </Card>
