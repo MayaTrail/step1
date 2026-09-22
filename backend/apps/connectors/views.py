@@ -270,10 +270,11 @@ class AWSAuditConnectorView(APIView):
             )
 
         user.aws_audit_role_arn = role_arn
+        user.aws_audit_regions = serializer.validated_data["regions"]
         # is_verified and is_demo are deliberately untouched: they record that
         # this user proved they own an account they can write to, and a
         # read-only role proves nothing about writes.
-        user.save(update_fields=["aws_audit_role_arn"])
+        user.save(update_fields=["aws_audit_role_arn", "aws_audit_regions"])
 
         return Response({"status": "verified", "account_id": account_id})
 

@@ -53,6 +53,24 @@ class User(AbstractUser):
             "review and revoke IAM-graph access without touching emulations."
         ),
     )
+    aws_audit_regions = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=(
+            "AWS regions the Attack Graph scan collects resources from (EC2, "
+            "Lambda, S3, etc.), declared by the tenant rather than auto-detected: "
+            "this is an authenticated, consented audit, not adversarial "
+            "reconnaissance, so there is no reason to guess at a customer's own "
+            "footprint. Empty means IAM-only — the scan still runs, but can only "
+            "report identities that already hold an impact directly, not "
+            "escalation paths through actual resources. Scoping to regions the "
+            "tenant actually uses (rather than scanning all ~30) is what keeps a "
+            "scan to single-digit minutes instead of ~17 (measured against a "
+            "67-identity account) — but a region left off this list is a region "
+            "the scan cannot see, the same way a role's own IAM read gate works: "
+            "the tenant is scoping in, not the platform scoping out on its own."
+        ),
+    )
     is_verified = models.BooleanField(
         default=False,
         help_text="True when the user's IAM role has been verified via STS.",

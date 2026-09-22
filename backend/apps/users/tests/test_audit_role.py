@@ -37,3 +37,22 @@ class AuditRoleFieldTests(SimpleTestCase):
         # read as source rather than imported.
         source = (BACKEND_ROOT / "apps/users/serializers.py").read_text(encoding="utf-8")
         self.assertIn('"aws_audit_role_arn"', source)
+
+
+class AuditRegionsFieldTests(SimpleTestCase):
+    """
+    Which regions the scan collects resources from.
+
+    Tenant-declared, not auto-detected: this is an authenticated, consented
+    scan, not adversarial recon, so there is no reason to probe for the
+    account's footprint instead of asking. Empty means IAM-only.
+    """
+
+    def test_regions_is_a_json_list_defaulting_empty(self):
+        field = User._meta.get_field("aws_audit_regions")
+        self.assertTrue(field.blank)
+        self.assertEqual(field.default(), [])
+
+    def test_the_profile_endpoint_exposes_it(self):
+        source = (BACKEND_ROOT / "apps/users/serializers.py").read_text(encoding="utf-8")
+        self.assertIn('"aws_audit_regions"', source)
