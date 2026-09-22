@@ -151,7 +151,22 @@ def run_scout_scan(scan_id: str) -> None:
         # analysis nobody sees. provider=None (the default) is a
         # deterministic offline template, not an LLM call: no external
         # request, no cost, safe to run on every scan.
-        annotate_with_narrative(report, top=MAX_CHAINS)
+        #
+        # Zero-hop chains are excluded from this call, not passed through to
+        # Scout as-is: Scout's template_narrative() (scout/reason/engine.py)
+        # unconditionally reads chain['hops'][0] in its no-matched-technique
+        # branch, and crashes the whole scan on the first zero-hop chain that
+        # isn't flagged origin_already_admin (Scout's own admin-origin skip
+        # covers some zero-hop chains, not all — this account has one that
+        # falls through). A zero-hop chain is "already privileged, no
+        # escalation to narrate" by definition — envelope.py already renders
+        # that state from `terminal_impact` with no narrative needed — so
+        # skipping it here costs nothing a user would see. `chains_with_hops`
+        # holds the *same* dict objects as report["chains"]; reason()'s
+        # in-place `chain["analysis"] = {...}` mutation still lands on the
+        # real report, this just changes which chains get looked at.
+        chains_with_hops = [c for c in report.get("chains", []) if c.get("hops")]
+        annotate_with_narrative({"chains": chains_with_hops}, top=MAX_CHAINS)
 
         envelope = serialize_scan(
             report=report,
