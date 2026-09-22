@@ -228,7 +228,12 @@ export default function QueryPanel({
               </li>
             ))}
           </ol>
-          <div className="rounded border border-border overflow-hidden bg-surface-deep">
+          {/* GraphCanvas's <svg> renders at its native layout width/height
+              (viewBox scales coordinates internally, not the element itself),
+              so a path with more than a couple of nodes is wider than this
+              360px panel. overflow-hidden would silently clip it with no way
+              to see the rest; overflow-x-auto makes it scrollable instead. */}
+          <div className="rounded border border-border overflow-x-auto bg-surface-deep">
             <GraphCanvas graph={graph} />
           </div>
         </div>
