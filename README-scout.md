@@ -208,3 +208,162 @@ role can have a smaller cap.
   must be applied (`python manage.py migrate`) before the endpoints will
   work — a missing migration surfaces as `ProgrammingError` at first use, not
   at Django boot.
+
+## Phase 4 — entity records, icons and on-demand path query
+
+Plan: `docs/superpowers/plans/2026-09-22-attack-graph-entity-graph-and-query.md`
+Design spec: `docs/superpowers/specs/2026-09-22-attack-graph-entity-graph-and-query-design.md`
+
+The scan task always threw away Scout's own graph (`report, _graph =
+pipeline.run(...)`) and kept only the ranked-chain envelope. This phase stores
+that graph, and builds three read endpoints and two frontend panels on top of
+it: search any entity in the account, see its full record (trust policy,
+tags, everything Scout recorded), and ask for the shortest paths between any
+two entities — not just the top 25 chains Scout itself pre-ranked.
+
+### `ScoutScan.graph` and the `.defer("graph")` invariant
+
+`ScoutScan` gained a nullable `graph = JSONField(null=True, blank=True)`
+holding `scout.graph.Graph.to_dict()` verbatim — every node and edge Scout
+collected, not just the chain endpoints the envelope keeps. **Null is the
+permanent state for every scan stored before this field existed** — nothing
+backfills them, and every `/graph/` endpoint below treats that as a normal
+404, not an error.
+
+**The column is never in the scan detail or list response, and never in the
+query that builds either.** `AttackGraphHub.tsx` polls `GET .../scan/<id>/`
+every 3s while a scan runs, and the list route has no pagination — it is
+every scan the user has ever run. Keeping `graph` out of
+`ScoutScanDetailSerializer`/`ScoutScanListSerializer`'s `Meta.fields` stops
+DRF *rendering* it; it does **not** stop Django *fetching* it, because both
+views' querysets were plain `filter()` calls (`SELECT *`). Both now carry
+`.defer("graph")` (`views.py`, `ScoutScanListView.get_queryset` and
+`ScoutScanDetailView.get`) — **this is the load-bearing half, and it is the
+one a future edit is most likely to remove without noticing**, since the
+serializer tests still pass either way. `apps/attack_graph/tests/test_model.py`'s
+`test_the_polled_querysets_defer_the_graph` counts the literal
+`.defer("graph")` string in `views.py` (must be exactly 2) specifically so a
+regression fails a test rather than only a profiler.
+
+`active_scans()` is deliberately left un-deferred: it filters to
+`pending`/`running` rows, whose `graph` is always `NULL`.
+
+### Measured payload size (Task 0 gate)
+
+The spec required measuring the graph's serialized size before committing to
+a plain `JSONField` column. Synthetic measurement (`backend/venv-dev`,
+2026-09-22):
+
+| Shape | Size |
+|---|---|
+| 70 identities / 300 resources | 89,004 bytes (0.08 MB) |
+| 500 identities / 3,000 resources | 770,023 bytes (0.73 MB) |
+
+Both well under the 4MB gate, so the plain column was confirmed and no
+storage rung (own table, or gzip'd `BinaryField`) was needed. **Caveat**: the
+synthetic graph is a single chain with one `granted_by` entry per edge; a
+real account is denser (more `PRIVESC_TO` edges per identity, larger
+`granted_by` arrays, a `CAN_ACCESS_RESOURCE` edge per resolved
+identity/resource pair), so treat 0.73 MB as a floor, not a prediction. No
+real-account measurement was taken this session — no audit-role AWS account
+was reachable — so this stays the one open item on the storage decision;
+retake it against a real completed scan (`payload_bytes(scan.graph)` in
+`graph_search.py`) before assuming the number holds at scale.
+
+### The three endpoints
+
+All three live under `/api/attack-graph/scan/<scan_id>/graph/`, gated on
+`HasScoutConnection` and scoped to the requesting user (someone else's scan
+is a 404, which doesn't confirm the id exists):
+
+| Method & path | Query params | Returns |
+|---|---|---|
+| `GET .../graph/nodes/` | `q` (optional, min 2 chars to filter) | `{"nodes": [ChainNode]}`, capped at `MAX_NODE_RESULTS = 50`, identities sorted first |
+| `GET .../graph/entity/` | `id` (required, exact node id) | one entity's full record — type, name, account id, raw `properties` |
+| `GET .../graph/path/` | `src`, `dst` (required, exact node ids) | the path-query response below |
+
+All three can 404 for four distinct reasons — collapsing them into one
+"scan not found" message tells someone watching a scan that is running
+right now to go start a new one, which is wrong advice for three of the four:
+
+| `code` | Meaning | Copy |
+|---|---|---|
+| (none — plain `{"detail": "No such scan."}`) | no scan with that id owned by this user | — |
+| `GRAPH_UNAVAILABLE` | scan completed before this field existed, or otherwise has no stored graph | "run a new scan to get it" |
+| `GRAPH_PENDING` | scan is `pending`/`running` | "still running, graph is stored when it finishes" |
+| `GRAPH_FAILED` | scan failed | the scan's own `error_message`, or a generic fallback |
+
+A client can branch on `code` to give the right message instead of a bare 404.
+
+### The path query: edge types, depth, `truncated` vs `search_capped`
+
+`GET .../graph/path/` traverses **`PRIVESC_TO`, `CAN_ASSUME`,
+`CAN_ACCESS_RESOURCE`** — Scout's own ranked-chain default is only
+`[PRIVESC_TO, CAN_ASSUME]`, under which *any* resource destination (an S3
+bucket, a Lambda) would report "no path found" for every account, because the
+traversal never looks at a resource edge at all. That default is
+deliberately widened here. The response echoes `edge_types` back so the "no
+path found" copy can name exactly what was tried.
+
+Depth is **10 hops**, not the ranked list's 5 — this endpoint answers "is
+there *any* path," not "what are the best 25," so a longer path here is a
+different, deliberately wider question, not a bug in the ranked list.
+
+Two independent flags on the response, easy to conflate and meaning very
+different things:
+
+- **`truncated`** — more paths exist than were returned (`MAX_QUERY_PATHS =
+  25`). The ones shown are the shortest, since the traversal runs breadth-first.
+- **`search_capped`** — the visit budget (`MAX_VISITED = 50_000` nodes) ran
+  out before the graph was fully explored. This is the one case where "no
+  path found" would be an unsafe thing to say, because the search may simply
+  not have gotten there yet — `graph_query._iter_paths_capped` is a
+  line-for-line copy of Scout's own `iter_paths`, kept in sync by
+  `IterPathsParityTests`, specifically so this signal is trustworthy.
+
+Hops are **not** built from Scout's `render_path()` — it emits no `action`
+and no `conditional`, so every hop routed through it would render
+"deterministic" even when the ranked-chains view shows the same edge as
+conditional. Hops are assembled from the raw edges instead
+(`graph_search.hop_dict`), field-for-field matching Scout's own `Hop`.
+
+### Why `graph_search.py` is CI-tested and `graph_query.py` is not
+
+CI (`config/settings/ci.py`, `requirements-test.txt`) installs exactly six
+packages — Django, python-decouple, PyYAML, celery, feedparser, requests.
+**Neither DRF, boto3 nor Scout is installed in CI.** The feature is split
+across two modules along that line:
+
+- **`graph_search.py`** — stdlib only. Search, entity lookup, hop assembly,
+  the small LRU in front of the DB read. Fully tested under CI
+  (`test_graph_search.py`), including the certainty-regression test (a
+  four-line fake edge, no real `scout.graph.Graph` needed) that guards
+  exactly the `render_path()` defect above.
+- **`graph_query.py`** — needs a real `scout.graph.Graph` to traverse, so
+  every Scout import is deferred inside a function (`# noqa: PLC0415`), the
+  same pattern `tasks.py` already used. Its tests (`test_graph_query.py`,
+  including `IterPathsParityTests`) run only under `backend/venv-dev` and
+  `skipUnless(HAS_SCOUT, ...)` in CI — cleanly *skipped*, confirmed by
+  running the file directly under `config.settings.ci`, not erroring, which
+  is what would happen if a Scout import had escaped to module scope.
+
+### Known gaps carried forward from this phase
+
+- **No real-account payload measurement** (see above) — the storage decision
+  rests on the synthetic number until this is retaken.
+- **Frontend visual verification was not done in-browser this session.**
+  Every frontend task (extracting `stepsToGraph`, the entity panel, the query
+  panel) was verified by a clean `npm run build` and, where the plan called
+  for a browser click-through, by a written static trace of the relevant code
+  paths instead — logging in as the one user with a completed scan
+  (`porttest`, scan `af678b61-...`, 19 chains) would have required either
+  their password or minting a JWT for them, and the latter was correctly
+  blocked as credential materialization. A real click-through against that
+  scan is still worth doing by hand.
+- **A real gap, not just an unverified step**: `QueryPanel`'s `EntityPicker`
+  swallows a failed `searchGraphNodes` call (`.catch(() => setOptions([]))`),
+  so on a pre-Phase-4 scan (`graph` still `None`) the picker silently shows no
+  suggestions forever instead of surfacing the backend's "run a new scan to
+  get it" message — the panel reads as blank rather than explained. Not fixed
+  as part of this phase; it's a UI design decision (inline error under the
+  picker? disable the panel for such a scan?) rather than a one-line fix.

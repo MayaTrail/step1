@@ -3029,7 +3029,13 @@ git commit -m "feat(attack-graph): on-demand path query panel"
 **Files:**
 - Modify: `docs/` — the Scout integration README referenced by commit `4e36ddf`
 
-- [ ] **Step 1: Document the three endpoints and the null-graph state**
+**Deviation found and fixed (2026-09-22).** The plan says `docs/`, but
+`git show --stat 4e36ddf` shows that commit actually touched
+`README-scout.md` at the **repo root**, not anything under `docs/` — a
+plan/reality mismatch, same class as the `render_path`/`resolve_arn_tokens`
+docstring collisions in Task 5. Used the real path throughout this task.
+
+- [x] **Step 1: Document the three endpoints and the null-graph state**
 
 Add a section covering:
 
@@ -3040,10 +3046,13 @@ Add a section covering:
 - the traversed edge types, the depth (10, vs the ranked list's 5), and what `truncated` and `search_capped` each mean — these are in the response so the UI can be honest about them, and a client author needs to know which is which;
 - the fact that `graph_search.py` is CI-tested while `graph_query.py` is not, with the reason.
 
-- [ ] **Step 2: Commit**
+Added as a new "Phase 4" section in `README-scout.md`, matching the existing
+narrative style and commit-table format.
+
+- [x] **Step 2: Commit**
 
 ```bash
-git add docs/
+git add README-scout.md
 git commit -m "docs: attack graph entity records and path query"
 ```
 
