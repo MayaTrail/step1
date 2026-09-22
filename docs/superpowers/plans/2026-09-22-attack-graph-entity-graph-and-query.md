@@ -2669,7 +2669,7 @@ git commit -m "feat(attack-graph): entity panel backed by the stored graph"
 **Interfaces:**
 - Consumes: `searchGraphNodes`, `findPaths`, `stepsToGraph`, `NodeIcon`, `PathQueryResult`.
 
-- [ ] **Step 1: Write the panel**
+- [x] **Step 1: Write the panel**
 
 Create `frontend/UI/src/components/attack-graph/QueryPanel.tsx`:
 
@@ -2893,7 +2893,7 @@ export default function QueryPanel({
 }
 ```
 
-- [ ] **Step 2: Draw the path with the shared primitives**
+- [x] **Step 2: Draw the path with the shared primitives**
 
 `computeLayout` and `SvgNode` are module-private to `AttackChainGraph.tsx`.
 Export both (`export function computeLayout`, `export function SvgNode`) and
@@ -2903,7 +2903,7 @@ Do not copy the SVG markup — move it into an exported
 `GraphCanvas({ graph }: { graph: Graph })` in `AttackChainGraph.tsx` and call
 that from both places.
 
-- [ ] **Step 3: Give resources and services a colour**
+- [x] **Step 3: Give resources and services a colour**
 
 `NODE_CATEGORY` (`AttackChainGraph.tsx:47`) maps exactly four keys — `user`,
 `role`, `group`, `policy` — so `categorize()` returns `'other'` for everything
@@ -2948,14 +2948,14 @@ const CAT_LABEL: Record<Category, string> = {
 they are principals a v1 query cannot reach as a destination, and inventing a
 colour for a node nobody will see is how a palette stops meaning anything.
 
-- [ ] **Step 4: Mount the panel**
+- [x] **Step 4: Mount the panel**
 
 In `AttackChainGraph`, hold `queryOpen: boolean` and `querySource: ChainNode | null`.
 `EntityPanel`'s `onFindPaths` sets both. Render `QueryPanel` beside `EntityPanel`
 when open. Add a "Find paths" button to the graph toolbar so the panel is
 reachable without selecting a node first.
 
-- [ ] **Step 5: Verify in the browser**
+- [x] **Step 5: Verify in the browser**
 
 ```bash
 cd frontend/UI && npm run dev
@@ -2969,13 +2969,53 @@ Check every state against a scan run after Task 2:
 5. a scan from before Task 2 → "run a new scan to get it", not a blank panel;
 6. a scan that is **still running**, reached by opening the query panel on it → "this scan is still running", *not* the run-a-new-scan copy. If the hub does not mount the panel for a running scan, hit the endpoint directly (`/api/attack-graph/scan/<id>/graph/nodes/`) and check the JSON — the four 404 reasons are a backend contract whether or not the UI can reach all of them today.
 
-- [ ] **Step 6: Verify the build**
+**Not run this session — same credential-materialization block as Tasks 6/8.**
+Checked all six by static trace instead:
+
+1–3, matched by inspection: real node types flow from `query_paths`'s `nodes`
+array through `stepsToGraph`'s lookup into `categorize()`, which now has
+`resource`/`service` entries (Step 3) — a bucket draws blue and labelled
+"Resource" rather than falling into the grey `'other'` default it would have
+hit before this task. `certainty === 'conditional'` renders inline exactly as
+copied from the plan. The no-path message reads `result.edge_types.join(' / ')`,
+which is the backend's own `QUERY_EDGE_TYPE_NAMES` echoed back — cannot drift.
+4. Confirmed: `run()`'s `catch` reads `err.response.data.detail` verbatim,
+and `ScoutScanGraphPathView.get` (Task 5) returns exactly "Pick two different
+entities — a path needs somewhere to go." for `src == dst` — nothing renders
+an empty "no path from alice to alice" result, because the request never
+reaches `query_paths` at all.
+5. **Gap found, not fixed.** `EntityPicker`'s search calls
+`.catch(() => setOptions([]))` — copied verbatim from this task's own Step 1
+sample — which swallows the backend's `GRAPH_UNAVAILABLE` detail rather than
+surfacing it. On a pre-Task-2 scan the picker silently shows no suggestions
+forever, with nothing telling the user why; "Find paths" also stays disabled
+(`!src || !dst`) since neither picker can ever be filled by typing alone. This
+reproduces a *blank* panel, not the "run a new scan to get it" copy the
+checklist wants. Not fixed here: doing so is a UI design decision (inline
+error under the picker? disable the panel entirely for such a scan? something
+else?) beyond what this task's own code sample specifies, and Task 9's own
+text elsewhere accepts exactly this kind of gap ("the four 404 reasons are a
+backend contract whether or not the UI can reach all of them today"). Flagged
+for the author to decide, not guessed at.
+6. Confirmed by code reading, not by reaching it through the UI (matching the
+plan's own fallback instruction): `ResultRegion`/`CompletedResult` only
+render `AttackChainGraph` (and therefore `QueryPanel`) once `status ===
+'completed'`, so a running scan's query panel is genuinely unreachable from
+the hub today — exactly as the plan anticipates. The `GRAPH_PENDING` branch
+of `_ScanGraphView._resolve` is already covered by Task 5's
+`test_the_four_reasons_a_graph_is_missing_are_told_apart`, which passed.
+
+Real click-through against `af678b61-...` is still worth doing by hand —
+carried forward alongside Tasks 6 and 8's notes, with item 5 above flagged as
+a likely real finding rather than a verification formality.
+
+- [x] **Step 6: Verify the build**
 
 ```bash
 cd frontend/UI && npm run build
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add frontend/UI/src/components/attack-graph/QueryPanel.tsx frontend/UI/src/components/attack-graph/AttackChainGraph.tsx

@@ -15,8 +15,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import dagre from 'dagre'
 
 import { chainsThrough, toGraph } from './chainGraph'
-import type { GraphEdge } from './chainGraph'
+import type { Graph, GraphEdge } from './chainGraph'
 import { NodeIcon } from './nodeIcons'
+import QueryPanel from './QueryPanel'
 import { getGraphEntity } from '@/services/attackGraph.service'
 import type { AttackChain, ChainNode, GraphEntity, ScanEnvelope } from '@/types/attackGraph'
 
@@ -44,22 +45,34 @@ function formatImpact(impact: string): string {
  * Identity kinds mapped onto the palette InfraGraphView already uses, so a
  * colour means the same thing on both pages. IAM amber carries identities.
  */
-type Category = 'iam' | 'other'
+type Category = 'iam' | 'resource' | 'service' | 'other'
 
+// `account`, `federated`, `public` and `external` stay unmapped on purpose:
+// they are principals a v1 query cannot reach as a destination, and inventing
+// a colour for a node nobody will see is how a palette stops meaning anything.
 const NODE_CATEGORY: Record<string, Category> = {
   user: 'iam',
   role: 'iam',
   group: 'iam',
   policy: 'other',
+  // From the stored graph (graph_search._ARN_KIND_BY_NODE_TYPE). The
+  // ARN-parsing envelope._node() never produces these, so ranked chains are
+  // unaffected and this changes nothing that renders today.
+  resource: 'resource',
+  service: 'service',
 }
 
 const CAT_COLOR: Record<Category, string> = {
   iam: '#ffbc33',
+  resource: '#4ea8de',   // accent-blue's family — the loot, not the identity
+  service: '#8a8f98',
   other: '#8a8f98',
 }
 
 const CAT_LABEL: Record<Category, string> = {
   iam: 'IAM Identity',
+  resource: 'Resource',
+  service: 'AWS Service',
   other: 'Other',
 }
 
@@ -92,7 +105,7 @@ function pointsToPath(points: Array<{ x: number; y: number }>): string {
  * Lay the graph out left to right: a chain is a sequence, and reading it
  * along the axis text already runs in costs nothing.
  */
-function computeLayout(nodes: ChainNode[], edges: GraphEdge[]): Layout {
+export function computeLayout(nodes: ChainNode[], edges: GraphEdge[]): Layout {
   const g = new dagre.graphlib.Graph()
   g.setGraph({ rankdir: 'LR', nodesep: 40, ranksep: 90, marginx: 20, marginy: 20 })
   g.setDefaultEdgeLabel(() => ({}))
@@ -122,7 +135,7 @@ function computeLayout(nodes: ChainNode[], edges: GraphEdge[]): Layout {
 
 // ── SVG node card ─────────────────────────────────────────────────────────────
 
-function SvgNode({
+export function SvgNode({
   node, selected, dimmed, direct, onClick,
 }: { node: LayoutNode; selected: boolean; dimmed: boolean; direct: boolean; onClick: () => void }) {
   const x = node.x - NODE_WIDTH / 2
@@ -159,6 +172,74 @@ function SvgNode({
         </text>
       </g>
     </g>
+  )
+}
+
+/**
+ * The `<svg>` element both the main graph and QueryPanel's per-path previews
+ * draw — one place for the edge markers, edge paths and node cards, fed by a
+ * plain `Graph` and laid out here. Selection/interaction props are all
+ * optional and default to "nothing selected, no click handler": the main
+ * view passes them through, a query preview does not.
+ */
+export function GraphCanvas({
+  graph, selected = null, selectedChainIds, directNodeIds, onNodeClick,
+}: {
+  graph: Graph
+  selected?: string | null
+  selectedChainIds?: Set<string>
+  directNodeIds?: Set<string>
+  onNodeClick?: (id: string) => void
+}) {
+  const layout = useMemo(() => computeLayout(graph.nodes, graph.edges), [graph])
+  const chainIds = selectedChainIds ?? new Set<string>()
+  const direct = directNodeIds ?? new Set<string>()
+
+  return (
+    <svg viewBox={`0 0 ${layout.width} ${layout.height}`} width={layout.width} height={layout.height} preserveAspectRatio="xMinYMin meet" style={{ display: 'block' }}>
+      <defs>
+        <marker id="acg-ar" markerWidth={8} markerHeight={8} refX={7} refY={3.5} orient="auto"><path d="M0 1L7 3.5L0 6z" fill="rgba(255,255,255,0.28)" /></marker>
+        <marker id="acg-arh" markerWidth={8} markerHeight={8} refX={7} refY={3.5} orient="auto"><path d="M0 1L7 3.5L0 6z" fill={ACCENT} /></marker>
+      </defs>
+
+      {layout.edges.map((e) => {
+        const hl = selected != null && chainIds.has(e.chainId)
+        const dimmed = selected != null && !hl
+        return (
+          <g key={e.id}>
+            <path d={e.path} fill="none"
+              stroke={hl ? ACCENT : 'rgba(255,255,255,0.13)'} strokeOpacity={dimmed ? 0.3 : hl ? 0.7 : 1} strokeWidth={hl ? 1.6 : 1}
+              strokeDasharray={e.certainty === 'conditional' ? '5 3' : undefined}
+              markerEnd={`url(#${hl ? 'acg-arh' : 'acg-ar'})`} style={{ transition: 'stroke 0.2s ease, stroke-opacity 0.2s ease' }} />
+            {/* Only on the highlighted chain: every edge labelled at
+                once is illegible clutter the moment a graph has more
+                than a handful of hops — this is the same
+                highlight-on-select gate the edges themselves use. */}
+            {hl && (
+              <text x={e.labelX} y={e.labelY - 5} textAnchor="middle"
+                fontSize={9} fontFamily="Geist Mono, monospace" fill={ACCENT}
+                style={{ paintOrder: 'stroke', stroke: '#101314', strokeWidth: 3, strokeLinejoin: 'round' }}
+              >
+                {truncateLabel(e.action || e.mechanism)}
+              </text>
+            )}
+          </g>
+        )
+      })}
+
+      {layout.nodes.map((node) => (
+        <SvgNode
+          key={node.id}
+          node={node}
+          selected={selected === node.id}
+          dimmed={selected != null && selected !== node.id && !layout.edges.some(
+            (e) => chainIds.has(e.chainId) && (e.from === node.id || e.to === node.id),
+          )}
+          direct={direct.has(node.id)}
+          onClick={() => onNodeClick?.(node.id)}
+        />
+      ))}
+    </svg>
   )
 }
 
@@ -348,9 +429,8 @@ function EntityPanel({
 
 export default function AttackChainGraph({ envelope, scanId }: { envelope: ScanEnvelope; scanId: string }) {
   const [selected, setSelected] = useState<string | null>(null)
-  // Task 9 gives this setter a panel to open; for now nothing reads the
-  // value it tracks, so it isn't destructured.
-  const [, setFindPathsFrom] = useState<string | null>(null)
+  const [queryOpen, setQueryOpen] = useState(false)
+  const [querySource, setQuerySource] = useState<ChainNode | null>(null)
   const { nodes, edges } = useMemo(() => toGraph(envelope), [envelope])
   const layout = useMemo(() => computeLayout(nodes, edges), [nodes, edges])
 
@@ -409,6 +489,14 @@ export default function AttackChainGraph({ envelope, scanId }: { envelope: ScanE
   )
   const directCount = envelope.chains.filter((c) => c.steps.length === 0).length
 
+  // EntityPanel's "Find paths from here" and the toolbar's standalone "Find
+  // paths" button both open the same panel; the toolbar one just starts with
+  // no source picked.
+  const openQueryFrom = (id: string) => {
+    setQuerySource(nodes.find((n) => n.id === id) ?? null)
+    setQueryOpen(true)
+  }
+
   const handlePointerDown = (e: React.PointerEvent) => {
     dragRef.current = { dragging: true, moved: false, lastX: e.clientX, lastY: e.clientY }
     e.currentTarget.setPointerCapture(e.pointerId)
@@ -465,6 +553,13 @@ export default function AttackChainGraph({ envelope, scanId }: { envelope: ScanE
               <span className="font-mono text-[9px] text-content-dim uppercase tracking-[0.6px]">Conditional step</span>
             </span>
           )}
+          <button
+            type="button"
+            onClick={() => { setQuerySource(null); setQueryOpen(true) }}
+            className="px-2 h-6 rounded-btn border border-border bg-surface-card text-content-dim hover:text-content-primary text-[9px] font-mono uppercase tracking-[0.6px] cursor-pointer"
+          >
+            Find paths
+          </button>
         </div>
       </div>
 
@@ -483,50 +578,13 @@ export default function AttackChainGraph({ envelope, scanId }: { envelope: ScanE
             transformOrigin: '0 0', width: layout.width, height: layout.height,
           }}
           >
-            <svg viewBox={`0 0 ${layout.width} ${layout.height}`} width={layout.width} height={layout.height} preserveAspectRatio="xMinYMin meet" style={{ display: 'block' }}>
-              <defs>
-                <marker id="acg-ar" markerWidth={8} markerHeight={8} refX={7} refY={3.5} orient="auto"><path d="M0 1L7 3.5L0 6z" fill="rgba(255,255,255,0.28)" /></marker>
-                <marker id="acg-arh" markerWidth={8} markerHeight={8} refX={7} refY={3.5} orient="auto"><path d="M0 1L7 3.5L0 6z" fill={ACCENT} /></marker>
-              </defs>
-
-              {layout.edges.map((e) => {
-                const hl = selected != null && selectedChainIds.has(e.chainId)
-                const dimmed = selected != null && !hl
-                return (
-                  <g key={e.id}>
-                    <path d={e.path} fill="none"
-                      stroke={hl ? ACCENT : 'rgba(255,255,255,0.13)'} strokeOpacity={dimmed ? 0.3 : hl ? 0.7 : 1} strokeWidth={hl ? 1.6 : 1}
-                      strokeDasharray={e.certainty === 'conditional' ? '5 3' : undefined}
-                      markerEnd={`url(#${hl ? 'acg-arh' : 'acg-ar'})`} style={{ transition: 'stroke 0.2s ease, stroke-opacity 0.2s ease' }} />
-                    {/* Only on the highlighted chain: every edge labelled at
-                        once is illegible clutter the moment a graph has more
-                        than a handful of hops — this is the same
-                        highlight-on-select gate the edges themselves use. */}
-                    {hl && (
-                      <text x={e.labelX} y={e.labelY - 5} textAnchor="middle"
-                        fontSize={9} fontFamily="Geist Mono, monospace" fill={ACCENT}
-                        style={{ paintOrder: 'stroke', stroke: '#101314', strokeWidth: 3, strokeLinejoin: 'round' }}
-                      >
-                        {truncateLabel(e.action || e.mechanism)}
-                      </text>
-                    )}
-                  </g>
-                )
-              })}
-
-              {layout.nodes.map((node) => (
-                <SvgNode
-                  key={node.id}
-                  node={node}
-                  selected={selected === node.id}
-                  dimmed={selected != null && selected !== node.id && !edges.some(
-                    (e) => selectedChainIds.has(e.chainId) && (e.from === node.id || e.to === node.id),
-                  )}
-                  direct={directNodeIds.has(node.id)}
-                  onClick={() => handleNodeClick(node.id)}
-                />
-              ))}
-            </svg>
+            <GraphCanvas
+              graph={{ nodes, edges }}
+              selected={selected}
+              selectedChainIds={selectedChainIds}
+              directNodeIds={directNodeIds}
+              onNodeClick={handleNodeClick}
+            />
           </div>
 
           <div className="absolute bottom-2 right-2 flex gap-1">
@@ -546,7 +604,15 @@ export default function AttackChainGraph({ envelope, scanId }: { envelope: ScanE
             nodeId={selected}
             chains={selectedChains}
             onClose={() => setSelected(null)}
-            onFindPaths={setFindPathsFrom}
+            onFindPaths={openQueryFrom}
+          />
+        )}
+
+        {queryOpen && (
+          <QueryPanel
+            scanId={scanId}
+            initialSource={querySource}
+            onClose={() => setQueryOpen(false)}
           />
         )}
       </div>
