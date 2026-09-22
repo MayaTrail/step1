@@ -63,6 +63,17 @@ class ScoutScan(models.Model):
         blank=True,
         help_text="The serialized result envelope (see envelope.py), once complete.",
     )
+    graph = models.JSONField(
+        null=True,
+        blank=True,
+        help_text=(
+            "Scout's own Graph.to_dict() for this scan — every node and edge, "
+            "not just the chain endpoints the envelope keeps. Null for every "
+            "scan stored before this field existed: that is a normal, "
+            "permanent state, not a backfill that is pending. Never returned "
+            "by the detail or list serializer; the page polls those."
+        ),
+    )
     error_message = models.TextField(
         blank=True,
         help_text="Human-readable failure reason, shown to the user verbatim.",

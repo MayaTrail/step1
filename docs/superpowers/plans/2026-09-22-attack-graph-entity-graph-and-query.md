@@ -181,7 +181,7 @@ git commit -m "docs: record measured graph payload size for the storage gate"
 **Interfaces:**
 - Produces: `ScoutScan.graph` — `JSONField(null=True, blank=True)`. Every later task reads `scan.graph` and must treat `None` as a normal, permanent state.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `backend/apps/attack_graph/tests/test_model.py`:
 
@@ -274,7 +274,7 @@ Because those two are skipped in CI, add the source-reading equivalent that is *
 
 Add `import pathlib` and `import re` if the file does not already have them.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
 cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test apps.attack_graph.tests.test_model -v 2
@@ -282,7 +282,7 @@ cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test ap
 
 Expected: FAIL — `FieldDoesNotExist: ScoutScan has no field named 'graph'`.
 
-- [ ] **Step 3: Add the field**
+- [x] **Step 3: Add the field**
 
 In `backend/apps/attack_graph/models.py`, directly after the `result` field:
 
@@ -300,7 +300,7 @@ In `backend/apps/attack_graph/models.py`, directly after the `result` field:
     )
 ```
 
-- [ ] **Step 4: Generate the migration**
+- [x] **Step 4: Generate the migration**
 
 ```bash
 cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py makemigrations users infrastructure emulations logs attack_graph
@@ -308,7 +308,7 @@ cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py makemig
 
 Expected: creates `apps/attack_graph/migrations/0002_scoutscan_graph.py` and nothing else. If it proposes changes to another app, stop — that is an unrelated drift and belongs in its own commit.
 
-- [ ] **Step 5: Keep the new column out of the two polled querysets**
+- [x] **Step 5: Keep the new column out of the two polled querysets**
 
 Adding the field is what makes this necessary, so it lands in the same commit. In `backend/apps/attack_graph/views.py`:
 
@@ -339,7 +339,7 @@ Write the comments as above, without the literal `.defer("graph")` in them — t
 
 `active_scans()` (`models.py:110`) is deliberately left alone: it filters to `pending`/`running` rows, whose `graph` is always `NULL`.
 
-- [ ] **Step 6: Verify migrations and models agree, the way CI does**
+- [x] **Step 6: Verify migrations and models agree, the way CI does**
 
 ```bash
 cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py makemigrations --check --dry-run
@@ -347,7 +347,7 @@ cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py makemig
 
 Expected: exit 0, "No changes detected".
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 ```bash
 cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test apps.attack_graph -v 2
@@ -355,7 +355,7 @@ cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test ap
 
 Expected: PASS, with 2 skips (the DRF-gated serializer tests).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add backend/apps/attack_graph/models.py backend/apps/attack_graph/migrations/0002_scoutscan_graph.py backend/apps/attack_graph/views.py backend/apps/attack_graph/tests/test_model.py

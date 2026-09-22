@@ -93,7 +93,12 @@ class ScoutScanListView(ListAPIView):
 
     def get_queryset(self):
         """Return only this user's scans."""
-        return ScoutScan.objects.filter(user=self.request.user)
+        # Deferring the graph column: this list is unpaginated — every scan
+        # the user has ever run — and get_state already forces `result` per
+        # row. Without it, one history-strip load pulls every stored graph out
+        # of Postgres. Keeping `graph` out of Meta.fields stops DRF
+        # *rendering* it; only this stops Django *fetching* it.
+        return ScoutScan.objects.filter(user=self.request.user).defer("graph")
 
 
 class ScoutScanDetailView(APIView):
@@ -115,7 +120,15 @@ class ScoutScanDetailView(APIView):
         Scoped to the user rather than looked up globally: a 404 for someone
         else's scan is the correct answer, and it does not confirm the id exists.
         """
-        scan = ScoutScan.objects.filter(id=scan_id, user=request.user).first()
+        # Deferring the graph column: AttackGraphHub polls this every 3s
+        # while a scan runs. The graph is served by the /graph/ endpoints,
+        # which fetch it deliberately and narrowly; nothing on this path
+        # needs it.
+        scan = (
+            ScoutScan.objects.filter(id=scan_id, user=request.user)
+            .defer("graph")
+            .first()
+        )
         if scan is None:
             return Response(
                 {"detail": "No such scan."}, status=status.HTTP_404_NOT_FOUND,
