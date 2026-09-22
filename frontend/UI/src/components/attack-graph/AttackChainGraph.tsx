@@ -192,32 +192,45 @@ export function SvgNode({
  * view passes them through, a query preview does not.
  */
 export function GraphCanvas({
-  graph, selected = null, selectedChainIds, directNodeIds, onNodeClick,
+  graph, selected = null, selectedEdgeId = null, selectedChainIds, directNodeIds, onNodeClick, onEdgeClick,
 }: {
   graph: Graph
   selected?: string | null
+  selectedEdgeId?: string | null
   selectedChainIds?: Set<string>
   directNodeIds?: Set<string>
   onNodeClick?: (id: string) => void
+  onEdgeClick?: (id: string) => void
 }) {
   const layout = useMemo(() => computeLayout(graph.nodes, graph.edges), [graph])
   const chainIds = selectedChainIds ?? new Set<string>()
   const direct = directNodeIds ?? new Set<string>()
+  // Whether ANY selection (node or edge) is active — a node selection and an
+  // edge selection both resolve to a non-empty selectedChainIds upstream, so
+  // this one check drives dimming regardless of which triggered it.
+  const hasSelection = chainIds.size > 0
 
   return (
-    <svg viewBox={`0 0 ${layout.width} ${layout.height}`} width={layout.width} height={layout.height} preserveAspectRatio="xMinYMin meet" style={{ display: 'block' }}>
+    <svg viewBox={`0 0 ${layout.width} ${layout.height}`} width={layout.width} height={layout.height} preserveAspectRatio="xMinYMin meet" style={{ display: 'block', userSelect: 'none' }}>
       <defs>
         <marker id="acg-ar" markerWidth={8} markerHeight={8} refX={7} refY={3.5} orient="auto"><path d="M0 1L7 3.5L0 6z" fill="rgba(255,255,255,0.28)" /></marker>
         <marker id="acg-arh" markerWidth={8} markerHeight={8} refX={7} refY={3.5} orient="auto"><path d="M0 1L7 3.5L0 6z" fill={ACCENT} /></marker>
       </defs>
 
       {layout.edges.map((e) => {
-        const hl = selected != null && chainIds.has(e.chainId)
-        const dimmed = selected != null && !hl
+        const hl = chainIds.has(e.chainId)
+        const dimmed = hasSelection && !hl
         return (
-          <g key={e.id}>
+          <g key={e.id} onClick={() => onEdgeClick?.(e.id)} style={{ cursor: onEdgeClick ? 'pointer' : undefined }}>
+            {/* Invisible wide hit target: the visible stroke below is only
+                1-1.6px, far too thin to click reliably — real mice and
+                trackpads miss a corridor that narrow even when aiming
+                straight at the line. pointerEvents: 'stroke' makes the hit
+                area explicit rather than relying on a transparent paint
+                counting as "painted" by default. */}
+            <path d={e.path} fill="none" stroke="transparent" strokeWidth={24} style={{ pointerEvents: 'stroke' }} />
             <path d={e.path} fill="none"
-              stroke={hl ? ACCENT : 'rgba(255,255,255,0.13)'} strokeOpacity={dimmed ? 0.3 : hl ? 0.7 : 1} strokeWidth={hl ? 1.6 : 1}
+              stroke={hl ? ACCENT : e.id === selectedEdgeId ? ACCENT : 'rgba(255,255,255,0.13)'} strokeOpacity={dimmed ? 0.3 : hl ? 0.7 : 1} strokeWidth={hl ? 1.6 : 1}
               strokeDasharray={e.certainty === 'conditional' ? '5 3' : undefined}
               markerEnd={`url(#${hl ? 'acg-arh' : 'acg-ar'})`} style={{ transition: 'stroke 0.2s ease, stroke-opacity 0.2s ease' }} />
             {/* Only on the highlighted chain: every edge labelled at
@@ -241,7 +254,7 @@ export function GraphCanvas({
           key={node.id}
           node={node}
           selected={selected === node.id}
-          dimmed={selected != null && selected !== node.id && !layout.edges.some(
+          dimmed={hasSelection && selected !== node.id && !layout.edges.some(
             (e) => chainIds.has(e.chainId) && (e.from === node.id || e.to === node.id),
           )}
           direct={direct.has(node.id)}
@@ -437,13 +450,104 @@ function EntityPanel({
   )
 }
 
+/**
+ * One escalation hop, in the same chain-level context EntityPanel shows for a
+ * node — rank, score, MITRE techniques, narrative/detection/remediation are
+ * all chain-level fields (AttackChain), and a hop shown with none of that
+ * around it doesn't explain why it matters. `step` is looked up from the
+ * chain rather than trusting GraphEdge alone, because GraphEdge (chainGraph.ts)
+ * doesn't carry conditional_reason or concrete_api_sequence.
+ */
+function EdgePanel({
+  edge, chain, nodesById, onClose, onViewChain,
+}: {
+  edge: GraphEdge
+  chain: AttackChain
+  nodesById: Map<string, ChainNode>
+  onClose: () => void
+  onViewChain: (nodeId: string) => void
+}) {
+  const step = chain.steps.find((s) => s.from === edge.from && s.to === edge.to)
+  const fromLabel = nodesById.get(edge.from)?.label ?? edge.from
+  const toLabel = nodesById.get(edge.to)?.label ?? edge.to
+
+  return (
+    <div className="w-[320px] shrink-0 bg-surface-card border border-border rounded-card p-4 animate-slideUp shadow-ring overflow-y-auto" style={{ maxHeight: '74vh' }}>
+      <div className="flex items-start gap-2 mb-3">
+        <div className="min-w-0 flex-1">
+          <div className="font-display text-[0.9rem] font-bold text-content-primary leading-tight truncate">
+            {edge.action || edge.mechanism || 'Escalation step'}
+          </div>
+          <div className="text-[0.7rem] text-content-secondary truncate" title={`${edge.from} → ${edge.to}`}>
+            {fromLabel} &rarr; {toLabel}
+          </div>
+        </div>
+        <button onClick={onClose} aria-label="Close" className="text-content-dim hover:text-content-primary transition-opacity hover:opacity-60 bg-transparent border-none cursor-pointer text-[14px] leading-none shrink-0">&#10005;</button>
+      </div>
+
+      {edge.detail && (
+        <div className="font-mono text-[10px] text-content-secondary leading-[1.5] mb-2">{edge.detail}</div>
+      )}
+      {edge.certainty === 'conditional' && (
+        <div className="font-mono text-[9.5px] leading-[1.5] mb-3" style={{ color: CAT_COLOR.iam }}>
+          Conditional{step?.conditional_reason ? ` — ${step.conditional_reason}` : ''}
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => onViewChain(chain.source.id)}
+        className="w-full mb-3 px-3 py-1.5 text-[0.75rem] rounded border border-border text-content-primary hover:bg-surface-elevated"
+      >
+        View full chain
+      </button>
+
+      <div className="h-px bg-border mb-3" />
+
+      <div className="rounded-btn border border-border bg-surface-base p-2.5">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="font-mono text-[10px] text-content-secondary">Rank #{chain.rank}</span>
+          {chain.score != null && (
+            <span className="font-mono text-[10px] text-content-dim">score {chain.score}</span>
+          )}
+        </div>
+        {(chain.mitre_techniques ?? []).length > 0 && (
+          <div className="flex flex-wrap gap-1 mb-2">
+            {chain.mitre_techniques.map((t) => (
+              <span key={t} className="font-mono text-[8.5px] uppercase tracking-[0.6px] px-1.5 py-0.5 rounded-[4px]" style={{ color: CAT_COLOR.iam, background: `${CAT_COLOR.iam}1a` }}>{t}</span>
+            ))}
+          </div>
+        )}
+        {chain.narrative && (
+          <div className="pt-2 border-t border-border">
+            <div className="font-mono text-[8.5px] uppercase tracking-[0.6px] text-content-dim mb-1">How it works</div>
+            <div className="font-mono text-[9.5px] text-content-secondary leading-[1.5]">{chain.narrative}</div>
+            {chain.detection && (
+              <div className="font-mono text-[9px] text-content-dim leading-[1.5] mt-1.5">
+                <span style={{ color: CAT_COLOR.iam }}>Detection —</span> {chain.detection}
+              </div>
+            )}
+            {chain.remediation && (
+              <div className="font-mono text-[9px] text-content-dim leading-[1.5] mt-1">
+                <span style={{ color: DIRECT_COLOR }}>Remediation —</span> {chain.remediation}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function AttackChainGraph({ envelope, scanId }: { envelope: ScanEnvelope; scanId: string }) {
   const [selected, setSelected] = useState<string | null>(null)
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [queryOpen, setQueryOpen] = useState(false)
   const [querySource, setQuerySource] = useState<ChainNode | null>(null)
   const { nodes, edges } = useMemo(() => toGraph(envelope), [envelope])
+  const nodesById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
   const layout = useMemo(() => computeLayout(nodes, edges), [nodes, edges])
 
   // Pan/zoom state. A plain CSS transform on a wrapper div, not a viewBox
@@ -457,7 +561,7 @@ export default function AttackChainGraph({ envelope, scanId }: { envelope: ScanE
   // already causes. handleNodeClick reads .moved synchronously from the
   // same gesture, so a ref (read after the fact, never rendered) is correct
   // here, not a bug.
-  const dragRef = useRef({ dragging: false, moved: false, lastX: 0, lastY: 0 })
+  const dragRef = useRef({ dragging: false, moved: false, startX: 0, startY: 0, lastX: 0, lastY: 0 })
 
   // New scan data -> fresh view. Without this, switching envelopes (a new
   // scan, or the same page after a re-scan) keeps whatever pan/zoom the
@@ -485,7 +589,14 @@ export default function AttackChainGraph({ envelope, scanId }: { envelope: ScanE
   if (nodes.length === 0) return null
 
   const selectedChains = selected ? chainsThrough(envelope, selected) : []
-  const selectedChainIds = new Set(selectedChains.map((c) => c.id))
+  const selectedEdge = selectedEdgeId ? edges.find((e) => e.id === selectedEdgeId) : undefined
+  const edgeChain = selectedEdge ? envelope.chains.find((c) => c.id === selectedEdge.chainId) : undefined
+  // Node selection highlights every chain through that identity; an edge
+  // selection highlights just the one chain it belongs to — either way this
+  // is the only set GraphCanvas needs to know what to light up.
+  const selectedChainIds = selected
+    ? new Set(selectedChains.map((c) => c.id))
+    : new Set(edgeChain ? [edgeChain.id] : [])
   const cats = Array.from(new Set(layout.nodes.map((n) => categorize(n))))
   const hasConditionalEdge = edges.some((e) => e.certainty === 'conditional')
 
@@ -510,24 +621,45 @@ export default function AttackChainGraph({ envelope, scanId }: { envelope: ScanE
   }
 
   const handlePointerDown = (e: React.PointerEvent) => {
-    dragRef.current = { dragging: true, moved: false, lastX: e.clientX, lastY: e.clientY }
-    e.currentTarget.setPointerCapture(e.pointerId)
+    dragRef.current = {
+      dragging: true, moved: false, startX: e.clientX, startY: e.clientY, lastX: e.clientX, lastY: e.clientY,
+    }
+    // No setPointerCapture here — see handlePointerMove for why.
   }
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!dragRef.current.dragging) return
     const dx = e.clientX - dragRef.current.lastX
     const dy = e.clientY - dragRef.current.lastY
-    // A real drag, not just sub-pixel jitter under an otherwise-still
-    // pointer — below this, handleNodeClick below still treats it as a
-    // click rather than silently swallowing every node click.
-    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) dragRef.current.moved = true
+    // Total drift from where the gesture started, not the delta since the
+    // last move event — real mice and trackpads report a few pixels of
+    // jitter on press alone, and that jitter was tripping this per-event
+    // check on ordinary clicks, permanently marking the gesture "moved" and
+    // silently swallowing handleNodeClick below. Measuring cumulative
+    // distance from the start point is the standard click-vs-drag test and
+    // survives that jitter.
+    const totalDx = e.clientX - dragRef.current.startX
+    const totalDy = e.clientY - dragRef.current.startY
+    if (!dragRef.current.moved && Math.hypot(totalDx, totalDy) > 6) {
+      dragRef.current.moved = true
+      // Capture is deferred to here, the moment a gesture is confirmed to be
+      // a drag rather than a click — capturing on every pointerdown (the
+      // previous approach) retargets the `click` event synthesized after
+      // pointerup to this container itself, regardless of what element the
+      // pointer actually released over. That silently swallowed every plain
+      // click on a node or edge card deep inside the SVG; only a real drag
+      // needs capture at all, to keep panning tracking if the cursor leaves
+      // the container mid-gesture.
+      e.currentTarget.setPointerCapture(e.pointerId)
+    }
     dragRef.current.lastX = e.clientX
     dragRef.current.lastY = e.clientY
     setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }))
   }
   const handlePointerUp = (e: React.PointerEvent) => {
     dragRef.current.dragging = false
-    e.currentTarget.releasePointerCapture?.(e.pointerId)
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
   }
   // The click a node's own onClick would otherwise fire is not suppressed
   // by the browser just because a drag happened elsewhere in the same
@@ -535,7 +667,15 @@ export default function AttackChainGraph({ envelope, scanId }: { envelope: ScanE
   // node" silently reopening the detail panel on the wrong identity.
   const handleNodeClick = (id: string) => {
     if (dragRef.current.moved) return
+    setSelectedEdgeId(null)
     setSelected((p) => (p === id ? null : id))
+  }
+  // Mutually exclusive with node selection — clicking an edge while a node's
+  // panel is open replaces it, same as clicking a different node would.
+  const handleEdgeClick = (id: string) => {
+    if (dragRef.current.moved) return
+    setSelected(null)
+    setSelectedEdgeId((p) => (p === id ? null : id))
   }
   const zoomBy = (factor: number) =>
     setView((v) => ({ ...v, scale: Math.min(2.5, Math.max(0.35, v.scale * factor)) }))
@@ -593,9 +733,11 @@ export default function AttackChainGraph({ envelope, scanId }: { envelope: ScanE
             <GraphCanvas
               graph={{ nodes, edges }}
               selected={selected}
+              selectedEdgeId={selectedEdgeId}
               selectedChainIds={selectedChainIds}
               directNodeIds={directNodeIds}
               onNodeClick={handleNodeClick}
+              onEdgeClick={handleEdgeClick}
             />
           </div>
 
@@ -617,6 +759,16 @@ export default function AttackChainGraph({ envelope, scanId }: { envelope: ScanE
             chains={selectedChains}
             onClose={() => setSelected(null)}
             onFindPaths={openQueryFrom}
+          />
+        )}
+
+        {selectedEdge && edgeChain && (
+          <EdgePanel
+            edge={selectedEdge}
+            chain={edgeChain}
+            nodesById={nodesById}
+            onClose={() => setSelectedEdgeId(null)}
+            onViewChain={(nodeId) => { setSelectedEdgeId(null); setSelected(nodeId) }}
           />
         )}
 
