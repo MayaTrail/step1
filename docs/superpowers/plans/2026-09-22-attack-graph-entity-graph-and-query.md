@@ -3073,15 +3073,51 @@ graphify update .
 
 Nothing else depends on this. Every task above ships with the letter badge, which is `NODE_TYPE_ICON`'s miss path — so a pending or refused permission costs the feature its icons and nothing else.
 
-- [ ] **Step 1: Ask for permission before downloading**
+- [x] **Step 1: Ask for permission before downloading**
+
+Asked and confirmed (2026-09-22): source URL (user-supplied), filename, and
+size (13,988,918 bytes, confirmed via a HEAD request before any download) —
+see `AskUserQuestion` in-session. Downloaded only after confirmation.
 
 State to the user, before fetching anything: the source URL, the archive filename, its size, and the exact list of icons to be extracted. Do not download first and ask after.
 
-- [ ] **Step 2: Decide the subset**
+- [x] **Step 2: Decide the subset**
 
 Cover the `NodeType` values that actually appear: `IAM_USER`, `IAM_ROLE`, `IAM_GROUP`, `AWS_ACCOUNT`, `SERVICE`, `FEDERATED`, `PUBLIC`, `EXTERNAL_ACCOUNT`, plus the `properties.resource_type` values a real scan produces for `RESOURCE` (EC2, Lambda, S3, KMS, SSM, ECS, SageMaker, CloudFormation at minimum — confirm against a real scan's graph rather than guessing). Do not vendor icons for services this product never sees.
 
-- [ ] **Step 3: Populate the lookup**
+**Scope cut, found and confirmed with the author, not guessed.** No real
+scan's graph was queryable this session (the running containers don't have
+this plan's code deployed — same gap noted throughout). More importantly,
+inspecting `graph_search.chain_node()` (Task 3) shows it carries only
+Scout's coarse `NodeType` through as `node_type` — for every `RESOURCE`
+node that is literally the string `"RESOURCE"`, never
+`properties.resource_type`. The finer distinction (EC2 vs S3 vs Lambda)
+lives only on `GraphEntity`, fetched per node in the entity panel — it
+never reaches `ChainNode`, which is what `NodeIcon` and `SvgNode` key on
+everywhere else a node is drawn. Picking 8 distinct `resource_type` icons
+per Step 2's literal instruction would have shipped dead code: every one of
+them would key to the same never-populated field. Raised with the author,
+who chose **one generic resource icon for every `RESOURCE` node** over
+threading `resource_type` through `graph_search`/`ChainNode` (real scope
+beyond this task's files) or dropping resource icons entirely.
+
+Also confirmed by inspecting the extracted archive: AWS's Architecture Icons
+package has a distinct **Role** resource icon but no distinct **User** or
+**Group** icon — only the generic `AWS Identity and Access Management`
+service icon, which the author did not want forced onto both. Final set,
+confirmed with the author:
+
+- `IAM_ROLE` → `Res_AWS-Identity-Access-Management_Role_48.svg` (already
+  brand-coloured, `#DD344C`, no light/dark variant needed)
+- `RESOURCE` → `Res_Generic-Application_48_Dark.svg` — the **`_Dark`**
+  variant (`#FFFFFF` fill), not `_Light` (`#232F3D`, near-black): `_Light`
+  icons are meant for a light background and would be invisible against
+  this app's dark surfaces. Caught by inspecting the SVG fill before
+  committing to it, not assumed from the filename.
+- `IAM_USER`, `IAM_GROUP`, `AWS_ACCOUNT`, `SERVICE`, `FEDERATED`, `PUBLIC`,
+  `EXTERNAL_ACCOUNT` stay on the letter-badge fallback.
+
+- [x] **Step 3: Populate the lookup**
 
 ```tsx
 import iamRole from '@/assets/aws-icons/iam-role.svg'
@@ -3097,7 +3133,7 @@ export const NODE_TYPE_ICON: Record<string, string> = {
 
 Vite resolves an imported `.svg` to a url, which is what `NodeIcon`'s `<img src>` already expects — no change to that component is needed.
 
-- [ ] **Step 4: Put the icon on the graph's node cards too**
+- [x] **Step 4: Put the icon on the graph's node cards too**
 
 `NodeIcon` covers the entity panel and the query pickers. It does **not** cover
 the nodes in the graph, which are drawn by `SvgNode`
@@ -3129,7 +3165,7 @@ ranked-chain nodes keep their letter badge and nothing that renders today
 changes. Use `href`, not `xlink:href` — React 16+ supports the former and the
 latter is deprecated.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 ```bash
 cd frontend/UI && npm run build && npm run dev
@@ -3142,12 +3178,33 @@ check the SVG case specifically: a bad `href` inside `<svg>` fails silently
 (empty space) rather than showing a broken-image marker, so compare against a
 node you know is mapped.
 
-- [ ] **Step 6: Commit**
+`npm run build` ran clean (Step 6 of the earlier browser-verification note
+applies here too — same session-wide credential block on logging in as the
+one user with a completed scan). Checked by static trace instead: `NodeIcon`
+(entity panel, both query pickers) and `SvgNode` (graph node cards, reading
+`NODE_TYPE_ICON` directly since `<img>` can't nest in `<svg>`) both key off
+`node.node_type`/`entity.type`. Both new entries (`IAM_ROLE`, `RESOURCE`) are
+locally-bundled Vite asset imports — confirmed inlined as `data:` URIs in the
+production build (`dist/assets` has no separate `.svg` files, both source
+SVGs are under Vite's 4KB inline threshold) — so there is no live URL that
+could 404 and produce the "bad href, silent empty space" failure mode the
+step warns about. `node_type` stays absent on every ranked-chain node
+(`envelope._node()` never sets it), so nothing that renders today changed —
+confirmed by reading `chainGraph.ts`'s `toGraph`/`stepsToGraph`, unchanged by
+this task. A real click-through is still worth doing, carried forward with
+the other frontend tasks' notes.
+
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/UI/src/assets/aws-icons frontend/UI/src/components/attack-graph/nodeIcons.tsx
 git commit -m "feat(attack-graph): AWS Architecture Icons per entity type"
 ```
+
+**Deviation: this `git add` list is incomplete.** Step 4 above explicitly
+modifies `AttackChainGraph.tsx` (`SvgNode`), and the Files section at the top
+of this task lists it — the Step 6 command just omits it. Included it in the
+actual commit.
 
 ---
 

@@ -16,7 +16,7 @@ import dagre from 'dagre'
 
 import { chainsThrough, toGraph } from './chainGraph'
 import type { Graph, GraphEdge } from './chainGraph'
-import { NodeIcon } from './nodeIcons'
+import { NODE_TYPE_ICON, NodeIcon } from './nodeIcons'
 import QueryPanel from './QueryPanel'
 import { getGraphEntity } from '@/services/attackGraph.service'
 import type { AttackChain, ChainNode, GraphEntity, ScanEnvelope } from '@/types/attackGraph'
@@ -143,6 +143,11 @@ export function SvgNode({
   const cat = categorize(node)
   const color = CAT_COLOR[cat]
   const clipId = `acg-nclip-${Math.round(node.x)}-${Math.round(node.y)}`
+  // NodeIcon (nodeIcons.tsx) covers the entity panel and the query pickers,
+  // but an <img> cannot go inside an <svg> — this card needs the SVG-native
+  // <image> element instead, so the lookup is read directly rather than
+  // through that component.
+  const iconHref = node.node_type ? NODE_TYPE_ICON[node.node_type] : undefined
 
   return (
     <g onClick={onClick} style={{ cursor: 'pointer', opacity: dimmed ? 0.35 : 1, transition: 'opacity 0.2s ease' }}>
@@ -156,9 +161,13 @@ export function SvgNode({
       )}
 
       <rect x={x + 11} y={y + 19} width={26} height={26} rx={7} fill={color} fillOpacity={0.14} />
-      <text x={x + 24} y={y + 36} textAnchor="middle" fill={color} fontSize={9} fontFamily="Geist Mono, monospace" fontWeight={700}>
-        {node.type.slice(0, 3).toUpperCase()}
-      </text>
+      {iconHref ? (
+        <image href={iconHref} x={x + 15} y={y + 23} width={18} height={18} />
+      ) : (
+        <text x={x + 24} y={y + 36} textAnchor="middle" fill={color} fontSize={9} fontFamily="Geist Mono, monospace" fontWeight={700}>
+          {node.type.slice(0, 3).toUpperCase()}
+        </text>
+      )}
 
       <defs>
         <clipPath id={clipId}><rect x={x} y={y} width={NODE_WIDTH - 8} height={NODE_HEIGHT} rx={NODE_RX} /></clipPath>
