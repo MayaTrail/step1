@@ -523,7 +523,7 @@ git commit -m "feat(attack-graph): persist the scan's full graph instead of disc
   - `payload_bytes(graph_dict: dict) -> int` — the storage measurement, here rather than in `graph_query.py` because it is stdlib (Task 0 inlines the same expression only because this module does not exist yet)
   - `graph_dict_for_scan(scan_id: str, load) -> dict | None`, `clear_graph_dict_cache()` — the LRU in front of the DB read, so a cache hit skips the SELECT and the jsonb parse, not just the rehydrate
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `backend/apps/attack_graph/tests/test_graph_search.py`:
 
@@ -768,7 +768,7 @@ class GraphDictCacheTests(SimpleTestCase):
         self.assertEqual(len(calls), 2)
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
 cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test apps.attack_graph.tests.test_graph_search -v 2
@@ -776,7 +776,7 @@ cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test ap
 
 Expected: FAIL at import — `ModuleNotFoundError: No module named 'apps.attack_graph.graph_search'`.
 
-- [ ] **Step 3: Write the module**
+- [x] **Step 3: Write the module**
 
 Create `backend/apps/attack_graph/graph_search.py`:
 
@@ -1054,7 +1054,7 @@ def payload_bytes(graph_dict: dict[str, Any]) -> int:
     return len(json.dumps(graph_dict))
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test apps.attack_graph -v 2
@@ -1062,14 +1062,14 @@ cd backend && DJANGO_SETTINGS_MODULE=config.settings.ci python manage.py test ap
 
 Expected: PASS, all of `test_graph_search` running (no skips in that module).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/apps/attack_graph/graph_search.py backend/apps/attack_graph/tests/test_graph_search.py
 git commit -m "feat(attack-graph): pure graph search, entity lookup and hop assembly"
 ```
 
-- [ ] **Step 6: Refresh the graft index (end of Phase 1)**
+- [x] **Step 6: Refresh the graft index (end of Phase 1)**
 
 ```bash
 graphify update .
