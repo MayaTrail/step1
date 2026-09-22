@@ -160,6 +160,136 @@ class SerializeScanTests(SimpleTestCase):
         chain = _envelope(report)["chains"][0]
         self.assertIsNone(chain["terminal_impact"])
 
+    def test_regions_are_recorded_when_resources_were_collected(self):
+        envelope = serialize_scan(
+            report=self.report, collection={"mode": "account"},
+            account_id="1", scanned_at=SCANNED_AT, regions=["ap-south-1", "us-east-1"],
+        )
+        self.assertEqual(envelope["regions"], ["ap-south-1", "us-east-1"])
+
+    def test_regions_default_empty_meaning_iam_only(self):
+        # No regions declared -> no resources collected -> the scan can only
+        # ever report identities that already hold an impact directly, never
+        # an escalation path through an actual resource. The UI must be able
+        # to tell this apart from "we looked at everything and found this".
+        envelope = _envelope(self.report)
+        self.assertEqual(envelope["regions"], [])
+
+    def test_a_hop_with_no_gating_is_deterministic(self):
+        # Every hop in the fixture has conditional: null (verified in Task 1
+        # against the one account sampled) -- this is the common case, not a
+        # placeholder, and must read as certain rather than merely "unknown".
+        step = _envelope(self.report)["chains"][0]["steps"][0]
+        self.assertEqual(step["certainty"], "deterministic")
+        self.assertEqual(step["conditional_reason"], "")
+
+    def test_a_conditional_field_with_no_gating_entries_is_still_deterministic(self):
+        hop = {**self.report["chains"][0]["hops"][0], "conditional": {"gating": []}}
+        report = {"chains": [{**self.report["chains"][0], "hops": [hop]}]}
+        step = _envelope(report)["chains"][0]["steps"][0]
+        self.assertEqual(step["certainty"], "deterministic")
+
+    def test_an_attacker_controllable_gate_is_conditional_with_a_concrete_reason(self):
+        # attacker_controllable means the gating key is something an attacker
+        # can plausibly arrange (a tag, an IP, an ExternalId) -- the reason
+        # must name the actual key, not a generic "a condition applies", or
+        # the panel is no more useful than the raw dashed line.
+        hop = {
+            **self.report["chains"][0]["hops"][0],
+            "conditional": {"gating": [{
+                "key": "aws:ResourceTag/team", "operator": "StringEquals",
+                "values": ["eng"], "klass": "attacker_controllable",
+            }]},
+        }
+        report = {"chains": [{**self.report["chains"][0], "hops": [hop]}]}
+        step = _envelope(report)["chains"][0]["steps"][0]
+        self.assertEqual(step["certainty"], "conditional")
+        self.assertIn("aws:ResourceTag/team", step["conditional_reason"])
+
+    def test_a_deny_may_apply_gate_reads_as_a_possible_block(self):
+        hop = {
+            **self.report["chains"][0]["hops"][0],
+            "conditional": {"gating": [
+                {"key": "", "operator": "", "values": [], "klass": "deny_may_apply"},
+            ]},
+        }
+        report = {"chains": [{**self.report["chains"][0], "hops": [hop]}]}
+        step = _envelope(report)["chains"][0]["steps"][0]
+        self.assertEqual(step["certainty"], "conditional")
+        self.assertIn("Deny", step["conditional_reason"])
+
+    def test_an_unrecognised_gating_klass_falls_back_to_a_generic_reason(self):
+        # A future Scout release can invent a klass this module has never
+        # seen. It must still read as conditional with *some* explanation,
+        # not raise and not silently claim certainty it cannot back.
+        hop = {
+            **self.report["chains"][0]["hops"][0],
+            "conditional": {"gating": [
+                {"key": "x", "operator": "y", "values": [], "klass": "some_future_klass"},
+            ]},
+        }
+        report = {"chains": [{**self.report["chains"][0], "hops": [hop]}]}
+        step = _envelope(report)["chains"][0]["steps"][0]
+        self.assertEqual(step["certainty"], "conditional")
+        self.assertTrue(step["conditional_reason"])
+
+    def test_multiple_gates_join_into_one_reason_without_duplicates(self):
+        hop = {
+            **self.report["chains"][0]["hops"][0],
+            "conditional": {"gating": [
+                {"key": "aws:SourceIp", "operator": "IpAddress",
+                 "values": ["10.0.0.0/8"], "klass": "attacker_controllable"},
+                {"key": "", "operator": "", "values": [], "klass": "deny_may_apply"},
+                {"key": "", "operator": "", "values": [], "klass": "deny_may_apply"},
+            ]},
+        }
+        report = {"chains": [{**self.report["chains"][0], "hops": [hop]}]}
+        reason = _envelope(report)["chains"][0]["steps"][0]["conditional_reason"]
+        self.assertIn("aws:SourceIp", reason)
+        self.assertIn("Deny", reason)
+        # deny_may_apply appeared twice; the reason must not repeat itself.
+        self.assertEqual(reason.count("Deny"), 1)
+
+    def test_alternate_mechanisms_are_carried_through(self):
+        # chains/builder.py's _collapse_by_mechanism stashes the merged-away
+        # routes on terminal_props["mechanisms"] -- without this mapping they
+        # are simply gone from the product's view, not merely unranked.
+        report = {"chains": [{
+            **self.report["chains"][0],
+            "terminal_props": {"mechanisms": ["passrole_service", "assume_role"]},
+        }]}
+        chain = _envelope(report)["chains"][0]
+        self.assertEqual(chain["alternate_mechanisms"], ["passrole_service", "assume_role"])
+
+    def test_alternate_mechanisms_default_to_empty(self):
+        chain = _envelope(self.report)["chains"][0]
+        self.assertEqual(chain["alternate_mechanisms"], [])
+
+    def test_analysis_fields_are_carried_through_when_present(self):
+        # Stamped by scout.reason.engine.reason() before serialize_scan runs
+        # (see tasks.py) -- a raw chain that already carries an "analysis"
+        # block from that step.
+        report = {"chains": [{
+            **self.report["chains"][0],
+            "analysis": {
+                "narrative": "ci-deploy can reach deploy-role via PassRole+lambda.",
+                "detection": "Alert on iam:PassRole followed by lambda:CreateFunction.",
+                "remediation": "Scope ci-deploy's PassRole to specific role ARNs.",
+            },
+        }]}
+        chain = _envelope(report)["chains"][0]
+        self.assertEqual(chain["narrative"], "ci-deploy can reach deploy-role via PassRole+lambda.")
+        self.assertEqual(chain["detection"], "Alert on iam:PassRole followed by lambda:CreateFunction.")
+        self.assertEqual(chain["remediation"], "Scope ci-deploy's PassRole to specific role ARNs.")
+
+    def test_analysis_fields_default_to_empty_strings_not_missing(self):
+        # No "analysis" key at all -- an older stored scan, or any report
+        # built without the reasoning step. Empty strings, not omitted keys,
+        # so the frontend never needs a presence check on top of a value check.
+        chain = _envelope(self.report)["chains"][0]
+        for key in ("narrative", "detection", "remediation"):
+            self.assertEqual(chain[key], "")
+
     def test_chain_ids_are_serializer_assigned_not_scouts_own(self):
         # Scout's own chain_id (e.g. "CHN-7540184B") is opaque and not
         # guaranteed stable across scans, so it must never surface. A

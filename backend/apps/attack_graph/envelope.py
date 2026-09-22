@@ -61,6 +61,7 @@ def serialize_scan(
     collection: dict[str, Any],
     account_id: str,
     scanned_at: datetime,
+    regions: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Turn a Scout report into the envelope stored on ScoutScan.result.
@@ -73,6 +74,13 @@ def serialize_scan(
             fell back to enumerating only the assumed role.
         account_id: The AWS account the scan ran against.
         scanned_at: When the scan completed, timezone-aware.
+        regions: Which regions resource collection covered (User.aws_audit_regions
+            at scan time), tenant-declared rather than auto-detected. Empty or
+            omitted means the scan was IAM-only — no EC2/Lambda/S3/etc. resources
+            were collected, so a chain through an actual resource anywhere could
+            not be found, only identities that already hold an impact directly.
+            Recorded so the UI can say so the same way it states the SCP caveat:
+            a scan is not "the whole account" merely by completing.
 
     Returns:
         A plain-JSON envelope. `mode` is Scout's value verbatim, or UNKNOWN_MODE
@@ -89,6 +97,7 @@ def serialize_scan(
         # policies fetched, so a reported chain may be blocked by an SCP this
         # scan never saw. Recorded here so the UI can say so.
         "evaluator": EVALUATOR,
+        "regions": list(regions or []),
         "truncated": len(chains) > MAX_CHAINS,
         "chains": [
             _chain(raw, rank)
@@ -133,6 +142,12 @@ def _chain(raw: dict[str, Any], rank: int) -> dict[str, Any]:
     the day Scout's shape changes to make the fallback trigger.
     """
     hops = sorted(raw.get("hops") or [], key=lambda hop: hop.get("hop_number", 0))
+    terminal_props = raw.get("terminal_props") or {}
+    # scout.reason.engine.reason() (called in tasks.py before serialize_scan)
+    # stamps this in-place on the raw chain; absent on any report produced
+    # without that step (e.g. an older stored scan, or a report built
+    # directly in a test) — treated as "no analysis available", not an error.
+    analysis = raw.get("analysis") or {}
     return {
         "id": f"chain-{rank}",
         "rank": rank,
@@ -152,6 +167,21 @@ def _chain(raw: dict[str, Any], rank: int) -> dict[str, Any]:
         # drops the field both read as None, which the frontend treats as
         # "unknown impact" rather than raising.
         "terminal_impact": raw.get("terminal_impact"),
+        # Scout's chain builder collapses near-duplicate chains (same source
+        # and target, different mechanism) into one representative chain and
+        # lists the merged-away routes here (chains/builder.py's
+        # _collapse_by_mechanism). Without this field those routes are simply
+        # gone from the product's view, not merely unranked — the account
+        # genuinely has more than one way in, and only one shows.
+        "alternate_mechanisms": list(terminal_props.get("mechanisms") or []),
+        # Plain-English "how this works", plus one detection and remediation
+        # idea, from Scout's own (offline, no-LLM-by-default) reasoning
+        # engine. Empty strings, never omitted, when no analysis was run —
+        # the frontend can render "no explanation available" without a
+        # presence check on three separate keys.
+        "narrative": analysis.get("narrative") or "",
+        "detection": analysis.get("detection") or "",
+        "remediation": analysis.get("remediation") or "",
     }
 
 
@@ -181,14 +211,16 @@ def _step(hop: dict[str, Any]) -> dict[str, Any]:
     """
     Normalise one hop of a chain.
 
-    No `technique` or `condition` field: Scout attaches neither per hop.
-    `mechanism`/`action` are Scout's own hop fields, carried through verbatim.
-    `hop["conditional"]` was null on every hop observed in Task 1, so its
-    populated shape is unconfirmed — it is deliberately not mapped here rather
-    than guessed at.
+    No `technique` field: Scout attaches none per hop (a chain's MITRE
+    technique ids are chain-level — see `_chain`). `mechanism`/`action` are
+    Scout's own hop fields, carried through verbatim.
+
+    `certainty`/`conditional_reason` come from `hop["conditional"]`
+    (`{"gating": [...]}` or null) — see `_conditional_summary`.
     """
     mechanism = hop.get("mechanism") or ""
     action = hop.get("action") or ""
+    certainty, conditional_reason = _conditional_summary(hop.get("conditional"))
     return {
         "from": str(hop.get("source_arn") or ""),
         "to": str(hop.get("target_arn") or ""),
@@ -196,4 +228,58 @@ def _step(hop: dict[str, Any]) -> dict[str, Any]:
         "action": action,
         "concrete_api_sequence": list(hop.get("concrete_api_sequence") or []),
         "detail": f"{action} ({mechanism})" if action and mechanism else (action or mechanism),
+        "certainty": certainty,
+        "conditional_reason": conditional_reason,
     }
+
+
+# Scout's evaluator (scout/eval/conditional.py) tags each gating key with a
+# `klass` describing why the grant isn't unconditional. `attacker_controllable`
+# is rendered from the gate's own key/operator/values so the reason names the
+# actual condition; the rest are fixed phrasing. SCP/permission-boundary
+# denial is deliberately absent here: Scout's own evaluator does not evaluate
+# those (see EVALUATOR above) — inventing a "blocked" phrase for a klass Scout
+# doesn't emit would assert a diagnosis this scan never made.
+_GATING_KLASS_PHRASES: dict[str, str] = {
+    "deny_may_apply": "a conditional Deny may block this",
+    "unknown_key": "an unresolved condition applies",
+    "unknown_operator": "an unresolved condition applies",
+    "parse_error": "an unresolved condition applies",
+}
+_GENERIC_GATING_REASON = "a condition applies"
+
+
+def _gating_reason(gate: dict[str, Any]) -> str:
+    """Plain-English reason for one gating key. Falls back rather than
+    raising on a klass this module has never seen — a future Scout release
+    must still read as conditional, with some explanation, not crash."""
+    klass = gate.get("klass") or ""
+    if klass == "attacker_controllable":
+        key = str(gate.get("key") or "").strip()
+        operator = str(gate.get("operator") or "").strip()
+        values = ", ".join(str(v) for v in (gate.get("values") or []))
+        parts = [p for p in (key, operator, values) if p]
+        return f"requires {' '.join(parts)}" if parts else _GENERIC_GATING_REASON
+    return _GATING_KLASS_PHRASES.get(klass, _GENERIC_GATING_REASON)
+
+
+def _conditional_summary(conditional: dict[str, Any] | None) -> tuple[str, str]:
+    """
+    (certainty, conditional_reason) for one hop.
+
+    "conditional" iff Scout's evaluator actually attached gating keys —
+    `conditional` can be present but carry an empty `gating` list, which
+    still means nothing gates the grant. Reasons are de-duplicated: several
+    gates commonly share the same klass (e.g. two Deny statements that may
+    both apply), and repeating the same sentence twice would read as two
+    findings instead of one.
+    """
+    gating = (conditional or {}).get("gating") or []
+    if not gating:
+        return "deterministic", ""
+    reasons: list[str] = []
+    for gate in gating:
+        reason = _gating_reason(gate)
+        if reason not in reasons:
+            reasons.append(reason)
+    return "conditional", "; ".join(reasons)
