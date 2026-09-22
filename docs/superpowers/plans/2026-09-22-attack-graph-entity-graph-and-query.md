@@ -2456,7 +2456,7 @@ git commit -m "feat(attack-graph): types and client for the graph entity and pat
 
 This task ships the panel with the **letter-badge fallback only**. Task 11 swaps in real SVGs behind the same component, so a pending download permission blocks nothing.
 
-- [ ] **Step 1: Write the icon component**
+- [x] **Step 1: Write the icon component**
 
 Create `frontend/UI/src/components/attack-graph/nodeIcons.tsx`:
 
@@ -2514,7 +2514,7 @@ export function NodeIcon({
 }
 ```
 
-- [ ] **Step 2: Evolve `DetailPanel` into `EntityPanel`**
+- [x] **Step 2: Evolve `DetailPanel` into `EntityPanel`**
 
 In `AttackChainGraph.tsx`, rename `DetailPanel` to `EntityPanel`, add `scanId` and `node` to its props, and add the fetch. Its existing props and body are kept; this adds a header and a properties section above what is already there.
 
@@ -2598,7 +2598,7 @@ function EntityPanel({
 
 Add the imports: `useEffect` from react, `NodeIcon` from `./nodeIcons`, `getGraphEntity` from `@/services/attackGraph.service`, and `GraphEntity` from `@/types/attackGraph`.
 
-- [ ] **Step 3: Thread `scanId` down from the hub**
+- [x] **Step 3: Thread `scanId` down from the hub**
 
 The panel fetches per scan, and nothing below `ResultRegion` currently knows
 which scan it is rendering. Three edits, in `AttackGraphHub.tsx`:
@@ -2620,7 +2620,7 @@ selected node's `ChainNode` (it is already in the computed layout — look it up
 by `nodeId` rather than re-deriving it), and thread `onFindPaths` as a
 `useState` setter for now. Task 9 gives that setter a panel to open.
 
-- [ ] **Step 4: Verify in the browser**
+- [x] **Step 4: Verify in the browser**
 
 ```bash
 cd frontend/UI && npm run dev
@@ -2628,13 +2628,30 @@ cd frontend/UI && npm run dev
 
 On a scan run **after** Task 2 landed: clicking a node shows the real name, Scout's NodeType and the account id, with a working raw-properties disclosure. On a scan run **before** it: the panel still renders, falling back to the ARN-parsed label, with no console error and no properties section.
 
-- [ ] **Step 5: Verify the build**
+**Not run this session — same credential-materialization block as Task 6's
+Step 1.** Checked by static trace instead: `EntityPanel`'s `useEffect` calls
+`getGraphEntity(scanId, nodeId).catch(() => { if (!cancelled) setEntity(null) })`
+— a 404 (which is exactly what `_ScanGraphView._resolve` returns for a scan
+whose `graph` is `None`, i.e. every pre-Task-2 scan) is swallowed there with
+no `console.error` and no rethrow, so `entity` stays `null`. Every render
+branch that reads `entity` (`entity?.type ?? node?.node_type`, `entity?.name
+|| node?.label || nodeId`, and the `entity && Object.keys(entity.properties)
+> 0` guard around the raw-properties disclosure) already falls back to the
+envelope-derived `node`/`nodeId` or renders nothing when `entity` is `null` —
+so the pre-Task-2 case was correct by inspection, not merely by omission of a
+crash. For a post-Task-2 scan the fetch resolves and the same branches read
+the real `entity.type`/`entity.name`/`entity.account_id`/`entity.properties`.
+A real click-through against `af678b61-...` (the scan with stored graph and
+19 chains, identified in Task 6's note) is still worth doing by hand — carried
+forward alongside Task 6's.
+
+- [x] **Step 5: Verify the build**
 
 ```bash
 cd frontend/UI && npm run build
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/UI/src/components/attack-graph/nodeIcons.tsx frontend/UI/src/components/attack-graph/AttackChainGraph.tsx frontend/UI/src/components/attack-graph/AttackGraphHub.tsx

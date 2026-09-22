@@ -271,21 +271,33 @@ function ResultRegion({ current, hasHistory }: { current: ScanDetail | undefined
     )
   }
 
-  return <CompletedResult result={result} />
+  return <CompletedResult result={result} scanId={current.id} />
 }
 
-function CompletedResult({ result }: { result: ScanEnvelope }) {
+function CompletedResult({ result, scanId }: { result: ScanEnvelope; scanId: string }) {
   const accountLine = (
     <div className="font-mono text-[10px] text-content-dim mb-2">Account {result.account_id}</div>
+  )
+  // Only relevant when the scan actually reached a verdict — 'partial' already
+  // explains its own incompleteness and a second, differently-worded caveat
+  // here would muddy that message rather than add to it.
+  const regions = result.regions ?? []
+  const regionsLine = (
+    <div className="font-mono text-[10px] text-content-dim mb-2">
+      {regions.length > 0
+        ? `Regions scanned: ${regions.join(', ')}`
+        : 'IAM only — no regions were scanned, so a path through an actual resource could not be found.'}
+    </div>
   )
 
   if (result.state === 'findings') {
     return (
       <div>
         {accountLine}
+        {regionsLine}
         <div className="font-mono text-[10px] text-content-dim mb-3">{SCP_CAVEAT}</div>
         <Suspense fallback={<div className="text-[0.9rem] text-content-secondary">Loading graph…</div>}>
-          <AttackChainGraph envelope={result} />
+          <AttackChainGraph envelope={result} scanId={scanId} />
         </Suspense>
       </div>
     )
@@ -295,6 +307,7 @@ function CompletedResult({ result }: { result: ScanEnvelope }) {
     return (
       <div>
         {accountLine}
+        {regionsLine}
         <StateBanner
           tone="green"
           title="No privilege-escalation paths found in this account"
