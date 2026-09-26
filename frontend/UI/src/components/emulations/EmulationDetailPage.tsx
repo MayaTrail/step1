@@ -1,10 +1,19 @@
 import { useState } from 'react'
+import type { ComponentType } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import { useEmulations } from '@/hooks/usePlatformData'
 import { getPlatformMeta } from '@/data'
 import type { PlatformId } from '@/types'
 import { ThreatOriginBadge } from '@/components/ui/ThreatOriginBadge'
 import { EmptyState } from '@/components/ui/EmptyState'
+import {
+  IconActivity,
+  IconHistory,
+  IconLayers,
+  IconMatrix,
+  IconRoute,
+  IconSparkle,
+} from '@/components/ui/Icons'
 import { RunEmulationModal } from '@/components/modals/RunEmulationModal'
 import { OverviewTab } from './OverviewTab'
 import { LiveEmulationTab } from './LiveEmulationTab'
@@ -15,6 +24,24 @@ import { PastFindingsTab } from './PastFindingsTab'
 import { ConnectGate } from '@/components/common/ConnectGate'
 
 type DetailTab = 'overview' | 'live' | 'path' | 'mitre' | 'explain' | 'findings'
+
+/**
+ * Tab icons.
+ *
+ * Four of these were drawn for this bar rather than reassigned from the
+ * existing set. The obvious substitute for MITRE Mapping was IconShield, but a
+ * shield already means "a guardrail would refuse this phase" on the Attack
+ * Path tab below, and one shape carrying two security meanings on one screen
+ * is worse than no icon at all.
+ */
+const TAB_ICONS: Record<DetailTab, ComponentType<{ size?: number }>> = {
+  overview: IconLayers,
+  live: IconActivity,
+  path: IconRoute,
+  mitre: IconMatrix,
+  explain: IconSparkle,
+  findings: IconHistory,
+}
 
 const TAB_LABELS: Record<DetailTab, string> = {
   overview: 'Overview',
@@ -113,12 +140,17 @@ export function EmulationDetailPage() {
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`px-[18px] py-2.5 text-xs font-semibold cursor-pointer border-b-2 -mb-px transition-all font-mono tracking-wider
+            className={`flex items-center gap-2 px-4 py-2.5 text-[13.5px] font-medium tracking-btn
+              cursor-pointer border-b-2 -mb-px transition-colors
               ${activeTab === tab
-                ? 'text-danger border-b-danger'
-                : 'text-content-dim border-b-transparent hover:text-content-secondary'
+                ? 'text-content-primary border-b-accent-blue'
+                : 'text-content-dim border-b-transparent hover:text-content-primary'
               }`}
           >
+            {(() => {
+              const TabIcon = TAB_ICONS[tab]
+              return <TabIcon size={14} />
+            })()}
             {TAB_LABELS[tab]}
           </button>
         ))}
@@ -138,7 +170,7 @@ export function EmulationDetailPage() {
       {activeTab === 'live' && (
         <LiveEmulationTab emulation={em} onRun={() => setShowRunModal(true)} refreshKey={runNonce} />
       )}
-      {activeTab === 'path' && <AttackPathTab emulation={em} />}
+      {activeTab === 'path' && <AttackPathTab emulation={em} platformId={pid} />}
       {activeTab === 'mitre' && <MitreMappingTab emulation={em} platformLabel={platformLabel} />}
       {activeTab === 'explain' && <ExplainPanel emulation={em} />}
       {activeTab === 'findings' && (

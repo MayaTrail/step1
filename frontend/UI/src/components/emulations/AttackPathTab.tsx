@@ -3,6 +3,10 @@ import type { Emulation, MitreMapping } from '@/types'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { TacticBadge } from '@/components/ui/TacticBadge'
+import { getPrevention } from '@/services/prevention.service'
+import type { PreventionAnalysis, PreventionPolicy } from '@/types/prevention'
+import { GuardrailDrawer } from './GuardrailDrawer'
+import { Shield, perimeterPolicies, policiesFor, shieldFor } from './preventionMeta'
 
 /**
  * Attack Path tab. Turns the kill chain into an interactive workspace: a
@@ -14,6 +18,13 @@ import { TacticBadge } from '@/components/ui/TacticBadge'
  * than just a name. Per-phase metadata the PRD envisions (duration, risk,
  * telemetry, artifacts) has no authored source yet, so it is left out instead
  * of being faked; it can land later as a MANIFEST enrichment.
+ *
+ * Prevention is an annotation here rather than a tab of its own. It was one
+ * briefly, and it redrew these same phases as a static list with three
+ * paragraphs of preamble: a second kill chain, less interactive than this one,
+ * saying the same thing backwards. A shield on each timeline card and a block
+ * in the panel carry it without a duplicate view, and the policy documents
+ * live in a drawer because they are reference a reader dips into and leaves.
  */
 
 /** Phase accent colors, shared with the Overview attack-summary timeline. */
@@ -21,11 +32,29 @@ const PHASE_COLORS = ['#f87171', '#ff6b35', '#fbbf24', '#00d4ff', '#a78bfa', '#1
 
 interface AttackPathTabProps {
   emulation: Emulation
+  /** Platform segment for links into the guardrail library. */
+  platformId: string
 }
 
-export function AttackPathTab({ emulation: em }: AttackPathTabProps) {
+export function AttackPathTab({ emulation: em, platformId }: AttackPathTabProps) {
   const phases = em.attackPath
   const [active, setActive] = useState(0)
+  const [prevention, setPrevention] = useState<PreventionAnalysis | null>(null)
+  const [openPolicy, setOpenPolicy] = useState<PreventionPolicy | null>(null)
+  const [openPerimeter, setOpenPerimeter] = useState(false)
+
+  // Prevention is supplementary: a failure leaves the attack path intact and
+  // simply shows no shields, rather than taking the tab down with it.
+  useEffect(() => {
+    let cancelled = false
+    setPrevention(null)
+    getPrevention(em.id)
+      .then((result) => !cancelled && setPrevention(result))
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [em.id])
 
   // Keep the selected phase visible when the timeline overflows horizontally
   // (long kill chains scroll rather than grow). Skip the initial mount so the
@@ -71,11 +100,24 @@ export function AttackPathTab({ emulation: em }: AttackPathTabProps) {
                 <button
                   ref={selected ? activeBtnRef : undefined}
                   onClick={() => setActive(i)}
-                  className={`flex-1 min-w-[150px] text-left rounded-[10px] px-4 py-3 cursor-pointer transition-all
-                    border bg-surface-base hover:border-border-active hover:-translate-y-0.5
+                  className={`relative flex-1 min-w-[150px] text-left rounded-[10px] px-4 py-3 cursor-pointer
+                    border bg-surface-base transition-[border-color,transform]
+                    hover:border-border-active hover:-translate-y-0.5
                     ${selected ? 'border-border-active' : 'border-border'}`}
-                  style={selected ? { borderTopColor: c, borderTopWidth: '2px' } : undefined}
                 >
+                  {/* The phase accent, on its own element so it neither fights
+                      the hover border nor changes the box size. */}
+                  <span
+                    aria-hidden="true"
+                    className={`absolute inset-x-3.5 top-0 h-0.5 rounded-b-sm transition-opacity
+                      ${selected ? 'opacity-100' : 'opacity-0'}`}
+                    style={{ backgroundColor: c }}
+                  />
+                  {shieldFor(p.phase, prevention) && (
+                    <span className="absolute right-3 top-2.5">
+                      <Shield state={shieldFor(p.phase, prevention)!} />
+                    </span>
+                  )}
                   <div className="font-mono text-[9px] tracking-label uppercase" style={{ color: c }}>
                     Phase {p.phase}
                   </div>
@@ -89,6 +131,13 @@ export function AttackPathTab({ emulation: em }: AttackPathTabProps) {
             )
           })}
         </div>
+        {prevention?.analysed && (
+          <p className="mt-3.5 text-[11.5px] leading-relaxed text-content-dim">
+            The shield on each phase is what a <b className="font-semibold text-content-secondary">
+            catalogue policy would do</b> if you deployed it. Solid blocks outright, amber depends on
+            a condition in your organisation, dashed means nothing in the library denies it.
+          </p>
+        )}
       </Card>
 
       {/* ── Phase detail panel ──────────────────────────────────────── */}
@@ -129,6 +178,100 @@ export function AttackPathTab({ emulation: em }: AttackPathTabProps) {
           })}
         </div>
 
+        {/* ── Prevention for this phase ─────────────────────────────── */}
+        {prevention?.analysed && (
+          <div className="mt-5 border-t border-border pt-5">
+            {(() => {
+              const forPhase = policiesFor(phase.phase, prevention)
+              const perimeter = perimeterPolicies(prevention)
+              const named = forPhase.filter((item) => item.scope === 'targeted')
+              // Declared actions live on the prevention payload: the emulation
+              // type predates the manifest field and does not carry them.
+              const declared = prevention.phases.find((row) => row.phase === phase.phase)?.actions
+              return (
+                <>
+                  <div className="mb-2.5 font-mono text-2xs uppercase tracking-label text-content-dim">
+                    Prevention
+                    {named.length > 0
+                      && ` — ${named.length} ${named.length === 1 ? 'policy' : 'policies'} would refuse this phase`}
+                  </div>
+
+                  {named.length === 0 ? (
+                    <div className="rounded-btn border-l-2 border-border-active bg-surface-elevated px-3.5 py-3 text-[12.5px] leading-relaxed text-content-dim">
+                      No library policy denies{' '}
+                      <span className="font-mono text-content-secondary">
+                        {declared?.join(', ') || 'these actions'}
+                      </span>{' '}
+                      outright. That is expected for ordinary read calls: a policy blocking them
+                      would break normal use of the resource.
+                    </div>
+                  ) : (
+                    named.map((item) => {
+                      const blocks = item.verdict === 'blocks'
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => setOpenPolicy(item)}
+                          className={`group mb-1.5 flex w-full items-start gap-3 rounded-btn border-l-2 bg-surface-elevated px-3.5 py-3 text-left transition-opacity hover:opacity-70 ${
+                            blocks ? 'border-safe' : 'border-warning'
+                          }`}
+                        >
+                          <span className="mt-0.5 flex-none">
+                            <Shield state={blocks ? 'blocks' : 'conditional'} size={16} />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-center gap-2 text-[13px] text-content-primary">
+                              {item.purpose}
+                              <span className="font-mono text-[10px] text-content-dim">
+                                {item.type}
+                              </span>
+                            </span>
+                            <span className="mt-1.5 flex flex-wrap gap-1">
+                              {item.actions.map((action) => (
+                                <span
+                                  key={action}
+                                  className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
+                                    blocks ? 'bg-safe/10 text-safe' : 'bg-warning/10 text-warning'
+                                  }`}
+                                >
+                                  {action}
+                                </span>
+                              ))}
+                            </span>
+                            <span className="mt-1.5 block text-[11px] leading-relaxed text-content-dim">
+                              {blocks
+                                ? 'Unconditional deny. If deployed, these actions fail for every principal.'
+                                : `Denies this unless ${item.conditionKeys[0]} is satisfied, a value only your organisation knows.`}
+                            </span>
+                          </span>
+                          <span className="flex-none text-accent-blue opacity-0 transition-opacity group-hover:opacity-100">
+                            &rsaquo;
+                          </span>
+                        </button>
+                      )
+                    })
+                  )}
+
+                  {perimeter.length > 0 && (
+                    <p className="mt-2.5 text-[11.5px] text-content-dim">
+                      {perimeter.length} data-perimeter policies also apply to every phase
+                      {' — '}
+                      <button
+                        type="button"
+                        onClick={() => setOpenPerimeter(true)}
+                        className="text-accent-blue transition-opacity hover:opacity-60"
+                      >
+                        see them
+                      </button>
+                    </p>
+                  )}
+                </>
+              )
+            })()}
+          </div>
+        )}
+
         {/* phase navigation */}
         <div className="flex justify-between mt-6 pt-5 border-t border-border">
           <Button
@@ -147,6 +290,17 @@ export function AttackPathTab({ emulation: em }: AttackPathTabProps) {
           </Button>
         </div>
       </Card>
+
+      <GuardrailDrawer
+        policy={openPolicy}
+        perimeter={perimeterPolicies(prevention)}
+        showPerimeter={openPerimeter}
+        platformId={platformId}
+        onClose={() => {
+          setOpenPolicy(null)
+          setOpenPerimeter(false)
+        }}
+      />
     </div>
   )
 }

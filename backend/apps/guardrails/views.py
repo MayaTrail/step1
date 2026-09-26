@@ -3,6 +3,7 @@ Views for the guardrails app.
 
 GET /api/guardrails/        GuardrailListView
 GET /api/guardrails/<id>/   GuardrailDetailView
+GET /api/guardrails/emulation/<emulation_type>/   EmulationGuardrailsView
 
 Both endpoints require IsAuthenticated rather than IsEnterpriseUser.  The
 library is a catalogue of published AWS sample policies: it reads nothing from
@@ -21,6 +22,10 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.emulations.registry import get_emulation
+from apps.infrastructure.permissions import IsEnterpriseUser
+
+from .matching import analyse
 from .registry import get_guardrail, list_guardrails
 
 # Catalogue keys the list response carries. "code" and "file" are detail-only.
@@ -104,3 +109,49 @@ class GuardrailDetailView(APIView):
             return Response({"detail": "Guardrail not found."}, status=404)
 
         return Response(guardrail)
+
+
+class EmulationGuardrailsView(APIView):
+    """
+    Which catalogue policies would interrupt one emulation's attack.
+
+    GET /api/guardrails/emulation/<emulation_type>/
+
+    Enterprise-gated, unlike the rest of this app. The catalogue itself is
+    public AWS samples and reads nothing from the user's account, but this
+    names an emulation's phases and the actions each performs, which is our
+    content rather than AWS's.
+
+    Every verdict means "if you deployed this policy". The library is a
+    catalogue, not a reading of the caller's Organization, and the response
+    says so in `basis` so a client cannot render it as deployed protection.
+    """
+
+    permission_classes = [IsEnterpriseUser]
+
+    def get(self, request: Request, emulation_type: str) -> Response:
+        """
+        Analyse one emulation against the whole guardrail catalogue.
+
+        Args:
+            request:        DRF request.
+            emulation_type: Registry name of the emulation.
+
+        Returns:
+            200 with the analysis, or 404 when the emulation is unknown. An
+            emulation whose phases declare no actions returns 200 with
+            `analysed: false`: that is "nobody has mapped this one yet", not
+            "no policy can stop it", and the two must not look alike.
+        """
+        entry = get_emulation(emulation_type)
+        if entry is None:
+            return Response(
+                {"detail": f"Unknown emulation '{emulation_type}'."}, status=404
+            )
+
+        manifest = entry.get("manifest", entry) or {}
+        result = analyse(manifest.get("attack_path") or [], list_guardrails())
+        result["emulationType"] = emulation_type
+        result["displayName"] = manifest.get("display_name", emulation_type)
+        result["basis"] = "catalogue"
+        return Response(result)
