@@ -187,7 +187,8 @@ export function AttackPathTab({ emulation: em, platformId }: AttackPathTabProps)
               const named = forPhase.filter((item) => item.scope === 'targeted')
               // Declared actions live on the prevention payload: the emulation
               // type predates the manifest field and does not carry them.
-              const declared = prevention.phases.find((row) => row.phase === phase.phase)?.actions
+              const row = prevention.phases.find((item) => item.phase === phase.phase)
+              const declared = row?.actions
               return (
                 <>
                   <div className="mb-2.5 font-mono text-2xs uppercase tracking-label text-content-dim">
@@ -198,12 +199,26 @@ export function AttackPathTab({ emulation: em, platformId }: AttackPathTabProps)
 
                   {named.length === 0 ? (
                     <div className="rounded-btn border-l-2 border-border-active bg-surface-elevated px-3.5 py-3 text-[12.5px] leading-relaxed text-content-dim">
-                      No library policy denies{' '}
-                      <span className="font-mono text-content-secondary">
-                        {declared?.join(', ') || 'these actions'}
-                      </span>{' '}
-                      outright. That is expected for ordinary read calls: a policy blocking them
-                      would break normal use of the resource.
+                      {!row?.annotated ? (
+                        <>
+                          This phase&apos;s AWS actions have not been mapped yet, so there is no
+                          prevention verdict for it. That is not the same as nothing denying it.
+                        </>
+                      ) : declared && declared.length === 0 ? (
+                        <>
+                          This phase performs no IAM-authorised AWS API call, so no policy can deny
+                          it. Prevention here is a network or workload control, not an identity one.
+                        </>
+                      ) : (
+                        <>
+                          No library policy denies{' '}
+                          <span className="font-mono text-content-secondary">
+                            {declared?.join(', ')}
+                          </span>{' '}
+                          outright. That is expected for ordinary read calls: a policy blocking them
+                          would break normal use of the resource.
+                        </>
+                      )}
                     </div>
                   ) : (
                     named.map((item) => {

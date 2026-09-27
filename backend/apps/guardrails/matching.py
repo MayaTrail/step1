@@ -295,10 +295,16 @@ def analyse(
         )
     )
 
+    # A phase carrying aws_actions: [] is a verified finding, not a missing
+    # annotation. SCARLETEEL's first two phases are container RCE over HTTP and
+    # an IMDSv1 curl, neither of which is an IAM-authorised API call, so no
+    # policy in any catalogue can refuse them. "Nothing denies these actions"
+    # and "this phase performs no AWS actions" look identical without this.
     phase_rows = [
         {
             "phase": phase.get("phase"),
             "name": phase.get("name"),
+            "annotated": "aws_actions" in phase,
             "actions": _as_list(phase.get("aws_actions")),
             "blockedBy": [
                 p["id"] for p in policies

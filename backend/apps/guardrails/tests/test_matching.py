@@ -262,6 +262,30 @@ class AnalyseTests(SimpleTestCase):
         self.assertEqual(rows[5]["blockedBy"], ["deny-versioning"])
         self.assertEqual(rows[1]["blockedBy"], [])
 
+    def test_a_phase_with_no_aws_actions_is_annotated(self):
+        """
+        aws_actions: [] is a verified finding. SCARLETEEL phase 1 is container
+        RCE over HTTP and phase 2 is an IMDSv1 curl; neither is an
+        IAM-authorised call, so no policy can refuse them. That must not look
+        the same as a phase nobody has mapped yet.
+        """
+        path = [
+            {"phase": 1, "name": "RCE", "aws_actions": []},
+            {"phase": 2, "name": "Purge", "aws_actions": ["s3:PutBucketVersioning"]},
+        ]
+        rows = {r["phase"]: r for r in analyse(path, self.catalogue)["phases"]}
+        self.assertTrue(rows[1]["annotated"])
+        self.assertEqual(rows[1]["actions"], [])
+
+    def test_a_phase_missing_the_key_is_not_annotated(self):
+        """Absent means nobody mapped it, which is a different statement."""
+        path = [
+            {"phase": 1, "name": "RCE", "techniques": []},
+            {"phase": 2, "name": "Purge", "aws_actions": ["s3:PutBucketVersioning"]},
+        ]
+        rows = {r["phase"]: r for r in analyse(path, self.catalogue)["phases"]}
+        self.assertFalse(rows[1]["annotated"])
+
     def test_an_unannotated_emulation_is_not_analysed(self):
         """
         Not the same as "no policy applies". A reader shown an empty list would

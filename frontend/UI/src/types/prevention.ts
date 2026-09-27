@@ -57,6 +57,13 @@ export interface PreventionPhase {
   actions: string[]
   /** Ids of policies that would refuse it outright. Conditional ones excluded. */
   blockedBy: string[]
+  /**
+   * True when the manifest declares this phase's actions, including declaring
+   * none. An empty `actions` with `annotated` true is a verified finding: the
+   * phase performs nothing IAM authorises. With it false the phase has simply
+   * not been mapped, and no prevention verdict can be given.
+   */
+  annotated: boolean
 }
 
 /** Everything the Prevention section renders. */

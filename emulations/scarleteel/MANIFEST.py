@@ -85,6 +85,7 @@ MANIFEST = {
         {
             "phase": 1,
             "name": "Initial Access",
+            "aws_actions": [],
             "techniques": [
                 {"id": "T1190", "name": "Exploit Public-Facing Application"},
             ],
@@ -92,6 +93,7 @@ MANIFEST = {
         {
             "phase": 2,
             "name": "Credential Access",
+            "aws_actions": [],
             "techniques": [
                 {"id": "T1552.005", "name": "Cloud Instance Metadata API"},
             ],
@@ -99,6 +101,12 @@ MANIFEST = {
         {
             "phase": 3,
             "name": "Discovery",
+            "aws_actions": [
+                "sts:GetCallerIdentity",
+                "s3:ListAllMyBuckets",
+                "s3:ListBucket",
+                "secretsmanager:ListSecrets",
+            ],
             "techniques": [
                 {"id": "T1087.004", "name": "Account Discovery: Cloud Account"},
                 {"id": "T1552.001", "name": "Credentials In Files"},
@@ -107,6 +115,10 @@ MANIFEST = {
         {
             "phase": 4,
             "name": "Defense Evasion",
+            "aws_actions": [
+                "cloudtrail:DescribeTrails",
+                "cloudtrail:StopLogging",
+            ],
             "techniques": [
                 {"id": "T1685.002", "name": "Disable or Modify Tools: Disable or Modify Cloud Log"},
             ],
@@ -114,6 +126,9 @@ MANIFEST = {
         {
             "phase": 5,
             "name": "Lateral Movement",
+            "aws_actions": [
+                "secretsmanager:GetSecretValue",
+            ],
             "techniques": [
                 {"id": "T1555.006", "name": "Cloud Secrets Management Stores"},
             ],
@@ -121,6 +136,10 @@ MANIFEST = {
         {
             "phase": 6,
             "name": "Persistence",
+            "aws_actions": [
+                "lambda:CreateFunction",
+                "iam:PassRole",
+            ],
             "techniques": [
                 {"id": "T1098", "name": "Account Manipulation — Lambda Backdoor"},
             ],
