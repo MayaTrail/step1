@@ -10,13 +10,19 @@ import type { RuleVerdict, ScoreStatus, WorkflowRun, WorkflowStatus } from '@/ty
 /** A step's state in the pipeline, for rendering a progress rail. */
 export type StepState = 'done' | 'active' | 'pending' | 'failed'
 
-/** The pipeline, in the order a run passes through it. */
+/**
+ * The pipeline, in the order a run passes through it. `stage` names the
+ * column and `label` the single job inside it.
+ */
 export const STEPS = [
-  { key: 'deploy', label: 'Deploy infrastructure' },
-  { key: 'attack', label: 'Run emulation' },
-  { key: 'alerts', label: 'Collect SIEM alerts' },
-  { key: 'score', label: 'Score' },
+  { key: 'deploy', stage: 'Deploy', label: 'Provision infrastructure' },
+  { key: 'attack', stage: 'Attack', label: 'Run emulation' },
+  { key: 'alerts', stage: 'Collect alerts', label: 'Wait for SIEM alerts' },
+  { key: 'score', stage: 'Score', label: 'Score detections' },
 ] as const
+
+/** One pipeline stage key. */
+export type StepKey = (typeof STEPS)[number]['key']
 
 /** Which step each status is sitting on. -1 means not started. */
 const STATUS_STEP: Record<WorkflowStatus, number> = {

@@ -74,6 +74,15 @@ class TechniqueNormalisationTests(SimpleTestCase):
         """A rule mapping the parent must not be turned into a sub-technique."""
         self.assertEqual(normalise_technique("attack.t1059"), "T1059")
 
+    def test_an_underscore_separator_is_read_as_a_sub_technique(self):
+        """Rule ids taken from filenames like sigma_t1685_002.yml use an underscore."""
+        for value in ("T1685_002", "t1685_002", "attack.t1685_002"):
+            self.assertEqual(normalise_technique(value), "T1685.002", value)
+
+    def test_a_suffix_that_is_not_a_sub_technique_matches_nothing(self):
+        """Four digits after the separator are not an ATT&CK sub-technique."""
+        self.assertEqual(normalise_technique("T1234_5678"), "")
+
     def test_text_naming_no_technique_yields_nothing(self):
         """Absence must be empty, not a guess."""
         self.assertEqual(normalise_technique("Suspicious login detected"), "")

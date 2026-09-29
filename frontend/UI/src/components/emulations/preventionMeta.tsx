@@ -10,8 +10,12 @@ import type { PreventionAnalysis, PreventionPolicy } from '@/types/prevention'
  * middle state is derived here rather than claimed there.
  */
 
-/** What a phase's shield says. */
-export type ShieldState = 'blocks' | 'conditional' | 'open'
+/**
+ * What a phase's shield says. `none` is a phase that makes no IAM-authorised
+ * call at all (container RCE over HTTP, an IMDS read), which no policy in the
+ * library can deny, and is not the same finding as `open`.
+ */
+export type ShieldState = 'blocks' | 'conditional' | 'open' | 'none'
 
 /**
  * How a phase fares against the catalogue.
@@ -25,6 +29,7 @@ export function shieldFor(
 ): ShieldState | null {
   if (!analysis?.analysed) return null
   const phase = analysis.phases.find((row) => row.phase === phaseNumber)
+  if (phase?.annotated && phase.actions.length === 0) return 'none'
   if (phase && phase.blockedBy.length > 0) return 'blocks'
   const conditional = analysis.policies.some(
     (policy) => policy.verdict === 'blocks_conditional' && policy.phases.includes(phaseNumber),
@@ -56,12 +61,14 @@ const SHIELD_COLOR: Record<ShieldState, string> = {
   blocks: '#5fc992',
   conditional: '#ffbc33',
   open: '#434345',
+  none: '#434345',
 }
 
 const SHIELD_TITLE: Record<ShieldState, string> = {
   blocks: 'A catalogue policy would refuse this phase outright',
   conditional: 'A catalogue policy would refuse this phase if a condition in your org holds',
   open: 'No catalogue policy denies this phase outright',
+  none: 'This phase makes no IAM-authorised call, so no policy can deny it',
 }
 
 /**
@@ -89,7 +96,7 @@ export function Shield({ state, size = 17 }: { state: ShieldState; size?: number
       <title>{SHIELD_TITLE[state]}</title>
       <path
         d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"
-        strokeDasharray={state === 'open' ? '3 3' : undefined}
+        strokeDasharray={state === 'open' || state === 'none' ? '3 3' : undefined}
       />
       {state === 'blocks' && <path d="M9 12l2 2 4-4" />}
       {state === 'conditional' && (

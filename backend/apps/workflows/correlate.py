@@ -33,8 +33,11 @@ from typing import Any
 
 # Alerts name a technique in many shapes: "T1098.001", "attack.t1098.001",
 # "MITRE T1098.001". Pulling the id out of whatever arrived is more reliable
-# than asking every SIEM to agree on a format.
-_TECHNIQUE_RE = re.compile(r"\bT(\d{4})(?:\.(\d{3}))?\b", re.IGNORECASE)
+# than asking every SIEM to agree on a format. The sub-technique separator may
+# be an underscore ("T1685_002"), the spelling some detection files use; the
+# separator has to be matched explicitly because "_" is a word character, so
+# the trailing \b alone would reject the whole id rather than just the suffix.
+_TECHNIQUE_RE = re.compile(r"\bT(\d{4})(?:[._](\d{3}))?\b", re.IGNORECASE)
 
 MATCH_EXACT = "exact"
 MATCH_TECHNIQUE = "technique"

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 
 import { IconClose } from '@/components/ui/Icons'
 import type { PreventionPolicy } from '@/types/prevention'
+import { Shield } from './preventionMeta'
 
 /**
  * One guardrail policy, read beside the attack phase it would refuse.
@@ -117,26 +118,26 @@ export function GuardrailDrawer({
               </div>
             </div>
             <div className="px-6 pb-10 pt-5">
-              <div className="mb-4 flex gap-2.5 rounded-btn border-l-2 border-warning bg-surface-elevated px-3.5 py-3">
-                <span className="flex-none text-warning">&#9888;</span>
-                <p className="text-xs leading-relaxed text-content-secondary">
-                  These deny a whole service unless the caller is inside a boundary you define.
-                  Against this attack they are{' '}
-                  <b className="font-semibold text-content-primary">one recommendation</b>: if your
-                  perimeter holds, the attacker never reaches the resource. They touch every phase
-                  because they match every action of the service.
-                </p>
-              </div>
+              <p className="mb-4 text-xs leading-relaxed text-content-secondary">
+                These deny a whole service unless the caller is inside a boundary you define.
+                Against this attack they are{' '}
+                <b className="font-semibold text-content-primary">one recommendation</b>: if your
+                perimeter holds, the attacker never reaches the resource. They touch every phase
+                because they match every action of the service.
+              </p>
               {perimeter.map((item) => (
                 <Link
                   key={item.id}
                   to={`/${platformId}/guardrails/${item.id}`}
-                  className="mb-1.5 flex items-center gap-3 rounded-btn bg-surface-elevated px-3.5 py-2.5 no-underline transition-opacity hover:opacity-65"
+                  className="flex items-center gap-3 border-b border-border px-0.5 py-2.5 no-underline
+                    first:border-t transition-opacity hover:opacity-60"
                 >
-                  <span className="flex-1 text-[12.5px] text-content-secondary">{item.purpose}</span>
-                  <span className="rounded bg-white/5 px-1.5 py-px font-mono text-[9px] text-content-dim">
+                  <span className="flex-1 text-sm text-content-primary">{item.purpose}</span>
+                  <span className="rounded border border-border px-1.5 py-px font-mono text-2xs uppercase
+                    tracking-label text-content-dim">
                     {item.type}
                   </span>
+                  <span aria-hidden="true" className="text-base leading-none text-content-dim">&rsaquo;</span>
                 </Link>
               ))}
             </div>
@@ -153,14 +154,8 @@ export function GuardrailDrawer({
             </div>
 
             <div className="px-6 pb-10 pt-5">
-              <div
-                className={`mb-5 flex gap-2.5 rounded-btn border-l-2 bg-surface-elevated px-3.5 py-3 ${
-                  blocks ? 'border-safe' : 'border-warning'
-                }`}
-              >
-                <span className={`flex-none ${blocks ? 'text-safe' : 'text-warning'}`}>
-                  {blocks ? '✓' : '⚠'}
-                </span>
+              <div className="mb-5 flex gap-2.5 rounded-btn bg-surface-elevated px-3.5 py-3">
+                <Shield state={blocks ? 'blocks' : 'conditional'} size={17} />
                 <p className="text-xs leading-relaxed text-content-secondary">
                   {blocks ? (
                     <>
@@ -221,7 +216,7 @@ export function GuardrailDrawer({
                           href={policy.source.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-accent-blue no-underline transition-opacity hover:opacity-70"
+                          className="text-accent-blue no-underline transition-opacity hover:opacity-60"
                         >
                           {policy.source.label}
                         </a>
@@ -242,7 +237,7 @@ export function GuardrailDrawer({
 
               <Link
                 to={`/${platformId}/guardrails/${policy.id}`}
-                className="text-[12.5px] text-accent-blue no-underline transition-opacity hover:opacity-70"
+                className="text-[12.5px] text-accent-blue no-underline transition-opacity hover:opacity-60"
               >
                 Open in the guardrail library &rarr;
               </Link>

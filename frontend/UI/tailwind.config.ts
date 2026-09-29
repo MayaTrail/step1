@@ -156,6 +156,30 @@ export default {
           '0%, 100%': { boxShadow: '0 0 0 1px var(--blue), 0 0 16px hsla(202, 100%, 67%, 0.18)' },
           '50%':      { boxShadow: '0 0 0 1px var(--blue), 0 0 28px hsla(202, 100%, 67%, 0.4)' },
         },
+        // Workflow job icons: blocks stacking while infrastructure deploys.
+        stackBlockMid: {
+          '0%, 28%':  { opacity: '0', transform: 'translateY(-4px)' },
+          '42%, 88%': { opacity: '1', transform: 'translateY(0)' },
+          '100%':     { opacity: '0' },
+        },
+        stackBlockTop: {
+          '0%, 52%':  { opacity: '0', transform: 'translateY(-4px)' },
+          '66%, 88%': { opacity: '1', transform: 'translateY(0)' },
+          '100%':     { opacity: '0' },
+        },
+        // Lights the blip just after the radar line passes it (it sits 45 degrees round).
+        radarBlip: {
+          '0%, 10%':   { opacity: '0' },
+          '14%':       { opacity: '1' },
+          '70%, 100%': { opacity: '0' },
+        },
+        bellRing: {
+          '0%, 50%, 100%': { transform: 'rotate(0deg)' },
+          '10%':           { transform: 'rotate(14deg)' },
+          '20%':           { transform: 'rotate(-12deg)' },
+          '30%':           { transform: 'rotate(8deg)' },
+          '40%':           { transform: 'rotate(-4deg)' },
+        },
       },
 
       animation: {
@@ -166,6 +190,11 @@ export default {
         spin:        'spin 0.6s linear infinite',
         travel:      'travel 1.4s linear infinite',
         nodeGlow:    'nodeGlow 1.8s ease-in-out infinite',
+        stackBlockMid: 'stackBlockMid 2.2s ease-out infinite',
+        stackBlockTop: 'stackBlockTop 2.2s ease-out infinite',
+        radarSweep:    'spin 1.6s linear infinite',
+        radarBlip:     'radarBlip 1.6s linear infinite',
+        bellRing:      'bellRing 1.8s ease-in-out infinite',
       },
     },
   },
