@@ -29,6 +29,8 @@ MANIFEST = {'schema_version': 3,
  'incidents': ['Stratus Red Team — AWS attack technique catalogue'],
  'attack_path': [{'phase': 1,
                   'name': 'Execution',
+                  'aws_actions': ['sagemaker:DescribeNotebookInstanceLifecycleConfig',
+                                  'sagemaker:UpdateNotebookInstanceLifecycleConfig'],
                   'techniques': [{'id': 'T1059',
                                   'name': 'Malicious Script Execution via SageMaker Lifecycle '
                                           'Config'}]}],

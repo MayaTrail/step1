@@ -30,6 +30,8 @@ MANIFEST = {'schema_version': 3,
  'incidents': ['Stratus Red Team — AWS attack technique catalogue'],
  'attack_path': [{'phase': 1,
                   'name': 'Privilege Escalation',
+                  'aws_actions': ['iam:GetLoginProfile',
+                                  'iam:UpdateLoginProfile'],
                   'techniques': [{'id': 'T1098.001',
                                   'name': 'Backdoor IAM User Console Login via '
                                           'UpdateLoginProfile'}]}],

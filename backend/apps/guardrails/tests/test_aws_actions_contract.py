@@ -5,11 +5,12 @@ Two layers, as in apps/emulations/tests/test_readiness.py:
 
   * Unit tests for the validator on hand-built manifests.
   * A discovery test over every emulation the registry finds, with a ratchet.
-    PENDING_AWS_ACTIONS names the emulations still waiting for their
-    annotations. Every AWS emulation not on it must comply, so a new emulation
-    cannot ship without aws_actions. Every emulation on it must still be
-    missing them, so annotating one fails this test until its name is removed.
-    The list can only shrink.
+    PENDING_AWS_ACTIONS held the emulations still waiting for annotations
+    while the catalogue was being worked through, and is now empty: every AWS
+    emulation complies, so a new one cannot ship without aws_actions. The
+    mechanism stays because it is what made the gap visible and kept it
+    shrinking, and because an emulation added for a new platform may need the
+    same grace period.
 """
 
 from __future__ import annotations
@@ -26,50 +27,10 @@ from apps.guardrails.matching import validate_aws_actions
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _FALLBACK_EMULATIONS_DIR = _REPO_ROOT / "emulations"
 
-# Emulations whose phases do not declare aws_actions yet, recorded on
-# 2026-10-01. Remove a name once its MANIFEST is annotated; never add one.
-PENDING_AWS_ACTIONS = frozenset({
-    "aws_credential_access_ec2_get_password_data",
-    "aws_credential_access_ec2_steal_instance_credentials",
-    "aws_credential_access_secretsmanager_batch_retrieve_secrets",
-    "aws_credential_access_secretsmanager_retrieve_secrets",
-    "aws_credential_access_ssm_retrieve_securestring_parameters",
-    "aws_defense_evasion_dns_delete_logs",
-    "aws_defense_evasion_elbv2_listener_auth_bypass_rule",
-    "aws_defense_evasion_rds_modify_public_access",
-    "aws_defense_evasion_vpc_remove_flow_logs",
-    "aws_defense_evasion_wafv2_disable_web_acl",
-    "aws_discovery_ec2_download_user_data",
-    "aws_discovery_ec2_enumerate_from_instance",
-    "aws_discovery_ses_enumerate",
-    "aws_execution_codepipeline_inject_stage",
-    "aws_execution_ec2_launch_unusual_instances",
-    "aws_execution_ec2_user_data",
-    "aws_execution_sagemaker_update_lifecycle_config",
-    "aws_execution_ssm_send_command",
-    "aws_execution_ssm_start_session",
-    "aws_exfiltration_dynamodb_export_to_s3",
-    "aws_exfiltration_ec2_security_group_open_port_22_ingress",
-    "aws_exfiltration_rds_share_snapshot",
-    "aws_exfiltration_sns_external_subscription",
-    "aws_impact_bedrock_invoke_model",
-    "aws_initial_access_cognito_identity_pool_unauth_creds",
-    "aws_initial_access_console_login_without_mfa",
-    "aws_lateral_movement_ec2_instance_connect",
-    "aws_lateral_movement_ec2_serial_console_send_ssh_public_key",
-    "aws_persistence_iam_backdoor_role",
-    "aws_persistence_iam_backdoor_user",
-    "aws_persistence_iam_create_admin_user",
-    "aws_persistence_iam_create_backdoor_role",
-    "aws_persistence_iam_create_user_login_profile",
-    "aws_persistence_lambda_backdoor_function",
-    "aws_persistence_lambda_layer_extension",
-    "aws_persistence_lambda_overwrite_code",
-    "aws_persistence_rolesanywhere_create_trust_anchor",
-    "aws_persistence_sqs_open_queue_policy",
-    "aws_persistence_sts_federation_token",
-    "aws_privilege_escalation_iam_update_user_login_profile",
-})
+# Every AWS emulation in the catalogue declares aws_actions, so nothing is
+# pending. A name added here would have to be removed again before its
+# annotations could land, which is what keeps the contract from slipping.
+PENDING_AWS_ACTIONS: frozenset[str] = frozenset()
 
 
 def _resolve_emulations_dir() -> Path:

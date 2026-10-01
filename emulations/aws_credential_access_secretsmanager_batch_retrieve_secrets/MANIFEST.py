@@ -29,6 +29,8 @@ MANIFEST = {'schema_version': 3,
  'incidents': ['Stratus Red Team — AWS attack technique catalogue'],
  'attack_path': [{'phase': 1,
                   'name': 'Credential Access',
+                  'aws_actions': ['secretsmanager:BatchGetSecretValue',
+                                  'secretsmanager:ListSecrets'],
                   'techniques': [{'id': 'T1555',
                                   'name': 'Retrieve a High Number of Secrets Manager Secrets via '
                                           'Batch'}]}],
