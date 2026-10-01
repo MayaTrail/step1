@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import re
 from typing import Any
 
 BLOCKS = "blocks"
@@ -222,6 +223,52 @@ def emulation_actions(attack_path: list[dict[str, Any]]) -> list[str]:
     for phase in attack_path or []:
         actions.update(_as_list(phase.get("aws_actions")))
     return sorted(actions)
+
+
+# An IAM action as policies spell it: a lower-case service prefix and an
+# action name, "s3:DeleteObject". Wildcards are refused because a phase
+# declares the calls it makes, and a call is never "s3:*".
+_ACTION_RE = re.compile(r"[a-z0-9-]+:[A-Z][A-Za-z0-9]*")
+
+
+def validate_aws_actions(entry: dict[str, Any]) -> list[str]:
+    """
+    Check that every phase of an AWS emulation declares its AWS actions.
+
+    Prevention analysis, and the account check built on it, can only judge
+    the actions a phase declares. A phase without the field is unanalysed, so
+    the field is required on every phase of an AWS emulation. An empty list
+    is valid: it records that the phase makes no IAM-authorised call, such as
+    an exploit over HTTP or a read of instance metadata. Emulations on other
+    platforms are not governed by AWS policies and are skipped.
+
+    Never raises, so a caller can collect the errors of every emulation in one
+    pass, as validate_readiness does.
+
+    Args:
+        entry: A registry catalogue entry or a MANIFEST dict.
+
+    Returns:
+        Human-readable error strings; empty when the emulation complies.
+    """
+    manifest = entry.get("manifest", entry) or {}
+    if manifest.get("platform") != "aws":
+        return []
+    name = manifest.get("name") or "<unnamed>"
+    errors: list[str] = []
+    for index, phase in enumerate(manifest.get("attack_path") or [], start=1):
+        label = f"{name}: phase {phase.get('phase', index)}"
+        if "aws_actions" not in phase:
+            errors.append(f"{label} has no 'aws_actions' (declare [] if it makes no IAM-authorised call)")
+            continue
+        actions = phase["aws_actions"]
+        if not isinstance(actions, list):
+            errors.append(f"{label}: 'aws_actions' must be a list (got {type(actions).__name__})")
+            continue
+        for action in actions:
+            if not isinstance(action, str) or not _ACTION_RE.fullmatch(action):
+                errors.append(f"{label}: {action!r} is not an IAM action like 's3:DeleteObject'")
+    return errors
 
 
 def analyse(
