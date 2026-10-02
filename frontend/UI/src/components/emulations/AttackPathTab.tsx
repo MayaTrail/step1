@@ -4,7 +4,8 @@ import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { TacticBadge } from '@/components/ui/TacticBadge'
 import { getPrevention } from '@/services/prevention.service'
-import type { PreventionAnalysis, PreventionPolicy } from '@/types/prevention'
+import type { AccountCheck, PreventionAnalysis, PreventionPolicy } from '@/types/prevention'
+import { AccountCheckPanel, PhaseAccountVerdict } from './AccountCheckPanel'
 import { GuardrailDrawer } from './GuardrailDrawer'
 import { Shield, perimeterPolicies, policiesFor, shieldFor } from './preventionMeta'
 
@@ -42,12 +43,15 @@ export function AttackPathTab({ emulation: em, platformId }: AttackPathTabProps)
   const [prevention, setPrevention] = useState<PreventionAnalysis | null>(null)
   const [openPolicy, setOpenPolicy] = useState<PreventionPolicy | null>(null)
   const [openPerimeter, setOpenPerimeter] = useState(false)
+  // Held here rather than in the panel so each phase can show its own verdict.
+  const [check, setCheck] = useState<AccountCheck | null>(null)
 
   // Prevention is supplementary: a failure leaves the attack path intact and
   // simply shows no shields, rather than taking the tab down with it.
   useEffect(() => {
     let cancelled = false
     setPrevention(null)
+    setCheck(null)
     getPrevention(em.id)
       .then((result) => !cancelled && setPrevention(result))
       .catch(() => undefined)
@@ -137,6 +141,14 @@ export function AttackPathTab({ emulation: em, platformId }: AttackPathTabProps)
             catalogue policy would do</b> if you deployed it. Solid blocks outright, amber depends on
             a condition in your organisation, dashed means nothing in the library denies it.
           </p>
+        )}
+        {prevention?.analysed && (
+          <AccountCheckPanel
+            emulationType={em.id}
+            prevention={prevention}
+            check={check}
+            onChecked={setCheck}
+          />
         )}
       </Card>
 
@@ -267,6 +279,8 @@ export function AttackPathTab({ emulation: em, platformId }: AttackPathTabProps)
                       )
                     })
                   )}
+
+                  <PhaseAccountVerdict check={check} phaseNumber={phase.phase} />
 
                   {perimeter.length > 0 && (
                     <p className="mt-2.5 text-[11.5px] text-content-dim">

@@ -90,3 +90,71 @@ export interface PreventionAnalysis {
     broad: number
   }
 }
+
+/**
+ * What the caller's own policies would do, as AWS evaluates them.
+ *
+ * The middle of three confidence levels. `catalogue` above says a published
+ * sample policy would refuse an action if it were deployed; this says the
+ * caller's real policies refuse it now. Neither is `observed`, which only an
+ * actual refusal during a run can establish, so neither may change a
+ * detection score.
+ */
+
+/** Per-action outcome of the account check. */
+export type CheckVerdict = 'allowed' | 'denied' | 'undecided'
+
+/**
+ * Who refused the action.
+ *
+ * `organization_scp` and `permissions_boundary` are guardrails working.
+ * `identity_policy` means the connected role simply lacks the permission,
+ * which stops the attack for an unrelated reason and is never prevention.
+ */
+export type DeniedBy = 'organization_scp' | 'permissions_boundary' | 'identity_policy'
+
+/** One action, as AWS judged it. */
+export interface CheckedAction {
+  action: string
+  verdict: CheckVerdict
+  deniedBy: DeniedBy | null
+  /** Condition keys AWS needed and we could not supply, so the answer is not final. */
+  missingContext: string[]
+}
+
+/** A phase's verdict, folded up from its actions. */
+export interface CheckedPhase {
+  phase: number
+  name: string
+  verdict: CheckVerdict | 'no_iam_call' | 'role_cannot_perform'
+  preventedActions: string[]
+  undecidedActions: string[]
+  roleCannotPerform: string[]
+}
+
+/** The account check's result. */
+export interface AccountCheck {
+  emulationType: string
+  displayName: string
+  /** Always "simulated". */
+  basis: string
+  region: string
+  /** The connected role's name, never its ARN. */
+  identity: string
+  summary: {
+    actionsChecked: number
+    prevented: string[]
+    undecided: string[]
+    roleCannotPerform: string[]
+    allowed: string[]
+  }
+  actions: CheckedAction[]
+  phases: CheckedPhase[]
+}
+
+/** Why a check could not run, with the fix when there is one. */
+export interface AccountCheckError {
+  detail: string
+  /** Set when the connected role is missing iam:SimulatePrincipalPolicy. */
+  missingPermission: string | null
+}

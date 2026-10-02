@@ -59,21 +59,26 @@ export const TONE_CLASS: Record<ActivityTone, string> = {
 /**
  * Where a row should take the reader.
  *
- * A stack is the most specific target available, and the stacks page opens the
- * matching panel from `?stack=`. Everything else lands on the section that owns
- * the event. `LogEntry` carries no target id of its own, and adding one would
- * mean a schema change to an app whose migrations are regenerated at container
- * boot, so section-level links are the honest ceiling here.
+ * The event type decides the page, not the presence of a stack. Emulation,
+ * workflow and playbook events also carry the stack they ran on, so checking
+ * `entry.stack` first sent all of them to the stacks page.
+ *
+ * Only a stack event links to one record: the stacks page opens the matching
+ * panel from `?stack=`. The others land on the section that owns them, because
+ * `LogEntry` records no run id to link to.
  *
  * @param entry - The activity entry.
- * @returns A router path.
+ * @returns A router path, or null for an event no page owns. Such a row is
+ *   shown but not clickable, rather than sending the reader somewhere unrelated.
  */
-export function activityHref(entry: LogEntry): string {
-  if (entry.stack) return `/stacks?stack=${entry.stack}`
+export function activityHref(entry: LogEntry): string | null {
+  if (entry.event.startsWith('stack.')) {
+    return entry.stack ? `/stacks?stack=${entry.stack}` : '/stacks'
+  }
   if (entry.event.startsWith('workflow.')) return '/workflows'
   if (entry.event.startsWith('emulation.')) return '/runs'
   if (entry.event.startsWith('playbook.')) return '/playbooks'
-  return '/stacks'
+  return null
 }
 
 /**

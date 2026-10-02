@@ -3,7 +3,8 @@ Views for the guardrails app.
 
 GET /api/guardrails/        GuardrailListView
 GET /api/guardrails/<id>/   GuardrailDetailView
-GET /api/guardrails/emulation/<emulation_type>/   EmulationGuardrailsView
+GET  /api/guardrails/emulation/<emulation_type>/        EmulationGuardrailsView
+POST /api/guardrails/emulation/<emulation_type>/check/  EmulationAccountCheckView
 
 Both endpoints require IsAuthenticated rather than IsEnterpriseUser.  The
 library is a catalogue of published AWS sample policies: it reads nothing from
@@ -17,16 +18,38 @@ would otherwise make the response roughly three times its size; the detail
 endpoint serves the document for the one policy a reader opened.
 """
 
+import logging
+import re
+
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
+from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.emulations.registry import get_emulation
 from apps.infrastructure.permissions import IsEnterpriseUser
+from apps.logs.models import LogEntry
+from apps.logs.record import record_activity
 
-from .matching import analyse
+from . import simulate
+from .matching import analyse, emulation_actions
 from .registry import get_guardrail, list_guardrails
+
+logger = logging.getLogger(__name__)
+
+# The region a lab is deployed to unless the caller chooses otherwise. Passing
+# it lets AWS decide a region-conditional policy; passing the wrong one would
+# produce a confident but wrong answer, which is why only this default and an
+# explicit choice are ever sent.
+_DEFAULT_REGION = "us-east-1"
+
+# An AWS region name, validated before it reaches a condition value so a
+# caller cannot put arbitrary text into the simulator request.
+_REGION_RE = re.compile(r"[a-z]{2}(-[a-z]+)+-\d")
 
 # Catalogue keys the list response carries. "code" and "file" are detail-only.
 _SUMMARY_FIELDS = ("id", "type", "purpose", "services", "source")
@@ -155,3 +178,149 @@ class EmulationGuardrailsView(APIView):
         result["displayName"] = manifest.get("display_name", emulation_type)
         result["basis"] = "catalogue"
         return Response(result)
+
+
+class EmulationAccountCheckView(APIView):
+    """
+    Ask AWS whether the caller's own policies would refuse this emulation.
+
+    POST /api/guardrails/emulation/<emulation_type>/check/
+        Optional body: {"region": "eu-west-1"}
+
+    The catalogue endpoint above answers "a published policy would block this
+    if you deployed it". This answers "your policies, as AWS evaluates them
+    right now, would block this", which is a different and stronger claim. It
+    performs none of the actions: AWS evaluates them and reports what would
+    happen.
+
+    Enterprise-gated and rate-limited. It assumes the caller's connected role
+    and spends one AWS call per request, so it is not something a stolen
+    session should be able to run in a loop.
+
+    What the result does not cover is stated in the response rather than left
+    for a reader to assume: resource control policies and resource policies
+    are invisible to the simulator, and only the connected role is evaluated,
+    so an emulation that steals a different identity partway through its
+    attack is not described by this answer.
+    """
+
+    permission_classes = [IsEnterpriseUser]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "guardrail_check"
+
+    def post(self, request: Request, emulation_type: str) -> Response:
+        """
+        Simulate the caller's connected role against the emulation's actions.
+
+        Args:
+            request:        DRF request, optionally carrying a region.
+            emulation_type: Registry name of the emulation.
+
+        Returns:
+            200 with per-action and per-phase verdicts; 404 for an unknown
+            emulation; 409 when the emulation declares no actions to check;
+            422 when AWS refuses the call, including the case where the role
+            is missing iam:SimulatePrincipalPolicy, which is reported as a
+            permission to add rather than as a failure of the feature.
+        """
+        entry = get_emulation(emulation_type)
+        if entry is None:
+            return Response(
+                {"detail": f"Unknown emulation '{emulation_type}'."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        manifest = entry.get("manifest", entry) or {}
+        attack_path = manifest.get("attack_path") or []
+        actions = emulation_actions(attack_path)
+        if not actions:
+            return Response(
+                {"detail": "This emulation declares no AWS actions, so there is nothing to check."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        region = request.data.get("region") or _DEFAULT_REGION
+        if not _REGION_RE.fullmatch(str(region)):
+            return Response(
+                {"detail": f"'{region}' is not an AWS region name."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = request.user
+        try:
+            sts = boto3.client("sts")
+            assumed = sts.assume_role(
+                RoleArn=user.aws_role_arn,
+                RoleSessionName=f"mayatrail-guardrail-check-{user.id}",
+                DurationSeconds=900,
+            )
+            credentials = assumed["Credentials"]
+            iam = boto3.client(
+                "iam",
+                aws_access_key_id=credentials["AccessKeyId"],
+                aws_secret_access_key=credentials["SecretAccessKey"],
+                aws_session_token=credentials["SessionToken"],
+            )
+            rows = simulate.evaluate(iam, user.aws_role_arn, actions, region)
+        except (ClientError, BotoCoreError) as exc:
+            return self._aws_error(exc, user.username, emulation_type)
+
+        summary = simulate.summarise(rows)
+        record_activity(
+            LogEntry.Event.GUARDRAIL_CHECK,
+            f"Checked {manifest.get('display_name', emulation_type)} against your AWS policies: "
+            f"{len(summary['prevented'])} of {summary['actionsChecked']} actions would be refused.",
+            actor=user,
+        )
+
+        return Response({
+            "emulationType": emulation_type,
+            "displayName": manifest.get("display_name", emulation_type),
+            "basis": "simulated",
+            "region": region,
+            # The role's name, not its ARN: the caller owns the ARN but the
+            # response has no need to carry an account id.
+            "identity": user.aws_role_arn.rsplit("/", 1)[-1],
+            "summary": summary,
+            "actions": rows,
+            "phases": simulate.phase_verdicts(attack_path, rows),
+        })
+
+    def _aws_error(self, exc: Exception, username: str, emulation_type: str) -> Response:
+        """
+        Turn a botocore exception into a response a reader can act on.
+
+        Args:
+            exc:            The raised ClientError or BotoCoreError.
+            username:       For the log line, never for the response.
+            emulation_type: For the log line.
+
+        Returns:
+            422 with a message, and `missingPermission` set when the role
+            cannot simulate, so the client can offer the fix rather than
+            rendering an error.
+        """
+        code = ""
+        message = str(exc)
+        response = getattr(exc, "response", None)
+        if isinstance(response, dict):
+            error = response.get("Error") or {}
+            code = error.get("Code", "")
+            message = error.get("Message", message)
+
+        logger.warning(
+            "Guardrail check failed for user=%s emulation=%s: %s",
+            username, emulation_type, code or exc.__class__.__name__,
+        )
+
+        # An AccessDenied naming the simulate call means the connected role
+        # predates this feature. That is a one-line policy addition, not a
+        # fault, so it is reported as such.
+        cannot_simulate = code == "AccessDenied" and "simulateprincipalpolicy" in message.lower()
+        return Response(
+            {
+                "detail": message,
+                "missingPermission": "iam:SimulatePrincipalPolicy" if cannot_simulate else None,
+            },
+            status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )

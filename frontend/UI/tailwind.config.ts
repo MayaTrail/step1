@@ -180,6 +180,11 @@ export default {
           '30%':           { transform: 'rotate(8deg)' },
           '40%':           { transform: 'rotate(-4deg)' },
         },
+        // Account check: a line moving down a shield while AWS evaluates policies.
+        scanBeam: {
+          from: { transform: 'translateY(0)',    opacity: '0.9' },
+          to:   { transform: 'translateY(24px)', opacity: '0.5' },
+        },
       },
 
       animation: {
@@ -195,6 +200,7 @@ export default {
         radarSweep:    'spin 1.6s linear infinite',
         radarBlip:     'radarBlip 1.6s linear infinite',
         bellRing:      'bellRing 1.8s ease-in-out infinite',
+        scanBeam:      'scanBeam 1.6s ease-in-out infinite alternate',
       },
     },
   },
