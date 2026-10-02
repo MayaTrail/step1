@@ -54,12 +54,21 @@ MANIFEST = {
             "techniques": [
                 {"id": "T1078.004", "name": "Valid Accounts: Cloud Accounts"},
             ],
+            "aws_actions": [
+                "s3:GetObject",
+                "sts:GetCallerIdentity",
+                "s3:ListAllMyBuckets",
+            ],
         },
         {
             "phase": 2,
             "name": "Collection: S3 Object Enumeration",
             "techniques": [
                 {"id": "T1530", "name": "Data from Cloud Storage"},
+            ],
+            "aws_actions": [
+                "s3:ListBucket",
+                "s3:GetObject",
             ],
         },
         {
@@ -68,6 +77,10 @@ MANIFEST = {
             "techniques": [
                 {"id": "T1486", "name": "Data Encrypted for Impact"},
             ],
+            "aws_actions": [
+                "s3:GetObject",
+                "s3:PutObject",
+            ],
         },
         {
             "phase": 4,
@@ -75,12 +88,22 @@ MANIFEST = {
             "techniques": [
                 {"id": "T1485", "name": "Data Destruction"},
             ],
+            "aws_actions": [
+                "s3:DeleteObject",
+                "s3:PutLifecycleConfiguration",
+            ],
         },
         {
             "phase": 5,
             "name": "Impact: Version History Purge",
             "techniques": [
                 {"id": "T1490", "name": "Inhibit System Recovery"},
+            ],
+            "aws_actions": [
+                "s3:GetBucketVersioning",
+                "s3:PutBucketVersioning",
+                "s3:ListBucketVersions",
+                "s3:DeleteObjectVersion",
             ],
         },
     ],

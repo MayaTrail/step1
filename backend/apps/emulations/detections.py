@@ -14,6 +14,7 @@ techniques) drawn from the MANIFEST.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,12 @@ _NOTE_PREFIX = "detection_note_"
 
 # Sigma severity levels, weakest first, for comparing documents within a file.
 _LEVEL_ORDER = ("informational", "low", "medium", "high", "critical")
+
+# Some detection files spell a sub-technique with an underscore
+# (sigma_t1685_002.yml). The grouping key keeps that spelling, because it is
+# also the rule id that URLs and stored reports use, but the technique it names
+# has to be ATT&CK's dotted form or it never matches the MANIFEST.
+_UNDERSCORE_SUBTECHNIQUE = re.compile(r"^(T\d{4})_(\d{3})$")
 
 # Metadata the detail view renders. Borrowed from a lower-severity document
 # when the highest-severity one omits it.
@@ -61,6 +68,22 @@ def _technique_key(filename: str) -> str | None:
         if stem.startswith(prefix):
             return stem[len(prefix):]
     return None
+
+
+def _canonical_technique_id(rule_id: str) -> str:
+    """
+    Spell a technique grouping key as an ATT&CK technique id.
+
+    Args:
+        rule_id: A grouping key from _technique_key, such as "t1098.001" or
+            "t1685_002".
+
+    Returns:
+        The upper-cased id with a dotted sub-technique, such as "T1098.001"
+        or "T1685.002". Keys already in the dotted form come back only
+        upper-cased.
+    """
+    return _UNDERSCORE_SUBTECHNIQUE.sub(r"\1.\2", rule_id.upper())
 
 
 def _group_by_technique(detection_files: list[str]) -> dict[str, dict[str, str]]:
@@ -180,7 +203,7 @@ def _coverage(manifest: dict, groups: dict[str, dict[str, str]]) -> dict[str, in
     of its techniques is covered.
     """
     covered_ids = {
-        key.upper()
+        _canonical_technique_id(key)
         for key, files in groups.items()
         if "sigma" in files or "kql" in files
     }
@@ -224,7 +247,7 @@ def list_detection_summaries(entry: dict) -> list[dict[str, Any]]:
         sigma_text = _read(detections_dir, files.get("sigma")) if detections_dir else None
         kql_text = _read(detections_dir, files.get("kql")) if detections_dir else None
         sigma = parse_sigma(sigma_text) if sigma_text else {}
-        technique = _technique_meta(manifest, rule_id.upper())
+        technique = _technique_meta(manifest, _canonical_technique_id(rule_id))
         summaries.append({
             "ruleId": rule_id,
             "technique": technique,
@@ -262,7 +285,7 @@ def build_detection_detail(entry: dict, rule_id: str) -> dict[str, Any] | None:
 
     sigma = parse_sigma(sigma_text) if sigma_text else {}
     manifest = entry.get("manifest", entry)
-    technique_id = rule_id.upper()
+    technique_id = _canonical_technique_id(rule_id)
 
     # references in Sigma frontmatter are a plain list of URLs.
     references = sigma.get("references") or []

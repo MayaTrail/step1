@@ -83,6 +83,17 @@ MANIFEST = {
         {
             "phase": 1,
             "name": "Initial Access & Persistence Establishment",
+            "aws_actions": [
+                "iam:GetUser",
+                "iam:ListAttachedUserPolicies",
+                "iam:ListUsers",
+                "ses:GetSendQuota",
+                "ses:ListIdentities",
+                "iam:CreateUser",
+                "iam:CreateLoginProfile",
+                "iam:CreateAccessKey",
+                "iam:AttachUserPolicy",
+            ],
             "techniques": [
                 {"id": "T1078.004", "name": "Valid Accounts: Cloud Accounts"},
                 {"id": "T1526", "name": "Cloud Service Discovery"},
@@ -94,6 +105,21 @@ MANIFEST = {
         {
             "phase": 2,
             "name": "Infrastructure Discovery & Compute Deployment",
+            # ec2:TerminateInstances is omitted although attack.py records it: the
+            # instance is terminated as soon as it reaches running, to cap cost. A
+            # policy denying it would stop that teardown, not the deployment.
+            "aws_actions": [
+                "ec2:DescribeRegions",
+                "ec2:DescribeInstances",
+                "ec2:DescribeSecurityGroups",
+                "ec2:DescribeVpcs",
+                "ec2:DescribeSubnets",
+                "ec2:DescribeInstanceTypes",
+                "ec2:DescribeAvailabilityZones",
+                "ssm:GetParameter",
+                "ec2:RunInstances",
+                "ec2:DescribeInstanceStatus",
+            ],
             "techniques": [
                 {"id": "T1580", "name": "Cloud Infrastructure Discovery"},
                 {"id": "T1578.002", "name": "Modify Cloud Compute Infrastructure: Create Cloud Instance"},
@@ -104,6 +130,32 @@ MANIFEST = {
         {
             "phase": 3,
             "name": "Persistence Hardening, Collection, Evasion & Phishing Infra",
+            # DeleteAccessKey and DeleteUser are the attacker erasing the ses user in
+            # step 15, not lab teardown. The teardown calls in the same function run
+            # through lab_iam and are excluded, which is why iam:DetachUserPolicy and
+            # iam:DeleteLoginProfile do not appear here.
+            "aws_actions": [
+                "iam:CreateUser",
+                "iam:CreateAccessKey",
+                "iam:ListRoles",
+                "iam:GetRole",
+                "iam:AttachRolePolicy",
+                "sts:AssumeRole",
+                "iam:UpdateLoginProfile",
+                "s3:ListAllMyBuckets",
+                "s3:ListBucket",
+                "iam:ListInstanceProfiles",
+                "iam:ListGroupsForUser",
+                "iam:ListSSHPublicKeys",
+                "guardduty:ListDetectors",
+                "guardduty:ListFindings",
+                "guardduty:GetFindings",
+                "iam:SimulatePrincipalPolicy",
+                "iam:UpdateAccessKey",
+                "iam:DeleteAccessKey",
+                "iam:DeleteUser",
+                "ses:VerifyEmailIdentity",
+            ],
             "techniques": [
                 {"id": "T1036.005", "name": "Masquerading: Match Legitimate Resource Name or Location"},
                 {"id": "T1199", "name": "Trusted Relationship"},

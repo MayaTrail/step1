@@ -30,6 +30,8 @@ MANIFEST = {
     'incidents': ['Stratus Red Team — AWS attack technique catalogue'],
     'attack_path': [{'phase': 1,
                      'name': 'Defense Evasion',
+                     'aws_actions': ['ec2:DeleteFlowLogs',
+                                     'sts:AssumeRole'],
                      'techniques': [{'id': 'T1685.002', 'name': 'Disable or Modify Tools: Disable or Modify Cloud Log'}]}],
     'mitre_mappings': [{'id': 'T1685.002',
                         'name': 'Disable or Modify Tools: Disable or Modify Cloud Log',

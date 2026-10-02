@@ -56,6 +56,7 @@ MANIFEST = {
         {
             "phase": 1,
             "name": "Resource Development (Documented)",
+            "aws_actions": [],
             "techniques": [
                 {"id": "T1583.001", "name": "Acquire Infrastructure: Domains"},
                 {"id": "T1608.001", "name": "Stage Capabilities: Upload Malware"},
@@ -64,6 +65,13 @@ MANIFEST = {
         {
             "phase": 2,
             "name": "Initial Execution: Malicious Container",
+            "aws_actions": [
+                "ecs:RunTask",
+                "ecs:DescribeTasks",
+                "sts:GetCallerIdentity",
+                "iam:GetUser",
+                "iam:ListAttachedUserPolicies",
+            ],
             "techniques": [
                 {"id": "T1204.003", "name": "User Execution: Malicious Image"},
                 {"id": "T1078.004", "name": "Valid Accounts: Cloud Accounts"},
@@ -72,6 +80,11 @@ MANIFEST = {
         {
             "phase": 3,
             "name": "Persistence & Privilege Escalation",
+            "aws_actions": [
+                "iam:CreateRole",
+                "iam:AttachRolePolicy",
+                "sts:AssumeRole",
+            ],
             "techniques": [
                 {"id": "T1136.003", "name": "Create Account: Cloud Account"},
                 {"id": "T1098.001", "name": "Account Manipulation: Additional Cloud Credentials"},
@@ -80,6 +93,30 @@ MANIFEST = {
         {
             "phase": 4,
             "name": "Execution: Multi-Service Miner Deployment",
+            "aws_actions": [
+                "codecommit:CreateRepository",
+                "codecommit:GetRepository",
+                "amplify:CreateApp",
+                "codebuild:CreateProject",
+                "ecs:CreateCluster",
+                "ecs:RegisterTaskDefinition",
+                "iam:PassRole",
+                "sagemaker:CreateNotebookInstance",
+                "sagemaker:DescribeNotebookInstance",
+                "sts:GetCallerIdentity",
+                "ec2:DescribeRegions",
+                "iam:GetAccountSummary",
+                "iam:ListRoles",
+                "iam:ListUsers",
+                "s3:ListAllMyBuckets",
+                "s3:GetObject",
+                "secretsmanager:ListSecrets",
+                "secretsmanager:GetSecretValue",
+                "ec2:DescribeLaunchTemplates",
+                "ec2:DescribeInstanceTypeOfferings",
+                "cloudformation:ValidateTemplate",
+                "autoscaling:DescribeAutoScalingGroups",
+            ],
             "techniques": [
                 {"id": "T1059.009", "name": "Command and Scripting Interpreter: Cloud API"},
                 {"id": "T1580",     "name": "Cloud Infrastructure Discovery"},
@@ -91,6 +128,15 @@ MANIFEST = {
         {
             "phase": 5,
             "name": "Defense Evasion & Impact",
+            "aws_actions": [
+                "cloudtrail:DescribeTrails",
+                "cloudtrail:GetTrailStatus",
+                "cloudtrail:StopLogging",
+                "s3:ListBucket",
+                "s3:DeleteObject",
+                "codecommit:ListRepositories",
+                "ecs:DescribeTasks",
+            ],
             "techniques": [
                 {"id": "T1070", "name": "Indicator Removal"},
                 {"id": "T1496", "name": "Resource Hijacking"},

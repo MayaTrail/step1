@@ -258,11 +258,7 @@ export function WorkflowsPage() {
             {error && <p className="text-xs text-danger mt-2">{error}</p>}
           </Card>
 
-          <RunsSection
-            runs={list}
-            loading={loading}
-            onChanged={() => setVersion((current) => current + 1)}
-          />
+          <RunsSection runs={list} loading={loading} />
         </>
       ) : (
         <EndpointsSection

@@ -207,3 +207,46 @@ export const IconClose = (p: IconProps) => (
         <path d="M6 6 18 18M18 6 6 18" />
     </Icon>
 )
+
+/**
+ * Drawn for the emulation detail tabs, where the existing set had no honest
+ * match. Reusing IconShield for MITRE Mapping was the alternative, and it
+ * would have collided with the prevention shields on the same page, where a
+ * shield already carries a three-state security meaning.
+ */
+
+/** Attack Path: a route through connected waypoints. */
+export const IconRoute = (p: IconProps) => (
+    <Icon {...p}>
+        <circle cx="5" cy="18" r="2.5" />
+        <circle cx="19" cy="6" r="2.5" />
+        <path d="M7.5 18h5a4 4 0 0 0 0-8H11a4 4 0 0 1 0-8h5.5" />
+    </Icon>
+)
+
+/** MITRE Mapping: a technique matrix. */
+export const IconMatrix = (p: IconProps) => (
+    <Icon {...p}>
+        <rect x="3" y="3" width="7" height="7" rx="1.5" />
+        <rect x="14" y="3" width="7" height="7" rx="1.5" />
+        <rect x="3" y="14" width="7" height="7" rx="1.5" />
+        <rect x="14" y="14" width="7" height="7" rx="1.5" />
+    </Icon>
+)
+
+/** Ask AI: the conventional generative sparkle. */
+export const IconSparkle = (p: IconProps) => (
+    <Icon {...p}>
+        <path d="M12 3.5 13.9 9l5.5 1.9-5.5 1.9L12 18.3l-1.9-5.5L4.6 11 10.1 9z" />
+        <path d="M18.5 16.5 19 18l1.5.5-1.5.5-.5 1.5-.5-1.5L16.5 18l1.5-.5z" />
+    </Icon>
+)
+
+/** Past Findings: a clock wound backwards. */
+export const IconHistory = (p: IconProps) => (
+    <Icon {...p}>
+        <path d="M3.5 9A9 9 0 1 1 3 12" />
+        <path d="M3 4.5V9h4.5" />
+        <path d="M12 7.5V12l3 1.8" />
+    </Icon>
+)

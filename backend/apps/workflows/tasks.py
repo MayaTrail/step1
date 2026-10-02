@@ -13,7 +13,8 @@ while waiting, survives a restart, and means the user can close the page, which
 is the behaviour this feature was asked for.
 
 Deploy and attack are the emulations app's existing tasks, invoked unchanged.
-This module decides when, never how.
+This module decides when, never how. The account check before deploy is the
+guardrails app's, shared with the emulation page's button.
 """
 
 from __future__ import annotations
@@ -22,12 +23,15 @@ import logging
 from datetime import timedelta
 from typing import Any
 
+from botocore.exceptions import BotoCoreError, ClientError
 from celery import shared_task
 from django.apps import apps as django_apps
 from django.conf import settings
 from django.utils import timezone
 
 from apps.emulations.registry import get_emulation
+from apps.guardrails import simulate
+from apps.guardrails.matching import emulation_actions
 from apps.logs.models import LogEntry
 from apps.logs.record import record_activity
 from apps.emulations.tasks import deploy_emulation_stack, run_emulation_attack
@@ -145,6 +149,81 @@ def _stack_name(workflow: WorkflowRun) -> str:
     return f"{workflow.emulation_type}-wf-{str(workflow.id)[:8]}"
 
 
+def _skipped(reason: str, checked_at: str, error_code: str = "") -> dict[str, Any]:
+    """
+    Build the record of an account check that did not run.
+
+    Args:
+        reason:     Why, as a code the frontend words for the reader.
+        checked_at: When it was attempted.
+        error_code: AWS's error code, for an AWS refusal.
+
+    Returns:
+        The account_check value to store.
+    """
+    record = {"status": "skipped", "reason": reason, "checkedAt": checked_at}
+    if error_code:
+        record["errorCode"] = error_code
+    return record
+
+
+def _account_check(workflow: WorkflowRun, manifest: dict[str, Any], region: str) -> dict[str, Any]:
+    """
+    Ask AWS what the owner's policies would refuse, before anything is deployed.
+
+    This stage can only finish or be skipped, never fail: whatever goes wrong,
+    the workflow deploys anyway. The answer informs the Prevention lane and is
+    not a precondition for testing detections, so a role connected before the
+    simulate permission existed must not stop a run that would otherwise work.
+
+    A skip keeps AWS's error code but never its message. The message names the
+    caller's ARN, account id included, and this record is served to the page.
+
+    Args:
+        workflow: The workflow about to deploy.
+        manifest: Its emulation's MANIFEST.
+        region:   The region its stack is about to be created in.
+
+    Returns:
+        {"status": "checked", "checkedAt", "result"}, where result has the
+        same shape the emulation page's check returns, or a skipped record
+        with a reason code.
+    """
+    checked_at = timezone.now().isoformat()
+    role_arn = workflow.owner.aws_role_arn
+    if not role_arn:
+        return _skipped("no_connected_role", checked_at)
+    if not emulation_actions(manifest.get("attack_path") or []):
+        # Kubernetes emulations, for example: nothing an IAM policy decides.
+        return _skipped("nothing_to_check", checked_at)
+
+    try:
+        result = simulate.check_account(
+            role_arn,
+            f"mayatrail-workflow-check-{workflow.owner_id}",
+            workflow.emulation_type,
+            manifest,
+            region,
+        )
+    except (ClientError, BotoCoreError) as exc:
+        code, message = simulate.aws_error(exc)
+        reason = "missing_permission" if simulate.cannot_simulate(code, message) else "aws_error"
+        logger.warning(
+            "Workflow %s: account check skipped (%s, %s)",
+            workflow.id, reason, code or exc.__class__.__name__,
+        )
+        return _skipped(reason, checked_at, code)
+    except Exception:  # noqa: BLE001 - a broken check must never stop the deploy
+        logger.exception("Workflow %s: account check failed unexpectedly", workflow.id)
+        return _skipped("check_failed", checked_at)
+
+    logger.info(
+        "Workflow %s: account check done, %d of %d actions refused",
+        workflow.id, len(result["summary"]["prevented"]), result["summary"]["actionsChecked"],
+    )
+    return {"status": "checked", "checkedAt": checked_at, "result": result}
+
+
 def _start_deploy(workflow: WorkflowRun) -> None:
     """
     Provision the emulation's infrastructure and move to DEPLOYING.
@@ -180,6 +259,13 @@ def _start_deploy(workflow: WorkflowRun) -> None:
     manifest = entry.get("manifest", entry)
     ttl_hours = manifest.get("default_ttl_hours", DEFAULT_TTL_HOURS)
 
+    # Asked before the stack exists, for the region the stack is about to get
+    # (it is created without one, so it takes the field's default). Reading
+    # the default rather than repeating it keeps the two from drifting apart.
+    workflow.account_check = _account_check(
+        workflow, manifest, Stack._meta.get_field("region").default
+    )
+
     stack = Stack.objects.create(
         name=_stack_name(workflow),
         owner=workflow.owner,
@@ -194,7 +280,7 @@ def _start_deploy(workflow: WorkflowRun) -> None:
     workflow.stack = stack
     workflow.status = WorkflowRun.Status.DEPLOYING
     workflow.started_at = timezone.now()
-    workflow.save(update_fields=["stack", "status", "started_at"])
+    workflow.save(update_fields=["account_check", "stack", "status", "started_at"])
 
     task = deploy_emulation_stack.apply_async(args=[str(stack.id)], queue="enterprise")
 

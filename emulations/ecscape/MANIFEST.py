@@ -36,6 +36,15 @@ MANIFEST = {
         {
             "phase": 1,
             "name": "Credential Access",
+            # The IMDS read and the agent introspection call on :51678 are
+            # plain HTTP to link-local and localhost, so no IAM action
+            # authorises them. ecs:Poll has no boto3 call in the payload: it
+            # authorises the SigV4-signed ACS WebSocket, which is opened
+            # directly because botocore exposes no client method for it.
+            "aws_actions": [
+                "ecs:DiscoverPollEndpoint",
+                "ecs:Poll",
+            ],
             "techniques": [
                 {"id": "T1552.005", "name": "Unsecured Credentials: Cloud Instance Metadata API"},
                 {"id": "T1552.007", "name": "Unsecured Credentials: Container API"},
@@ -44,6 +53,10 @@ MANIFEST = {
         {
             "phase": 2,
             "name": "Privilege Escalation",
+            # No further API call. The control plane streams the other tasks'
+            # credentials over the WebSocket phase 1 already opened, so the
+            # escalation is authorised by ecs:Poll and nothing else.
+            "aws_actions": [],
             "techniques": [
                 {"id": "T1134", "name": "Access Token Manipulation"},
             ],
