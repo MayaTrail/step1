@@ -116,7 +116,7 @@ class AccountCheckTests(TestCase):
         force_authenticate(request, user=self.user)
         entry = None if manifest is None else {"name": manifest["name"], "manifest": manifest}
         with patch("apps.guardrails.views.get_emulation", return_value=entry), \
-                patch("apps.guardrails.views.boto3.client", _client_factory(iam)):
+                patch("boto3.client", _client_factory(iam)):
             return self.view(request, emulation_type=emulation)
 
     def test_an_scp_deny_is_reported_as_prevention(self):

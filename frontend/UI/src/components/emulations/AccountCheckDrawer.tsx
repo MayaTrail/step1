@@ -41,7 +41,11 @@ interface AccountCheckDrawerProps {
   /** When the browser received the answer. */
   checkedAt: Date | null
   onClose: () => void
-  onRecheck: () => void
+  /**
+   * Omitted where the result is a record rather than a live question, as on a
+   * workflow run: rechecking there would replace what the run was judged on.
+   */
+  onRecheck?: () => void
 }
 
 export function AccountCheckDrawer({
@@ -131,7 +135,7 @@ export function AccountCheckDrawer({
             </>
           ) : (
             <>
-              <SecondaryButton onClick={onRecheck}>Check again</SecondaryButton>
+              {onRecheck && <SecondaryButton onClick={onRecheck}>Check again</SecondaryButton>}
               {check && (
                 <span className="text-xs text-content-dim">
                   Simulated, not observed. Nothing was performed.
@@ -346,13 +350,13 @@ const PHASE_WORD: Record<CheckedPhase['verdict'], { text: string; tone: string }
   no_iam_call: { text: 'No IAM call', tone: 'text-content-dim' },
 }
 
-const REFUSED_BY: Record<string, string> = {
+export const REFUSED_BY: Record<string, string> = {
   organization_scp: "by your organisation's SCP",
   permissions_boundary: 'by a permissions boundary',
 }
 
 /** One action's outcome: the word, and in plain terms who or what decided it. */
-function ActionRow({ row }: { row: CheckedAction }) {
+export function ActionRow({ row }: { row: CheckedAction }) {
   let word = 'Allowed'
   let tone = 'text-content-secondary'
   let why: React.ReactNode = null
@@ -417,6 +421,35 @@ function joinPhases(numbers: number[]): string {
   return `${numbers.slice(0, -1).join(', ')} and ${numbers[numbers.length - 1]}`
 }
 
+/**
+ * The answer in one sentence: how many actions your guardrails refuse, and
+ * which phases that stops. Shared with the workflow pipeline's check stage.
+ */
+export function CheckHeadline({ check, className = '' }: { check: AccountCheck; className?: string }) {
+  const { prevented, undecided, roleCannotPerform, actionsChecked } = check.summary
+  const stopped = check.phases.filter((phase) => phase.verdict === 'denied').map((phase) => phase.phase)
+  return (
+    <p className={`text-sm leading-relaxed text-content-secondary ${className}`}>
+      {prevented.length === 0 ? (
+        <>
+          <b className="font-semibold text-content-primary">None of the {actionsChecked} actions</b>{' '}
+          would be refused by your guardrails.
+          {undecided.length === 0 && roleCannotPerform.length === 0
+            && ` Every phase could run as your connected role in ${check.region}.`}
+        </>
+      ) : (
+        <>
+          <b className="font-semibold text-content-primary">
+            {prevented.length} of {actionsChecked} actions
+          </b>{' '}
+          would be refused by your guardrails, which stops {stopped.length === 1 ? 'phase' : 'phases'}{' '}
+          {joinPhases(stopped)}.
+        </>
+      )}
+    </p>
+  )
+}
+
 /** The answer: counts first, then each phase, then what the check could not see. */
 function Answer({ check, prevention }: { check: AccountCheck; prevention: PreventionAnalysis }) {
   // Phases with something to say start open; allowed ones wait for a click.
@@ -434,8 +467,7 @@ function Answer({ check, prevention }: { check: AccountCheck; prevention: Preven
   const byAction = new Map(check.actions.map((row) => [row.action.toLowerCase(), row]))
   const declared = new Map(prevention.phases.map((phase) => [phase.phase, phase.actions]))
 
-  const { prevented, undecided, roleCannotPerform, allowed, actionsChecked } = check.summary
-  const stopped = check.phases.filter((phase) => phase.verdict === 'denied').map((phase) => phase.phase)
+  const { prevented, undecided, roleCannotPerform, allowed } = check.summary
 
   function toggle(phase: number) {
     setOpened((current) => {
@@ -456,24 +488,7 @@ function Answer({ check, prevention }: { check: AccountCheck; prevention: Preven
   return (
     <>
       <section>
-        <p className="mb-3.5 text-sm leading-relaxed text-content-secondary">
-          {prevented.length === 0 ? (
-            <>
-              <b className="font-semibold text-content-primary">None of the {actionsChecked} actions</b>{' '}
-              would be refused by your guardrails.
-              {undecided.length === 0 && roleCannotPerform.length === 0
-                && ` Every phase could run as your connected role in ${check.region}.`}
-            </>
-          ) : (
-            <>
-              <b className="font-semibold text-content-primary">
-                {prevented.length} of {actionsChecked} actions
-              </b>{' '}
-              would be refused by your guardrails, which stops {stopped.length === 1 ? 'phase' : 'phases'}{' '}
-              {joinPhases(stopped)}.
-            </>
-          )}
-        </p>
+        <CheckHeadline check={check} className="mb-3.5" />
         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
           {counts.map((count) => (
             <div key={count.label} className="rounded-btn border border-border px-3 py-2.5 shadow-ring">

@@ -24,11 +24,18 @@ Two limits are structural and the wording of every result has to respect them:
 The third limit is about who is asked. Only the identity named by
 PolicySourceArn is evaluated, so a result describes the connected role, not
 whatever identity an emulation steals partway through its attack.
+
+Everything here works on a boto3 client handed in, so tests replay recorded
+AWS responses, except `check_account`, which assumes the role and builds that
+client itself. It is the one entry point the emulation page and the workflow
+stage share, so both produce the same result.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from .matching import emulation_actions
 
 # Verdicts, narrower than AWS's decision strings because the question here is
 # "would a guardrail stop this", not "what does the policy say".
@@ -213,3 +220,105 @@ def phase_verdicts(
             "roleCannotPerform": sorted(unavailable),
         })
     return verdicts
+
+
+def check_account(
+    role_arn: str,
+    session_name: str,
+    emulation_type: str,
+    manifest: dict[str, Any],
+    region: str,
+) -> dict[str, Any]:
+    """
+    Assume the connected role, ask AWS about the emulation, and build the result.
+
+    The caller must have confirmed the emulation declares actions: an empty
+    request would come back as "nothing refused", which reads as a finding.
+
+    Args:
+        role_arn:       The connected role to assume and evaluate.
+        session_name:   STS session name, so CloudTrail shows who asked.
+        emulation_type: Registry name of the emulation.
+        manifest:       Its MANIFEST, carrying attack_path with aws_actions.
+        region:         Supplied as aws:RequestedRegion to region conditions.
+
+    Returns:
+        The account check result: identity, region, summary, per-action rows
+        and per-phase verdicts.
+
+    Raises:
+        botocore ClientError or BotoCoreError when STS or IAM refuses. What a
+        refusal means differs per caller, so it is theirs to interpret.
+    """
+    # Imported here so the pure functions above stay importable where boto3 is
+    # not installed, as in the CI test environment.
+    import boto3
+
+    # 900 seconds is the shortest session STS allows; one simulate call needs
+    # a fraction of it, and the credentials are never stored.
+    assumed = boto3.client("sts").assume_role(
+        RoleArn=role_arn,
+        RoleSessionName=session_name,
+        DurationSeconds=900,
+    )
+    credentials = assumed["Credentials"]
+    iam = boto3.client(
+        "iam",
+        aws_access_key_id=credentials["AccessKeyId"],
+        aws_secret_access_key=credentials["SecretAccessKey"],
+        aws_session_token=credentials["SessionToken"],
+    )
+
+    attack_path = manifest.get("attack_path") or []
+    rows = evaluate(iam, role_arn, emulation_actions(attack_path), region)
+    return {
+        "emulationType": emulation_type,
+        "displayName": manifest.get("display_name", emulation_type),
+        "basis": "simulated",
+        "region": region,
+        # The role's name, not its ARN: the result has no need to carry an
+        # account id.
+        "identity": role_arn.rsplit("/", 1)[-1],
+        "summary": summarise(rows),
+        "actions": rows,
+        "phases": phase_verdicts(attack_path, rows),
+    }
+
+
+def aws_error(exc: Exception) -> tuple[str, str]:
+    """
+    Read the error code and message out of a botocore exception.
+
+    Args:
+        exc: A ClientError, BotoCoreError or anything else raised by boto3.
+
+    Returns:
+        (code, message). The code is empty when AWS sent none, as with a
+        network failure. The message can name the caller's ARN, account id
+        included, so it is for logs and for the caller's own response only.
+    """
+    code = ""
+    message = str(exc)
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        error = response.get("Error") or {}
+        code = error.get("Code", "")
+        message = error.get("Message", message)
+    return code, message
+
+
+def cannot_simulate(code: str, message: str) -> bool:
+    """
+    Tell whether an AWS refusal means the role lacks the simulate permission.
+
+    That is a one-line policy addition for roles connected before this feature
+    existed, not a fault, so callers offer the fix instead of an error.
+
+    Args:
+        code:    The AWS error code.
+        message: The AWS error message.
+
+    Returns:
+        True when AWS denied iam:SimulatePrincipalPolicy itself.
+    """
+    return code == "AccessDenied" and "simulateprincipalpolicy" in message.lower()

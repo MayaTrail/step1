@@ -1,13 +1,15 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { WorkflowRunDetail } from '@/types/workflow'
+import type { PreventionAnalysis } from '@/types/prevention'
+import type { AccountCheckSkipReason, WorkflowRunDetail } from '@/types/workflow'
 import { Card } from '@/components/ui/Card'
 import { formatWhen } from '@/components/threatfeed/feedMeta'
+import { AccountCheckDrawer, CheckHeadline } from '@/components/emulations/AccountCheckDrawer'
 import { STEPS, stepStates, type StepKey, type StepState } from './workflowMeta'
 import { JobIcon } from './JobIcon'
 
 /**
- * The four stages a workflow passes through, laid out left to right.
+ * The stages a workflow passes through, laid out left to right.
  *
  * Each stage holds one job, and selecting a job opens what is known about it
  * underneath. A failed run opens on the job that failed, because the reason it
@@ -17,7 +19,12 @@ import { JobIcon } from './JobIcon'
  *
  * Red appears here only when the pipeline itself breaks. A detection that
  * stayed silent is a finding about the client's coverage, not a broken run,
- * and it is reported further down the page in amber.
+ * and it is reported further down the page in amber. A skipped account check
+ * is grey for the same reason: the run carried on without it.
+ *
+ * Every job is the same size. The spacing between columns is a shared gap
+ * rather than padding on all but the last, which made the last job wider, and
+ * each job stretches to the tallest so a wrapped label does not stand out.
  */
 
 const STATE_WORD: Record<StepState, string> = {
@@ -25,6 +32,45 @@ const STATE_WORD: Record<StepState, string> = {
   active: 'running',
   failed: 'failed',
   pending: 'pending',
+  skipped: 'skipped',
+  unchecked: 'not checked',
+}
+
+/** Why the account check was skipped: a few words for the job, a sentence for its details. */
+const SKIP_TEXT: Record<AccountCheckSkipReason, { short: string; detail: string }> = {
+  no_connected_role: {
+    short: 'no connected role',
+    detail: 'No AWS role was connected when this run started, so there was nothing to ask AWS about.',
+  },
+  nothing_to_check: {
+    short: 'nothing to check',
+    detail: 'This emulation makes no call that an IAM policy decides, so there was nothing to ask AWS.',
+  },
+  missing_permission: {
+    short: 'missing permission',
+    detail:
+      'Your connected role cannot run this check yet. Add iam:SimulatePrincipalPolicy to it; it is '
+      + 'read-only and changes nothing in your account. The policy on the connect page already includes it.',
+  },
+  aws_error: {
+    short: 'AWS refused',
+    detail: 'AWS refused the check. Nothing was wrong with this run, and the next run will ask again.',
+  },
+  check_failed: {
+    short: 'check failed',
+    detail: 'The check could not be completed. Nothing was wrong with this run, and the next run will ask again.',
+  },
+}
+
+/** The second line of a job: its state, or for the account check, what it found. */
+function jobSubtitle(run: WorkflowRunDetail, key: StepKey, state: StepState): string {
+  const check = run.accountCheck
+  if (key === 'check' && check) {
+    if (check.status === 'skipped') return `skipped · ${SKIP_TEXT[check.reason].short}`
+    const { actionsChecked, prevented } = check.result.summary
+    return `${actionsChecked} actions · ${prevented.length} refused`
+  }
+  return STATE_WORD[state]
 }
 
 /** The stage a failed run gave up on, as recorded by the backend. */
@@ -32,8 +78,12 @@ function failedStage(run: WorkflowRunDetail): StepKey {
   return STEPS.find((step) => step.key === run.failedStep)?.key ?? 'deploy'
 }
 
-/** @param run - The workflow whose stages are drawn. */
-export function PipelineGraph({ run }: { run: WorkflowRunDetail }) {
+/**
+ * @param run - The workflow whose stages are drawn.
+ * @param prevention - The emulation's declared phases and actions, which the
+ *   account check's details need; null until loaded.
+ */
+export function PipelineGraph({ run, prevention }: { run: WorkflowRunDetail; prevention: PreventionAnalysis | null }) {
   const states = stepStates(run)
   /*
    * Undefined means the reader has not picked a job yet, so the default
@@ -47,7 +97,7 @@ export function PipelineGraph({ run }: { run: WorkflowRunDetail }) {
     <Card className="p-5">
       <div className="font-mono text-2xs uppercase tracking-label text-content-dim">Pipeline</div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-y-4 mt-3.5">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-x-7 gap-y-4 mt-3.5">
         {STEPS.map((step, index) => {
           const state = states[index] ?? 'pending'
           const selected = open === step.key
@@ -57,23 +107,31 @@ export function PipelineGraph({ run }: { run: WorkflowRunDetail }) {
               ? 'border-accent-blue/35'
               : 'border-border'
           return (
-            <div key={step.key} className="pr-7 last:pr-0">
+            <div key={step.key} className="flex flex-col">
               <div className="text-xs text-content-secondary tracking-body mb-2">{step.stage}</div>
-              <div className="relative">
+              <div className="relative flex-1">
                 <button
                   type="button"
                   aria-expanded={selected}
                   onClick={() => setChosen(selected ? null : step.key)}
-                  className={`w-full flex items-center gap-3 text-left px-3 py-2.5 rounded-xl
+                  className={`w-full h-full flex items-center gap-3 text-left px-3 py-2.5 rounded-xl
                     bg-surface-base border transition-opacity hover:opacity-60 ${border}`}
                 >
                   <JobIcon stage={step.key} state={state} />
                   <span className="min-w-0">
-                    <span className="block text-sm text-content-primary tracking-body">{step.label}</span>
-                    <span className="block font-mono text-2xs text-content-dim mt-0.5">{STATE_WORD[state]}</span>
+                    <span
+                      className={`block text-sm tracking-body ${
+                        state === 'unchecked' ? 'text-content-dim' : 'text-content-primary'
+                      }`}
+                    >
+                      {step.label}
+                    </span>
+                    <span className="block font-mono text-2xs text-content-dim mt-0.5">
+                      {jobSubtitle(run, step.key, state)}
+                    </span>
                   </span>
                 </button>
-                {/* The link to the next job, in the gap the column padding leaves. */}
+                {/* The link to the next job, drawn inside the column gap. */}
                 {index < STEPS.length - 1 && (
                   <span aria-hidden="true" className="hidden lg:block absolute top-1/2 left-full ml-1.5 w-4 h-px bg-border" />
                 )}
@@ -85,7 +143,11 @@ export function PipelineGraph({ run }: { run: WorkflowRunDetail }) {
 
       {open && (
         <div className="mt-4 pt-4 border-t border-border">
-          <StageDetail run={run} stage={open} />
+          {open === 'check' ? (
+            <CheckDetail run={run} prevention={prevention} />
+          ) : (
+            <StageDetail run={run} stage={open} />
+          )}
         </div>
       )}
     </Card>
@@ -166,6 +228,98 @@ function StageDetail({ run, stage }: { run: WorkflowRunDetail; stage: StepKey })
       </dl>
       {failedHere && run.detail && (
         <p className="text-xs text-danger leading-relaxed tracking-body mt-3">{run.detail}</p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * What the account check found before deploy, or why it did not run.
+ *
+ * Its details open the same drawer as the emulation page, read-only: the
+ * check is a record of the policies in force when this run began, and a
+ * recheck here would replace what the run was judged on.
+ *
+ * @param run - The workflow being shown.
+ * @param prevention - Each phase's declared actions, for the drawer.
+ */
+function CheckDetail({ run, prevention }: { run: WorkflowRunDetail; prevention: PreventionAnalysis | null }) {
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const check = run.accountCheck
+
+  if (!check) {
+    const text = run.status === 'scheduled' || run.status === 'pending'
+      ? 'Runs just before the deploy: asks AWS whether your policies would refuse this emulation\'s '
+        + 'actions. Nothing is performed in your account.'
+      : 'This run has no account check: it started before workflows ran one, or stopped before its '
+        + 'deploy began.'
+    return <p className="text-xs text-content-secondary leading-relaxed tracking-body">{text}</p>
+  }
+
+  if (check.status === 'skipped') {
+    return (
+      <div>
+        <p className="text-xs text-content-secondary leading-relaxed tracking-body">
+          {SKIP_TEXT[check.reason].detail}
+          {check.errorCode && <span className="font-mono text-content-dim"> ({check.errorCode})</span>}
+        </p>
+        <p className="text-xs text-content-dim leading-relaxed tracking-body mt-2">
+          The workflow carried on without it, so the Prevention lane shows library advice only.
+        </p>
+        {check.reason === 'missing_permission' && (
+          <Link
+            to="/me"
+            className="inline-flex items-center gap-1.5 mt-3 px-2.5 py-1 rounded-btn border border-white/10
+              text-xs text-content-primary no-underline transition-opacity hover:opacity-60"
+          >
+            Open the connect page
+            <span className="text-content-dim">&rsaquo;</span>
+          </Link>
+        )}
+      </div>
+    )
+  }
+
+  const { result } = check
+  return (
+    <div>
+      <CheckHeadline check={result} className="mb-3" />
+      <dl className="grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-3">
+        {[
+          ['Acting as', result.identity],
+          ['Region', result.region],
+          ['Checked', `${formatWhen(check.checkedAt)}, before deploy`],
+        ].map(([label, value]) => (
+          <div key={label}>
+            <dt className="font-mono text-2xs uppercase tracking-caps text-content-dim">{label}</dt>
+            <dd className="text-xs tracking-body mt-1.5 break-words text-content-secondary">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 mt-3.5">
+        {prevention && (
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-btn border border-white/10
+              text-xs text-content-primary transition-opacity hover:opacity-60"
+          >
+            View details
+            <span className="text-content-dim">&rsaquo;</span>
+          </button>
+        )}
+        <span className="text-xs text-content-dim tracking-body">Simulated, not observed. Never part of the score.</span>
+      </div>
+      {prevention && (
+        <AccountCheckDrawer
+          open={drawerOpen}
+          running={false}
+          check={result}
+          refusal={null}
+          prevention={prevention}
+          checkedAt={new Date(check.checkedAt)}
+          onClose={() => setDrawerOpen(false)}
+        />
       )}
     </div>
   )

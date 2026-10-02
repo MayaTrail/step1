@@ -21,7 +21,6 @@ endpoint serves the document for the one policy a reader opened.
 import logging
 import re
 
-import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -248,43 +247,24 @@ class EmulationAccountCheckView(APIView):
 
         user = request.user
         try:
-            sts = boto3.client("sts")
-            assumed = sts.assume_role(
-                RoleArn=user.aws_role_arn,
-                RoleSessionName=f"mayatrail-guardrail-check-{user.id}",
-                DurationSeconds=900,
+            result = simulate.check_account(
+                user.aws_role_arn,
+                f"mayatrail-guardrail-check-{user.id}",
+                emulation_type,
+                manifest,
+                region,
             )
-            credentials = assumed["Credentials"]
-            iam = boto3.client(
-                "iam",
-                aws_access_key_id=credentials["AccessKeyId"],
-                aws_secret_access_key=credentials["SecretAccessKey"],
-                aws_session_token=credentials["SessionToken"],
-            )
-            rows = simulate.evaluate(iam, user.aws_role_arn, actions, region)
         except (ClientError, BotoCoreError) as exc:
             return self._aws_error(exc, user.username, emulation_type)
 
-        summary = simulate.summarise(rows)
+        summary = result["summary"]
         record_activity(
             LogEntry.Event.GUARDRAIL_CHECK,
-            f"Checked {manifest.get('display_name', emulation_type)} against your AWS policies: "
+            f"Checked {result['displayName']} against your AWS policies: "
             f"{len(summary['prevented'])} of {summary['actionsChecked']} actions would be refused.",
             actor=user,
         )
-
-        return Response({
-            "emulationType": emulation_type,
-            "displayName": manifest.get("display_name", emulation_type),
-            "basis": "simulated",
-            "region": region,
-            # The role's name, not its ARN: the caller owns the ARN but the
-            # response has no need to carry an account id.
-            "identity": user.aws_role_arn.rsplit("/", 1)[-1],
-            "summary": summary,
-            "actions": rows,
-            "phases": simulate.phase_verdicts(attack_path, rows),
-        })
+        return Response(result)
 
     def _aws_error(self, exc: Exception, username: str, emulation_type: str) -> Response:
         """
@@ -300,14 +280,7 @@ class EmulationAccountCheckView(APIView):
             cannot simulate, so the client can offer the fix rather than
             rendering an error.
         """
-        code = ""
-        message = str(exc)
-        response = getattr(exc, "response", None)
-        if isinstance(response, dict):
-            error = response.get("Error") or {}
-            code = error.get("Code", "")
-            message = error.get("Message", message)
-
+        code, message = simulate.aws_error(exc)
         logger.warning(
             "Guardrail check failed for user=%s emulation=%s: %s",
             username, emulation_type, code or exc.__class__.__name__,
@@ -316,7 +289,7 @@ class EmulationAccountCheckView(APIView):
         # An AccessDenied naming the simulate call means the connected role
         # predates this feature. That is a one-line policy addition, not a
         # fault, so it is reported as such.
-        cannot_simulate = code == "AccessDenied" and "simulateprincipalpolicy" in message.lower()
+        cannot_simulate = simulate.cannot_simulate(code, message)
         return Response(
             {
                 "detail": message,

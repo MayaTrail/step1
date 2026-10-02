@@ -1,4 +1,4 @@
-import type { RuleVerdict, ScoreStatus, WorkflowRun, WorkflowStatus } from '@/types/workflow'
+import type { RuleVerdict, ScoreStatus, WorkflowRunDetail, WorkflowStatus } from '@/types/workflow'
 
 /**
  * Presentation logic for workflows, kept out of the components.
@@ -7,14 +7,19 @@ import type { RuleVerdict, ScoreStatus, WorkflowRun, WorkflowStatus } from '@/ty
  * inline in JSX would make it easy to get the failure case wrong.
  */
 
-/** A step's state in the pipeline, for rendering a progress rail. */
-export type StepState = 'done' | 'active' | 'pending' | 'failed'
+/**
+ * A step's state in the pipeline, for rendering a progress rail. `skipped` and
+ * `unchecked` belong to the account check alone: it can be skipped without
+ * stopping the run, and runs older than the check never had one.
+ */
+export type StepState = 'done' | 'active' | 'pending' | 'failed' | 'skipped' | 'unchecked'
 
 /**
  * The pipeline, in the order a run passes through it. `stage` names the
  * column and `label` the single job inside it.
  */
 export const STEPS = [
+  { key: 'check', stage: 'Check account', label: 'Check your policies' },
   { key: 'deploy', stage: 'Deploy', label: 'Provision infrastructure' },
   { key: 'attack', stage: 'Attack', label: 'Run emulation' },
   { key: 'alerts', stage: 'Collect alerts', label: 'Wait for SIEM alerts' },
@@ -24,7 +29,14 @@ export const STEPS = [
 /** One pipeline stage key. */
 export type StepKey = (typeof STEPS)[number]['key']
 
-/** Which step each status is sitting on. -1 means not started. */
+/**
+ * The steps the run's status moves through, in order. The account check is
+ * not among them: it has no status of its own, because it runs in the same
+ * tick that starts the deploy.
+ */
+const RUN_STEPS: StepKey[] = ['deploy', 'attack', 'alerts', 'score']
+
+/** Which of RUN_STEPS each status is sitting on. -1 means not started. */
 const STATUS_STEP: Record<WorkflowStatus, number> = {
   scheduled: -1,
   pending: -1,
@@ -41,35 +53,59 @@ export function isOpen(status: WorkflowStatus): boolean {
 }
 
 /**
- * Decide how to render each step of the pipeline for a given run.
+ * The account check's state, read from what the run stored.
+ *
+ * No record means one of two things: the run has not reached its deploy yet,
+ * or it started before workflows ran the check (or gave up before it ran).
+ */
+function checkState(run: WorkflowRunDetail): StepState {
+  if (run.accountCheck) return run.accountCheck.status === 'checked' ? 'done' : 'skipped'
+  return run.status === 'scheduled' || run.status === 'pending' ? 'pending' : 'unchecked'
+}
+
+/**
+ * Decide how to render one step of the pipeline for a given run.
+ *
+ * Steps are found by key, never by position, so adding a step cannot shift a
+ * caller onto the wrong one.
  *
  * A failed run marks the step it died on rather than showing everything as
  * pending, because "it failed" is far less useful than "it failed deploying".
  * Which step that was comes from the run itself, not from this function.
  *
  * @param run - The workflow being rendered.
- * @returns One state per entry in STEPS.
+ * @param key - The step to describe.
+ * @returns The step's state.
  */
-export function stepStates(run: WorkflowRun): StepState[] {
+export function stageState(run: WorkflowRunDetail, key: StepKey): StepState {
+  if (key === 'check') return checkState(run)
+  const index = RUN_STEPS.indexOf(key)
+
   if (run.status === 'failed') {
     // The backend records which step gave up, because only the code that gave
     // up knows. An earlier version inferred it from startedAt, which is set
     // when deploying begins rather than when it succeeds, so a failed deploy
     // rendered green and the blame landed on a step that never ran.
-    const failedIndex = STEPS.findIndex((step) => step.key === run.failedStep)
+    const failedIndex = RUN_STEPS.indexOf(run.failedStep as StepKey)
     const reached = failedIndex >= 0 ? failedIndex : 0
-    return STEPS.map((_, index) =>
-      index < reached ? 'done' : index === reached ? 'failed' : 'pending',
-    )
+    return index < reached ? 'done' : index === reached ? 'failed' : 'pending'
   }
 
   const current = STATUS_STEP[run.status]
-  return STEPS.map((_, index) => {
-    if (current < 0) return 'pending'
-    if (index < current) return 'done'
-    if (index === current) return 'active'
-    return 'pending'
-  })
+  if (current < 0) return 'pending'
+  if (index < current) return 'done'
+  if (index === current) return 'active'
+  return 'pending'
+}
+
+/**
+ * Every step's state, in STEPS order.
+ *
+ * @param run - The workflow being rendered.
+ * @returns One state per entry in STEPS.
+ */
+export function stepStates(run: WorkflowRunDetail): StepState[] {
+  return STEPS.map((step) => stageState(run, step.key))
 }
 
 /** Label for each status, phrased for a reader rather than as a field value. */

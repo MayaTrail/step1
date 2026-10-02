@@ -79,10 +79,19 @@ function Running({ stage }: { stage: StepKey }) {
 
 /**
  * @param stage - Which job the icon belongs to, which picks its animation.
- * @param state - Where the job is: done, active, failed or pending.
+ * @param state - Where the job is. `skipped` is grey, never red: a skipped
+ *   account check let the run carry on. `unchecked` shares the pending outline.
  */
 export function JobIcon({ stage, state }: { stage: StepKey; state: StepState }) {
   if (state === 'active') return <Running stage={stage} />
+  if (state === 'skipped') {
+    return (
+      <Frame className="text-content-dim">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M8 12h8" />
+      </Frame>
+    )
+  }
   if (state === 'done') {
     return (
       <Frame className="text-safe">

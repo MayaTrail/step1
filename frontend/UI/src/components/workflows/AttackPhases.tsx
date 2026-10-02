@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import type { AttackPhase } from '@/types/platform'
-import type { PreventionAnalysis, PreventionPolicy } from '@/types/prevention'
+import type { AccountCheck, CheckedAction, CheckedPhase, PreventionAnalysis, PreventionPolicy } from '@/types/prevention'
 import type { AlertEvidence, MatchTier, RuleOutcome, WorkflowRunDetail } from '@/types/workflow'
 import { Card } from '@/components/ui/Card'
+import { ActionRow, REFUSED_BY } from '@/components/emulations/AccountCheckDrawer'
 import { GuardrailDrawer } from '@/components/emulations/GuardrailDrawer'
 import {
   Shield,
@@ -17,8 +18,11 @@ import { canonicalTechnique, preventionCounts, rulesForPhase, unplacedRules } fr
 /**
  * The attack phases of one run, each read against two lanes.
  *
- * Prevention comes from the published policy library, not the client's
- * account, so it is labelled advice and never feeds the detection score.
+ * Prevention leads with what the client's own policies did, as AWS simulated
+ * them just before the deploy, with the published library's advice under each
+ * phase as the fix to consider. When the run has no account check (skipped,
+ * or older than the check) the lane falls back to the library alone and is
+ * labelled advice. Neither is observed, so neither feeds the detection score.
  * Detection is what the client's SIEM actually reported during the run.
  * Keeping them in separate lanes lets a reader see, per phase, whether a gap
  * is best closed with a policy or with a rule.
@@ -55,6 +59,7 @@ export function AttackPhases({ run, phases, prevention }: AttackPhasesProps) {
   const score = run.score
   const rules = score?.rules ?? []
   const analysed = Boolean(prevention?.analysed)
+  const account = run.accountCheck?.status === 'checked' ? run.accountCheck.result : null
   const perimeter = perimeterPolicies(prevention)
   const unplaced = score ? unplacedRules(phases, rules) : []
   const statusNote = score ? SCORE_STATUS_NOTE[score.status] : ''
@@ -69,6 +74,16 @@ export function AttackPhases({ run, phases, prevention }: AttackPhasesProps) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [selected, openPolicy, openPerimeter])
+
+  const perimeterButton = perimeter.length > 0 && (
+    <button
+      type="button"
+      onClick={() => setOpenPerimeter(true)}
+      className="block mt-1.5 text-accent-blue transition-opacity hover:opacity-60"
+    >
+      +{perimeter.length} perimeter policies
+    </button>
+  )
 
   /* Spotlight: once a phase is chosen, the others fade back. */
   const dim = (phase: number) => (selected !== null && phase !== selected ? 'opacity-40' : '')
@@ -103,21 +118,20 @@ export function AttackPhases({ run, phases, prevention }: AttackPhasesProps) {
               />
             ))}
 
-            {prevention && (
+            {(prevention || account) && (
               <>
-                <LaneLabel name="Prevention" tag="advice">
-                  {analysed && prevention ? (
+                <LaneLabel name="Prevention" tag={account ? 'simulated' : 'advice'}>
+                  {account ? (
                     <>
+                      <AccountSummary account={account} />
+                      {analysed && ' Library advice under each.'}
+                      {perimeterButton}
+                    </>
+                  ) : analysed && prevention ? (
+                    <>
+                      {run.accountCheck?.status === 'skipped' && 'Your account was not checked for this run. '}
                       <PreventionSummary phases={phases} prevention={prevention} />
-                      {perimeter.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setOpenPerimeter(true)}
-                          className="block mt-1.5 text-accent-blue transition-opacity hover:opacity-60"
-                        >
-                          +{perimeter.length} perimeter policies
-                        </button>
-                      )}
+                      {perimeterButton}
                     </>
                   ) : (
                     'Not mapped for this emulation yet.'
@@ -125,7 +139,10 @@ export function AttackPhases({ run, phases, prevention }: AttackPhasesProps) {
                 </LaneLabel>
                 {phases.map((phase) => (
                   <LaneCell key={phase.phase} className={dim(phase.phase)} onClick={() => toggle(phase.phase)}>
-                    {analysed ? <PreventionCell phase={phase.phase} prevention={prevention} /> : null}
+                    {account && <AccountCell account={account} phase={phase.phase} />}
+                    {analysed && (
+                      <PreventionCell phase={phase.phase} prevention={prevention} underAccount={Boolean(account)} />
+                    )}
                   </LaneCell>
                 ))}
               </>
@@ -162,6 +179,7 @@ export function AttackPhases({ run, phases, prevention }: AttackPhasesProps) {
               <PhasePanel
                 phase={chosen}
                 run={run}
+                account={account}
                 prevention={analysed ? prevention : null}
                 onClose={() => setSelected(null)}
                 onPolicy={setOpenPolicy}
@@ -211,6 +229,11 @@ interface StepHeaderProps {
  *
  * The connecting line runs through the node centres, so it starts at the first
  * node and stops at the last instead of running off either edge.
+ *
+ * The grid stretches every header to the tallest in the row, and a button
+ * centres its content vertically by default. A phase whose name wraps to
+ * fewer lines then had its node pushed down, breaking the line, so the
+ * content is pinned to the top as a flex column.
  */
 function StepHeader({ phase, first, last, selected, className, onClick }: StepHeaderProps) {
   return (
@@ -218,7 +241,7 @@ function StepHeader({ phase, first, last, selected, className, onClick }: StepHe
       type="button"
       aria-pressed={selected}
       onClick={onClick}
-      className={`text-left px-3 pt-0.5 pb-3 transition-opacity hover:opacity-60 ${className}`}
+      className={`flex flex-col text-left px-3 pt-0.5 pb-3 transition-opacity hover:opacity-60 ${className}`}
     >
       <span className="flex items-center">
         {!first && <span aria-hidden="true" className="-ml-3 w-3 h-px bg-border" />}
@@ -260,15 +283,21 @@ function LaneLabel({ name, tag, children }: { name: string; tag?: string; childr
   )
 }
 
-/** One cell of a lane; clicking anywhere in the column selects its phase. */
+/**
+ * One cell of a lane; clicking anywhere in the column selects its phase.
+ *
+ * Pinned to the top like StepHeader, so a row's verdicts line up however their
+ * text wraps. The single wrapper keeps chips at their natural width.
+ */
 function LaneCell({ className, onClick, children }: { className: string; onClick: () => void; children: ReactNode }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`border-t border-border px-3 py-3 text-left transition-opacity hover:opacity-60 ${className}`}
+      className={`flex flex-col border-t border-border px-3 py-3 text-left transition-opacity hover:opacity-60
+        ${className}`}
     >
-      {children}
+      <span className="block w-full">{children}</span>
     </button>
   )
 }
@@ -289,8 +318,21 @@ const PREVENTION_TEXT: Record<Exclude<ShieldState, 'blocks' | 'conditional'>, st
   open: 'No library policy',
 }
 
-/** A phase's shield and a few words on what the catalogue would do to it. */
-function PreventionCell({ phase, prevention }: { phase: number; prevention: PreventionAnalysis | null }) {
+/**
+ * A phase's shield and a few words on what the catalogue would do to it.
+ *
+ * @param underAccount - True when it sits under the account verdict, where it
+ *   is the secondary line: smaller, dimmer and named as the library's.
+ */
+function PreventionCell({
+  phase,
+  prevention,
+  underAccount = false,
+}: {
+  phase: number
+  prevention: PreventionAnalysis | null
+  underAccount?: boolean
+}) {
   const state = shieldFor(phase, prevention)
   if (!state || !prevention) return null
   let text: string
@@ -303,10 +345,57 @@ function PreventionCell({ phase, prevention }: { phase: number; prevention: Prev
   } else {
     text = PREVENTION_TEXT[state]
   }
+  if (underAccount) {
+    return (
+      <span className="flex items-start gap-1.5 mt-2 pt-2 border-t border-dashed border-border text-xs
+        text-content-dim leading-snug tracking-body">
+        <Shield state={state} size={13} />
+        Library: {text.toLowerCase()}
+      </span>
+    )
+  }
   return (
     <span className="flex items-start gap-2 text-xs text-content-secondary leading-snug tracking-body">
       <Shield state={state} size={16} />
       {text}
+    </span>
+  )
+}
+
+/** "2 of 5 phases refused by your policies", counted from the account check. */
+function AccountSummary({ account }: { account: AccountCheck }) {
+  const refused = account.phases.filter((phase) => phase.verdict === 'denied').length
+  if (refused === 0) return <>No phase is refused by your policies.</>
+  return <>{refused} of {account.phases.length} phases refused by your policies.</>
+}
+
+const ACCOUNT_WORD: Record<CheckedPhase['verdict'], { text: string; tone: string; by: string }> = {
+  denied: { text: 'Refused', tone: 'text-safe', by: '' },
+  undecided: { text: 'Undecided', tone: 'text-warning', by: 'needs a value from the real request' },
+  role_cannot_perform: { text: "Role can't perform", tone: 'text-warning', by: 'a setup gap, not protection' },
+  allowed: { text: 'Allowed', tone: 'text-content-secondary', by: 'nothing in your policies refuses it' },
+  no_iam_call: { text: 'No IAM call', tone: 'text-content-dim', by: 'nothing for a policy to refuse' },
+}
+
+/**
+ * What the client's own policies did to one phase, in a word and who decided.
+ *
+ * A refusal names the layer that refused: the phase only lists its refused
+ * actions, so the layer is read from the first of them.
+ */
+function AccountCell({ account, phase }: { account: AccountCheck; phase: number }) {
+  const row = account.phases.find((item) => item.phase === phase)
+  if (!row) return null
+  const word = ACCOUNT_WORD[row.verdict]
+  let by = word.by
+  if (row.verdict === 'denied') {
+    const first = account.actions.find((action) => action.action === row.preventedActions[0])
+    by = (first?.deniedBy && REFUSED_BY[first.deniedBy]) || 'by your guardrails'
+  }
+  return (
+    <span className="block text-xs leading-snug tracking-body">
+      <span className={`block ${word.tone}`}>{word.text}</span>
+      <span className="block text-content-dim mt-1">{by}</span>
     </span>
   )
 }
@@ -355,13 +444,14 @@ function Chip({ className, children }: { className: string; children: ReactNode 
 interface PhasePanelProps {
   phase: AttackPhase
   run: WorkflowRunDetail
+  account: AccountCheck | null
   prevention: PreventionAnalysis | null
   onClose: () => void
   onPolicy: (policy: PreventionPolicy) => void
 }
 
 /** Everything about one phase: its actions and policies beside its detections. */
-function PhasePanel({ phase, run, prevention, onClose, onPolicy }: PhasePanelProps) {
+function PhasePanel({ phase, run, account, prevention, onClose, onPolicy }: PhasePanelProps) {
   const rules = run.score ? rulesForPhase(phase, run.score.rules) : null
   return (
     <div className="relative bg-surface-base border border-border rounded-xl px-5 pt-4 pb-5">
@@ -380,13 +470,25 @@ function PhasePanel({ phase, run, prevention, onClose, onPolicy }: PhasePanelPro
         </button>
       </div>
 
-      <div className={`grid gap-7 ${prevention ? 'sm:grid-cols-2' : ''}`}>
-        {prevention && (
+      <div className={`grid gap-7 ${prevention || account ? 'sm:grid-cols-2' : ''}`}>
+        {(prevention || account) && (
           <div>
-            <div className="font-mono text-2xs uppercase tracking-label text-content-dim">
-              Prevention <span className="text-content-muted">(advice)</span>
-            </div>
-            <PhasePrevention phase={phase.phase} prevention={prevention} onPolicy={onPolicy} />
+            {account && (
+              <div className="mb-5">
+                <div className="font-mono text-2xs uppercase tracking-label text-content-dim">
+                  Your account <span className="text-content-muted">(simulated)</span>
+                </div>
+                <PhaseAccount account={account} phase={phase.phase} prevention={prevention} />
+              </div>
+            )}
+            {prevention && (
+              <>
+                <div className="font-mono text-2xs uppercase tracking-label text-content-dim">
+                  {account ? 'Library' : 'Prevention'} <span className="text-content-muted">(advice)</span>
+                </div>
+                <PhasePrevention phase={phase.phase} prevention={prevention} onPolicy={onPolicy} />
+              </>
+            )}
           </div>
         )}
         <div>
@@ -400,8 +502,54 @@ function PhasePanel({ phase, run, prevention, onClose, onPolicy }: PhasePanelPro
               rules.map((rule) => <DetectionRow key={`${rule.ruleId}-${rule.title}`} rule={rule} />)
             )}
           </div>
+          {account && (
+            <p className="text-xs text-content-dim leading-relaxed mt-3">
+              Scored on its own. A refusal in your account is simulated, so it never excuses a missed
+              detection; only a refusal observed during the attack could.
+            </p>
+          )}
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Each of the phase's actions with what the client's policies did to it.
+ *
+ * The phase verdict lists only the actions that went wrong, so the full list
+ * comes from the declared actions, joined to the results by name (IAM action
+ * names are case-insensitive). Without the declaration, the results alone are
+ * shown, which still covers every action that was refused or undecided.
+ */
+function PhaseAccount({
+  account,
+  phase,
+  prevention,
+}: {
+  account: AccountCheck
+  phase: number
+  prevention: PreventionAnalysis | null
+}) {
+  const byAction = new Map(account.actions.map((row) => [row.action.toLowerCase(), row]))
+  const declared = prevention?.phases.find((row) => row.phase === phase)?.actions
+  const verdict = account.phases.find((row) => row.phase === phase)
+  const names = declared ?? [
+    ...(verdict?.preventedActions ?? []),
+    ...(verdict?.undecidedActions ?? []),
+    ...(verdict?.roleCannotPerform ?? []),
+  ]
+  const rows = names
+    .map((name) => byAction.get(name.toLowerCase()))
+    .filter((row): row is CheckedAction => Boolean(row))
+  if (rows.length === 0) {
+    return <p className="text-xs text-content-dim mt-2">This phase makes no call an IAM policy can refuse.</p>
+  }
+  return (
+    <div className="mt-2">
+      {rows.map((row) => (
+        <ActionRow key={row.action} row={row} />
+      ))}
     </div>
   )
 }

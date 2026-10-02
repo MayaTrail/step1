@@ -13,7 +13,7 @@ import {
   STATUS_LABEL,
   STATUS_TONE,
   isOpen,
-  stepStates,
+  stageState,
   untilDeadline,
   untilScheduled,
 } from './workflowMeta'
@@ -29,6 +29,8 @@ import { UnattributedAlerts } from './UnattributedAlerts'
  * the attack runs, only the pipeline shows, because nothing below it exists
  * yet. Once the emulation has finished, the attack phases appear with their
  * prevention and detection lanes, and the phase data is fetched only then.
+ * The prevention data is the exception: the account check runs before the
+ * deploy, and its details need each phase's actions as soon as it has passed.
  */
 
 /** "9 min 50 s" between two timestamps, or an empty string if either is missing. */
@@ -67,8 +69,9 @@ export function WorkflowRunPage() {
 
 /** The page once the run has loaded. */
 function RunView({ run }: { run: WorkflowRunDetail }) {
-  const attackDone = stepStates(run)[1] === 'done'
+  const attackDone = stageState(run, 'attack') === 'done'
   const type = attackDone ? run.emulationType : null
+  const preventionType = attackDone || run.accountCheck?.status === 'checked' ? run.emulationType : null
 
   const techniques = useCachedResource(
     type ? `emulation-techniques:${type}` : null,
@@ -76,7 +79,10 @@ function RunView({ run }: { run: WorkflowRunDetail }) {
   )
   // Prevention is supplementary: a refusal (it needs a verified account) or a
   // failure leaves the page intact and simply omits the Prevention lane.
-  const prevention = useCachedResource(type ? `prevention:${type}` : null, () => getPrevention(type as string))
+  const prevention = useCachedResource(
+    preventionType ? `prevention:${preventionType}` : null,
+    () => getPrevention(preventionType as string),
+  )
 
   const silent = run.score?.counts.silent ?? 0
   const took = run.status === 'completed' ? duration(run.startedAt, run.completedAt) : ''
@@ -109,7 +115,7 @@ function RunView({ run }: { run: WorkflowRunDetail }) {
         </div>
       </div>
 
-      <PipelineGraph run={run} />
+      <PipelineGraph run={run} prevention={prevention.data ?? null} />
 
       {!attackDone ? (
         <p className="text-xs text-content-dim tracking-body px-1">
