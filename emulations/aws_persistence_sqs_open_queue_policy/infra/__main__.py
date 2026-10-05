@@ -179,3 +179,5 @@ pulumi.export("victim_role_name",        VICTIM_ROLE_NAME)
 pulumi.export("account_id",             account_id)
 pulumi.export("victim_access_key_id",     victim_access_key.id)
 pulumi.export("victim_secret_access_key", pulumi.Output.secret(victim_access_key.secret))
+# Names the victim user so the account check can simulate it once the lab is deployed.
+pulumi.export("victim_user_name",         victim_user.name)

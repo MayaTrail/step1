@@ -25,6 +25,10 @@ MANIFEST = {
     'active_since': 'Atomic technique (MayaTrail pipeline)',
     'targets': 'AWS accounts with PITR-enabled DynamoDB tables and roles holding dynamodb:ExportTableToPointInTime',
     'incidents': ['3CoreSec — DynamoDB export exfiltration research'],
+    'identities': {
+        'attacker_user': {'kind': 'lab_user', 'label': "The lab's attacker user", 'output': 'attacker_user_name'},
+        'victim_role': {'kind': 'lab_role', 'label': "The lab's victim role", 'output': 'victim_role_arn'},
+    },
     'attack_path': [{'phase': 1,
                      'name': 'Collection',
                      'aws_actions': ['dynamodb:DescribeExport',
@@ -32,6 +36,17 @@ MANIFEST = {
                                      'dynamodb:ExportTableToPointInTime',
                                      'dynamodb:ListTables',
                                      'sts:AssumeRole'],
+                     'acting_as': {
+                         'attacker_user': ['sts:AssumeRole'],
+                         'victim_role': ['dynamodb:DescribeExport', 'dynamodb:DescribeTable', 'dynamodb:ExportTableToPointInTime', 'dynamodb:ListTables'],
+                     },
+                     'aws_resources': {
+                         'sts:AssumeRole': '{victim_role_arn}',
+                         'dynamodb:DescribeExport': '{prod_customers_table_arn}/export/*',
+                         'dynamodb:DescribeTable': ['{prod_customers_table_arn}', 'arn:aws:dynamodb:{region}:{account_id}:table/{internal_api_keys_table_name}'],
+                         'dynamodb:ExportTableToPointInTime': '{prod_customers_table_arn}',
+                         'dynamodb:ListTables': '*',
+                     },
                      'techniques': [{'id': 'T1530', 'name': 'Data from Cloud Storage'}]}],
     'mitre_mappings': [{'id': 'T1530',
                         'name': 'Data from Cloud Storage',

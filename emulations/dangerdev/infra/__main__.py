@@ -912,5 +912,7 @@ pulumi.export("honey_access_key_id", honey_access_key.id)
 pulumi.export("admin_access_key_secret", pulumi.Output.secret(admin_access_key.secret))
 pulumi.export("alice_access_key_id",     alice_access_key.id)
 pulumi.export("alice_access_key_secret", pulumi.Output.secret(alice_access_key.secret))
+# Names the hijacked user so the account check can simulate it once the lab is deployed.
+pulumi.export("alice_user_name",         alice_user.name)
 # lab_private_key_pem is a Pulumi secret — encrypted in state, never plaintext in CLI output
 pulumi.export("lab_private_key_pem", pulumi.Output.secret(lab_private_key.private_key_pem))

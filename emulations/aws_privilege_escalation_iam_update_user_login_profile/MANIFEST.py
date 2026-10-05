@@ -32,6 +32,11 @@ MANIFEST = {'schema_version': 3,
                   'name': 'Privilege Escalation',
                   'aws_actions': ['iam:GetLoginProfile',
                                   'iam:UpdateLoginProfile'],
+                  'acting_as': 'connected_role',
+                  'aws_resources': {
+                      'iam:GetLoginProfile': 'arn:aws:iam::{account_id}:user/{target_user_name}',
+                      'iam:UpdateLoginProfile': 'arn:aws:iam::{account_id}:user/{target_user_name}',
+                  },
                   'techniques': [{'id': 'T1098.001',
                                   'name': 'Backdoor IAM User Console Login via '
                                           'UpdateLoginProfile'}]}],

@@ -30,12 +30,13 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.emulations.registry import get_emulation
+from apps.infrastructure.models import Stack
 from apps.infrastructure.permissions import IsEnterpriseUser
 from apps.logs.models import LogEntry
 from apps.logs.record import record_activity
 
 from . import simulate
-from .matching import analyse, emulation_actions
+from .matching import acting_identities, analyse, declared_identities, emulation_actions
 from .registry import get_guardrail, list_guardrails
 
 logger = logging.getLogger(__name__)
@@ -176,7 +177,42 @@ class EmulationGuardrailsView(APIView):
         result["emulationType"] = emulation_type
         result["displayName"] = manifest.get("display_name", emulation_type)
         result["basis"] = "catalogue"
+        # The identities its phases act as, by label and kind only: which stack
+        # output names a lab identity is an implementation detail of the check.
+        identities = declared_identities(manifest)
+        used = {who for phase in manifest.get("attack_path") or [] for who in acting_identities(phase)}
+        result["identities"] = [
+            {"key": key, "label": identities[key].get("label", key), "kind": identities[key].get("kind", "")}
+            for key in sorted(used) if key in identities
+        ]
         return Response(result)
+
+
+# Stack states in which a lab's identities exist and its outputs are recorded.
+_DEPLOYED = (
+    Stack.Status.READY,
+    Stack.Status.READY_FOR_ATTACK,
+    Stack.Status.ATTACKING,
+    Stack.Status.ATTACK_COMPLETE,
+)
+
+
+def _deployed_lab(user, emulation_type: str):
+    """
+    The caller's most recently created deployed lab of one emulation.
+
+    Args:
+        user:           The caller; only their own stacks are considered.
+        emulation_type: Registry name of the emulation.
+
+    Returns:
+        The Stack, or None when the caller has no deployed lab of it.
+    """
+    return (
+        Stack.objects.filter(owner=user, emulation_type=emulation_type, status__in=_DEPLOYED)
+        .order_by("-created_at")
+        .first()
+    )
 
 
 class EmulationAccountCheckView(APIView):
@@ -192,15 +228,19 @@ class EmulationAccountCheckView(APIView):
     performs none of the actions: AWS evaluates them and reports what would
     happen.
 
+    Each action is judged as the identity that performs it. The connected
+    role is always asked about; a lab user or role is asked about when the
+    caller has a deployed lab of this emulation, found through its stack
+    outputs, and that lab's region is used. Identities the attack creates, and
+    requests sent with no identity, cannot be asked about and say so.
+
     Enterprise-gated and rate-limited. It assumes the caller's connected role
-    and spends one AWS call per request, so it is not something a stolen
-    session should be able to run in a loop.
+    and spends one simulation per identity it can check, so it is not
+    something a stolen session should be able to run in a loop.
 
     What the result does not cover is stated in the response rather than left
     for a reader to assume: resource control policies and resource policies
-    are invisible to the simulator, and only the connected role is evaluated,
-    so an emulation that steals a different identity partway through its
-    attack is not described by this answer.
+    are invisible to the simulator.
     """
 
     permission_classes = [IsEnterpriseUser]
@@ -238,7 +278,10 @@ class EmulationAccountCheckView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        region = request.data.get("region") or _DEFAULT_REGION
+        # A deployed lab lets its own identities be checked, and is the region
+        # the attack would run in; without one, lab identities say so.
+        lab = _deployed_lab(request.user, emulation_type)
+        region = request.data.get("region") or (lab.region if lab else _DEFAULT_REGION)
         if not _REGION_RE.fullmatch(str(region)):
             return Response(
                 {"detail": f"'{region}' is not an AWS region name."},
@@ -253,17 +296,25 @@ class EmulationAccountCheckView(APIView):
                 emulation_type,
                 manifest,
                 region,
+                (lab.outputs or {}) if lab else None,
             )
         except (ClientError, BotoCoreError) as exc:
             return self._aws_error(exc, user.username, emulation_type)
 
         summary = result["summary"]
-        record_activity(
-            LogEntry.Event.GUARDRAIL_CHECK,
-            f"Checked {result['displayName']} against your AWS policies: "
-            f"{len(summary['prevented'])} of {summary['actionsChecked']} actions would be refused.",
-            actor=user,
-        )
+        if summary["actionsChecked"]:
+            message = (
+                f"Checked {result['displayName']} against your AWS policies: "
+                f"{len(summary['prevented'])} of {summary['actionsChecked']} actions would be refused."
+            )
+        else:
+            message = (
+                f"Checked {result['displayName']}: none of its actions run as your connected role, "
+                "so nothing was sent to AWS."
+            )
+        record_activity(LogEntry.Event.GUARDRAIL_CHECK, message, actor=user)
+        # The stack id only builds the "View stack" link; it is never shown.
+        result["lab"] = {"stackId": str(lab.id), "deployedAt": lab.created_at.isoformat()} if lab else None
         return Response(result)
 
     def _aws_error(self, exc: Exception, username: str, emulation_type: str) -> Response:

@@ -21,11 +21,15 @@ DRF's test helpers are absent.
 from __future__ import annotations
 
 import unittest
+from datetime import timedelta
 from unittest.mock import patch
 
 from botocore.exceptions import ClientError
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.utils import timezone
+
+from apps.infrastructure.models import Stack
 
 from apps.logs.models import LogEntry
 
@@ -48,8 +52,8 @@ ANNOTATED = {
     "display_name": "Sample",
     "platform": "aws",
     "attack_path": [
-        {"phase": 1, "name": "Impact", "aws_actions": ["s3:DeleteObject"]},
-        {"phase": 2, "name": "Access", "aws_actions": ["sts:GetCallerIdentity"]},
+        {"phase": 1, "name": "Impact", "aws_actions": ["s3:DeleteObject"], "acting_as": "connected_role"},
+        {"phase": 2, "name": "Access", "aws_actions": ["sts:GetCallerIdentity"], "acting_as": "connected_role"},
     ],
 }
 UNANNOTATED = {"name": "bare", "display_name": "Bare", "platform": "aws", "attack_path": [{"phase": 1, "name": "X"}]}
@@ -118,6 +122,58 @@ class AccountCheckTests(TestCase):
         with patch("apps.guardrails.views.get_emulation", return_value=entry), \
                 patch("boto3.client", _client_factory(iam)):
             return self.view(request, emulation_type=emulation)
+
+    LAB_MANIFEST = {
+        "name": "sample",
+        "display_name": "Sample",
+        "platform": "aws",
+        "identities": {"stolen_user": {"kind": "lab_user", "label": "The lab's stolen user", "output": "victim_user_name"}},
+        "attack_path": [{"phase": 1, "name": "Collect", "aws_actions": ["s3:GetObject"], "acting_as": "stolen_user"}],
+    }
+
+    def _lab(self, owner, status=Stack.Status.READY_FOR_ATTACK):
+        """A deployed lab of the sample emulation, in eu-west-1."""
+        return Stack.objects.create(
+            name=f"sample-{owner.username}",
+            owner=owner,
+            emulation_type="sample",
+            status=status,
+            region="eu-west-1",
+            outputs={"victim_user_name": "lab-victim"},
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+
+    def test_a_deployed_lab_is_used_for_its_identities_and_region(self):
+        """The stolen user is checked in the caller's lab, in the lab's region."""
+        lab = self._lab(self.user)
+        iam = StubIAM([{"EvalActionName": "s3:GetObject", "EvalDecision": "allowed"}])
+        response = self._post(iam, manifest=self.LAB_MANIFEST)
+        self.assertEqual(response.status_code, 200)
+        account = ROLE.split(":")[4]
+        self.assertEqual(iam.requests[0]["PolicySourceArn"], f"arn:aws:iam::{account}:user/lab-victim")
+        self.assertEqual(response.data["region"], "eu-west-1")
+        self.assertEqual(response.data["lab"]["stackId"], str(lab.id))
+        self.assertEqual(response.data["identities"][0]["status"], "checked")
+
+    def test_without_a_lab_its_identities_say_so(self):
+        """No lab, no principal to simulate: the identity is not deployed and AWS is not called."""
+        iam = StubIAM([])
+        response = self._post(iam, manifest=self.LAB_MANIFEST)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(iam.requests, [])
+        self.assertIsNone(response.data["lab"])
+        self.assertEqual(response.data["identities"][0]["status"], "not_deployed")
+
+    def test_another_users_lab_is_never_used(self):
+        """Labs are owner-scoped: someone else's stack must not stand in for the caller's."""
+        other = User.objects.create_user(
+            username="someone", email="someone@example.com", password="pw", is_verified=True, is_demo=False,
+        )
+        self._lab(other)
+        iam = StubIAM([])
+        response = self._post(iam, manifest=self.LAB_MANIFEST)
+        self.assertIsNone(response.data["lab"])
+        self.assertEqual(iam.requests, [])
 
     def test_an_scp_deny_is_reported_as_prevention(self):
         """The headline case: the caller's organization refuses an action."""

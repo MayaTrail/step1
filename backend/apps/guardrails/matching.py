@@ -271,6 +271,250 @@ def validate_aws_actions(entry: dict[str, Any]) -> list[str]:
     return errors
 
 
+# Who performs an emulation's calls. Two identities exist for every emulation
+# without being declared: the connected role, the only identity the account
+# check can ask AWS about before an attack, and "anonymous", a request sent
+# with no identity at all, to which no IAM policy applies.
+CONNECTED_ROLE = "connected_role"
+ANONYMOUS = "anonymous"
+_BUILT_IN_IDENTITIES = {
+    CONNECTED_ROLE: {"label": "Your connected role", "kind": CONNECTED_ROLE},
+    ANONYMOUS: {"label": "No identity (anonymous request)", "kind": ANONYMOUS},
+}
+
+# Kinds an emulation declares for itself. A lab user or role is created by the
+# emulation's infrastructure and named by one of its stack outputs, so it can
+# be found once the lab is deployed. An attack-created identity only exists
+# while the attack runs, so it can never be checked beforehand.
+LAB_USER = "lab_user"
+LAB_ROLE = "lab_role"
+ATTACK_CREATED = "attack_created"
+_DECLARABLE_KINDS = (LAB_USER, LAB_ROLE, ATTACK_CREATED)
+_IDENTITY_KEY_RE = re.compile(r"[a-z][a-z0-9_]*")
+
+
+def declared_identities(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """
+    Every identity an emulation's phases may act as.
+
+    Args:
+        manifest: A MANIFEST dict.
+
+    Returns:
+        {key: {label, kind, ...}}: the built-in identities plus the
+        emulation's own `identities` declarations.
+    """
+    identities = {key: dict(value) for key, value in _BUILT_IN_IDENTITIES.items()}
+    for key, value in (manifest.get("identities") or {}).items():
+        if isinstance(value, dict):
+            identities[key] = dict(value)
+    return identities
+
+
+def acting_identities(phase: dict[str, Any]) -> dict[str, list[str]]:
+    """
+    Who performs each of a phase's actions.
+
+    `acting_as` is either one identity, which performs every action of the
+    phase, or a mapping of identity to the actions it performs, for a phase
+    that switches identity partway.
+
+    Args:
+        phase: One attack_path entry.
+
+    Returns:
+        {identity: [actions]}. Empty when the phase declares no acting_as or
+        makes no IAM-authorised call; a caller must then not assume anyone.
+    """
+    acting = phase.get("acting_as")
+    if isinstance(acting, str):
+        actions = _as_list(phase.get("aws_actions"))
+        return {acting: actions} if actions else {}
+    if isinstance(acting, dict):
+        return {key: _as_list(value) for key, value in acting.items() if _as_list(value)}
+    return {}
+
+
+def validate_acting_as(entry: dict[str, Any]) -> list[str]:
+    """
+    Check that every action of an AWS emulation names the identity performing it.
+
+    The account check judges an action against the identity that performs it.
+    Asking about the wrong one gives a confident answer about someone else, so
+    nothing is assumed: every phase that declares actions must say who
+    performs them, and every identity it names must be built in or declared,
+    with a label and, for a lab identity, the stack output that names it.
+
+    Never raises, like validate_aws_actions, so one pass can collect the
+    errors of every emulation.
+
+    Args:
+        entry: A registry catalogue entry or a MANIFEST dict.
+
+    Returns:
+        Human-readable error strings; empty when the emulation complies.
+    """
+    manifest = entry.get("manifest", entry) or {}
+    if manifest.get("platform") != "aws":
+        return []
+    name = manifest.get("name") or "<unnamed>"
+    errors: list[str] = []
+
+    declared = manifest.get("identities") or {}
+    if not isinstance(declared, dict):
+        return [f"{name}: 'identities' must be a mapping of key to declaration"]
+    for key, value in declared.items():
+        label = f"{name}: identity {key!r}"
+        if key in _BUILT_IN_IDENTITIES:
+            errors.append(f"{label} is built in and must not be declared")
+            continue
+        if not isinstance(key, str) or not _IDENTITY_KEY_RE.fullmatch(key):
+            errors.append(f"{label}: keys are lower-case words joined by underscores")
+        if not isinstance(value, dict):
+            errors.append(f"{label} must be a mapping with 'kind' and 'label'")
+            continue
+        if value.get("kind") not in _DECLARABLE_KINDS:
+            errors.append(f"{label}: 'kind' must be one of {', '.join(_DECLARABLE_KINDS)}")
+        if not isinstance(value.get("label"), str) or not value.get("label", "").strip():
+            errors.append(f"{label} needs a 'label' a reader understands")
+        output = value.get("output")
+        if value.get("kind") in (LAB_USER, LAB_ROLE) and (not isinstance(output, str) or not output):
+            errors.append(f"{label} needs the 'output' that names it once the lab is deployed")
+        if value.get("kind") == ATTACK_CREATED and output is not None:
+            errors.append(f"{label} is created by the attack, so no stack output can name it")
+
+    known = set(_BUILT_IN_IDENTITIES) | set(declared)
+    used: set[str] = set()
+    for index, phase in enumerate(manifest.get("attack_path") or [], start=1):
+        label = f"{name}: phase {phase.get('phase', index)}"
+        actions = _as_list(phase.get("aws_actions"))
+        acting = phase.get("acting_as")
+        if not actions:
+            continue
+        if acting is None:
+            errors.append(f"{label} declares actions but not 'acting_as' (who performs them)")
+            continue
+        if isinstance(acting, str):
+            mapping = {acting: actions}
+        elif isinstance(acting, dict):
+            mapping = acting
+        else:
+            errors.append(f"{label}: 'acting_as' must be an identity or a mapping of identity to actions")
+            continue
+        covered: set[str] = set()
+        for who, listed in mapping.items():
+            used.add(who)
+            if who not in known:
+                errors.append(f"{label} acts as {who!r}, which is neither built in nor declared")
+            if not isinstance(listed, list):
+                errors.append(f"{label}: the actions of {who!r} must be a list")
+                continue
+            for action in listed:
+                if action not in actions:
+                    errors.append(f"{label}: {who!r} performs {action!r}, which 'aws_actions' does not declare")
+                covered.add(action)
+        for action in actions:
+            if action not in covered:
+                errors.append(f"{label}: no identity performs {action!r}")
+
+    for key in declared:
+        if key not in used:
+            errors.append(f"{name}: identity {key!r} is declared but no phase acts as it")
+    return errors
+
+
+# A resource template: an ARN, optionally with {placeholders} filled from the
+# lab's stack outputs, {account_id} and {region}; or "*" for an action AWS only
+# authorises against all resources (sts:GetCallerIdentity, most List calls).
+_PLACEHOLDER_RE = re.compile(r"\{([a-z0-9_]+)\}")
+BUILT_IN_PLACEHOLDERS = ("account_id", "region")
+
+
+def phase_resources(phase: dict[str, Any]) -> dict[str, list[str]]:
+    """
+    The resources each of a phase's actions targets, as declared.
+
+    Without them AWS judges an action against "*", which asks a different
+    question from the one the attack makes: a lab policy scoped to its own
+    bucket says no to "*" and yes to the bucket.
+
+    Args:
+        phase: One attack_path entry.
+
+    Returns:
+        {action: [resource templates]}; an action not listed has no declaration.
+    """
+    declared = phase.get("aws_resources")
+    if not isinstance(declared, dict):
+        return {}
+    return {action: _as_list(value) for action, value in declared.items() if _as_list(value)}
+
+
+def placeholders(template: str) -> list[str]:
+    """
+    The {names} a resource template needs filled.
+
+    Args:
+        template: A resource template such as "arn:aws:s3:::{target_bucket_name}/*".
+
+    Returns:
+        The placeholder names, in order.
+    """
+    return _PLACEHOLDER_RE.findall(template)
+
+
+def validate_resources(entry: dict[str, Any]) -> list[str]:
+    """
+    Check that every action the connected role or a lab identity performs names its resource.
+
+    Their policies are scoped to specific resources, so judging an action
+    against "*" reports a refusal the real attack never meets. Each such action
+    must therefore declare its resource, or "*" when AWS only authorises it
+    against all resources; leaving it out is what is refused. The connected
+    role's resource is also what lets the emulation page fall back to a clearly
+    labelled all-resources check before a lab exists. Declarations for the
+    anonymous and attack-created identities are optional but must be well formed.
+
+    Never raises, like the other contracts.
+
+    Args:
+        entry: A registry catalogue entry or a MANIFEST dict.
+
+    Returns:
+        Human-readable error strings; empty when the emulation complies.
+    """
+    manifest = entry.get("manifest", entry) or {}
+    if manifest.get("platform") != "aws":
+        return []
+    name = manifest.get("name") or "<unnamed>"
+    identities = declared_identities(manifest)
+    errors: list[str] = []
+    for index, phase in enumerate(manifest.get("attack_path") or [], start=1):
+        label = f"{name}: phase {phase.get('phase', index)}"
+        actions = set(_as_list(phase.get("aws_actions")))
+        declared = phase.get("aws_resources")
+        if declared is not None and not isinstance(declared, dict):
+            errors.append(f"{label}: 'aws_resources' must map an action to its resource")
+            continue
+        resources = phase_resources(phase)
+        for action, templates in resources.items():
+            if action not in actions:
+                errors.append(f"{label}: 'aws_resources' names {action!r}, which 'aws_actions' does not declare")
+            for template in templates:
+                if template != "*" and not template.startswith(("arn:", "{")):
+                    errors.append(f"{label}: {template!r} for {action!r} is neither an ARN template nor \"*\"")
+        for who, performed in acting_identities(phase).items():
+            if identities.get(who, {}).get("kind") not in (CONNECTED_ROLE, LAB_USER, LAB_ROLE):
+                continue
+            for action in performed:
+                if action not in resources:
+                    errors.append(
+                        f"{label}: {who!r} performs {action!r} with no 'aws_resources' entry "
+                        "(name its resource, or \"*\" if AWS only authorises it against all resources)"
+                    )
+    return errors
+
+
 def analyse(
     attack_path: list[dict[str, Any]], guardrails: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -353,6 +597,7 @@ def analyse(
             "name": phase.get("name"),
             "annotated": "aws_actions" in phase,
             "actions": _as_list(phase.get("aws_actions")),
+            "actingAs": acting_identities(phase),
             "blockedBy": [
                 p["id"] for p in policies
                 if phase.get("phase") in p["phases"] and p["verdict"] == BLOCKS

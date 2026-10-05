@@ -347,3 +347,5 @@ pulumi.export("target_bucket_name", terraform_state_bucket.id)
 pulumi.export("cloudtrail_arn", trail.arn)
 pulumi.export("secrets_manager_arn", secret.arn)
 pulumi.export("lambda_role_arn", lambda_role.arn)
+# The instance role the attack steals through IMDS; the account check simulates it by ARN.
+pulumi.export("instance_role_arn", ec2_role.arn)

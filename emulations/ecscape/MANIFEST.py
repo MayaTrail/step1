@@ -45,6 +45,11 @@ MANIFEST = {
                 "ecs:DiscoverPollEndpoint",
                 "ecs:Poll",
             ],
+            "acting_as": "connected_role",
+            "aws_resources": {
+                "ecs:DiscoverPollEndpoint": "*",
+                "ecs:Poll": "*",
+            },
             "techniques": [
                 {"id": "T1552.005", "name": "Unsecured Credentials: Cloud Instance Metadata API"},
                 {"id": "T1552.007", "name": "Unsecured Credentials: Container API"},

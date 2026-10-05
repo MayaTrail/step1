@@ -52,6 +52,12 @@ MANIFEST = {
     ],
 
     # ── Kill-chain phases ──────────────────────────────────────────────────────
+    "identities": {
+        "victim_user": {"kind": "lab_user", "label": "The lab's victim user", "output": "victim_user_name"},
+        "repo_role": {"kind": "attack_created", "label": "A CodeCommit role the attack creates"},
+        "notebook_role": {"kind": "attack_created", "label": "A SageMaker role the attack creates"},
+        "ecs_role": {"kind": "attack_created", "label": "An ECS role the attack creates"},
+    },
     "attack_path": [
         {
             "phase": 1,
@@ -72,6 +78,17 @@ MANIFEST = {
                 "iam:GetUser",
                 "iam:ListAttachedUserPolicies",
             ],
+            "acting_as": {
+                "connected_role": ["ecs:RunTask", "ecs:DescribeTasks"],
+                "victim_user": ["sts:GetCallerIdentity", "iam:GetUser", "iam:ListAttachedUserPolicies"],
+            },
+            "aws_resources": {
+                "ecs:RunTask": "arn:aws:ecs:{region}:{account_id}:task-definition/{task_family}",
+                "ecs:DescribeTasks": "arn:aws:ecs:{region}:{account_id}:task/{cluster_name}/*",
+                "sts:GetCallerIdentity": "*",
+                "iam:GetUser": "arn:aws:iam::{account_id}:user/{victim_user_name}",
+                "iam:ListAttachedUserPolicies": "arn:aws:iam::{account_id}:user/{victim_user_name}",
+            },
             "techniques": [
                 {"id": "T1204.003", "name": "User Execution: Malicious Image"},
                 {"id": "T1078.004", "name": "Valid Accounts: Cloud Accounts"},
@@ -85,6 +102,12 @@ MANIFEST = {
                 "iam:AttachRolePolicy",
                 "sts:AssumeRole",
             ],
+            "acting_as": "victim_user",
+            "aws_resources": {
+                "iam:CreateRole": ["arn:aws:iam::{account_id}:role/AWSCodeCommit-Role", "arn:aws:iam::{account_id}:role/sugo-role", "arn:aws:iam::{account_id}:role/ecsTaskExecutionRole"],
+                "iam:AttachRolePolicy": ["arn:aws:iam::{account_id}:role/AWSCodeCommit-Role", "arn:aws:iam::{account_id}:role/sugo-role", "arn:aws:iam::{account_id}:role/ecsTaskExecutionRole"],
+                "sts:AssumeRole": ["arn:aws:iam::{account_id}:role/AWSCodeCommit-Role", "arn:aws:iam::{account_id}:role/sugo-role", "arn:aws:iam::{account_id}:role/ecsTaskExecutionRole"],
+            },
             "techniques": [
                 {"id": "T1136.003", "name": "Create Account: Cloud Account"},
                 {"id": "T1098.001", "name": "Account Manipulation: Additional Cloud Credentials"},
@@ -117,6 +140,27 @@ MANIFEST = {
                 "cloudformation:ValidateTemplate",
                 "autoscaling:DescribeAutoScalingGroups",
             ],
+            "acting_as": {
+                "repo_role": ["codecommit:CreateRepository", "codecommit:GetRepository", "amplify:CreateApp", "codebuild:CreateProject", "iam:PassRole"],
+                "notebook_role": ["sagemaker:CreateNotebookInstance", "sagemaker:DescribeNotebookInstance", "iam:PassRole"],
+                "ecs_role": ["ecs:CreateCluster", "ecs:RegisterTaskDefinition", "iam:PassRole"],
+                "victim_user": ["sts:GetCallerIdentity", "ec2:DescribeRegions", "iam:GetAccountSummary", "iam:ListRoles", "iam:ListUsers", "s3:ListAllMyBuckets", "s3:GetObject", "secretsmanager:ListSecrets", "secretsmanager:GetSecretValue", "ec2:DescribeLaunchTemplates", "ec2:DescribeInstanceTypeOfferings", "cloudformation:ValidateTemplate", "autoscaling:DescribeAutoScalingGroups"],
+            },
+            "aws_resources": {
+                "sts:GetCallerIdentity": "*",
+                "ec2:DescribeRegions": "*",
+                "iam:GetAccountSummary": "*",
+                "iam:ListRoles": "*",
+                "iam:ListUsers": "*",
+                "s3:ListAllMyBuckets": "*",
+                "s3:GetObject": "arn:aws:s3:::{tfstate_bucket_name}/terraform.tfstate",
+                "secretsmanager:ListSecrets": "*",
+                "secretsmanager:GetSecretValue": "{canary_secret_arn}",
+                "ec2:DescribeLaunchTemplates": "*",
+                "ec2:DescribeInstanceTypeOfferings": "*",
+                "cloudformation:ValidateTemplate": "*",
+                "autoscaling:DescribeAutoScalingGroups": "*",
+            },
             "techniques": [
                 {"id": "T1059.009", "name": "Command and Scripting Interpreter: Cloud API"},
                 {"id": "T1580",     "name": "Cloud Infrastructure Discovery"},
@@ -137,6 +181,18 @@ MANIFEST = {
                 "codecommit:ListRepositories",
                 "ecs:DescribeTasks",
             ],
+            "acting_as": {
+                "repo_role": ["codecommit:ListRepositories"],
+                "victim_user": ["cloudtrail:DescribeTrails", "cloudtrail:GetTrailStatus", "cloudtrail:StopLogging", "s3:ListBucket", "s3:DeleteObject", "ecs:DescribeTasks"],
+            },
+            "aws_resources": {
+                "cloudtrail:DescribeTrails": "*",
+                "cloudtrail:GetTrailStatus": "arn:aws:cloudtrail:{region}:{account_id}:trail/{trail_name}",
+                "cloudtrail:StopLogging": "arn:aws:cloudtrail:{region}:{account_id}:trail/{trail_name}",
+                "s3:ListBucket": "arn:aws:s3:::{cloudtrail_bucket_name}",
+                "s3:DeleteObject": "arn:aws:s3:::{cloudtrail_bucket_name}/*",
+                "ecs:DescribeTasks": "arn:aws:ecs:{region}:{account_id}:task/{cluster_name}/*",
+            },
             "techniques": [
                 {"id": "T1070", "name": "Indicator Removal"},
                 {"id": "T1496", "name": "Resource Hijacking"},

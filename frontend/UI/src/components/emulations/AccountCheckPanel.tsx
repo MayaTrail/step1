@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 
 import { checkAgainstAccount } from '@/services/prevention.service'
 import type { AccountCheck, AccountCheckError, CheckedPhase, PreventionAnalysis } from '@/types/prevention'
-import { AccountCheckDrawer, formatCheckedAt } from './AccountCheckDrawer'
+import { AccountCheckDrawer, canRecheck, formatCheckedAt } from './AccountCheckDrawer'
 
 /**
  * Asking AWS what the reader's own policies would do to this emulation.
@@ -164,6 +164,7 @@ function Summary({
   onRecheck: () => void
 }) {
   const { prevented, undecided, roleCannotPerform, actionsChecked } = check.summary
+  const notChecked = check.summary.notChecked?.length ?? 0
   const gaps = [
     undecided.length > 0 && `${undecided.length} undecided`,
     roleCannotPerform.length > 0 && `${roleCannotPerform.length} your role can't perform`,
@@ -171,21 +172,31 @@ function Summary({
   return (
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
       <span className="font-mono text-2xs uppercase tracking-label text-content-dim">Your account</span>
-      <span className="text-sm leading-relaxed text-content-secondary">
-        <b className="font-semibold text-content-primary">
-          {prevented.length === 0 ? `None of ${actionsChecked}` : `${prevented.length} of ${actionsChecked}`}
-        </b>{' '}
-        actions would be refused by your guardrails.
-        {gaps.length > 0 && <span className="text-warning"> {gaps.join(', ')}.</span>}
-      </span>
+      {actionsChecked === 0 ? (
+        <span className="text-sm leading-relaxed text-content-secondary">
+          Nothing could be checked yet: see who performs this attack&apos;s actions.
+        </span>
+      ) : (
+        <span className="text-sm leading-relaxed text-content-secondary">
+          <b className="font-semibold text-content-primary">
+            {prevented.length === 0 ? `None of ${actionsChecked}` : `${prevented.length} of ${actionsChecked}`}
+          </b>{' '}
+          {notChecked > 0 ? 'checked actions' : 'actions'} would be refused by your guardrails.
+          {gaps.length > 0 && <span className="text-warning"> {gaps.join(', ')}.</span>}
+          {notChecked > 0 && <span className="text-content-dim"> {notChecked} not checked (other identities).</span>}
+        </span>
+      )}
       <span className="font-mono text-2xs text-content-muted">
         simulated · {formatCheckedAt(checkedAt)} · {check.region}
       </span>
       <span className="ml-auto flex gap-3">
         <LinkButton onClick={onOpen}>View details &rsaquo;</LinkButton>
-        <LinkButton onClick={onRecheck} disabled={running}>
-          {running ? 'Asking AWS…' : 'Check again'}
-        </LinkButton>
+        {/* With no connected role or lab identity involved, a recheck could not change the answer. */}
+        {canRecheck(check.identities ?? [{ kind: 'connected_role' }]) && (
+          <LinkButton onClick={onRecheck} disabled={running}>
+            {running ? 'Asking AWS…' : 'Check again'}
+          </LinkButton>
+        )}
       </span>
     </div>
   )
@@ -197,6 +208,8 @@ const PHASE_TEXT: Record<CheckedPhase['verdict'], string> = {
   undecided: 'Your policies could not be decided for this phase',
   role_cannot_perform: 'Your role cannot perform this phase',
   no_iam_call: 'No IAM-authorised call to refuse',
+  not_checked: 'Not checked: some of this phase runs as another identity',
+  no_identity: 'Sent with no identity, so no IAM rule applies',
 }
 
 const PHASE_TONE: Record<CheckedPhase['verdict'], string> = {
@@ -205,6 +218,8 @@ const PHASE_TONE: Record<CheckedPhase['verdict'], string> = {
   undecided: 'text-warning',
   role_cannot_perform: 'text-warning',
   no_iam_call: 'text-content-dim',
+  not_checked: 'text-content-dim',
+  no_identity: 'text-content-dim',
 }
 
 /**

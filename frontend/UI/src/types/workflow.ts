@@ -114,13 +114,15 @@ export type AccountCheckSkipReason =
 /**
  * The account check a workflow ran just before deploying.
  *
- * A snapshot of the owner's policies when the run began, never rerun, so it
- * stays true to that run. A skip carries AWS's error code but never its
+ * A snapshot of the owner's policies, never rerun, so it stays true to that
+ * run. Since 2026-10-05 it is taken once the lab is deployed, just before the
+ * attack (`afterDeploy`); older runs were checked before deploy, as the
+ * connected role only. A skip carries AWS's error code but never its
  * message, which would name the caller's account id.
  */
 export type WorkflowAccountCheck =
-  | { status: 'checked'; checkedAt: string; result: AccountCheck }
-  | { status: 'skipped'; checkedAt: string; reason: AccountCheckSkipReason; errorCode?: string }
+  | { status: 'checked'; checkedAt: string; afterDeploy?: boolean; result: AccountCheck }
+  | { status: 'skipped'; checkedAt: string; afterDeploy?: boolean; reason: AccountCheckSkipReason; errorCode?: string }
 
 /** A workflow with its per-rule verdicts. */
 export interface WorkflowRunDetail extends WorkflowRun {

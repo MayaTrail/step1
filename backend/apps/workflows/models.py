@@ -252,9 +252,11 @@ class WorkflowRun(models.Model):
         null=True,
         blank=True,
         help_text=(
-            "What the owner's AWS policies would refuse, as simulated just before "
-            "deploy. Kept on the run so it describes the policies in force for "
-            "this run. Shown beside the score and never part of it: only a "
+            "What the owner's AWS policies would refuse, as simulated once the "
+            "lab is deployed and just before the attack, for each identity the "
+            "attack acts as. Runs from before 2026-10-05 were checked before "
+            "deploy, as the connected role only. Kept on the run so it describes "
+            "the policies in force for this run. Shown beside the score and never part of it: only a "
             "refusal observed during the attack may explain a silent detection. "
             "Null on runs that predate the check."
         ),

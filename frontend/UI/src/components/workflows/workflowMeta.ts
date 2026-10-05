@@ -19,8 +19,8 @@ export type StepState = 'done' | 'active' | 'pending' | 'failed' | 'skipped' | '
  * column and `label` the single job inside it.
  */
 export const STEPS = [
-  { key: 'check', stage: 'Check account', label: 'Check your policies' },
   { key: 'deploy', stage: 'Deploy', label: 'Provision infrastructure' },
+  { key: 'check', stage: 'Check account', label: 'Check your policies' },
   { key: 'attack', stage: 'Attack', label: 'Run emulation' },
   { key: 'alerts', stage: 'Collect alerts', label: 'Wait for SIEM alerts' },
   { key: 'score', stage: 'Score', label: 'Score detections' },
@@ -32,7 +32,7 @@ export type StepKey = (typeof STEPS)[number]['key']
 /**
  * The steps the run's status moves through, in order. The account check is
  * not among them: it has no status of its own, because it runs in the same
- * tick that starts the deploy.
+ * tick that starts the attack, once the lab is deployed.
  */
 const RUN_STEPS: StepKey[] = ['deploy', 'attack', 'alerts', 'score']
 
@@ -55,12 +55,12 @@ export function isOpen(status: WorkflowStatus): boolean {
 /**
  * The account check's state, read from what the run stored.
  *
- * No record means one of two things: the run has not reached its deploy yet,
+ * No record means one of two things: the run has not reached its attack yet,
  * or it started before workflows ran the check (or gave up before it ran).
  */
 function checkState(run: WorkflowRunDetail): StepState {
   if (run.accountCheck) return run.accountCheck.status === 'checked' ? 'done' : 'skipped'
-  return run.status === 'scheduled' || run.status === 'pending' ? 'pending' : 'unchecked'
+  return ['scheduled', 'pending', 'deploying'].includes(run.status) ? 'pending' : 'unchecked'
 }
 
 /**

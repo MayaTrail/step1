@@ -79,6 +79,11 @@ MANIFEST = {
     ],
 
     # ── Kill-chain phases (frontend attackPath) ───────────────────────────────
+    "identities": {
+        "leaked_admin": {"kind": "lab_user", "label": "The lab's leaked admin user", "output": "admin_user_name"},
+        "backdoor_user": {"kind": "attack_created", "label": "A backdoor user the attack creates"},
+        "alice": {"kind": "lab_user", "label": "The lab's hijacked user alice.chen", "output": "alice_user_name"},
+    },
     "attack_path": [
         {
             "phase": 1,
@@ -94,6 +99,18 @@ MANIFEST = {
                 "iam:CreateAccessKey",
                 "iam:AttachUserPolicy",
             ],
+            "acting_as": "leaked_admin",
+            "aws_resources": {
+                "iam:GetUser": "arn:aws:iam::{account_id}:user/{admin_user_name}",
+                "iam:ListAttachedUserPolicies": "arn:aws:iam::{account_id}:user/{admin_user_name}",
+                "iam:ListUsers": "*",
+                "ses:GetSendQuota": "*",
+                "ses:ListIdentities": "*",
+                "iam:CreateUser": "arn:aws:iam::{account_id}:user/DangerDev@protonmail.me",
+                "iam:CreateLoginProfile": "arn:aws:iam::{account_id}:user/DangerDev@protonmail.me",
+                "iam:CreateAccessKey": "arn:aws:iam::{account_id}:user/DangerDev@protonmail.me",
+                "iam:AttachUserPolicy": "arn:aws:iam::{account_id}:user/DangerDev@protonmail.me",
+            },
             "techniques": [
                 {"id": "T1078.004", "name": "Valid Accounts: Cloud Accounts"},
                 {"id": "T1526", "name": "Cloud Service Discovery"},
@@ -120,6 +137,7 @@ MANIFEST = {
                 "ec2:RunInstances",
                 "ec2:DescribeInstanceStatus",
             ],
+            "acting_as": "backdoor_user",
             "techniques": [
                 {"id": "T1580", "name": "Cloud Infrastructure Discovery"},
                 {"id": "T1578.002", "name": "Modify Cloud Compute Infrastructure: Create Cloud Instance"},
@@ -156,6 +174,16 @@ MANIFEST = {
                 "iam:DeleteUser",
                 "ses:VerifyEmailIdentity",
             ],
+            "acting_as": {
+                "alice": ["ses:VerifyEmailIdentity"],
+                "leaked_admin": ["iam:DeleteAccessKey", "iam:DeleteUser"],
+                "backdoor_user": ["iam:CreateUser", "iam:CreateAccessKey", "iam:ListRoles", "iam:GetRole", "iam:AttachRolePolicy", "sts:AssumeRole", "iam:UpdateLoginProfile", "s3:ListAllMyBuckets", "s3:ListBucket", "iam:ListInstanceProfiles", "iam:ListGroupsForUser", "iam:ListSSHPublicKeys", "guardduty:ListDetectors", "guardduty:ListFindings", "guardduty:GetFindings", "iam:SimulatePrincipalPolicy", "iam:UpdateAccessKey", "iam:DeleteAccessKey", "iam:DeleteUser"],
+            },
+            "aws_resources": {
+                "ses:VerifyEmailIdentity": "arn:aws:ses:{region}:{account_id}:identity/emulation-noreply@emulation-lab-noreply.example.com",
+                "iam:DeleteAccessKey": "arn:aws:iam::{account_id}:user/DangerDev@protonmail.me",
+                "iam:DeleteUser": "arn:aws:iam::{account_id}:user/DangerDev@protonmail.me",
+            },
             "techniques": [
                 {"id": "T1036.005", "name": "Masquerading: Match Legitimate Resource Name or Location"},
                 {"id": "T1199", "name": "Trusted Relationship"},

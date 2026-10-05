@@ -22,9 +22,10 @@ import { JobIcon } from './JobIcon'
  * and it is reported further down the page in amber. A skipped account check
  * is grey for the same reason: the run carried on without it.
  *
- * Every job is the same size. The spacing between columns is a shared gap
- * rather than padding on all but the last, which made the last job wider, and
- * each job stretches to the tallest so a wrapped label does not stand out.
+ * Every job is the same, fixed size. The spacing between columns is a shared
+ * gap rather than padding on all but the last, which made the last job wider,
+ * and a label too long for its job is cut with an ellipsis, shown in full on
+ * hover, so one long label never resizes the whole row.
  */
 
 const STATE_WORD: Record<StepState, string> = {
@@ -67,8 +68,10 @@ function jobSubtitle(run: WorkflowRunDetail, key: StepKey, state: StepState): st
   const check = run.accountCheck
   if (key === 'check' && check) {
     if (check.status === 'skipped') return `skipped · ${SKIP_TEXT[check.reason].short}`
+    if (!check.afterDeploy) return 'checked before deploy'
     const { actionsChecked, prevented } = check.result.summary
-    return `${actionsChecked} actions · ${prevented.length} refused`
+    if (actionsChecked === 0) return 'nothing checkable'
+    return `${actionsChecked} checked · ${prevented.length} refused`
   }
   return STATE_WORD[state]
 }
@@ -107,26 +110,27 @@ export function PipelineGraph({ run, prevention }: { run: WorkflowRunDetail; pre
               ? 'border-accent-blue/35'
               : 'border-border'
           return (
-            <div key={step.key} className="flex flex-col">
+            <div key={step.key}>
               <div className="text-xs text-content-secondary tracking-body mb-2">{step.stage}</div>
-              <div className="relative flex-1">
+              <div className="relative">
                 <button
                   type="button"
                   aria-expanded={selected}
                   onClick={() => setChosen(selected ? null : step.key)}
-                  className={`w-full h-full flex items-center gap-3 text-left px-3 py-2.5 rounded-xl
+                  title={`${step.label}: ${jobSubtitle(run, step.key, state)}`}
+                  className={`w-full h-14 flex items-center gap-3 text-left px-3 rounded-xl
                     bg-surface-base border transition-opacity hover:opacity-60 ${border}`}
                 >
                   <JobIcon stage={step.key} state={state} />
                   <span className="min-w-0">
                     <span
-                      className={`block text-sm tracking-body ${
+                      className={`block truncate text-sm tracking-body ${
                         state === 'unchecked' ? 'text-content-dim' : 'text-content-primary'
                       }`}
                     >
                       {step.label}
                     </span>
-                    <span className="block font-mono text-2xs text-content-dim mt-0.5">
+                    <span className="block truncate font-mono text-2xs text-content-dim mt-0.5">
                       {jobSubtitle(run, step.key, state)}
                     </span>
                   </span>
@@ -248,11 +252,12 @@ function CheckDetail({ run, prevention }: { run: WorkflowRunDetail; prevention: 
   const check = run.accountCheck
 
   if (!check) {
-    const text = run.status === 'scheduled' || run.status === 'pending'
-      ? 'Runs just before the deploy: asks AWS whether your policies would refuse this emulation\'s '
-        + 'actions. Nothing is performed in your account.'
+    const text = ['scheduled', 'pending', 'deploying'].includes(run.status)
+      ? 'Runs once the lab is deployed, just before the attack: by then the lab\'s own identities exist, '
+        + 'so they are checked in this run\'s lab, with your organisation\'s SCPs applied. Nothing is '
+        + 'performed in your account.'
       : 'This run has no account check: it started before workflows ran one, or stopped before its '
-        + 'deploy began.'
+        + 'attack began.'
     return <p className="text-xs text-content-secondary leading-relaxed tracking-body">{text}</p>
   }
 
@@ -284,11 +289,16 @@ function CheckDetail({ run, prevention }: { run: WorkflowRunDetail; prevention: 
   return (
     <div>
       <CheckHeadline check={result} className="mb-3" />
+      <p className="text-xs text-content-dim leading-relaxed tracking-body mb-3">
+        {check.afterDeploy
+          ? "Checked in this run's own lab, just before the attack."
+          : 'This run is older than lab-identity checks: it was checked before its deploy, as your connected role only.'}
+      </p>
       <dl className="grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-3">
         {[
           ['Acting as', result.identity],
           ['Region', result.region],
-          ['Checked', `${formatWhen(check.checkedAt)}, before deploy`],
+          ['Checked', `${formatWhen(check.checkedAt)}, ${check.afterDeploy ? 'before the attack' : 'before deploy'}`],
         ].map(([label, value]) => (
           <div key={label}>
             <dt className="font-mono text-2xs uppercase tracking-caps text-content-dim">{label}</dt>

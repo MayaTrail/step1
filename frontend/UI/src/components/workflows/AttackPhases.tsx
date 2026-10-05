@@ -3,7 +3,7 @@ import type { AttackPhase } from '@/types/platform'
 import type { AccountCheck, CheckedAction, CheckedPhase, PreventionAnalysis, PreventionPolicy } from '@/types/prevention'
 import type { AlertEvidence, MatchTier, RuleOutcome, WorkflowRunDetail } from '@/types/workflow'
 import { Card } from '@/components/ui/Card'
-import { ActionRow, REFUSED_BY } from '@/components/emulations/AccountCheckDrawer'
+import { ActionRow, REFUSED_BY, runsAs } from '@/components/emulations/AccountCheckDrawer'
 import { GuardrailDrawer } from '@/components/emulations/GuardrailDrawer'
 import {
   Shield,
@@ -365,8 +365,12 @@ function PreventionCell({
 /** "2 of 5 phases refused by your policies", counted from the account check. */
 function AccountSummary({ account }: { account: AccountCheck }) {
   const refused = account.phases.filter((phase) => phase.verdict === 'denied').length
-  if (refused === 0) return <>No phase is refused by your policies.</>
-  return <>{refused} of {account.phases.length} phases refused by your policies.</>
+  const unchecked = account.phases.filter((phase) => phase.verdict === 'not_checked').length
+  if (account.summary.actionsChecked === 0) return <>No phase could be checked yet.</>
+  const lead = refused === 0
+    ? 'No phase is refused by your policies'
+    : `${refused} of ${account.phases.length} phases refused by your policies`
+  return <>{lead}{unchecked > 0 ? `; ${unchecked} not checked.` : '.'}</>
 }
 
 const ACCOUNT_WORD: Record<CheckedPhase['verdict'], { text: string; tone: string; by: string }> = {
@@ -375,6 +379,8 @@ const ACCOUNT_WORD: Record<CheckedPhase['verdict'], { text: string; tone: string
   role_cannot_perform: { text: "Role can't perform", tone: 'text-warning', by: 'a setup gap, not protection' },
   allowed: { text: 'Allowed', tone: 'text-content-secondary', by: 'nothing in your policies refuses it' },
   no_iam_call: { text: 'No IAM call', tone: 'text-content-dim', by: 'nothing for a policy to refuse' },
+  not_checked: { text: 'Not checked', tone: 'text-content-dim', by: 'runs as other identities' },
+  no_identity: { text: 'No identity', tone: 'text-content-dim', by: 'sent with no identity' },
 }
 
 /**
@@ -391,6 +397,23 @@ function AccountCell({ account, phase }: { account: AccountCheck; phase: number 
   if (row.verdict === 'denied') {
     const first = account.actions.find((action) => action.action === row.preventedActions[0])
     by = (first?.deniedBy && REFUSED_BY[first.deniedBy]) || 'by your guardrails'
+  } else if (row.verdict === 'not_checked') {
+    // One identity is named; a mix is summarised by how much was checked.
+    // Anonymous rows are neither checked nor unchecked, so they are left out of "n of m checked".
+    const anonymous = new Set(
+      (account.identities ?? []).filter((identity) => identity.status === 'no_identity').map((identity) => identity.key),
+    )
+    const judged = (row.rows ?? []).filter((pair) => !anonymous.has(pair.identity)).length
+    const unchecked = row.notCheckedActions?.length ?? 0
+    const who = (row.notCheckedIdentities ?? [])
+      .map((key) => account.identities?.find((identity) => identity.key === key))
+      .filter((identity) => identity !== undefined)
+    const reasons = new Set(who.map((identity) => identity?.status))
+    if (judged > unchecked) by = `${judged - unchecked} of ${judged} checked; the rest run as other identities`
+    else if (reasons.size === 1 && reasons.has('not_deployed')) by = 'deploy the lab to check'
+    else if (reasons.size === 1 && reasons.has('not_exported')) by = 'redeploy the lab to check'
+    else if (reasons.size === 1 && reasons.has('attack_created')) by = 'runs as identities the attack creates'
+    else if (who.length === 1 && who[0]) by = runsAs(who[0])
   }
   return (
     <span className="block text-xs leading-snug tracking-body">
@@ -531,24 +554,36 @@ function PhaseAccount({
   phase: number
   prevention: PreventionAnalysis | null
 }) {
+  const key = (identity: string | undefined, action: string) => `${identity ?? ''}|${action.toLowerCase()}`
+  const byPair = new Map(account.actions.map((row) => [key(row.identity, row.action), row]))
   const byAction = new Map(account.actions.map((row) => [row.action.toLowerCase(), row]))
+  const identities = new Map((account.identities ?? []).map((identity) => [identity.key, identity]))
   const declared = prevention?.phases.find((row) => row.phase === phase)?.actions
   const verdict = account.phases.find((row) => row.phase === phase)
-  const names = declared ?? [
-    ...(verdict?.preventedActions ?? []),
-    ...(verdict?.undecidedActions ?? []),
-    ...(verdict?.roleCannotPerform ?? []),
-  ]
-  const rows = names
-    .map((name) => byAction.get(name.toLowerCase()))
-    .filter((row): row is CheckedAction => Boolean(row))
+  // Pairs when the result names them; otherwise, for a result stored before
+  // identities were declared, the declared actions or the problem lists.
+  const rows = verdict?.rows
+    ? verdict.rows
+      .map((pair) => byPair.get(key(pair.identity, pair.action)))
+      .filter((row): row is CheckedAction => Boolean(row))
+    : (declared ?? [
+      ...(verdict?.preventedActions ?? []),
+      ...(verdict?.undecidedActions ?? []),
+      ...(verdict?.roleCannotPerform ?? []),
+    ])
+      .map((name) => byAction.get(name.toLowerCase()))
+      .filter((row): row is CheckedAction => Boolean(row))
   if (rows.length === 0) {
     return <p className="text-xs text-content-dim mt-2">This phase makes no call an IAM policy can refuse.</p>
   }
   return (
     <div className="mt-2">
       {rows.map((row) => (
-        <ActionRow key={row.action} row={row} />
+        <ActionRow
+          key={`${row.identity ?? ''}-${row.action}`}
+          row={row}
+          identity={row.identity ? identities.get(row.identity) : undefined}
+        />
       ))}
     </div>
   )

@@ -55,6 +55,8 @@ export interface PreventionPhase {
   name: string
   /** AWS actions this phase performs, declared in the emulation manifest. */
   actions: string[]
+  /** Who performs them: identity key to the actions it performs. */
+  actingAs?: Record<string, string[]>
   /** Ids of policies that would refuse it outright. Conditional ones excluded. */
   blockedBy: string[]
   /**
@@ -83,6 +85,8 @@ export interface PreventionAnalysis {
   actions: string[]
   phases: PreventionPhase[]
   policies: PreventionPolicy[]
+  /** The identities its phases act as, for labelling who performs what. */
+  identities?: DeclaredIdentity[]
   counts: {
     blocks: number
     blocks_conditional: number
@@ -101,8 +105,27 @@ export interface PreventionAnalysis {
  * detection score.
  */
 
-/** Per-action outcome of the account check. */
-export type CheckVerdict = 'allowed' | 'denied' | 'undecided'
+/**
+ * Kinds of identity an emulation acts as. Only the connected role can be
+ * checked before an attack; a lab identity exists once the lab is deployed,
+ * an attack-created one only during the attack, and an anonymous request has
+ * no identity for an IAM policy to judge.
+ */
+export type IdentityKind = 'connected_role' | 'anonymous' | 'lab_user' | 'lab_role' | 'attack_created' | 'undeclared'
+
+/** An identity an emulation declares, by label and kind. */
+export interface DeclaredIdentity {
+  key: string
+  label: string
+  kind: IdentityKind
+}
+
+/**
+ * Per-action outcome of the account check. `not_checked` is an action another
+ * identity performs: a verdict about the connected role would describe the
+ * wrong identity, so none is given.
+ */
+export type CheckVerdict = 'allowed' | 'denied' | 'undecided' | 'not_checked' | 'no_identity'
 
 /**
  * Who refused the action.
@@ -116,6 +139,16 @@ export type DeniedBy = 'organization_scp' | 'permissions_boundary' | 'identity_p
 /** One action, as AWS judged it. */
 export interface CheckedAction {
   action: string
+  /** Who performs it, as an identity key. Absent on results stored before identities were declared. */
+  identity?: string
+  /**
+   * How precisely its resource was named: "specific" (the resource the attack
+   * targets), "all" (an action AWS only authorises against all resources),
+   * "fallback" (a connected-role resource that named a lab output no deployed
+   * lab has yet, so it was judged against all resources until the lab exists),
+   * or "unspecified" (none declared, on results stored before this contract).
+   */
+  resourceScope?: 'specific' | 'all' | 'fallback' | 'unspecified'
   verdict: CheckVerdict
   deniedBy: DeniedBy | null
   /** Condition keys AWS needed and we could not supply, so the answer is not final. */
@@ -130,6 +163,26 @@ export interface CheckedPhase {
   preventedActions: string[]
   undecidedActions: string[]
   roleCannotPerform: string[]
+  /** The next three are absent on results stored before identities were declared. */
+  notCheckedActions?: string[]
+  notCheckedIdentities?: string[]
+  /** The (identity, action) pairs this phase was judged on. */
+  rows?: { identity: string; action: string }[]
+}
+
+/**
+ * Why an identity was or was not asked about. A lab identity is checked once
+ * the lab is deployed; before that it is not deployed, and a lab deployed
+ * before it was exported needs a redeploy. Absent on older results.
+ */
+export type IdentityStatus = 'checked' | 'not_deployed' | 'not_exported' | 'attack_created' | 'no_identity' | 'undeclared'
+
+/** An identity the attack acts as, and whether the check could ask AWS about it. */
+export interface CheckIdentity extends DeclaredIdentity {
+  /** How many actions it performs. */
+  actions: number
+  checked: boolean
+  status?: IdentityStatus
 }
 
 /** The account check's result. */
@@ -142,7 +195,14 @@ export interface AccountCheck {
   /** The connected role's name, never its ARN. */
   identity: string
   summary: {
+    /** Actions AWS evaluated: those the connected role performs. */
     actionsChecked: number
+    /** Actions other identities perform, which were not sent to AWS. Absent on older results. */
+    notChecked?: string[]
+    /** Actions sent with no identity, which no IAM rule can judge. Absent on older results. */
+    noIdentity?: string[]
+    /** Actions a lab identity's own policy lacks: the emulation's setup, not the reader's role. */
+    labCannotPerform?: string[]
     prevented: string[]
     undecided: string[]
     roleCannotPerform: string[]
@@ -150,6 +210,10 @@ export interface AccountCheck {
   }
   actions: CheckedAction[]
   phases: CheckedPhase[]
+  /** Absent on results stored before identities were declared. */
+  identities?: CheckIdentity[]
+  /** The deployed lab whose identities were checked; null without one. The id only builds a link. */
+  lab?: { stackId: string; deployedAt: string } | null
 }
 
 /** Why a check could not run, with the fix when there is one. */

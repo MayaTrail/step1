@@ -31,6 +31,11 @@ MANIFEST = {'schema_version': 3,
                   'name': 'Execution',
                   'aws_actions': ['sagemaker:DescribeNotebookInstanceLifecycleConfig',
                                   'sagemaker:UpdateNotebookInstanceLifecycleConfig'],
+                  'acting_as': 'connected_role',
+                  'aws_resources': {
+                      'sagemaker:DescribeNotebookInstanceLifecycleConfig': 'arn:aws:sagemaker:{region}:{account_id}:notebook-instance-lifecycle-config/{lifecycle_config_name}',
+                      'sagemaker:UpdateNotebookInstanceLifecycleConfig': 'arn:aws:sagemaker:{region}:{account_id}:notebook-instance-lifecycle-config/{lifecycle_config_name}',
+                  },
                   'techniques': [{'id': 'T1059',
                                   'name': 'Malicious Script Execution via SageMaker Lifecycle '
                                           'Config'}]}],
