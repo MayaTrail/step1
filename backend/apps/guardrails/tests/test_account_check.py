@@ -24,7 +24,6 @@ import unittest
 from datetime import timedelta
 from unittest.mock import patch
 
-from botocore.exceptions import ClientError
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
@@ -33,7 +32,11 @@ from apps.infrastructure.models import Stack
 
 from apps.logs.models import LogEntry
 
+# botocore travels with boto3, which the CI test environment omits along with
+# DRF, so this import shares the guard: ClientError is only built inside the
+# DRF-gated tests, which skip when either dependency is absent.
 try:
+    from botocore.exceptions import ClientError
     from rest_framework.test import APIRequestFactory, force_authenticate
 
     from apps.guardrails.views import EmulationAccountCheckView

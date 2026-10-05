@@ -14,3 +14,7 @@
 # install both files to run everything locally.
 PyYAML==6.0.2
 pysigma==0.11.23
+# pysigma 0.11.23 pulls pyparsing unpinned, but pyparsing 3.3 broke its
+# compound-condition parser: "A and not B" raises TypeError: 'str' object is
+# not callable during parse. Cap below 3.3 until pysigma is upgraded.
+pyparsing<3.3
