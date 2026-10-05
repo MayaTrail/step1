@@ -538,3 +538,5 @@ pulumi.export("task_family",        TASK_FAMILY)
 pulumi.export("log_group_name",     LOG_GROUP_NAME)
 pulumi.export("honey_user_name",    HONEY_USER_NAME)
 pulumi.export("canary_secret_name", CANARY_SECRET_NAME)
+# Names the victim user so the account check can simulate it once the lab is deployed.
+pulumi.export("victim_user_name",   victim_user.name)

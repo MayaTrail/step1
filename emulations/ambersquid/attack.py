@@ -68,6 +68,34 @@ def make_session(access_key, secret_key, session_token=None, region="us-east-1")
         region_name=region,
     )
 
+
+def _session_from_outputs(outputs, region):
+    """
+    Session for the account owner's own actions, such as launching the task in phase 2.
+
+    Inside MayaTrail the worker injects the user's connected-role credentials as
+    outputs["_aws_credentials"], and they must be used explicitly. The worker's
+    environment also holds MayaTrail's own platform keys, which a bare
+    boto3.Session() would pick up, sending the call to the wrong account. The
+    ambient session is only reached when this file runs standalone.
+
+    Args:
+        outputs: Stack outputs passed to run(), possibly carrying _aws_credentials.
+        region:  AWS region for the session.
+
+    Returns:
+        A boto3 Session.
+    """
+    creds = (outputs or {}).get("_aws_credentials")
+    if creds:
+        return make_session(
+            creds.get("AWS_ACCESS_KEY_ID"),
+            creds.get("AWS_SECRET_ACCESS_KEY"),
+            creds.get("AWS_SESSION_TOKEN"),
+            region=region,
+        )
+    return boto3.Session(region_name=region)
+
 def assume_role(base_session, role_arn, session_name, duration=3600):
     sts = base_session.client("sts")
     resp = sts.assume_role(
@@ -116,14 +144,26 @@ def phase_resource_development():
 # Phase 2 -- Initial Execution / Malicious Container (Step 3)
 # ---------------------------------------------------------------------------
 
-def phase_initial_execution(cluster_name, task_family, subnet_id, task_sg_id, region="us-east-1"):
-    """Launch ECS Fargate task using Pulumi-provisioned task definition."""
+def phase_initial_execution(operator_session, cluster_name, task_family, subnet_id, task_sg_id):
+    """
+    Launch ECS Fargate task using Pulumi-provisioned task definition.
+
+    Args:
+        operator_session: Session of the account owner who runs the image, from
+            _session_from_outputs so it is never the worker's ambient credentials.
+        cluster_name:     ECS cluster to run the task in.
+        task_family:      Task definition family to launch.
+        subnet_id:        Subnet for the task's network interface.
+        task_sg_id:       Security group for the task.
+
+    Returns:
+        The task ARN, or None when the launch failed.
+    """
     print("\n" + "="*60)
     print("PHASE 2: Initial Execution -- Malicious Container")
     print("="*60)
     print_step("Step 3 [T1204.003]: Launch ECS Fargate task with injected victim creds")
 
-    operator_session = boto3.Session(region_name=region)
     ecs = operator_session.client("ecs")
 
     if not subnet_id or not task_sg_id:
@@ -1098,7 +1138,8 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
         phase_delay()
 
         task_arn = phase_initial_execution(
-            cluster_name, task_family, subnet_id_val, task_sg_id_val, region=region
+            _session_from_outputs(outputs, region),
+            cluster_name, task_family, subnet_id_val, task_sg_id_val,
         )
         phase_delay()
 

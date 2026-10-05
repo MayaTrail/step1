@@ -13,7 +13,8 @@ while waiting, survives a restart, and means the user can close the page, which
 is the behaviour this feature was asked for.
 
 Deploy and attack are the emulations app's existing tasks, invoked unchanged.
-This module decides when, never how.
+This module decides when, never how. The account check just before the attack
+is the guardrails app's, shared with the emulation page's button.
 """
 
 from __future__ import annotations
@@ -22,12 +23,15 @@ import logging
 from datetime import timedelta
 from typing import Any
 
+from botocore.exceptions import BotoCoreError, ClientError
 from celery import shared_task
 from django.apps import apps as django_apps
 from django.conf import settings
 from django.utils import timezone
 
 from apps.emulations.registry import get_emulation
+from apps.guardrails import simulate
+from apps.guardrails.matching import emulation_actions
 from apps.logs.models import LogEntry
 from apps.logs.record import record_activity
 from apps.emulations.tasks import deploy_emulation_stack, run_emulation_attack
@@ -145,6 +149,90 @@ def _stack_name(workflow: WorkflowRun) -> str:
     return f"{workflow.emulation_type}-wf-{str(workflow.id)[:8]}"
 
 
+def _skipped(reason: str, checked_at: str, error_code: str = "") -> dict[str, Any]:
+    """
+    Build the record of an account check that did not run.
+
+    Args:
+        reason:     Why, as a code the frontend words for the reader.
+        checked_at: When it was attempted.
+        error_code: AWS's error code, for an AWS refusal.
+
+    Returns:
+        The account_check value to store.
+    """
+    record = {"status": "skipped", "reason": reason, "checkedAt": checked_at, "afterDeploy": True}
+    if error_code:
+        record["errorCode"] = error_code
+    return record
+
+
+def _account_check(
+    workflow: WorkflowRun, manifest: dict[str, Any], region: str, outputs: dict[str, Any]
+) -> dict[str, Any]:
+    """
+    Ask AWS what the owner's policies would refuse, just before the attack.
+
+    It runs once the lab is deployed, because the lab's own identities (the
+    stolen user, the instance role) only exist from then on, and they are the
+    ones the attack acts as. Each is checked in this run's own lab, so the
+    answer describes the identities this run will really use.
+
+    This stage can only finish or be skipped, never fail: whatever goes wrong,
+    the attack starts anyway. The answer informs the Prevention lane and is
+    not a precondition for testing detections, so a role connected before the
+    simulate permission existed must not stop a run that would otherwise work.
+
+    A skip keeps AWS's error code but never its message. The message names the
+    caller's ARN, account id included, and this record is served to the page.
+
+    Args:
+        workflow: The workflow about to attack.
+        manifest: Its emulation's MANIFEST.
+        region:   The region its stack was deployed to.
+        outputs:  The stack's outputs, which name the lab's identities.
+
+    Returns:
+        {"status": "checked", "checkedAt", "result"}, where result has the
+        same shape the emulation page's check returns, or a skipped record
+        with a reason code.
+    """
+    checked_at = timezone.now().isoformat()
+    role_arn = workflow.owner.aws_role_arn
+    if not role_arn:
+        return _skipped("no_connected_role", checked_at)
+    if not emulation_actions(manifest.get("attack_path") or []):
+        # Kubernetes emulations, for example: nothing an IAM policy decides.
+        return _skipped("nothing_to_check", checked_at)
+
+    try:
+        result = simulate.check_account(
+            role_arn,
+            f"mayatrail-workflow-check-{workflow.owner_id}",
+            workflow.emulation_type,
+            manifest,
+            region,
+            outputs,
+        )
+    except (ClientError, BotoCoreError) as exc:
+        code, message = simulate.aws_error(exc)
+        reason = "missing_permission" if simulate.cannot_simulate(code, message) else "aws_error"
+        logger.warning(
+            "Workflow %s: account check skipped (%s, %s)",
+            workflow.id, reason, code or exc.__class__.__name__,
+        )
+        return _skipped(reason, checked_at, code)
+    except Exception:  # noqa: BLE001 - a broken check must never stop the attack
+        logger.exception("Workflow %s: account check failed unexpectedly", workflow.id)
+        return _skipped("check_failed", checked_at)
+
+    logger.info(
+        "Workflow %s: account check done, %d of %d actions refused",
+        workflow.id, len(result["summary"]["prevented"]), result["summary"]["actionsChecked"],
+    )
+    return {"status": "checked", "checkedAt": checked_at, "afterDeploy": True, "result": result}
+
+
 def _start_deploy(workflow: WorkflowRun) -> None:
     """
     Provision the emulation's infrastructure and move to DEPLOYING.
@@ -222,7 +310,10 @@ def _start_deploy(workflow: WorkflowRun) -> None:
 
 def _start_attack(workflow: WorkflowRun) -> None:
     """
-    Launch the emulation once its stack is ready, and move to ATTACKING.
+    Check the account, launch the emulation once its stack is ready, and move to ATTACKING.
+
+    The account check runs here, in the tick that starts the attack, so it
+    adds no waiting of its own and sees the lab exactly as the attack will.
 
     Args:
         workflow: A workflow whose stack has reached ready_for_attack.
@@ -231,6 +322,8 @@ def _start_attack(workflow: WorkflowRun) -> None:
 
     entry = get_emulation(workflow.emulation_type) or {}
     manifest = entry.get("manifest", entry)
+    stack = workflow.stack
+    workflow.account_check = _account_check(workflow, manifest, stack.region, stack.outputs or {})
 
     run = EmulationRun.objects.create(
         stack=workflow.stack,
@@ -241,7 +334,7 @@ def _start_attack(workflow: WorkflowRun) -> None:
     )
     workflow.emulation_run = run
     workflow.status = WorkflowRun.Status.ATTACKING
-    workflow.save(update_fields=["emulation_run", "status"])
+    workflow.save(update_fields=["account_check", "emulation_run", "status"])
 
     run_emulation_attack.apply_async(args=[str(run.id)], queue="enterprise")
     logger.info("Workflow %s: attacking via run %s", workflow.id, run.id)

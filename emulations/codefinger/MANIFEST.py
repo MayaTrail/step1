@@ -47,6 +47,9 @@ MANIFEST = {
     ],
 
     # ── Kill-chain phases ──────────────────────────────────────────────────────
+    "identities": {
+        "stolen_user": {"kind": "lab_user", "label": "The lab's stolen user", "output": "victim_user_name"},
+    },
     "attack_path": [
         {
             "phase": 1,
@@ -54,6 +57,19 @@ MANIFEST = {
             "techniques": [
                 {"id": "T1078.004", "name": "Valid Accounts: Cloud Accounts"},
             ],
+            "aws_actions": [
+                "s3:GetObject",
+                "sts:GetCallerIdentity",
+                "s3:ListAllMyBuckets",
+            ],
+            "acting_as": {
+                "anonymous": ["s3:GetObject"],
+                "stolen_user": ["sts:GetCallerIdentity", "s3:ListAllMyBuckets"],
+            },
+            "aws_resources": {
+                "sts:GetCallerIdentity": "*",
+                "s3:ListAllMyBuckets": "*",
+            },
         },
         {
             "phase": 2,
@@ -61,6 +77,15 @@ MANIFEST = {
             "techniques": [
                 {"id": "T1530", "name": "Data from Cloud Storage"},
             ],
+            "aws_actions": [
+                "s3:ListBucket",
+                "s3:GetObject",
+            ],
+            "acting_as": "stolen_user",
+            "aws_resources": {
+                "s3:ListBucket": "arn:aws:s3:::{target_bucket_name}",
+                "s3:GetObject": "arn:aws:s3:::{target_bucket_name}/*",
+            },
         },
         {
             "phase": 3,
@@ -68,6 +93,15 @@ MANIFEST = {
             "techniques": [
                 {"id": "T1486", "name": "Data Encrypted for Impact"},
             ],
+            "aws_actions": [
+                "s3:GetObject",
+                "s3:PutObject",
+            ],
+            "acting_as": "stolen_user",
+            "aws_resources": {
+                "s3:GetObject": "arn:aws:s3:::{target_bucket_name}/*",
+                "s3:PutObject": "arn:aws:s3:::{target_bucket_name}/*",
+            },
         },
         {
             "phase": 4,
@@ -75,6 +109,15 @@ MANIFEST = {
             "techniques": [
                 {"id": "T1485", "name": "Data Destruction"},
             ],
+            "aws_actions": [
+                "s3:DeleteObject",
+                "s3:PutLifecycleConfiguration",
+            ],
+            "acting_as": "stolen_user",
+            "aws_resources": {
+                "s3:DeleteObject": "arn:aws:s3:::{target_bucket_name}/*",
+                "s3:PutLifecycleConfiguration": "arn:aws:s3:::{target_bucket_name}",
+            },
         },
         {
             "phase": 5,
@@ -82,6 +125,19 @@ MANIFEST = {
             "techniques": [
                 {"id": "T1490", "name": "Inhibit System Recovery"},
             ],
+            "aws_actions": [
+                "s3:GetBucketVersioning",
+                "s3:PutBucketVersioning",
+                "s3:ListBucketVersions",
+                "s3:DeleteObjectVersion",
+            ],
+            "acting_as": "stolen_user",
+            "aws_resources": {
+                "s3:GetBucketVersioning": "arn:aws:s3:::{target_bucket_name}",
+                "s3:PutBucketVersioning": "arn:aws:s3:::{target_bucket_name}",
+                "s3:ListBucketVersions": "arn:aws:s3:::{target_bucket_name}",
+                "s3:DeleteObjectVersion": "arn:aws:s3:::{target_bucket_name}/*",
+            },
         },
     ],
 

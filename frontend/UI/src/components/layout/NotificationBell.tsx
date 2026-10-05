@@ -182,13 +182,9 @@ export function NotificationBell() {
 /** One event: what kind it was, what it said, and when. */
 function ActivityRow({ entry, onNavigate }: { entry: LogEntry; onNavigate: () => void }) {
   const meta = eventMeta(entry.event, entry.level)
-
-  return (
-    <Link
-      to={activityHref(entry)}
-      onClick={onNavigate}
-      className="block px-4 py-3 no-underline transition-opacity hover:opacity-75"
-    >
+  const href = activityHref(entry)
+  const body = (
+    <>
       <span className="flex items-center gap-1.5">
         <span className={`w-1.5 h-1.5 rounded-full bg-current shrink-0 ${TONE_CLASS[meta.tone]}`} />
         <span className={`font-mono text-2xs uppercase tracking-caps ${TONE_CLASS[meta.tone]}`}>
@@ -201,6 +197,18 @@ function ActivityRow({ entry, onNavigate }: { entry: LogEntry; onNavigate: () =>
       <span className="block text-xs tracking-body text-content-secondary leading-relaxed mt-1">
         {entry.message}
       </span>
+    </>
+  )
+
+  if (!href) return <div className="px-4 py-3">{body}</div>
+
+  return (
+    <Link
+      to={href}
+      onClick={onNavigate}
+      className="block px-4 py-3 no-underline transition-opacity hover:opacity-75"
+    >
+      {body}
     </Link>
   )
 }

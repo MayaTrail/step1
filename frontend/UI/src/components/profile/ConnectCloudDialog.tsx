@@ -28,6 +28,10 @@ const ARN_RE = /^arn:aws:iam::\d{12}:role\/.+$/
  * there is nothing stable to scope to. That makes this least privilege by
  * action, not by resource, which the comparison panel states plainly rather
  * than letting the label overstate it.
+ *
+ * The prevention check sits in a statement of its own so its Sid says what it
+ * is for: a policy document cannot carry comments, and the Sid survives when
+ * the policy is copied into the AWS console.
  */
 const SCOPED_POLICY = `{
   "Version": "2012-10-17",
@@ -61,6 +65,12 @@ const SCOPED_POLICY = `{
         "kms:Decrypt",
         "kms:GenerateDataKey"
       ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "MayaTrailPreventionCheck",
+      "Effect": "Allow",
+      "Action": "iam:SimulatePrincipalPolicy",
       "Resource": "*"
     }
   ]
@@ -529,6 +539,13 @@ export function ConnectCloudDialog({ onClose }: { onClose: () => void }) {
                   leading-relaxed text-content-secondary overflow-auto max-h-[260px] m-0">
                   {policyView === 'scoped' ? SCOPED_POLICY : ADMIN_POLICY}
                 </pre>
+                {policyView === 'scoped' && (
+                  <p className="mt-2 text-xs text-content-dim leading-relaxed">
+                    <span className="font-mono text-content-secondary">MayaTrailPreventionCheck</span> lets
+                    MayaTrail ask AWS whether your organisation&apos;s policies would block an
+                    emulation&apos;s actions, without performing them. It changes nothing in your account.
+                  </p>
+                )}
               </div>
             </div>
 

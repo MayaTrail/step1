@@ -163,6 +163,10 @@ REST_FRAMEWORK = {
         "endpoint_secret": "10/min",
         "ai_test": "20/min",
         "ai_chat": "60/min",
+        # Each guardrail check assumes the caller's role and spends one AWS
+        # call. A person checks an emulation once before running it, so this
+        # is ample for real use and bounds what a stolen session can probe.
+        "guardrail_check": "20/min",
     },
 }
 

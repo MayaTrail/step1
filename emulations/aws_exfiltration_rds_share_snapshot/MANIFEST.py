@@ -29,8 +29,23 @@ MANIFEST = {
     'active_since': 'Atomic technique (Stratus Red Team)',
     'targets': 'AWS accounts with RDS instances and roles holding rds:ModifyDBSnapshotAttribute',
     'incidents': ['Stratus Red Team — AWS attack technique catalogue'],
+    'identities': {
+        'attacker_role': {'kind': 'lab_role', 'label': "The lab's attacker role", 'output': 'attacker_role_arn'},
+    },
     'attack_path': [{'phase': 1,
                      'name': 'Exfiltration',
+                     'aws_actions': ['rds:DescribeDBSnapshotAttributes',
+                                     'rds:ModifyDBSnapshotAttribute',
+                                     'sts:AssumeRole'],
+                     'acting_as': {
+                         'connected_role': ['sts:AssumeRole'],
+                         'attacker_role': ['rds:DescribeDBSnapshotAttributes', 'rds:ModifyDBSnapshotAttribute'],
+                     },
+                     'aws_resources': {
+                         'sts:AssumeRole': '{attacker_role_arn}',
+                         'rds:DescribeDBSnapshotAttributes': 'arn:aws:rds:{region}:{account_id}:snapshot:{snapshot_id}',
+                         'rds:ModifyDBSnapshotAttribute': 'arn:aws:rds:{region}:{account_id}:snapshot:{snapshot_id}',
+                     },
                      'techniques': [{'id': 'T1537', 'name': 'Transfer Data to Cloud Account'}]}],
     'mitre_mappings': [{'id': 'T1537',
                         'name': 'Transfer Data to Cloud Account',

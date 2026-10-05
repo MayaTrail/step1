@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import type { WorkflowRun, WorkflowStatus } from '@/types/workflow'
 import { Card } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { IconChevron } from '@/components/ui/Icons'
 import { formatWhen } from '@/components/threatfeed/feedMeta'
-import { WorkflowDrawer } from './WorkflowDrawer'
 import {
   STATUS_LABEL,
   STATUS_TONE,
@@ -68,15 +68,25 @@ function matches(run: WorkflowRun, filter: FilterKey): boolean {
 interface RunsSectionProps {
   runs: WorkflowRun[]
   loading: boolean
-  /** Called after a change the list has to refetch to show. */
-  onChanged: () => void
 }
 
-export function RunsSection({ runs, loading, onChanged }: RunsSectionProps) {
-  const [filter, setFilter] = useState<FilterKey>('all')
-  // Held here rather than in the router, so closing the panel returns the
-  // reader to the same scroll position and the same filter.
-  const [openId, setOpenId] = useState<string | null>(null)
+export function RunsSection({ runs, loading }: RunsSectionProps) {
+  const navigate = useNavigate()
+  // The filter lives in the URL because a run opens on its own page: going
+  // back to the list must land on the same filter the reader left.
+  const [params, setParams] = useSearchParams()
+  const requested = params.get('filter')
+  const filter: FilterKey = FILTERS.some(({ key }) => key === requested) ? (requested as FilterKey) : 'all'
+  const setFilter = (key: FilterKey) =>
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current)
+        if (key === 'all') next.delete('filter')
+        else next.set('filter', key)
+        return next
+      },
+      { replace: true },
+    )
 
   const counts = useMemo(() => {
     const result = {} as Record<FilterKey, number>
@@ -133,28 +143,17 @@ export function RunsSection({ runs, loading, onChanged }: RunsSectionProps) {
             </thead>
             <tbody>
               {filtered.map((run) => (
-                <RunRow key={run.id} run={run} onOpen={() => setOpenId(run.id)} />
+                <RunRow key={run.id} run={run} onOpen={() => navigate(`/workflows/${run.id}`)} />
               ))}
             </tbody>
           </table>
         </div>
       )}
-
-      {openId && (
-        <WorkflowDrawer
-          workflowId={openId}
-          onClose={() => setOpenId(null)}
-          onDeleted={() => {
-            setOpenId(null)
-            onChanged()
-          }}
-        />
-      )}
     </Card>
   )
 }
 
-/** One workflow on one line. The whole row opens the detail panel. */
+/** One workflow on one line. The whole row opens the run on its own page. */
 function RunRow({ run, onOpen }: { run: WorkflowRun; onOpen: () => void }) {
   // A scheduled run and a stuck one look identical on a row, so the status
   // cell has to say when it is due.

@@ -116,9 +116,11 @@ class WorkflowRunDetailSerializer(WorkflowRunSerializer):
     emulationRunStatus = serializers.CharField(
         source="emulation_run.status", read_only=True, default=""
     )
+    accountCheck = serializers.JSONField(source="account_check", read_only=True)
 
     class Meta(WorkflowRunSerializer.Meta):
         fields = WorkflowRunSerializer.Meta.fields + [
             "report", "windowStart", "windowEnd",
             "stackId", "stackStatus", "emulationRunId", "emulationRunStatus",
+            "accountCheck",
         ]

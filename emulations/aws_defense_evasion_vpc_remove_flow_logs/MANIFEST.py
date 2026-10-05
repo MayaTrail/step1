@@ -28,8 +28,21 @@ MANIFEST = {
     'active_since': 'Atomic technique (Stratus Red Team)',
     'targets': 'AWS accounts with VPC flow logs and roles holding ec2:DeleteFlowLogs',
     'incidents': ['Stratus Red Team — AWS attack technique catalogue'],
+    'identities': {
+        'attacker_role': {'kind': 'lab_role', 'label': "The lab's attacker role", 'output': 'attacker_role_arn'},
+    },
     'attack_path': [{'phase': 1,
                      'name': 'Defense Evasion',
+                     'aws_actions': ['ec2:DeleteFlowLogs',
+                                     'sts:AssumeRole'],
+                     'acting_as': {
+                         'connected_role': ['sts:AssumeRole'],
+                         'attacker_role': ['ec2:DeleteFlowLogs'],
+                     },
+                     'aws_resources': {
+                         'sts:AssumeRole': '{attacker_role_arn}',
+                         'ec2:DeleteFlowLogs': 'arn:aws:ec2:{region}:{account_id}:vpc-flow-log/{flow_log_id}',
+                     },
                      'techniques': [{'id': 'T1685.002', 'name': 'Disable or Modify Tools: Disable or Modify Cloud Log'}]}],
     'mitre_mappings': [{'id': 'T1685.002',
                         'name': 'Disable or Modify Tools: Disable or Modify Cloud Log',

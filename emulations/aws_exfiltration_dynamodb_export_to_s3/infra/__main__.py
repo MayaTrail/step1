@@ -349,4 +349,6 @@ pulumi.export("prod_customers_table_name",    prod_customers_table.name)
 pulumi.export("prod_customers_table_arn",     prod_customers_table.arn)
 pulumi.export("attacker_access_key_id",       attacker_access_key.id)
 pulumi.export("attacker_secret_access_key",   pulumi.Output.secret(attacker_access_key.secret))
+# Names the attacker user so the account check can simulate it once the lab is deployed.
+pulumi.export("attacker_user_name",           attacker_user.name)
 pulumi.export("internal_api_keys_table_name", internal_api_keys_table.name)

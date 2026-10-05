@@ -28,11 +28,17 @@ both files: pip install -r requirements-test.txt -r requirements-dev.txt
 import glob
 import importlib.util
 import os
+import tempfile
 from pathlib import Path
 
 from django.test import SimpleTestCase
 
-from apps.emulations.detections import parse_sigma, parse_sigma_documents
+from apps.emulations.detections import (
+    build_detection_detail,
+    list_detection_summaries,
+    parse_sigma,
+    parse_sigma_documents,
+)
 
 # backend/apps/emulations/tests/test_detections.py -> repo root is parents[4].
 _REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -102,6 +108,78 @@ def _load_validator():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+class UnderscoreTechniqueIdTests(SimpleTestCase):
+    """
+    A detection file may spell its sub-technique with an underscore.
+
+    sigma_t1685_002.yml keeps "t1685_002" as its rule id, because detail URLs
+    and stored reports already use it, but the technique it names must still
+    resolve to ATT&CK's T1685.002. The dotted rule alongside it proves the
+    usual spelling is left exactly as it was.
+    """
+
+    def setUp(self):
+        """Lay out a throwaway emulation with one underscore and one dotted rule."""
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        directory = Path(self._tmp.name)
+        files = {
+            "sigma_t1685_002.yml": "title: Trail stopped\nlevel: high\n",
+            "kql_t1685_002.kql": "AWSCloudTrail | where EventName == 'StopLogging'\n",
+            "sigma_t1098.yml": "title: Role changed\nlevel: medium\n",
+        }
+        for name, body in files.items():
+            (directory / name).write_text(body)
+        self.entry = {
+            "name": "sample",
+            "display_name": "Sample",
+            "detections_path": str(directory),
+            "detection_files": sorted(files),
+            "manifest": {
+                "attack_path": [
+                    {"phase": 1, "name": "Evasion", "techniques": [{"id": "T1685.002"}]},
+                    {"phase": 2, "name": "Persistence", "techniques": [{"id": "T1098"}]},
+                ],
+                "mitre_mappings": [
+                    {"id": "T1685.002", "name": "Disable Cloud Logs", "tactic": "Defense Evasion"},
+                    {"id": "T1098", "name": "Account Manipulation", "tactic": "Persistence"},
+                ],
+            },
+        }
+
+    def _summary(self, rule_id):
+        """Return the library summary for one rule id."""
+        summaries = {s["ruleId"]: s for s in list_detection_summaries(self.entry)}
+        return summaries[rule_id]
+
+    def test_the_rule_id_keeps_the_filename_spelling(self):
+        """Changing it would break detail URLs and rule ids in stored reports."""
+        self.assertEqual(self._summary("t1685_002")["ruleId"], "t1685_002")
+
+    def test_the_underscore_rule_resolves_its_technique(self):
+        """Without the dotted id the MANIFEST lookup finds no name or tactic."""
+        technique = self._summary("t1685_002")["technique"]
+        self.assertEqual(technique["id"], "T1685.002")
+        self.assertEqual(technique["name"], "Disable Cloud Logs")
+        self.assertEqual(technique["tactic"], "Defense Evasion")
+
+    def test_a_dotted_rule_is_unchanged(self):
+        """The usual spelling must come through exactly as before."""
+        technique = self._summary("t1098")["technique"]
+        self.assertEqual(technique, {"id": "T1098", "name": "Account Manipulation", "tactic": "Persistence"})
+
+    def test_the_underscore_rule_covers_its_phase(self):
+        """A phase whose only rule uses the underscore spelling still counts as covered."""
+        detail = build_detection_detail(self.entry, "t1685_002")
+        self.assertEqual(detail["coverage"]["phasesCovered"], 2)
+        self.assertEqual(detail["coverage"]["techniquesCovered"], 2)
+
+    def test_a_rule_is_not_listed_as_related_to_itself(self):
+        """The related list excludes the rule's own technique, whichever way it is spelled."""
+        detail = build_detection_detail(self.entry, "t1685_002")
+        self.assertEqual([m["id"] for m in detail["relatedTechniques"]], ["T1098"])
 
 
 class ParseSigmaTests(SimpleTestCase):

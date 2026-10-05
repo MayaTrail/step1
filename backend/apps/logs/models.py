@@ -47,6 +47,10 @@ class LogEntry(models.Model):
         WORKFLOW_ARCHIVED = "workflow.archived", "Workflow Archived"
         WORKFLOW_RESTORED = "workflow.restored", "Workflow Restored"
         PLAYBOOK_COMMAND = "playbook.command", "Playbook Command Run"
+        # Checking an emulation against the caller's own policies reads the
+        # permissions of their connected role. It changes nothing, but it is a
+        # read of their IAM configuration and belongs in the trail.
+        GUARDRAIL_CHECK = "guardrail.check", "Guardrail Check Run"
 
     id = models.UUIDField(
         primary_key=True,

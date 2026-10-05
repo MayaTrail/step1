@@ -29,6 +29,11 @@ MANIFEST = {'schema_version': 3,
  'incidents': ['Stratus Red Team — AWS attack technique catalogue'],
  'attack_path': [{'phase': 1,
                   'name': 'Lateral Movement',
+                  'aws_actions': ['ec2-instance-connect:SendSerialConsoleSSHPublicKey'],
+                  'acting_as': 'connected_role',
+                  'aws_resources': {
+                      'ec2-instance-connect:SendSerialConsoleSSHPublicKey': 'arn:aws:ec2:{region}:{account_id}:instance/{instance_id}',
+                  },
                   'techniques': [{'id': 'T1021.004',
                                   'name': 'Usage of EC2 Serial Console to Push an SSH Public '
                                           'Key'}]}],

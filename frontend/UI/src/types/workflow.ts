@@ -6,6 +6,8 @@
  * for their SIEM to report what it caught, then score the difference.
  */
 
+import type { AccountCheck } from './prevention'
+
 /** Lifecycle of a workflow, in the order a run passes through it. */
 export type WorkflowStatus =
   | 'scheduled'
@@ -101,6 +103,27 @@ export interface WorkflowRun {
   archivedAt: string | null
 }
 
+/** Why a workflow's account check did not run, as the backend records it. */
+export type AccountCheckSkipReason =
+  | 'no_connected_role'
+  | 'nothing_to_check'
+  | 'missing_permission'
+  | 'aws_error'
+  | 'check_failed'
+
+/**
+ * The account check a workflow ran just before deploying.
+ *
+ * A snapshot of the owner's policies, never rerun, so it stays true to that
+ * run. Since 2026-10-05 it is taken once the lab is deployed, just before the
+ * attack (`afterDeploy`); older runs were checked before deploy, as the
+ * connected role only. A skip carries AWS's error code but never its
+ * message, which would name the caller's account id.
+ */
+export type WorkflowAccountCheck =
+  | { status: 'checked'; checkedAt: string; afterDeploy?: boolean; result: AccountCheck }
+  | { status: 'skipped'; checkedAt: string; afterDeploy?: boolean; reason: AccountCheckSkipReason; errorCode?: string }
+
 /** A workflow with its per-rule verdicts. */
 export interface WorkflowRunDetail extends WorkflowRun {
   report: { rules: RuleOutcome[]; unmatched: AlertEvidence[] } | null
@@ -110,6 +133,8 @@ export interface WorkflowRunDetail extends WorkflowRun {
   stackStatus: string
   emulationRunId: string | null
   emulationRunStatus: string
+  /** Null on runs that predate the check. */
+  accountCheck: WorkflowAccountCheck | null
 }
 
 /** A webhook a client's SIEM posts alerts to. Never carries the secret. */

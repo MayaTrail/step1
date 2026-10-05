@@ -12,8 +12,8 @@ import { BLOCK_LABELS, type BlockType } from './playbookBlocks'
  * It documents what each block becomes for a reader, since that is the part
  * that is not visible from the editor alone.
  *
- * Deliberately has no backdrop, unlike WorkflowDrawer, StackDrawer and
- * EndpointDrawer. Those dim the page because the reader is focused on one item
+ * Deliberately has no backdrop, unlike StackDrawer, EndpointDrawer and
+ * GuardrailDrawer. Those dim the page because the reader is focused on one item
  * and the list behind is irrelevant. A reference panel is the opposite case:
  * its whole value is being readable while you work, so the page stays visible
  * and clickable and shifts left to make room rather than being covered. Please

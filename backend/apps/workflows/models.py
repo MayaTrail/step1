@@ -248,6 +248,19 @@ class WorkflowRun(models.Model):
             "detection failure, and blending them hides the actionable one."
         ),
     )
+    account_check = models.JSONField(
+        null=True,
+        blank=True,
+        help_text=(
+            "What the owner's AWS policies would refuse, as simulated once the "
+            "lab is deployed and just before the attack, for each identity the "
+            "attack acts as. Runs from before 2026-10-05 were checked before "
+            "deploy, as the connected role only. Kept on the run so it describes "
+            "the policies in force for this run. Shown beside the score and never part of it: only a "
+            "refusal observed during the attack may explain a silent detection. "
+            "Null on runs that predate the check."
+        ),
+    )
     archived_at = models.DateTimeField(
         null=True,
         blank=True,
