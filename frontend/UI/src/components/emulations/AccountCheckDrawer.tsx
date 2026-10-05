@@ -500,6 +500,26 @@ export function ActionRow({ row, identity }: { row: CheckedAction; identity?: Ch
       </>
     )
   }
+
+  // Judged against all resources rather than the one the attack targets: no
+  // deployed lab names it yet (fallback), or the result predates resource
+  // declarations (unspecified). When the answer is otherwise a plain "allowed",
+  // that scope is the only caveat, so it takes the reason slot next to the
+  // verdict and the verdict is dimmed to read as provisional, not confirmed.
+  // The instruction callout above the phases explains it in full.
+  const judgedAgainstAll =
+    (row.resourceScope === 'fallback' || row.resourceScope === 'unspecified') &&
+    row.verdict !== 'no_identity' &&
+    row.verdict !== 'not_checked'
+  if (judgedAgainstAll && !why) {
+    why = (
+      <span className="text-accent-blue">
+        {row.resourceScope === 'fallback' ? 'all resources · deploy to check' : 'all resources'}
+      </span>
+    )
+    tone = 'text-content-dim'
+  }
+
   return (
     <div className="flex items-baseline gap-2.5 border-t border-border py-2 text-xs">
       <span className="min-w-0 flex-1 break-all font-mono text-content-secondary">
@@ -507,23 +527,6 @@ export function ActionRow({ row, identity }: { row: CheckedAction; identity?: Ch
         {identity && (
           <span className="ml-1.5 rounded border border-border px-1 font-mono text-2xs text-content-dim">
             {KIND_TAG[identity.kind]}
-          </span>
-        )}
-        {/* Judged against all resources rather than the one the attack targets:
-            either no lab is deployed to name it yet (fallback), or the result
-            predates resource declarations (unspecified). A rule written for a
-            specific resource would not have been matched. */}
-        {(row.resourceScope === 'fallback' || row.resourceScope === 'unspecified') &&
-          row.verdict !== 'no_identity' && row.verdict !== 'not_checked' && (
-          <span
-            title={
-              row.resourceScope === 'fallback'
-                ? 'No lab is deployed yet, so AWS judged this against all resources. Deploy the lab to check the exact resource.'
-                : 'No resource is declared for this action, so AWS judged it against all resources'
-            }
-            className="ml-1.5 rounded border border-dashed border-border px-1 font-mono text-2xs text-content-dim"
-          >
-            {row.resourceScope === 'fallback' ? 'deploy to check' : 'all resources'}
           </span>
         )}
       </span>
@@ -666,6 +669,35 @@ function LabLine({ check }: { check: AccountCheck }) {
   return null
 }
 
+/**
+ * Why some "allowed" answers are provisional, and how to make them exact.
+ *
+ * Shown only when the connected role has an action judged against all resources
+ * because no lab is deployed to name its real target. It instructs rather than
+ * warns: a fallback is an incomplete answer, not a problem with the account.
+ */
+function FallbackNote({ check }: { check: AccountCheck }) {
+  const anyFallback = check.actions.some((row) => row.resourceScope === 'fallback')
+  if (!anyFallback) return null
+  return (
+    <div className="mt-3.5 rounded-btn border border-border bg-surface-elevated px-3.5 py-3 shadow-ring">
+      <p className="text-xs leading-relaxed text-content-secondary">
+        <span className="text-content-primary">Some actions were checked against all resources.</span>{' '}
+        No lab is deployed, so they were judged against every resource, not the exact one the attack
+        targets. &quot;Allowed&quot; here means your role can perform them in general. Deploy the lab to
+        check against the real resource, where the answer can change if your role is limited to specific
+        resources.
+      </p>
+      <Link
+        to="?tab=live"
+        className="mt-2 inline-block text-xs text-accent-blue no-underline transition-opacity hover:opacity-60"
+      >
+        Deploy this emulation &rsaquo;
+      </Link>
+    </div>
+  )
+}
+
 /** Who performs the attack's actions, and whether each identity could be checked. */
 function IdentityList({ identities }: { identities: CheckIdentity[] }) {
   return (
@@ -759,6 +791,8 @@ function Answer({ check, prevention }: { check: AccountCheck; prevention: Preven
       </section>
 
       <LabLine check={check} />
+
+      <FallbackNote check={check} />
 
       {identities.size > 0 && (
         <Section label="Who performs these actions">
