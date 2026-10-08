@@ -1,0 +1,15 @@
+// EBS snapshot shared with another AWS account (T1537)
+//
+// ec2:ModifySnapshotAttribute with createVolumePermission.add. Allowlist your organization's
+// accounts and your backup vault accounts.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "ec2.amazonaws.com"
+| where EventName == "ModifySnapshotAttribute"
+| where RequestParameters has "createVolumePermission"
+| where RequestParameters has '"add"'
+| project TimeGenerated, EventName, ErrorCode, PrincipalArn = UserIdentityArn,
+          SourceIp = SourceIpAddress, AWSRegion, UserAgent, RequestParameters
+| order by TimeGenerated desc

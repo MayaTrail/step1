@@ -1,0 +1,14 @@
+// S3 bucket policy grants another AWS account access (T1537)
+//
+// s3:PutBucketPolicy naming an account-root principal. Compare the account IDs against your
+// organization; IAM Access Analyzer gives the authoritative external-access answer.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "s3.amazonaws.com"
+| where EventName == "PutBucketPolicy"
+| where RequestParameters has ":root"
+| project TimeGenerated, EventName, ErrorCode, PrincipalArn = UserIdentityArn,
+          SourceIp = SourceIpAddress, AWSRegion, UserAgent, RequestParameters
+| order by TimeGenerated desc

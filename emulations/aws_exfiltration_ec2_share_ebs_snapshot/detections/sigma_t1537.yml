@@ -1,0 +1,30 @@
+# Exfiltrate an EBS Snapshot by Sharing It (T1537)
+#
+# ec2:ModifySnapshotAttribute with createVolumePermission.add. Allowlist your organization's
+# accounts and your backup vault accounts.
+title: EBS snapshot shared with another AWS account
+id: 6ca2a227-b107-5c53-917d-9c114d7ee4ab
+status: experimental
+description: >-
+  Detects ec2:ModifySnapshotAttribute adding createVolumePermission to an EBS
+  snapshot. The recipient can create a volume from it and read the disk in an
+  account you do not control.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.exfiltration.ec2-share-ebs-snapshot/
+  - https://attack.mitre.org/techniques/T1537/
+tags:
+  - attack.exfiltration
+  - attack.t1537
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'ModifySnapshotAttribute'
+  adds_perm:
+    requestParameters|contains: '"createVolumePermission":{"add"'
+  condition: selection and adds_perm
+falsepositives:
+  - Cross-account backup or DR copies to accounts in the same organization.
+level: high

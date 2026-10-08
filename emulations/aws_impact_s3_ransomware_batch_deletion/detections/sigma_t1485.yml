@@ -1,0 +1,28 @@
+# S3 Ransomware Through Batch Object Deletion (T1485)
+#
+# s3:DeleteObjects (S3 data event). Tune by principal: alert on principals that do not
+# normally delete, or on bursts. Requires the trail to log S3 data events.
+title: S3 objects deleted in bulk with DeleteObjects
+id: 1f8b41aa-3514-5ba0-891c-4b38ddaa8af8
+status: experimental
+description: >-
+  Detects s3:DeleteObjects, which removes up to 1,000 objects per call. Several
+  calls from one principal in a short window, without matching writes, is the
+  destruction stage of S3 ransomware. Requires S3 data events on the trail.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.impact.s3-ransomware-batch-deletion/
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'DeleteObjects'
+  condition: selection
+falsepositives:
+  - Lifecycle-style cleanup jobs and ETL pipelines that batch-delete staging data.
+level: medium

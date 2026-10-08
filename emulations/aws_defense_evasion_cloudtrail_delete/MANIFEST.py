@@ -1,0 +1,68 @@
+"""
+MANIFEST for the Delete CloudTrail Trail atomic emulation.
+
+Migrated from Stratus Red Team `aws.defense-evasion.cloudtrail-delete`. The id/name is the
+import-safe underscore form; the original id is in `aliases`.
+schema_version 3.
+"""
+
+MANIFEST = {   'schema_version': 3,
+    'name': 'aws_defense_evasion_cloudtrail_delete',
+    'display_name': 'Delete CloudTrail Trail',
+    'description': 'Simulates an attacker permanently deleting a CloudTrail trail with '
+                   'cloudtrail:DeleteTrail so that subsequent API activity is no longer delivered by it. '
+                   'Unlike StopLogging this cannot be undone from the API: the trail configuration is gone.',
+    'tier': 'atomic',
+    'platform': 'aws',
+    'added': '2026-10',
+    'services': ['CloudTrail', 'S3', 'IAM'],
+    'readiness': {'type': 'none'},
+    'origin': 'stratus-red-team',
+    'origin_label': 'ATOMIC TECHNIQUE',
+    'tags': ['Defense Evasion', 'CloudTrail'],
+    'technique_count': 1,
+    'severity': 'HIGH',
+    'aliases': 'aws.defense-evasion.cloudtrail-delete',
+    'attribution': 'Stratus Red Team — atomic technique',
+    'active_since': 'Atomic technique (Stratus Red Team)',
+    'targets': 'AWS accounts where principals hold cloudtrail:DeleteTrail',
+    'incidents': ['Stratus Red Team — AWS attack technique catalogue'],
+    'identities': {   'attacker_role': {   'kind': 'lab_role',
+                                           'label': "The lab's attacker role",
+                                           'output': 'attacker_role_arn'}},
+    'attack_path': [   {   'phase': 1,
+                           'name': 'Defense Evasion',
+                           'aws_actions': ['cloudtrail:DeleteTrail', 'cloudtrail:GetTrail', 'sts:AssumeRole'],
+                           'acting_as': {   'connected_role': ['sts:AssumeRole'],
+                                            'attacker_role': [   'cloudtrail:DeleteTrail',
+                                                                 'cloudtrail:GetTrail']},
+                           'aws_resources': {   'sts:AssumeRole': '{attacker_role_arn}',
+                                                'cloudtrail:GetTrail': '{trail_arn}',
+                                                'cloudtrail:DeleteTrail': '{trail_arn}'},
+                           'techniques': [   {   'id': 'T1685.002',
+                                                 'name': 'Disable or Modify Tools: Disable or Modify Cloud '
+                                                         'Log'}]}],
+    'mitre_mappings': [   {   'id': 'T1685.002',
+                              'name': 'Disable or Modify Tools: Disable or Modify Cloud Log',
+                              'tactic': 'Defense Evasion',
+                              'platform': 'AWS',
+                              'description': 'cloudtrail:DeleteTrail removing a trail'}],
+    'references': [   {   'icon': '>',
+                          'title': 'Stratus Red Team — Delete CloudTrail Trail',
+                          'source': 'Stratus Red Team · stratus-red-team.cloud',
+                          'type': 'REFERENCE',
+                          'color': 'cyan',
+                          'url': 'https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.cloudtrail-delete/'},
+                      {   'icon': '#',
+                          'title': 'MITRE ATT&CK — T1685.002',
+                          'source': 'MITRE ATT&CK · mitre.org',
+                          'type': 'MITRE',
+                          'color': 'purple',
+                          'url': 'https://attack.mitre.org/techniques/T1685/002/'}],
+    'phase_count': 1,
+    'estimated_duration_minutes': 3,
+    'estimated_cost_per_hour_usd': 0.0,
+    'default_ttl_hours': 1,
+    'total_resources': 6,
+    'resources': {'ec2_count': 0, 'instance_types': []},
+    'resource_costs': []}

@@ -1,0 +1,75 @@
+"""
+MANIFEST for the Stop CloudTrail Trail atomic emulation.
+
+Migrated from Stratus Red Team `aws.defense-evasion.cloudtrail-stop`. The id/name is the
+import-safe underscore form; the original id is in `aliases`.
+schema_version 3.
+"""
+
+MANIFEST = {   'schema_version': 3,
+    'name': 'aws_defense_evasion_cloudtrail_stop',
+    'display_name': 'Stop CloudTrail Trail',
+    'description': 'Simulates an attacker calling cloudtrail:StopLogging on a trail to pause API audit '
+                   'logging while they act, then restoring it with StartLogging to blend back in. '
+                   'StopLogging is one of the highest-signal events in AWS and raises the GuardDuty finding '
+                   'Stealth:IAMUser/CloudTrailLoggingDisabled.',
+    'tier': 'atomic',
+    'platform': 'aws',
+    'added': '2026-10',
+    'services': ['CloudTrail', 'S3', 'IAM'],
+    'readiness': {'type': 'none'},
+    'origin': 'stratus-red-team',
+    'origin_label': 'ATOMIC TECHNIQUE',
+    'tags': ['Defense Evasion', 'CloudTrail'],
+    'technique_count': 1,
+    'severity': 'HIGH',
+    'aliases': 'aws.defense-evasion.cloudtrail-stop',
+    'attribution': 'Stratus Red Team — atomic technique',
+    'active_since': 'Atomic technique (Stratus Red Team)',
+    'targets': 'AWS accounts where principals hold cloudtrail:StopLogging',
+    'incidents': ['Stratus Red Team — AWS attack technique catalogue'],
+    'identities': {   'attacker_role': {   'kind': 'lab_role',
+                                           'label': "The lab's attacker role",
+                                           'output': 'attacker_role_arn'}},
+    'attack_path': [   {   'phase': 1,
+                           'name': 'Defense Evasion',
+                           'aws_actions': [   'cloudtrail:GetTrailStatus',
+                                              'cloudtrail:StartLogging',
+                                              'cloudtrail:StopLogging',
+                                              'sts:AssumeRole'],
+                           'acting_as': {   'connected_role': ['sts:AssumeRole'],
+                                            'attacker_role': [   'cloudtrail:GetTrailStatus',
+                                                                 'cloudtrail:StartLogging',
+                                                                 'cloudtrail:StopLogging']},
+                           'aws_resources': {   'sts:AssumeRole': '{attacker_role_arn}',
+                                                'cloudtrail:GetTrailStatus': '{trail_arn}',
+                                                'cloudtrail:StopLogging': '{trail_arn}',
+                                                'cloudtrail:StartLogging': '{trail_arn}'},
+                           'techniques': [   {   'id': 'T1685.002',
+                                                 'name': 'Disable or Modify Tools: Disable or Modify Cloud '
+                                                         'Log'}]}],
+    'mitre_mappings': [   {   'id': 'T1685.002',
+                              'name': 'Disable or Modify Tools: Disable or Modify Cloud Log',
+                              'tactic': 'Defense Evasion',
+                              'platform': 'AWS',
+                              'description': 'cloudtrail:StopLogging pausing a trail, followed by '
+                                             'StartLogging'}],
+    'references': [   {   'icon': '>',
+                          'title': 'Stratus Red Team — Stop CloudTrail Trail',
+                          'source': 'Stratus Red Team · stratus-red-team.cloud',
+                          'type': 'REFERENCE',
+                          'color': 'cyan',
+                          'url': 'https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.cloudtrail-stop/'},
+                      {   'icon': '#',
+                          'title': 'MITRE ATT&CK — T1685.002',
+                          'source': 'MITRE ATT&CK · mitre.org',
+                          'type': 'MITRE',
+                          'color': 'purple',
+                          'url': 'https://attack.mitre.org/techniques/T1685/002/'}],
+    'phase_count': 1,
+    'estimated_duration_minutes': 3,
+    'estimated_cost_per_hour_usd': 0.0,
+    'default_ttl_hours': 1,
+    'total_resources': 6,
+    'resources': {'ec2_count': 0, 'instance_types': []},
+    'resource_costs': []}

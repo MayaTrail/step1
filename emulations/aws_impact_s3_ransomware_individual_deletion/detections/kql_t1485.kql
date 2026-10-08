@@ -1,0 +1,14 @@
+// Burst of single-object S3 deletes (T1485)
+//
+// s3:DeleteObject (S3 data event). Base rule for a burst threshold: alert when one principal
+// deletes many objects in one bucket within minutes. Requires S3 data events.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "s3.amazonaws.com"
+| where EventName == "DeleteObject"
+| summarize Deletes = count(), FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated)
+    by PrincipalArn = UserIdentityArn, Bucket = tostring(parse_json(RequestParameters).bucketName),
+       bin(TimeGenerated, 5m)
+| where Deletes >= 50

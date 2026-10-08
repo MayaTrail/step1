@@ -1,0 +1,71 @@
+"""
+MANIFEST for the Delete CloudTrail Logs Through an S3 Lifecycle Rule atomic emulation.
+
+Migrated from Stratus Red Team `aws.defense-evasion.cloudtrail-lifecycle-rule`. The id/name is the
+import-safe underscore form; the original id is in `aliases`.
+schema_version 3.
+"""
+
+MANIFEST = {   'schema_version': 3,
+    'name': 'aws_defense_evasion_cloudtrail_lifecycle_rule',
+    'display_name': 'Delete CloudTrail Logs Through an S3 Lifecycle Rule',
+    'description': 'Simulates an attacker adding a 1-day expiration lifecycle rule to the S3 bucket that '
+                   "stores a trail's logs, so S3 itself deletes historical and future audit logs within a "
+                   'day, without a single DeleteObject call from the attacker.',
+    'tier': 'atomic',
+    'platform': 'aws',
+    'added': '2026-10',
+    'services': ['CloudTrail', 'S3', 'IAM'],
+    'readiness': {'type': 'none'},
+    'origin': 'stratus-red-team',
+    'origin_label': 'ATOMIC TECHNIQUE',
+    'tags': ['Defense Evasion', 'CloudTrail', 'S3'],
+    'technique_count': 1,
+    'severity': 'HIGH',
+    'aliases': 'aws.defense-evasion.cloudtrail-lifecycle-rule',
+    'attribution': 'Stratus Red Team — atomic technique',
+    'active_since': 'Atomic technique (Stratus Red Team)',
+    'targets': 'AWS accounts where principals can set lifecycle configuration on CloudTrail log buckets',
+    'incidents': ['Stratus Red Team — AWS attack technique catalogue'],
+    'identities': {   'attacker_role': {   'kind': 'lab_role',
+                                           'label': "The lab's attacker role",
+                                           'output': 'attacker_role_arn'}},
+    'attack_path': [   {   'phase': 1,
+                           'name': 'Defense Evasion',
+                           'aws_actions': [   's3:GetLifecycleConfiguration',
+                                              's3:PutLifecycleConfiguration',
+                                              'sts:AssumeRole'],
+                           'acting_as': {   'connected_role': ['sts:AssumeRole'],
+                                            'attacker_role': [   's3:GetLifecycleConfiguration',
+                                                                 's3:PutLifecycleConfiguration']},
+                           'aws_resources': {   'sts:AssumeRole': '{attacker_role_arn}',
+                                                's3:GetLifecycleConfiguration': '{bucket_arn}',
+                                                's3:PutLifecycleConfiguration': '{bucket_arn}'},
+                           'techniques': [   {   'id': 'T1685.002',
+                                                 'name': 'Disable or Modify Tools: Disable or Modify Cloud '
+                                                         'Log'}]}],
+    'mitre_mappings': [   {   'id': 'T1685.002',
+                              'name': 'Disable or Modify Tools: Disable or Modify Cloud Log',
+                              'tactic': 'Defense Evasion',
+                              'platform': 'AWS',
+                              'description': 's3:PutBucketLifecycleConfiguration expiring a CloudTrail log '
+                                             "bucket's objects"}],
+    'references': [   {   'icon': '>',
+                          'title': 'Stratus Red Team — Delete CloudTrail Logs Through an S3 Lifecycle Rule',
+                          'source': 'Stratus Red Team · stratus-red-team.cloud',
+                          'type': 'REFERENCE',
+                          'color': 'cyan',
+                          'url': 'https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.cloudtrail-lifecycle-rule/'},
+                      {   'icon': '#',
+                          'title': 'MITRE ATT&CK — T1685.002',
+                          'source': 'MITRE ATT&CK · mitre.org',
+                          'type': 'MITRE',
+                          'color': 'purple',
+                          'url': 'https://attack.mitre.org/techniques/T1685/002/'}],
+    'phase_count': 1,
+    'estimated_duration_minutes': 3,
+    'estimated_cost_per_hour_usd': 0.0,
+    'default_ttl_hours': 1,
+    'total_resources': 6,
+    'resources': {'ec2_count': 0, 'instance_types': []},
+    'resource_costs': []}

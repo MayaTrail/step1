@@ -1,0 +1,33 @@
+# Disable CloudTrail Logging Through Event Selectors (T1685.002)
+#
+# cloudtrail:PutEventSelectors with includeManagementEvents=false or readWriteType=ReadOnly
+# silences write activity without stopping the trail.
+title: CloudTrail event selectors changed to drop management events
+id: a86f7cd9-1de5-52ae-9012-24f89e4fe20d
+status: experimental
+description: >-
+  Detects cloudtrail:PutEventSelectors that excludes management events or
+  restricts a trail to read-only events. The trail keeps reporting IsLogging=true
+  while write activity goes unrecorded, which defeats StopLogging-based
+  detections.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.cloudtrail-event-selectors/
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense_impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'PutEventSelectors'
+  drops_mgmt:
+    requestParameters|contains:
+      - '"includeManagementEvents":false'
+      - '"readWriteType":"ReadOnly"'
+  condition: selection and drops_mgmt
+falsepositives:
+  - Cost-driven reconfiguration of a secondary trail (should be change-managed).
+level: high

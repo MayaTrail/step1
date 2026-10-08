@@ -1,0 +1,27 @@
+# Delete CloudTrail Trail (T1685.002)
+#
+# cloudtrail:DeleteTrail removes a trail configuration. Scope out the IaC roles that
+# legitimately destroy trails and alert on everything else.
+title: CloudTrail trail deleted
+id: 18f9879c-5412-5547-85b1-8e8cf02608a2
+status: experimental
+description: >-
+  Detects cloudtrail:DeleteTrail. Deleting a trail permanently stops its delivery
+  of API audit logs and is one of the clearest defense-evasion signals in AWS.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.cloudtrail-delete/
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense_impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'DeleteTrail'
+  condition: selection
+falsepositives:
+  - Infrastructure-as-code pipelines tearing down a trail.
+level: high

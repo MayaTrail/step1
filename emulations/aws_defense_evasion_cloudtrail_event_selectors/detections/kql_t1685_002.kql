@@ -1,0 +1,14 @@
+// CloudTrail event selectors drop management events (T1685.002)
+//
+// cloudtrail:PutEventSelectors with includeManagementEvents=false or readWriteType=ReadOnly
+// silences write activity without stopping the trail.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "cloudtrail.amazonaws.com"
+| where EventName == "PutEventSelectors"
+| where RequestParameters has '"includeManagementEvents":false' or RequestParameters has '"readWriteType":"ReadOnly"'
+| project TimeGenerated, EventName, ErrorCode, PrincipalArn = UserIdentityArn,
+          SourceIp = SourceIpAddress, AWSRegion, UserAgent, RequestParameters
+| order by TimeGenerated desc

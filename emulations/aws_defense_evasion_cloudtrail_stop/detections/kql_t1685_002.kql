@@ -1,0 +1,13 @@
+// CloudTrail trail logging stopped (T1685.002)
+//
+// cloudtrail:StopLogging pauses a trail. Legitimate use is near zero outside change-managed
+// maintenance. GuardDuty raises Stealth:IAMUser/CloudTrailLoggingDisabled for the same event.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "cloudtrail.amazonaws.com"
+| where EventName == "StopLogging"
+| project TimeGenerated, EventName, ErrorCode, PrincipalArn = UserIdentityArn,
+          SourceIp = SourceIpAddress, AWSRegion, UserAgent, RequestParameters
+| order by TimeGenerated desc

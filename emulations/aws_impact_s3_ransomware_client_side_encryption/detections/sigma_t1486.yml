@@ -1,0 +1,30 @@
+# S3 Ransomware Through Client-Side Encryption (T1486)
+#
+# s3:PutObject of <key>.encrypted (S3 data event). Ransomware families vary the suffix;
+# the KQL generalises to any put-new-key + delete-original pairing.
+title: S3 object rewritten with an .encrypted suffix
+id: f54ea1c9-c7ea-5fe2-83cf-4c526870edba
+status: experimental
+description: >-
+  Detects s3:PutObject writing a key that ends in .encrypted. Paired with
+  DeleteObject of the matching original key across many objects this is client-
+  side S3 ransomware. Requires S3 data events on the trail.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.impact.s3-ransomware-client-side-encryption/
+  - https://attack.mitre.org/techniques/T1486/
+tags:
+  - attack.impact
+  - attack.t1486
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutObject'
+  enc_suffix:
+    requestParameters.key|endswith: '.encrypted'
+  condition: selection and enc_suffix
+falsepositives:
+  - Backup tools that write client-side encrypted copies with this suffix.
+level: high

@@ -1,0 +1,30 @@
+# Exfiltrate an AMI by Sharing It (T1537)
+#
+# ec2:ModifyImageAttribute with launchPermission.add. Allowlist your own organization's
+# accounts; a userId outside it, or group "all", is exfiltration.
+title: AMI shared with another AWS account
+id: 262d3498-c7a4-5147-aab2-f4b4c4f60d89
+status: experimental
+description: >-
+  Detects ec2:ModifyImageAttribute adding a launch permission to an AMI. The
+  recipient account can launch or copy the image and read its volumes outside your
+  control.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.exfiltration.ec2-share-ami/
+  - https://attack.mitre.org/techniques/T1537/
+tags:
+  - attack.exfiltration
+  - attack.t1537
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'ModifyImageAttribute'
+  adds_perm:
+    requestParameters|contains: '"launchPermission":{"add"'
+  condition: selection and adds_perm
+falsepositives:
+  - Golden-AMI pipelines sharing images to accounts in the same organization.
+level: high

@@ -1,0 +1,66 @@
+"""
+MANIFEST for the S3 Ransomware Through Batch Object Deletion atomic emulation.
+
+Migrated from Stratus Red Team `aws.impact.s3-ransomware-batch-deletion`. The id/name is the
+import-safe underscore form; the original id is in `aliases`.
+schema_version 3.
+"""
+
+MANIFEST = {   'schema_version': 3,
+    'name': 'aws_impact_s3_ransomware_batch_deletion',
+    'display_name': 'S3 Ransomware Through Batch Object Deletion',
+    'description': 'Simulates the destruction stage of S3 ransomware: the attacker lists a bucket and '
+                   'deletes every object in batches of up to 1,000 with s3:DeleteObjects, so a whole bucket '
+                   'disappears in a handful of API calls. The lab bucket holds 100 synthetic objects with no '
+                   'versioning.',
+    'tier': 'atomic',
+    'platform': 'aws',
+    'added': '2026-10',
+    'services': ['S3', 'IAM'],
+    'readiness': {'type': 'none'},
+    'origin': 'stratus-red-team',
+    'origin_label': 'ATOMIC TECHNIQUE',
+    'tags': ['Impact', 'S3', 'Ransomware'],
+    'technique_count': 1,
+    'severity': 'HIGH',
+    'aliases': 'aws.impact.s3-ransomware-batch-deletion',
+    'attribution': 'Stratus Red Team — atomic technique',
+    'active_since': 'Atomic technique (Stratus Red Team)',
+    'targets': 'AWS accounts with unversioned S3 buckets and principals holding s3:DeleteObject',
+    'incidents': ['Stratus Red Team — AWS attack technique catalogue'],
+    'identities': {   'attacker_role': {   'kind': 'lab_role',
+                                           'label': "The lab's attacker role",
+                                           'output': 'attacker_role_arn'}},
+    'attack_path': [   {   'phase': 1,
+                           'name': 'Impact',
+                           'aws_actions': ['s3:DeleteObject', 's3:ListBucket', 'sts:AssumeRole'],
+                           'acting_as': {   'connected_role': ['sts:AssumeRole'],
+                                            'attacker_role': ['s3:DeleteObject', 's3:ListBucket']},
+                           'aws_resources': {   'sts:AssumeRole': '{attacker_role_arn}',
+                                                's3:ListBucket': '{bucket_arn}',
+                                                's3:DeleteObject': '{bucket_arn}/*'},
+                           'techniques': [{'id': 'T1485', 'name': 'Data Destruction'}]}],
+    'mitre_mappings': [   {   'id': 'T1485',
+                              'name': 'Data Destruction',
+                              'tactic': 'Impact',
+                              'platform': 'AWS',
+                              'description': "s3:DeleteObjects mass-deleting a bucket's objects"}],
+    'references': [   {   'icon': '>',
+                          'title': 'Stratus Red Team — S3 Ransomware Through Batch Object Deletion',
+                          'source': 'Stratus Red Team · stratus-red-team.cloud',
+                          'type': 'REFERENCE',
+                          'color': 'cyan',
+                          'url': 'https://stratus-red-team.cloud/attack-techniques/AWS/aws.impact.s3-ransomware-batch-deletion/'},
+                      {   'icon': '#',
+                          'title': 'MITRE ATT&CK — T1485',
+                          'source': 'MITRE ATT&CK · mitre.org',
+                          'type': 'MITRE',
+                          'color': 'purple',
+                          'url': 'https://attack.mitre.org/techniques/T1485/'}],
+    'phase_count': 1,
+    'estimated_duration_minutes': 3,
+    'estimated_cost_per_hour_usd': 0.0,
+    'default_ttl_hours': 1,
+    'total_resources': 104,
+    'resources': {'ec2_count': 0, 'instance_types': []},
+    'resource_costs': []}

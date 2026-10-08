@@ -1,0 +1,13 @@
+// Attempt to leave the AWS Organization (T1666)
+//
+// organizations:LeaveOrganization. Deliberately does not filter on errorCode: the emulation's
+// attempt is denied by an IAM guard, and real attackers are often denied by SCPs too.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "organizations.amazonaws.com"
+| where EventName == "LeaveOrganization"
+| project TimeGenerated, EventName, ErrorCode, PrincipalArn = UserIdentityArn,
+          SourceIp = SourceIpAddress, AWSRegion, UserAgent, RequestParameters
+| order by TimeGenerated desc

@@ -1,0 +1,29 @@
+# Attempt to Leave the AWS Organization (T1666)
+#
+# organizations:LeaveOrganization. Deliberately does not filter on errorCode: the emulation's
+# attempt is denied by an IAM guard, and real attackers are often denied by SCPs too.
+title: Attempt to leave the AWS Organization
+id: 7e156778-0da3-508d-833b-bf2778882885
+status: experimental
+description: >-
+  Detects organizations:LeaveOrganization, successful or not. A member account
+  leaving the organization escapes SCPs, the organization trail and delegated
+  security tooling. A denied attempt still shows intent and should be
+  investigated.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.organizations-leave/
+  - https://attack.mitre.org/techniques/T1666/
+tags:
+  - attack.defense_impairment
+  - attack.t1666
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'organizations.amazonaws.com'
+    eventName: 'LeaveOrganization'
+  condition: selection
+falsepositives:
+  - Planned account migration between organizations (rare, change-managed).
+level: high

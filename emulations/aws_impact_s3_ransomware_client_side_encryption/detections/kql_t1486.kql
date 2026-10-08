@@ -1,0 +1,20 @@
+// S3 objects replaced by .encrypted copies (T1486)
+//
+// s3:PutObject of <key>.encrypted (S3 data event). Ransomware families vary the suffix;
+// the KQL generalises to any put-new-key + delete-original pairing.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "s3.amazonaws.com"
+| where EventName in ("PutObject", "DeleteObject")
+| extend Req = parse_json(RequestParameters)
+| extend Bucket = tostring(Req.bucketName), Key = tostring(Req.key)
+| extend BaseKey = iff(EventName == "PutObject" and Key endswith ".encrypted",
+                       substring(Key, 0, strlen(Key) - 10), Key)
+| summarize Puts = countif(EventName == "PutObject" and Key endswith ".encrypted"),
+            Deletes = countif(EventName == "DeleteObject")
+    by PrincipalArn = UserIdentityArn, Bucket, BaseKey
+| where Puts > 0 and Deletes > 0
+| summarize RewrittenObjects = count() by PrincipalArn, Bucket
+| where RewrittenObjects >= 10

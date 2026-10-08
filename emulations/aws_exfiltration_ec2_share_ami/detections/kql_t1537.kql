@@ -1,0 +1,15 @@
+// AMI shared with another AWS account (T1537)
+//
+// ec2:ModifyImageAttribute with launchPermission.add. Allowlist your own organization's
+// accounts; a userId outside it, or group "all", is exfiltration.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "ec2.amazonaws.com"
+| where EventName == "ModifyImageAttribute"
+| where RequestParameters has "launchPermission"
+| where RequestParameters has '"add"'
+| project TimeGenerated, EventName, ErrorCode, PrincipalArn = UserIdentityArn,
+          SourceIp = SourceIpAddress, AWSRegion, UserAgent, RequestParameters
+| order by TimeGenerated desc

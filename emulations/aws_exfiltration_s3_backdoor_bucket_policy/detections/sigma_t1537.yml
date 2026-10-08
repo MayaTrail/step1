@@ -1,0 +1,31 @@
+# Backdoor an S3 Bucket Through Its Bucket Policy (T1537)
+#
+# s3:PutBucketPolicy naming an account-root principal. Compare the account IDs against your
+# organization; IAM Access Analyzer gives the authoritative external-access answer.
+title: S3 bucket policy grants access to another AWS account
+id: 2a27f903-0ca1-57e1-859a-9d34e4e2fd2e
+status: experimental
+description: >-
+  Detects s3:PutBucketPolicy installing a statement whose principal is an account
+  root (arn:aws:iam::<account>:root). Granting another account read access through
+  the bucket policy is a persistent exfiltration path that survives credential
+  rotation.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.exfiltration.s3-backdoor-bucket-policy/
+  - https://attack.mitre.org/techniques/T1537/
+tags:
+  - attack.exfiltration
+  - attack.t1537
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketPolicy'
+  cross_account:
+    requestParameters|contains: ':root'
+  condition: selection and cross_account
+falsepositives:
+  - Approved cross-account data sharing (log archive, analytics accounts).
+level: medium

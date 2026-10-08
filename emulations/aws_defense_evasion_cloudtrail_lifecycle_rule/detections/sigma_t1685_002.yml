@@ -1,0 +1,32 @@
+# Delete CloudTrail Logs Through an S3 Lifecycle Rule (T1685.002)
+#
+# PutBucketLifecycle with an Expiration action. Raise to high when the bucket is a
+# CloudTrail/Config/flow-log destination; join against DescribeTrails to find those buckets.
+title: Expiration lifecycle rule set on an S3 bucket
+id: 2e870fd1-b25f-53a8-8493-6ff2040c0419
+status: experimental
+description: >-
+  Detects s3:PutBucketLifecycleConfiguration (CloudTrail eventName
+  PutBucketLifecycle) adding an Expiration action. On a bucket that receives
+  CloudTrail, Config or VPC flow logs this makes S3 delete the audit trail without
+  any DeleteObject call.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.cloudtrail-lifecycle-rule/
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense_impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketLifecycle'
+  expires:
+    requestParameters|contains: 'Expiration'
+  condition: selection and expires
+falsepositives:
+  - Routine retention policies on non-log buckets.
+  - IaC applying an approved log-retention rule (typically 365+ days).
+level: medium

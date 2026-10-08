@@ -1,0 +1,14 @@
+// Expiration lifecycle rule on an S3 bucket (T1685.002)
+//
+// PutBucketLifecycle with an Expiration action. Raise to high when the bucket is a
+// CloudTrail/Config/flow-log destination; join against DescribeTrails to find those buckets.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "s3.amazonaws.com"
+| where EventName == "PutBucketLifecycle"
+| where RequestParameters has "Expiration"
+| project TimeGenerated, EventName, ErrorCode, PrincipalArn = UserIdentityArn,
+          SourceIp = SourceIpAddress, AWSRegion, UserAgent, RequestParameters
+| order by TimeGenerated desc

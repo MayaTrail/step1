@@ -1,0 +1,29 @@
+# S3 Ransomware Through Individual Object Deletion (T1485)
+#
+# s3:DeleteObject (S3 data event). Base rule for a burst threshold: alert when one principal
+# deletes many objects in one bucket within minutes. Requires S3 data events.
+title: S3 object deleted (ransomware burst candidate)
+id: 88d295be-e762-5b7d-8b16-cee3c4fab581
+status: experimental
+description: >-
+  Matches every s3:DeleteObject data event. On its own this is noisy; use it as
+  the base rule for a volume threshold per principal and bucket (see the KQL),
+  which is the destruction stage of S3 ransomware. Requires S3 data events on the
+  trail.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.impact.s3-ransomware-individual-deletion/
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'DeleteObject'
+  condition: selection
+falsepositives:
+  - Applications that delete objects as part of normal operation (tune per principal).
+level: low

@@ -1,0 +1,13 @@
+// CloudTrail trail deleted (T1685.002)
+//
+// cloudtrail:DeleteTrail removes a trail configuration. Scope out the IaC roles that
+// legitimately destroy trails and alert on everything else.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "cloudtrail.amazonaws.com"
+| where EventName == "DeleteTrail"
+| project TimeGenerated, EventName, ErrorCode, PrincipalArn = UserIdentityArn,
+          SourceIp = SourceIpAddress, AWSRegion, UserAgent, RequestParameters
+| order by TimeGenerated desc

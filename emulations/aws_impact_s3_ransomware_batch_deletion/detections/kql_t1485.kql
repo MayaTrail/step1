@@ -1,0 +1,13 @@
+// S3 objects deleted in bulk with DeleteObjects (T1485)
+//
+// s3:DeleteObjects (S3 data event). Tune by principal: alert on principals that do not
+// normally delete, or on bursts. Requires the trail to log S3 data events.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL.
+AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "s3.amazonaws.com"
+| where EventName == "DeleteObjects"
+| summarize Calls = count(), FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated)
+    by PrincipalArn = UserIdentityArn, Bucket = tostring(parse_json(RequestParameters).bucketName)
+| where Calls >= 1
