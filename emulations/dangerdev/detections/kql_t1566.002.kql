@@ -1,7 +1,14 @@
 // T1566.002 Phishing: Spearphishing Link — SES Abuse via Hijacked alice.chen
 // DangerDev: VerifyEmailIdentity + SendEmail using alice.chen hijacked session.
-// Critical chain: T1098 (alice.chen key creation) → T1566.002 (SES send) within 24h.
-// SES sandbox blocks external delivery but CloudTrail events still fully logged.
+// Critical chain: T1098 (alice.chen key creation) → T1566.002 (SES activity) within 24h.
+// Do NOT filter on ErrorCode: refused attempts are the signal. The MayaTrail emulation
+// yields VerifyEmailIdentity (success), SendEmail (MessageRejected, unverified sender,
+// mailbox-simulator recipient only), PutAccountDetails / UpdateAccountSendingEnabled
+// (AccessDenied from an explicit IAM Deny).
+// VISIBILITY: SendEmail / SendRawEmail / SendTemplatedEmail / SendBulkEmail are CloudTrail
+// DATA events (EventCategory "Data", resources.type AWS::SES::EmailIdentity). They are not
+// in Event History or default trails; they need an advanced event selector for
+// AWS::SES::EmailIdentity. SMTP-interface sends are never logged.
 
 let hijacked_accounts = AWSCloudTrail
 | where TimeGenerated > ago(2d)
@@ -15,26 +22,29 @@ let hijacked_accounts = AWSCloudTrail
 AWSCloudTrail
 | where TimeGenerated > ago(1d)
 | where EventSource == "ses.amazonaws.com"
-| where EventName in ("SendEmail", "SendRawEmail", "VerifyEmailIdentity", "CreateEmailIdentity")
+| where EventName in ("SendEmail", "SendRawEmail", "VerifyEmailIdentity", "CreateEmailIdentity",
+                      "PutAccountDetails", "UpdateAccountSendingEnabled", "PutAccountSendingAttributes")
 | where UserIdentityType == "IAMUser"
 | where UserIdentityArn !contains "SESDeliveryRole"
 | where UserIdentityArn !contains "MarketingAutomation"
 | where UserIdentityArn !contains "ses-smtp-user"
 | extend EmailIdentity = tostring(parse_json(RequestParameters).emailAddress)
+| extend Outcome = iff(isempty(ErrorCode), "Succeeded", strcat("Refused: ", ErrorCode))
 | join kind=leftouter (hijacked_accounts) on $left.UserIdentityUserName == $right.HijackedUser
 | extend WasHijacked = isnotempty(HijackTime)
 | extend Severity = case(
+    EventName in ("PutAccountDetails", "UpdateAccountSendingEnabled", "PutAccountSendingAttributes"), "Critical",
     WasHijacked and EventName in ("SendEmail", "SendRawEmail"), "Critical",
     WasHijacked,                                                 "High",
     EventName in ("SendEmail", "SendRawEmail"),                  "High",
     "Medium"
   )
 | extend AlertTitle = case(
-    WasHijacked, strcat("SES Phishing via Hijacked Account: ",
+    WasHijacked, strcat("SES ", EventName, " (", Outcome, ") via Hijacked Account: ",
         UserIdentityUserName, " (hijacked by ", HijackActor, ")"),
-    strcat("SES Send/Identity from Non-Service IAM Principal: ", UserIdentityUserName)
+    strcat("SES ", EventName, " (", Outcome, ") from Non-Service IAM Principal: ", UserIdentityUserName)
   )
-| project TimeGenerated, Severity, AlertTitle, EventName, UserIdentityUserName,
+| project TimeGenerated, Severity, AlertTitle, EventName, ErrorCode, Outcome, UserIdentityUserName,
           UserIdentityArn, EmailIdentity, WasHijacked, HijackTime, HijackActor,
           SourceIpAddress, UserAgent, AwsRegion
 | sort by TimeGenerated desc

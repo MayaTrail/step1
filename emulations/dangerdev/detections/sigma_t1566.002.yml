@@ -1,18 +1,28 @@
-title: DangerDev — SES Email Send or Identity Creation from Non-Automation Principal
+title: DangerDev — SES Send, Identity Creation or Sandbox-Exit Attempt from Non-Automation Principal
 id: c5d6e7f8-a9b0-4234-cdef-000000000014
 status: experimental
 description: >
-  Detects SES SendEmail, SendRawEmail, or VerifyEmailIdentity from IAM user principals
-  not associated with approved email delivery roles. DangerDev used alice.chen's hijacked
-  credentials to create SES identities for phishing campaigns targeting cryptocurrency
-  exchange users and PayPal accounts. SES sandbox mode in the lab account prevents
-  external delivery, but CloudTrail events are still generated. Production SES abuse
-  triggers AWS Trust & Safety suspension.
+  Detects SES SendEmail / SendRawEmail, identity creation (VerifyEmailIdentity,
+  CreateEmailIdentity) and account-level SES abuse (PutAccountDetails = request to leave
+  the SES sandbox, UpdateAccountSendingEnabled / PutAccountSendingAttributes) from IAM
+  user principals not associated with approved email delivery roles. DangerDev used
+  alice.chen's hijacked credentials to create SES identities for PayPal-themed phishing.
+  The rule does NOT filter on errorCode: refused attempts (AccessDenied on
+  PutAccountDetails, MessageRejected on SendEmail from an unverified identity) are the
+  signal, and the MayaTrail emulation produces exactly those.
+  VISIBILITY CAVEAT: SendEmail, SendRawEmail, SendTemplatedEmail and SendBulkEmail are
+  CloudTrail DATA events (resources.type AWS::SES::EmailIdentity). They are absent from
+  Event History and from default management-event trails, and only appear when a trail
+  has an advanced event selector for AWS::SES::EmailIdentity (the lab deploys
+  dangerdev-ses-data-events-trail for its lab identity). Mail sent via the SES SMTP
+  interface is never logged. Identity and account calls are management events.
 references:
     - https://attack.mitre.org/techniques/T1566/002/
     - https://www.invictus-ir.com/news/the-curious-case-of-dangerdev-protonmail-me
+    - https://docs.aws.amazon.com/ses/latest/dg/logging-using-cloudtrail.html
 author: MayaTrail
 date: 2026/04/15
+modified: 2026/10/09
 tags:
     - attack.initial_access
     - attack.t1566.002
@@ -27,6 +37,9 @@ detection:
             - SendRawEmail
             - VerifyEmailIdentity
             - CreateEmailIdentity
+            - PutAccountDetails
+            - UpdateAccountSendingEnabled
+            - PutAccountSendingAttributes
         userIdentity.type: IAMUser
     filter_ses_roles:
         userIdentity.arn|contains:
@@ -35,6 +48,12 @@ detection:
             - ':assumed-role/MarketingAutomation'
             - 'ses-smtp-user'
     condition: selection and not filter_ses_roles
+fields:
+    - eventName
+    - eventCategory
+    - errorCode
+    - userIdentity.arn
+    - requestParameters
 falsepositives:
     - Developers testing SES integration from personal IAM credentials (sandbox only)
     - Legacy applications using IAM user credentials for SES (should migrate to roles)
