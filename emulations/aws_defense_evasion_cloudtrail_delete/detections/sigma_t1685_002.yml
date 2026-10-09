@@ -1,16 +1,33 @@
 # Delete CloudTrail Trail (T1685.002)
 #
-# cloudtrail:DeleteTrail removes a trail configuration. Scope out the IaC roles that
-# legitimately destroy trails and alert on everything else.
+# THE GENERATED RULE IS KEPT AS THE PRIMARY DOCUMENT. eventSource + eventName DeleteTrail with
+# no errorCode filter is right: a refused DeleteTrail (an SCP, an organization trail touched from
+# a member account - NotOrganizationMasterAccountException) is the same intent against a better
+# defended trail, and it is exactly the attempt that precedes a quieter retry.
+#
+# FIELD SHAPE. eventSource cloudtrail.amazonaws.com, MANAGEMENT event, trail home Region (a call
+# from any other Region fails with InvalidHomeRegionException). requestParameters.name holds the
+# trail name or ARN as the caller passed it; responseElements is null. The deletion is permanent:
+# the configuration (selectors, bucket, KMS key, CloudWatch Logs wiring) cannot be read back after
+# the fact, so the last CreateTrail/UpdateTrail event for the trail is the only record of what it
+# was. Log files already delivered stay in the bucket.
+#
+# WHAT WAS ADDED. A second document for the quieter sibling - UpdateTrail weakening a trail that
+# still exists (single-Region, no global service events, no log file validation). It is a
+# different call from the one this emulation makes and is shipped at medium so it does not change
+# what the detail page displays for this package.
 title: CloudTrail trail deleted
 id: 18f9879c-5412-5547-85b1-8e8cf02608a2
+name: cloudtrail_delete_trail
 status: experimental
 description: >-
-  Detects cloudtrail:DeleteTrail. Deleting a trail permanently stops its delivery
-  of API audit logs and is one of the clearest defense-evasion signals in AWS.
+  Detects cloudtrail:DeleteTrail, successful or refused. Deleting a trail permanently stops its
+  delivery of API audit logs and erases its configuration; it is one of the clearest
+  defense-impairment signals in AWS.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.cloudtrail-delete/
   - https://attack.mitre.org/techniques/T1685/002/
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_DeleteTrail.html
 tags:
   - attack.defense_impairment
   - attack.t1685.002
@@ -23,5 +40,41 @@ detection:
     eventName: 'DeleteTrail'
   condition: selection
 falsepositives:
-  - Infrastructure-as-code pipelines tearing down a trail.
+  - An infrastructure-as-code pipeline tearing down a trail it owns. Allowlist that pipeline's
+    role ARN rather than muting the rule.
 level: high
+---
+# The trail survives but records less. Each selection is one documented weakening; any of them
+# on a production trail removes coverage without producing a DeleteTrail or StopLogging. Booleans
+# are matched unquoted: CloudTrail renders these request members as JSON booleans.
+title: CloudTrail trail weakened with UpdateTrail
+id: 9bfa08f4-a5fb-4f29-b196-7590ebbd0419
+status: experimental
+description: >-
+  Detects cloudtrail:UpdateTrail turning a trail single-Region, dropping global service events or
+  disabling log file validation. The trail keeps reporting IsLogging=true while it records less,
+  or records it without integrity protection.
+references:
+  - https://attack.mitre.org/techniques/T1685/002/
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_UpdateTrail.html
+tags:
+  - attack.defense_impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'UpdateTrail'
+  single_region:
+    requestParameters.isMultiRegionTrail: false
+  no_global_events:
+    requestParameters.includeGlobalServiceEvents: false
+  no_validation:
+    requestParameters.enableLogFileValidation: false
+  condition: selection and (single_region or no_global_events or no_validation)
+falsepositives:
+  - A deliberate cost reduction on a secondary trail, which should be change-managed and should
+    never touch the account's primary multi-Region trail.
+level: medium

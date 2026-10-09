@@ -1,14 +1,52 @@
-// S3 bucket policy grants another AWS account access (T1537)
+// S3 bucket policy grants access outside the account, statement by statement (T1537)
 //
-// s3:PutBucketPolicy naming an account-root principal. Compare the account IDs against your
-// organization; IAM Access Analyzer gives the authoritative external-access answer.
+// Expands every Allow statement of every PutBucketPolicy, extracts the AWS principals, and keeps
+// those that are "*" or belong to an account other than the bucket owner (RecipientAccountId)
+// and not on the allowlist. Statements scoped with aws:PrincipalOrgID are flagged, not dropped.
+// Each grant is paired with the next DeleteBucketPolicy / PutBucketPolicy on the same bucket, the
+// earliest point the grant could have been removed. Read the later policy to confirm it was.
 //
-// Dialect: Sentinel / Azure Log Analytics KQL.
-AWSCloudTrail
-| where TimeGenerated > ago(7d)
-| where EventSource == "s3.amazonaws.com"
-| where EventName == "PutBucketPolicy"
-| where RequestParameters has ":root"
-| project TimeGenerated, EventName, ErrorCode, PrincipalArn = UserIdentityArn,
-          SourceIp = SourceIpAddress, AWSRegion, UserAgent, RequestParameters
-| order by TimeGenerated desc
+// PutBucketPolicy is a management event; the GetObject / ListObjects calls a backdoor enables are
+// DATA events, present only if the trail logs S3 data events for the bucket.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL (AWSCloudTrail table).
+let lookback = 30d;
+let KnownAccounts = dynamic(["000000000000"]);    // your organization's account IDs
+let changes = AWSCloudTrail
+    | where TimeGenerated > ago(lookback)
+    | where EventSource == "s3.amazonaws.com" and EventName in ("PutBucketPolicy", "DeleteBucketPolicy")
+    | where isempty(ErrorCode)
+    | extend Req = parse_json(RequestParameters)
+    | extend Bucket = tostring(Req.bucketName);
+let grants = AWSCloudTrail
+    | where TimeGenerated > ago(lookback)
+    | where EventSource == "s3.amazonaws.com" and EventName == "PutBucketPolicy"
+    | extend Req = parse_json(RequestParameters)
+    | extend Bucket = tostring(Req.bucketName), Policy = Req.bucketPolicy
+    | mv-expand Stmt = Policy.Statement
+    | where tostring(Stmt.Effect) == "Allow"
+    | extend RawPrincipal = Stmt.Principal
+    | extend Principals = case(tostring(RawPrincipal) == "*", dynamic(["*"]),
+                               isnotempty(RawPrincipal.AWS), iff(gettype(RawPrincipal.AWS) == "array",
+                                                                RawPrincipal.AWS, pack_array(RawPrincipal.AWS)),
+                               dynamic([]))
+    | mv-expand Principal = Principals to typeof(string)
+    | extend PrincipalAccount = iff(Principal == "*", "*", extract(@"(\d{12})", 1, Principal))
+    | where PrincipalAccount == "*" or (isnotempty(PrincipalAccount)
+            and PrincipalAccount != RecipientAccountId and PrincipalAccount !in (KnownAccounts))
+    | extend OrgScoped = tostring(Stmt.Condition) has "aws:PrincipalOrgID",
+             Actions = tostring(Stmt.Action)
+    | project GrantedAt = TimeGenerated, Bucket, Principal, PrincipalAccount, Actions, OrgScoped,
+              ErrorCode, RecipientAccountId, AWSRegion, PrincipalArn = UserIdentityArn,
+              AccessKey = UserIdentityAccessKeyId, SourceIpAddress, UserAgent, Sid = tostring(Stmt.Sid);
+grants
+| join kind=leftouter (changes | project ChangedAt = TimeGenerated, Bucket, NextChange = EventName) on Bucket
+| summarize NextPolicyChangeAt = minif(ChangedAt, ChangedAt > GrantedAt),
+            NextChange = take_anyif(NextChange, ChangedAt > GrantedAt)
+    by GrantedAt, Bucket, Principal, PrincipalAccount, Actions, OrgScoped, ErrorCode,
+       RecipientAccountId, AWSRegion, PrincipalArn, AccessKey, SourceIpAddress, UserAgent, Sid
+| extend Outcome = iff(isempty(ErrorCode), "POLICY APPLIED", strcat("REFUSED: ", ErrorCode)),
+         Severity = case(PrincipalAccount == "*" and not(OrgScoped), "critical",
+                         PrincipalAccount == "*", "medium (org-scoped wildcard)",
+                         "high")
+| order by GrantedAt desc

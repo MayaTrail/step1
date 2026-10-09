@@ -1,14 +1,41 @@
-// Expiration lifecycle rule on an S3 bucket (T1685.002)
+// Expiration lifecycle rule on an S3 bucket, ranked by whether the bucket holds audit logs (T1685.002)
 //
-// PutBucketLifecycle with an Expiration action. Raise to high when the bucket is a
-// CloudTrail/Config/flow-log destination; join against DescribeTrails to find those buckets.
+// CloudTrail eventName is PutBucketLifecycle (API PutBucketLifecycleConfiguration). The object
+// deletions it causes are performed by S3 and never appear in CloudTrail, so this management
+// event is the only CloudTrail record of the technique.
 //
-// Dialect: Sentinel / Azure Log Analytics KQL.
+// LogBuckets is built from CreateTrail/UpdateTrail events in the lookback. Extend it with your
+// Config delivery channel and flow-log destination buckets, and with trails older than the
+// lookback (a static list is fine) - a log bucket missing from this set is ranked as ordinary.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL (AWSCloudTrail table).
+let lookback = 30d;
+let LogBuckets = AWSCloudTrail
+    | where TimeGenerated > ago(90d)
+    | where EventSource == "cloudtrail.amazonaws.com" and EventName in ("CreateTrail", "UpdateTrail")
+    | where isempty(ErrorCode)
+    | extend Bucket = tostring(parse_json(RequestParameters).s3BucketName),
+             Trail = tostring(parse_json(RequestParameters).name)
+    | where isnotempty(Bucket)
+    | summarize Trails = make_set(Trail) by Bucket, RecipientAccountId;
 AWSCloudTrail
-| where TimeGenerated > ago(7d)
+| where TimeGenerated > ago(lookback)
 | where EventSource == "s3.amazonaws.com"
-| where EventName == "PutBucketLifecycle"
-| where RequestParameters has "Expiration"
-| project TimeGenerated, EventName, ErrorCode, PrincipalArn = UserIdentityArn,
-          SourceIp = SourceIpAddress, AWSRegion, UserAgent, RequestParameters
+| where EventName in ("PutBucketLifecycle", "DeleteBucketLifecycle")
+| extend Req = parse_json(RequestParameters)
+| extend Bucket = tostring(Req.bucketName), Lifecycle = tostring(Req.LifecycleConfiguration)
+| extend ExpiryDays = toint(extract(@'"(?:Days|NoncurrentDays)":"?(\d+)', 1, Lifecycle)),
+         Expires = Lifecycle has "Expiration"
+| where EventName == "DeleteBucketLifecycle" or Expires
+| join kind=leftouter LogBuckets on Bucket, RecipientAccountId
+| extend IsLogBucket = isnotempty(Trails)
+| extend Severity = case(
+    EventName == "DeleteBucketLifecycle", "info (rule removed - pair with the put)",
+    IsLogBucket and ExpiryDays <= 7, "critical",
+    IsLogBucket, "high",
+    ExpiryDays <= 7, "high",
+    "medium")
+| project TimeGenerated, EventName, Severity, Bucket, IsLogBucket, Trails, ExpiryDays,
+          ErrorCode, PrincipalArn = UserIdentityArn, AccessKey = UserIdentityAccessKeyId,
+          SourceIpAddress, UserAgent, AWSRegion, Lifecycle
 | order by TimeGenerated desc

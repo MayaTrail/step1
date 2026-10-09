@@ -1,17 +1,35 @@
 # Exfiltrate an EBS Snapshot by Sharing It (T1537)
 #
-# ec2:ModifySnapshotAttribute with createVolumePermission.add. Allowlist your organization's
-# accounts and your backup vault accounts.
-title: EBS snapshot shared with another AWS account
-id: 6ca2a227-b107-5c53-917d-9c114d7ee4ab
+# WHAT WAS WRONG WITH THE GENERATED RULE. It matched requestParameters|contains on the literal
+# string '"createVolumePermission":{"add"' - serialisation-dependent (the in-process evaluator
+# renders a space after the colon, so it never fired there) - and it rated a PUBLIC snapshot and a
+# named-account share the same. The rules below address the nested path and split the cases.
+#
+# FIELD SHAPE (ModifySnapshotAttribute, ec2.amazonaws.com, management event, snapshot Region).
+#   requestParameters.snapshotId
+#   requestParameters.attributeType                      'CREATE_VOLUME_PERMISSION'
+#   requestParameters.createVolumePermission.add.items[]     {userId} | {group: all}
+#   requestParameters.createVolumePermission.remove.items[]  the UNSHARE - must not alert
+#
+# NO errorCode FILTER. A snapshot encrypted with the default aws/ebs key cannot be shared, and
+# Block public access for snapshots refuses group:all. This emulation runs into the first in any
+# tenant with EBS encryption by default under aws/ebs: the share is refused, the run continues,
+# and the refused attempt is the only event. A success filter would make the rule blind to it.
+#
+# THE CONSUMPTION EVENTS EXIST HERE, UNLIKE AMIs AND RDS. AWS logs SharedSnapshotCopyInitiated and
+# SharedSnapshotVolumeCreated in the OWNER's account when a recipient copies the shared snapshot
+# or creates a volume from it. They are the "was it used" answer and get their own document.
+title: EBS snapshot made public
+id: ef8d91f9-71fa-40fb-a6ee-2b131d5d8173
+name: ebs_snapshot_shared_public
 status: experimental
 description: >-
-  Detects ec2:ModifySnapshotAttribute adding createVolumePermission to an EBS
-  snapshot. The recipient can create a volume from it and read the disk in an
-  account you do not control.
+  Detects ec2:ModifySnapshotAttribute adding createVolumePermission for group "all". Every AWS
+  account can now create a volume from the snapshot and read the disk.
 references:
-  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.exfiltration.ec2-share-ebs-snapshot/
   - https://attack.mitre.org/techniques/T1537/
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifySnapshotAttribute.html
+  - https://docs.aws.amazon.com/ebs/latest/userguide/block-public-access-snapshots.html
 tags:
   - attack.exfiltration
   - attack.t1537
@@ -22,9 +40,121 @@ detection:
   selection:
     eventSource: 'ec2.amazonaws.com'
     eventName: 'ModifySnapshotAttribute'
-  adds_perm:
-    requestParameters|contains: '"createVolumePermission":{"add"'
-  condition: selection and adds_perm
+  public_value:
+    requestParameters.createVolumePermission.add.items|re: '"group":\s*"all"'
+  condition: selection and public_value
 falsepositives:
-  - Cross-account backup or DR copies to accounts in the same organization.
+  - A deliberately published dataset snapshot. Always a decision somebody can name.
+level: critical
+---
+title: EBS snapshot shared with another AWS account
+id: 6ca2a227-b107-5c53-917d-9c114d7ee4ab
+name: ebs_snapshot_shared_cross_account
+status: experimental
+description: >-
+  Detects ec2:ModifySnapshotAttribute adding createVolumePermission for a specific AWS account not
+  on the allowlist. The recipient can create a volume from the snapshot and read the disk in an
+  account you do not control.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.exfiltration.ec2-share-ebs-snapshot/
+  - https://attack.mitre.org/techniques/T1537/
+  - https://docs.aws.amazon.com/ebs/latest/userguide/ebs-modifying-snapshot-permissions.html
+tags:
+  - attack.exfiltration
+  - attack.t1537
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'ModifySnapshotAttribute'
+  adds_permission:
+    requestParameters.createVolumePermission.add|exists: true
+  public_value:
+    requestParameters.createVolumePermission.add.items|re: '"group":\s*"all"'
+  # POPULATE BEFORE DEPLOYING with your organization's and backup/DR accounts' IDs.
+  known_recipients:
+    requestParameters.createVolumePermission.add.items|contains:
+      - '000000000000'          # replace with a real account ID, or delete this block
+  condition: selection and adds_permission and not public_value and not known_recipients
+falsepositives:
+  - Cross-account backup or DR copies to accounts in the same organization. Allowlist those
+    account IDs above.
+level: high
+---
+# Evidence of consumption, recorded in the OWNER's account: the recipient copied the shared
+# snapshot or created a volume from it. Stratus Red Team notes that in these events the acting
+# account is the recipient's and the owner appears as recipientAccountId.
+title: Shared EBS snapshot copied or used by another account
+id: bf8aea35-68f4-4e9e-bcb7-4bcdf8af6e53
+status: experimental
+description: >-
+  Detects SharedSnapshotCopyInitiated or SharedSnapshotVolumeCreated - another account copying a
+  snapshot you shared, or creating a volume from it. The data has left.
+references:
+  - https://docs.aws.amazon.com/ebs/latest/userguide/ebs-modifying-snapshot-permissions.html
+tags:
+  - attack.exfiltration
+  - attack.t1537
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName:
+      - 'SharedSnapshotCopyInitiated'
+      - 'SharedSnapshotVolumeCreated'
+  condition: selection
+falsepositives:
+  - A backup or DR account copying snapshots it is meant to receive.
+level: high
+---
+# Base rule - sequence component only, not for direct alerting. CopySnapshot is the documented
+# way to re-encrypt a default-key snapshot under a customer-managed key so that it can be shared.
+title: EBS snapshot created or copied
+id: 02b93881-a110-4a70-9fc0-c5494fc37d47
+name: ebs_snapshot_created_bb
+status: experimental
+description: Base rule - sequence component only, not for direct alerting.
+references:
+  - https://attack.mitre.org/techniques/T1578/001/
+tags:
+  - attack.defense_impairment
+  - attack.t1578.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName:
+      - 'CreateSnapshot'
+      - 'CreateSnapshots'
+      - 'CopySnapshot'
+  success:
+    errorCode|exists: false
+  condition: selection and success
+level: informational
+---
+title: EBS snapshot created or copied and then shared out of the account by one principal
+id: bbdac13b-dcfe-4f6b-94e7-7a9f0ab04ec1
+status: experimental
+description: >-
+  One principal created or copied a snapshot and then shared one with an unlisted account within
+  an hour - the path around the rule that default-key snapshots cannot be shared.
+references:
+  - https://attack.mitre.org/techniques/T1537/
+tags:
+  - attack.exfiltration
+  - attack.t1537
+correlation:
+  type: temporal_ordered
+  rules:
+    - ebs_snapshot_created_bb
+    - ebs_snapshot_shared_cross_account
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
 level: high

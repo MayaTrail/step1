@@ -1,14 +1,35 @@
-// Burst of single-object S3 deletes (T1485)
+// Burst of single-object S3 deletes by one principal in one bucket (T1485)
 //
-// s3:DeleteObject (S3 data event). Base rule for a burst threshold: alert when one principal
-// deletes many objects in one bucket within minutes. Requires S3 data events.
+// REQUIRES S3 DATA EVENTS. DeleteObject is a CloudTrail data event; a workspace without S3 data
+// events returns nothing here, which is INCONCLUSIVE, not clean.
 //
-// Dialect: Sentinel / Azure Log Analytics KQL.
+// Counts DISTINCT keys per principal, bucket and 5-minute bin (each DeleteObject names its key),
+// and adds the context that separates destruction from churn: did the same principal write in the
+// same window (churn rewrites; a wipe does not), did it read first (exfiltration before
+// destruction), and did it list the bucket.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL (AWSCloudTrail table).
+let lookback = 7d;
+let threshold = 50;
 AWSCloudTrail
-| where TimeGenerated > ago(7d)
+| where TimeGenerated > ago(lookback)
 | where EventSource == "s3.amazonaws.com"
-| where EventName == "DeleteObject"
-| summarize Deletes = count(), FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated)
-    by PrincipalArn = UserIdentityArn, Bucket = tostring(parse_json(RequestParameters).bucketName),
-       bin(TimeGenerated, 5m)
-| where Deletes >= 50
+| where EventName in ("DeleteObject", "PutObject", "GetObject", "ListObjects", "ListObjectsV2")
+| extend Req = parse_json(RequestParameters)
+| extend Bucket = tostring(Req.bucketName), Key = tostring(Req.key)
+| summarize DistinctKeysDeleted = dcountif(Key, EventName == "DeleteObject" and isempty(ErrorCode)),
+            DeniedDeletes = countif(EventName == "DeleteObject" and isnotempty(ErrorCode)),
+            Puts = countif(EventName == "PutObject"),
+            Gets = countif(EventName == "GetObject"),
+            Lists = countif(EventName in ("ListObjects", "ListObjectsV2")),
+            FirstDelete = minif(TimeGenerated, EventName == "DeleteObject"),
+            LastDelete = maxif(TimeGenerated, EventName == "DeleteObject"),
+            SampleKeys = make_set_if(Key, EventName == "DeleteObject", 5),
+            SourceIps = make_set(SourceIpAddress, 10)
+    by PrincipalArn = UserIdentityArn, Bucket, RecipientAccountId, bin(TimeGenerated, 5m)
+| where DistinctKeysDeleted >= threshold or DeniedDeletes >= threshold
+| extend Pattern = case(Puts == 0 and Gets > 0, "read then delete (exfiltration + destruction)",
+                        Puts == 0, "delete only (destruction)",
+                        Puts >= DistinctKeysDeleted, "rewrite + delete (possible encryption; see T1486 playbook)",
+                        "mixed")
+| order by FirstDelete desc

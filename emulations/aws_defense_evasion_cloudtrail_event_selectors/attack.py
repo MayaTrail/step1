@@ -127,9 +127,14 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     ct = session.client("cloudtrail", region_name=region)
 
     original = ct.get_event_selectors(TrailName=trail_arn)
-    restore = original.get("EventSelectors") or [
-        {"ReadWriteType": "All", "IncludeManagementEvents": True, "DataResources": []}
-    ]
+    # A trail uses either basic EventSelectors or AdvancedEventSelectors; restore
+    # whichever form it had.
+    if original.get("AdvancedEventSelectors"):
+        restore = {"AdvancedEventSelectors": original["AdvancedEventSelectors"]}
+    else:
+        restore = {"EventSelectors": original.get("EventSelectors") or [
+            {"ReadWriteType": "All", "IncludeManagementEvents": True, "DataResources": []}
+        ]}
     print(f"  [+] Current selectors on {trail_name}: {restore}")
 
     try:
@@ -145,7 +150,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
         time.sleep(DWELL_TIME_S)
     finally:
         banner("Revert - Restore the original selectors (PutEventSelectors)")
-        ct.put_event_selectors(TrailName=trail_arn, EventSelectors=restore)
+        ct.put_event_selectors(TrailName=trail_arn, **restore)
         print("  [+] Original selectors restored")
 
     banner("Complete")

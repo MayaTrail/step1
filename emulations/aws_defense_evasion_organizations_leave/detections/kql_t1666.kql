@@ -1,13 +1,36 @@
-// Attempt to leave the AWS Organization (T1666)
+// Attempt to leave the AWS Organization, classified by outcome (T1666)
 //
-// organizations:LeaveOrganization. Deliberately does not filter on errorCode: the emulation's
-// attempt is denied by an IAM guard, and real attackers are often denied by SCPs too.
+// Deliberately NO errorCode filter: this emulation's attempt is always refused by an explicit
+// IAM Deny, and real attempts are usually refused by an SCP. The Outcome column says which
+// control held. Organizations is global: the events are recorded in us-east-1.
 //
-// Dialect: Sentinel / Azure Log Analytics KQL.
-AWSCloudTrail
-| where TimeGenerated > ago(7d)
-| where EventSource == "organizations.amazonaws.com"
-| where EventName == "LeaveOrganization"
-| project TimeGenerated, EventName, ErrorCode, PrincipalArn = UserIdentityArn,
-          SourceIp = SourceIpAddress, AWSRegion, UserAgent, RequestParameters
-| order by TimeGenerated desc
+// Each attempt is enriched with the principal's DescribeOrganization calls in the hour before
+// (membership reconnaissance) and its activity count in the hour after.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL (AWSCloudTrail table).
+let lookback = 30d;
+let attempts = AWSCloudTrail
+    | where TimeGenerated > ago(lookback)
+    | where EventSource == "organizations.amazonaws.com"
+    | where EventName in ("LeaveOrganization", "RemoveAccountFromOrganization")
+    | extend Outcome = case(
+        isempty(ErrorCode), "SUCCEEDED - account is outside the organization's controls",
+        ErrorCode has "AccessDenied", "refused: access denied (SCP or IAM deny)",
+        ErrorCode == "MasterCannotLeaveOrganizationException", "refused: management account cannot leave",
+        ErrorCode == "AWSOrganizationsNotInUseException", "refused: account is not in an organization",
+        ErrorCode == "ConstraintViolationException", "refused: constraint violation (e.g. account lacks standalone prerequisites)",
+        strcat("refused: ", ErrorCode))
+    | project AttemptTime = TimeGenerated, EventName, Outcome, ErrorCode, RecipientAccountId,
+              PrincipalArn = UserIdentityArn, AccessKey = UserIdentityAccessKeyId,
+              SourceIpAddress, UserAgent, RequestParameters;
+let activity = AWSCloudTrail
+    | where TimeGenerated > ago(lookback)
+    | project T = TimeGenerated, PrincipalArn = UserIdentityArn, EventName, EventSource;
+attempts
+| join kind=leftouter activity on PrincipalArn
+| summarize ReconBefore = countif(EventName1 == "DescribeOrganization" and T between ((AttemptTime - 1h) .. AttemptTime)),
+            CallsAfter = countif(T > AttemptTime and T <= AttemptTime + 1h),
+            ServicesAfter = make_set_if(EventSource, T > AttemptTime and T <= AttemptTime + 1h, 20)
+    by AttemptTime, EventName, Outcome, ErrorCode, RecipientAccountId, PrincipalArn, AccessKey,
+       SourceIpAddress, UserAgent
+| order by AttemptTime desc

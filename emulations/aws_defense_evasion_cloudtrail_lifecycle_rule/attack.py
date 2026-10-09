@@ -130,9 +130,10 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
     session = _attacker_session(outputs, region, "atomic-t1685002-ct-lifecycle")
     s3 = session.client("s3", region_name=region)
 
+    original_rules = None
     try:
-        s3.get_bucket_lifecycle_configuration(Bucket=bucket_name)
-        print("  [~] Bucket already has a lifecycle configuration")
+        original_rules = s3.get_bucket_lifecycle_configuration(Bucket=bucket_name)["Rules"]
+        print(f"  [~] Bucket already has {len(original_rules)} lifecycle rule(s); they are restored in revert")
     except ClientError as exc:
         if exc.response["Error"]["Code"] != "NoSuchLifecycleConfiguration":
             raise
@@ -156,9 +157,15 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
         print(f"  [*] Dwelling {DWELL_TIME_S}s")
         time.sleep(DWELL_TIME_S)
     finally:
-        banner("Revert - Remove the lifecycle rule (DeleteBucketLifecycle)")
-        s3.delete_bucket_lifecycle(Bucket=bucket_name)
-        print("  [+] Lifecycle configuration removed")
+        if original_rules:
+            banner("Revert - Restore the original lifecycle rules (PutBucketLifecycleConfiguration)")
+            s3.put_bucket_lifecycle_configuration(Bucket=bucket_name,
+                                                  LifecycleConfiguration={"Rules": original_rules})
+            print("  [+] Original lifecycle configuration restored")
+        else:
+            banner("Revert - Remove the lifecycle rule (DeleteBucketLifecycle)")
+            s3.delete_bucket_lifecycle(Bucket=bucket_name)
+            print("  [+] Lifecycle configuration removed")
 
     banner("Complete")
     print("CloudTrail events generated: sts:AssumeRole, s3:GetBucketLifecycle, s3:PutBucketLifecycle, "

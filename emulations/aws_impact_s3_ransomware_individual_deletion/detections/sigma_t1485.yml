@@ -1,18 +1,31 @@
 # S3 Ransomware Through Individual Object Deletion (T1485)
 #
-# s3:DeleteObject (S3 data event). Base rule for a burst threshold: alert when one principal
-# deletes many objects in one bucket within minutes. Requires S3 data events.
+# THE GENERATED RULE WAS A BASE RULE SHIPPED ALONE. It matched every s3:DeleteObject at level low,
+# and its own description said it needed a volume threshold that only the KQL implemented. In a
+# Sigma deployment that meant nothing alerted. It is kept as the base, and the threshold now ships
+# as a Sigma correlation.
+#
+# S3 OBJECT CALLS ARE CLOUDTRAIL DATA EVENTS: recorded only by a trail or event data store with an
+# S3 data-event selector covering the bucket; never in Event history or lookup-events. Unlike
+# DeleteObjects, each DeleteObject record names its key (requestParameters.key), so distinct keys
+# CAN be counted here - which is what the correlation does.
+#
+# THRESHOLD BASIS (no observed baseline): 50 distinct keys deleted by one principal in one bucket
+# in five minutes. An application deleting its own temporary objects rarely sustains that against
+# one bucket; a scripted wipe does it in seconds (this emulation deletes 100 keys back to back).
+# `gte`, never `gt`. Re-baseline per bucket before deploying; raise it for known high-churn
+# buckets rather than muting the rule.
 title: S3 object deleted (ransomware burst candidate)
 id: 88d295be-e762-5b7d-8b16-cee3c4fab581
+name: s3_delete_object
 status: experimental
 description: >-
-  Matches every s3:DeleteObject data event. On its own this is noisy; use it as
-  the base rule for a volume threshold per principal and bucket (see the KQL),
-  which is the destruction stage of S3 ransomware. Requires S3 data events on the
-  trail.
+  Matches every s3:DeleteObject data event. Base rule for the per-principal, per-bucket burst
+  correlation below; noisy on its own. Requires S3 data events on the trail.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.impact.s3-ransomware-individual-deletion/
   - https://attack.mitre.org/techniques/T1485/
+  - https://docs.aws.amazon.com/awscloudtrail/latest/userguide/logging-data-events-with-cloudtrail.html
 tags:
   - attack.impact
   - attack.t1485
@@ -25,5 +38,31 @@ detection:
     eventName: 'DeleteObject'
   condition: selection
 falsepositives:
-  - Applications that delete objects as part of normal operation (tune per principal).
+  - Applications that delete objects as part of normal operation (tune the correlation per
+    principal or bucket).
 level: low
+---
+title: Burst of S3 object deletions by one principal in one bucket
+id: 38578fd6-8cf7-495b-9d0d-c0939b36276a
+status: experimental
+description: >-
+  One principal deleted 50 or more distinct objects from one bucket within five minutes using
+  single-object DeleteObject calls - the destruction stage of S3 ransomware.
+references:
+  - https://attack.mitre.org/techniques/T1485/
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-s3.html
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: value_count
+  rules:
+    - s3_delete_object
+  group-by:
+    - userIdentity.arn
+    - requestParameters.bucketName
+  timespan: 5m
+  condition:
+    field: requestParameters.key
+    gte: 50
+level: high

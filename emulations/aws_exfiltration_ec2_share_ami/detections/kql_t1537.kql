@@ -1,15 +1,46 @@
-// AMI shared with another AWS account (T1537)
+// AMI launch permission granted outside the account, with exposure window (T1537)
 //
-// ec2:ModifyImageAttribute with launchPermission.add. Allowlist your own organization's
-// accounts; a userId outside it, or group "all", is exfiltration.
+// One row per recipient added by ModifyImageAttribute (successful or refused). Each grant is
+// classified (PUBLIC / ORGANIZATION / OU / ACCOUNT), checked against an allowlist of your own
+// accounts, and paired with the first later removal of the same recipient from the same image,
+// giving the exposure window. An empty RevokedAt on a successful grant means the share may still
+// be live - confirm with DescribeImageAttribute.
 //
-// Dialect: Sentinel / Azure Log Analytics KQL.
-AWSCloudTrail
-| where TimeGenerated > ago(7d)
-| where EventSource == "ec2.amazonaws.com"
-| where EventName == "ModifyImageAttribute"
-| where RequestParameters has "launchPermission"
-| where RequestParameters has '"add"'
-| project TimeGenerated, EventName, ErrorCode, PrincipalArn = UserIdentityArn,
-          SourceIp = SourceIpAddress, AWSRegion, UserAgent, RequestParameters
-| order by TimeGenerated desc
+// Dialect: Sentinel / Azure Log Analytics KQL (AWSCloudTrail table).
+let lookback = 30d;
+let KnownRecipients = dynamic(["000000000000"]);   // your organization's account IDs / org ARN
+let perms = AWSCloudTrail
+    | where TimeGenerated > ago(lookback)
+    | where EventSource == "ec2.amazonaws.com" and EventName == "ModifyImageAttribute"
+    | extend Req = parse_json(RequestParameters)
+    | extend ImageId = tostring(Req.imageId)
+    | extend Added = Req.launchPermission.add.items, Removed = Req.launchPermission.remove.items;
+let grants = perms
+    | where isnotempty(Added)
+    | mv-expand Item = Added
+    | extend Recipient = coalesce(tostring(Item.userId), tostring(Item.group),
+                                  tostring(Item.organizationArn), tostring(Item.organizationalUnitArn)),
+             Kind = case(tostring(Item.group) == "all", "PUBLIC",
+                         isnotempty(tostring(Item.organizationArn)), "ORGANIZATION",
+                         isnotempty(tostring(Item.organizationalUnitArn)), "OU",
+                         "ACCOUNT")
+    | project GrantedAt = TimeGenerated, ImageId, Recipient, Kind, ErrorCode, RecipientAccountId,
+              AWSRegion, PrincipalArn = UserIdentityArn, AccessKey = UserIdentityAccessKeyId,
+              SourceIpAddress, UserAgent;
+let revokes = perms
+    | where isnotempty(Removed) and isempty(ErrorCode)
+    | mv-expand Item = Removed
+    | extend Recipient = coalesce(tostring(Item.userId), tostring(Item.group),
+                                  tostring(Item.organizationArn), tostring(Item.organizationalUnitArn))
+    | project RevokedAt = TimeGenerated, ImageId, Recipient;
+grants
+| where Recipient !in (KnownRecipients) and Recipient != RecipientAccountId
+| join kind=leftouter revokes on ImageId, Recipient
+| summarize RevokedAt = minif(RevokedAt, RevokedAt > GrantedAt)
+    by GrantedAt, ImageId, Recipient, Kind, ErrorCode, RecipientAccountId, AWSRegion, PrincipalArn,
+       AccessKey, SourceIpAddress, UserAgent
+| extend Outcome = iff(isempty(ErrorCode), "SHARED", strcat("REFUSED: ", ErrorCode)),
+         Severity = iff(Kind == "PUBLIC", "critical", "high"),
+         ExposureMinutes = iff(isempty(ErrorCode) and isnotnull(RevokedAt),
+                               datetime_diff("minute", RevokedAt, GrantedAt), long(null))
+| order by GrantedAt desc

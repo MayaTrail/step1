@@ -1,18 +1,31 @@
 # Attempt to Leave the AWS Organization (T1666)
 #
-# organizations:LeaveOrganization. Deliberately does not filter on errorCode: the emulation's
-# attempt is denied by an IAM guard, and real attackers are often denied by SCPs too.
+# NO errorCode FILTER, ON PURPOSE. This emulation's LeaveOrganization is ALWAYS refused: the lab
+# role carries an explicit IAM Deny on organizations:LeaveOrganization, so the event lands with
+# an access-denied errorCode (Stratus's own sample shows `AccessDenied`; the Organizations API
+# documents AccessDeniedException). In a real estate the same is true of most attempts - an SCP
+# denies it, or the account is the management account (MasterCannotLeaveOrganizationException),
+# or it is not in an organization at all (AWSOrganizationsNotInUseException). A rule that keeps
+# only successes sees none of them, and a successful leave is the one case where the
+# organization's controls - SCPs, the organization trail, delegated GuardDuty and Security Hub -
+# are already gone by the time anyone looks.
+#
+# FIELD SHAPE. eventSource organizations.amazonaws.com. Organizations is a global service; its
+# events are recorded in us-east-1 whatever Region the caller used. LeaveOrganization takes no
+# parameters, so requestParameters is null and the only discriminators are the principal and the
+# account (recipientAccountId).
 title: Attempt to leave the AWS Organization
 id: 7e156778-0da3-508d-833b-bf2778882885
+name: organizations_leave_attempt
 status: experimental
 description: >-
-  Detects organizations:LeaveOrganization, successful or not. A member account
-  leaving the organization escapes SCPs, the organization trail and delegated
-  security tooling. A denied attempt still shows intent and should be
-  investigated.
+  Detects organizations:LeaveOrganization, successful or refused. A member account leaving the
+  organization escapes SCPs, the organization trail and delegated security tooling; a refused
+  attempt shows the same intent and should be investigated as an active intrusion.
 references:
   - https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.organizations-leave/
   - https://attack.mitre.org/techniques/T1666/
+  - https://docs.aws.amazon.com/organizations/latest/APIReference/API_LeaveOrganization.html
 tags:
   - attack.defense_impairment
   - attack.t1666
@@ -25,5 +38,77 @@ detection:
     eventName: 'LeaveOrganization'
   condition: selection
 falsepositives:
-  - Planned account migration between organizations (rare, change-managed).
+  - A planned, change-managed account migration between organizations. It is rare, done from a
+    named administrative role, and announced in advance.
+level: high
+---
+# The management-account side of the same outcome: the management account removing a member.
+# Recorded in the management account's trail, not the member's.
+title: Account removed from the AWS Organization
+id: c217d04a-c80f-4a57-b7c7-b3c744bda9bb
+status: experimental
+description: >-
+  Detects organizations:RemoveAccountFromOrganization. The removed account stops being governed
+  by the organization's SCPs, organization trail and delegated security services.
+references:
+  - https://attack.mitre.org/techniques/T1666/
+  - https://docs.aws.amazon.com/organizations/latest/APIReference/API_RemoveAccountFromOrganization.html
+tags:
+  - attack.defense_impairment
+  - attack.t1666
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'organizations.amazonaws.com'
+    eventName: 'RemoveAccountFromOrganization'
+  condition: selection
+falsepositives:
+  - Account decommissioning or transfer by the organization's administrators.
+level: high
+---
+# Base rule - sequence component only, not for direct alerting. DescribeOrganization is called
+# constantly by tooling; on its own it means nothing.
+title: AWS Organization membership read
+id: 16359f90-57f0-4350-b8a6-bc70fdc11225
+name: organizations_describe_bb
+status: experimental
+description: Base rule - sequence component only, not for direct alerting.
+references:
+  - https://attack.mitre.org/techniques/T1666/
+tags:
+  - attack.defense_impairment
+  - attack.t1666
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'organizations.amazonaws.com'
+    eventName: 'DescribeOrganization'
+  condition: selection
+level: informational
+---
+# Confirm membership, then try to leave: the shape of a deliberate attempt rather than a
+# misfired script, and exactly the sequence this emulation performs. Grouped on the principal.
+title: Organization membership checked, then leave attempted by the same principal
+id: c07e3756-a3cf-430e-9dcd-ae7dc12a7d6c
+status: experimental
+description: >-
+  One principal read its organization membership and then called LeaveOrganization within an
+  hour, successful or not.
+references:
+  - https://attack.mitre.org/techniques/T1666/
+tags:
+  - attack.defense_impairment
+  - attack.t1666
+correlation:
+  type: temporal_ordered
+  rules:
+    - organizations_describe_bb
+    - organizations_leave_attempt
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
 level: high

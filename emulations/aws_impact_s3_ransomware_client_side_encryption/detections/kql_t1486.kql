@@ -1,20 +1,45 @@
-// S3 objects replaced by .encrypted copies (T1486)
+// S3 objects replaced by encrypted copies: read -> write <key><suffix> -> delete <key> (T1486)
 //
-// s3:PutObject of <key>.encrypted (S3 data event). Ransomware families vary the suffix;
-// the KQL generalises to any put-new-key + delete-original pairing.
+// REQUIRES S3 DATA EVENTS (GetObject / PutObject / DeleteObject). Without them this returns
+// nothing, which is INCONCLUSIVE, not clean.
 //
-// Dialect: Sentinel / Azure Log Analytics KQL.
-AWSCloudTrail
-| where TimeGenerated > ago(7d)
-| where EventSource == "s3.amazonaws.com"
-| where EventName in ("PutObject", "DeleteObject")
-| extend Req = parse_json(RequestParameters)
-| extend Bucket = tostring(Req.bucketName), Key = tostring(Req.key)
-| extend BaseKey = iff(EventName == "PutObject" and Key endswith ".encrypted",
-                       substring(Key, 0, strlen(Key) - 10), Key)
-| summarize Puts = countif(EventName == "PutObject" and Key endswith ".encrypted"),
-            Deletes = countif(EventName == "DeleteObject")
-    by PrincipalArn = UserIdentityArn, Bucket, BaseKey
-| where Puts > 0 and Deletes > 0
-| summarize RewrittenObjects = count() by PrincipalArn, Bucket
-| where RewrittenObjects >= 10
+// Joins each suffixed PutObject back to its original key - the step Sigma cannot do - and counts,
+// per principal and bucket, how many originals were read, rewritten under a new suffix and then
+// deleted. Any new suffix works, not only the ones the Sigma rule lists: the join is on "a new key
+// that is an existing key plus a dot-suffix, followed by deletion of the existing key".
+//
+// Dialect: Sentinel / Azure Log Analytics KQL (AWSCloudTrail table).
+let lookback = 7d;
+let min_objects = 10;
+let s3 = AWSCloudTrail
+    | where TimeGenerated > ago(lookback)
+    | where EventSource == "s3.amazonaws.com"
+    | where EventName in ("GetObject", "PutObject", "DeleteObject")
+    | where isempty(ErrorCode)
+    | extend Req = parse_json(RequestParameters)
+    | project TimeGenerated, EventName, PrincipalArn = UserIdentityArn, RecipientAccountId,
+              Bucket = tostring(Req.bucketName), Key = tostring(Req.key), SourceIpAddress;
+let rewrites = s3
+    | where EventName == "PutObject"
+    | extend Suffix = extract(@"(\.[A-Za-z0-9]{2,12})$", 1, Key)
+    | where isnotempty(Suffix)
+    | extend OriginalKey = substring(Key, 0, strlen(Key) - strlen(Suffix))
+    | project PutTime = TimeGenerated, PrincipalArn, Bucket, OriginalKey, NewKey = Key, Suffix;
+let deletes = s3
+    | where EventName == "DeleteObject"
+    | project DeleteTime = TimeGenerated, PrincipalArn, Bucket, OriginalKey = Key;
+let reads = s3
+    | where EventName == "GetObject"
+    | project ReadTime = TimeGenerated, PrincipalArn, Bucket, OriginalKey = Key;
+rewrites
+| join kind=inner deletes on PrincipalArn, Bucket, OriginalKey
+| where DeleteTime between (PutTime .. (PutTime + 10m))
+| join kind=leftouter reads on PrincipalArn, Bucket, OriginalKey
+| extend ReadFirst = isnotnull(ReadTime) and ReadTime <= PutTime
+| summarize ObjectsRewritten = dcount(OriginalKey), ReadBeforeWrite = dcountif(OriginalKey, ReadFirst),
+            Suffixes = make_set(Suffix, 5), FirstRewrite = min(PutTime), LastDelete = max(DeleteTime),
+            SampleKeys = make_set(NewKey, 5)
+    by PrincipalArn, Bucket
+| where ObjectsRewritten >= min_objects
+| extend Severity = "critical"
+| order by FirstRewrite desc
