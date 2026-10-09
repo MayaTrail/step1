@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     curl \
     unzip \
+    git \
     && ARCH="$(dpkg --print-architecture)" \
     && case "$ARCH" in arm64) AWSARCH=aarch64 ;; *) AWSARCH=x86_64 ;; esac \
     && curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWSARCH}.zip" -o /tmp/awscliv2.zip \
@@ -28,8 +29,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies first (cache layer).
+#
+# requirements.txt pins mayatrail-scout to a git+https commit SHA in a private
+# repository (MayaTrail/scout). Cloning it needs a GitHub credential with read
+# access, supplied here as a BuildKit secret so it never lands in an image
+# layer or the build cache — unlike a --build-arg, which would. Build with:
+#   DOCKER_BUILDKIT=1 docker build --secret id=github_token,env=GITHUB_TOKEN \
+#     -f backend/Dockerfile -t mayatrail-backend backend/
+# where GITHUB_TOKEN is a fine-grained PAT (or deploy token) scoped to
+# read-only access on MayaTrail/scout.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=secret,id=github_token \
+    git config --global url."https://oauth2:$(cat /run/secrets/github_token)@github.com/".insteadOf "https://github.com/" \
+    && pip install --no-cache-dir -r requirements.txt \
+    && git config --global --unset url."https://oauth2:$(cat /run/secrets/github_token)@github.com/".insteadOf
 
 # Copy application source.
 COPY . .

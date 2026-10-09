@@ -51,6 +51,12 @@ class LogEntry(models.Model):
         # permissions of their connected role. It changes nothing, but it is a
         # read of their IAM configuration and belongs in the trail.
         GUARDRAIL_CHECK = "guardrail.check", "Guardrail Check Run"
+        # An attack graph scan reads the tenant's IAM and nothing else, but it
+        # assumes a role in their account, so it belongs in the same trail as
+        # every other action MayaTrail takes there.
+        SCAN_STARTED = "scan.started", "Attack Graph Scan Started"
+        SCAN_COMPLETED = "scan.completed", "Attack Graph Scan Completed"
+        SCAN_FAILED = "scan.failed", "Attack Graph Scan Failed"
 
     id = models.UUIDField(
         primary_key=True,

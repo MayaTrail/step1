@@ -30,3 +30,20 @@ PyYAML==6.0.2
 pysigma==0.11.23
 pySigma-backend-splunk==1.1.3
 pySigma-backend-opensearch==1.0.4
+
+# IAM privilege-escalation graph engine behind the Attack Graph page. Pinned
+# exactly: Scout is maintained in its own repository and its chain output is a
+# contract this backend serializes into a versioned envelope
+# (apps/attack_graph/envelope.py). An unpinned upgrade can change that shape
+# and turn a working graph into an empty one with no code change on our side.
+#
+# MayaTrail/scout is a private repository with no git tags (pyproject.toml's
+# own version field is a stale "0.0.1"), so the pin is a commit SHA rather
+# than a version number. A bare `pip install -r requirements.txt` against this
+# line requires GitHub credentials for MayaTrail/scout to be resolvable at
+# clone time — this URL intentionally carries no embedded token. Both
+# backend/Dockerfile and backend/Dockerfile.worker, and the CI install step,
+# still need a credential-injection step (e.g. a BuildKit `--mount=type=secret`
+# populating a git credential helper) added before this will build outside a
+# shell that already has repo access — that plumbing is not yet done.
+mayatrail-scout[aws] @ git+https://github.com/MayaTrail/scout.git@094302366538951c210e8204845976a67eb6feec

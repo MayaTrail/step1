@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     curl \
     ca-certificates \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Pulumi CLI — pinned to match pulumi/pulumi-python:3.207.0 used by the
@@ -27,8 +28,17 @@ ENV PATH="/root/.pulumi/bin:${PATH}"
 ENV PULUMI_HOME="/root/.pulumi"
 
 # Install Python dependencies.
+#
+# See backend/Dockerfile for why this needs a BuildKit secret: requirements.txt
+# pins mayatrail-scout to a commit in the private MayaTrail/scout repo. Build
+# with:
+#   DOCKER_BUILDKIT=1 docker build --secret id=github_token,env=GITHUB_TOKEN \
+#     -f backend/Dockerfile.worker -t mayatrail-worker backend/
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=secret,id=github_token \
+    git config --global url."https://oauth2:$(cat /run/secrets/github_token)@github.com/".insteadOf "https://github.com/" \
+    && pip install --no-cache-dir -r requirements.txt \
+    && git config --global --unset url."https://oauth2:$(cat /run/secrets/github_token)@github.com/".insteadOf
 
 # Copy application source.
 COPY . .

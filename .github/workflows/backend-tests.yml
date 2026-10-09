@@ -50,5 +50,5 @@ jobs:
 
       # apps.users carries the .env.example contract test, which asserts every
       # setting config/settings/ reads is documented for whoever deploys this.
-      - name: Run the emulation, metrics, guardrail, threat feed, workflow, infrastructure and users suites
-        run: python manage.py test apps.emulations apps.metrics apps.guardrails apps.threatintel apps.workflows apps.infrastructure apps.users
+      - name: Run the emulation, metrics, guardrail, threat feed, workflow, infrastructure, attack graph and users suites
+        run: python manage.py test apps.emulations apps.metrics apps.guardrails apps.threatintel apps.workflows apps.infrastructure apps.attack_graph apps.users
