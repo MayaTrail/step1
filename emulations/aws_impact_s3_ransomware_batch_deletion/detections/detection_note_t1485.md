@@ -29,5 +29,5 @@ The KQL reports call counts, an upper bound on objects removed (calls × 1,000),
 3. Check for `GetObject` by the same principal before the delete (exfiltration for extortion) and for a ransom note after it.
 
 **MITRE:** T1485 (*Data Destruction*).
-**Severity:** manifest HIGH.
+**Severity:** manifest CRITICAL.
 **Emulation fingerprint:** session `atomic-t1485-s3-batch` on `stratus-red-team-ransomware-batch-attacker-role`; bucket `stratus-red-team-ransomware-batch-<account>`; one `ListObjects(V2)` then one `DeleteObjects`. Not reversible: redeploy the stack to recreate the objects.

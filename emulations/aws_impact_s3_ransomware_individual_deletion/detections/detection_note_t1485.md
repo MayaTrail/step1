@@ -27,5 +27,5 @@ The generated package shipped only the low-level base rule and left the threshol
 3. Look for `GetObject` by the same principal before the deletes.
 
 **MITRE:** T1485 (*Data Destruction*).
-**Severity:** manifest HIGH.
+**Severity:** manifest CRITICAL.
 **Emulation fingerprint:** session `atomic-t1485-s3-individual` on `stratus-red-team-ransomware-individual-attacker-role`; bucket `stratus-red-team-ransomware-individual-<account>`; 100 `DeleteObject` calls on `data/file-0000.txt` … `data/file-0099.txt`. Not reversible: redeploy the stack.

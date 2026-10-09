@@ -28,5 +28,5 @@ The KQL joins each suffixed `PutObject` back to the original key and its deletio
 3. Treat every object read as exfiltrated; look for a ransom note object.
 
 **MITRE:** T1486 (*Data Encrypted for Impact*).
-**Severity:** manifest HIGH.
+**Severity:** manifest CRITICAL.
 **Emulation fingerprint:** session `atomic-t1486-s3-encrypt` on `stratus-red-team-ransomware-encrypt-attacker-role`; bucket `stratus-red-team-ransomware-encrypt-<account>`; 50 × (GetObject, PutObject `.encrypted`, DeleteObject).

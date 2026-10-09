@@ -7,7 +7,7 @@
 | Incident Type | Data destruction (every object in a bucket is removed in a few batch calls; in a real intrusion usually preceded by exfiltration and followed by a ransom note) |
 | Threat Actor | N/A — single technique, not actor-attributed (Stratus Red Team `aws.impact.s3-ransomware-batch-deletion`) |
 | Platform | aws |
-| Severity | Critical when the bucket had no versioning, replica or backup — the data is gone. High when versioning or a replica makes it recoverable; the attacker still controls a principal with delete rights |
+| Severity | **Critical** (matches the emulation manifest), assuming no recovery copy. Critical when the bucket had no versioning, replica or backup — the data is gone. High when versioning or a replica makes it recoverable; the attacker still controls a principal with delete rights |
 | MITRE Tactics | Impact |
 | MITRE Techniques | T1485 |
 | Services in Scope | S3, IAM, STS, CloudTrail (S3 data events), CloudTrail Lake / Athena, GuardDuty S3 Protection, CloudWatch storage metrics, AWS Backup |
