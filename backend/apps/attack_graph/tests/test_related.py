@@ -100,6 +100,15 @@ class RelatedEmulationsTests(SimpleTestCase):
         self.assertEqual([link["id"] for link in links], ["full_campaign"])
         self.assertEqual(links[0]["tier"], "campaign")
 
+    def test_campaign_never_links_on_a_single_shared_call(self, _detections):
+        catalogue = [
+            _emulation("campaign", "enterprise", ["iam:PassRole", "lambda:CreateFunction"]),
+            _emulation("atomic", "atomic", ["iam:PassRole"]),
+        ]
+        chain = _chain("c1", ["iam:PassRole(RoleArn=arn:aws:iam::1:role/Deploy)"])
+        links = self._related(catalogue, chain)["c1"]["emulations"]
+        self.assertEqual([link["id"] for link in links], ["atomic"])
+
     def test_campaign_needs_three_calls_of_a_longer_path(self, _detections):
         chain = _chain("c1", [
             "iam:CreateUser(UserName=x)", "iam:AttachUserPolicy(UserName=x)", "iam:CreateAccessKey(UserName=x)",

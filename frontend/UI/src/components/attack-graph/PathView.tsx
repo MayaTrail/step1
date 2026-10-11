@@ -7,6 +7,10 @@
  * in the panel matches the 2 on the canvas; the last edge, into the impact,
  * is not a step and has none. Selecting a card or a badge spotlights it and
  * opens a panel pointing at it.
+ *
+ * The reach view draws its paths here too. A path that ends at an identity
+ * rather than an impact passes showImpact={false}: every edge is then a step,
+ * and endNote says what the last card's panel should.
  */
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -22,6 +26,9 @@ import type { PathNode } from './pathModel'
 type Selection = { kind: 'node'; index: number } | { kind: 'step'; index: number } | { kind: 'impact' } | null
 
 const STILL = 'motion-reduce:animate-none'
+
+// The reach view starts from a user or a role, the identities its list offers.
+const REACHABLE_KINDS = ['IAM user', 'IAM role']
 
 // Canvas geometry in px. Cards are w-40 h-12 (160 x 48); the layout below must match.
 const CARD_W = 160
@@ -54,7 +61,18 @@ function useWidth(ref: RefObject<HTMLDivElement>): number {
   return width
 }
 
-export function PathView({ chain, scanId }: { chain: AttackChain; scanId: string }) {
+export function PathView({
+  chain, scanId, showImpact = true, endNote, onReach,
+}: {
+  chain: AttackChain
+  scanId: string
+  /** End the path in the impact card. */
+  showImpact?: boolean
+  /** The last identity's panel text when there is no impact card. */
+  endNote?: string
+  /** Offered on a user's or role's panel: show what that identity can reach. */
+  onReach?: (nodeId: string) => void
+}) {
   const [selected, setSelected] = useState<Selection>(null)
   const nodes = pathNodes(chain)
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -66,9 +84,9 @@ export function PathView({ chain, scanId }: { chain: AttackChain; scanId: string
 
   // Identities, then the impact, spread across the canvas but never closer
   // than MIN_GAP: a long path makes the canvas wider and it scrolls sideways.
-  const count = nodes.length + 1
+  const count = nodes.length + (showImpact ? 1 : 0)
   const width = Math.max(containerWidth, PAD * 2 + CARD_W * count + MIN_GAP * (count - 1))
-  const gap = (width - PAD * 2 - CARD_W * count) / (count - 1)
+  const gap = (width - PAD * 2 - CARD_W * count) / Math.max(count - 1, 1)
   const left = (i: number) => PAD + i * (CARD_W + gap)
 
   // Aim the panel's pointer at the centre of whatever is selected.
@@ -128,6 +146,7 @@ export function PathView({ chain, scanId }: { chain: AttackChain; scanId: string
                 key={`${node.id}-${i}`}
                 x={left(i)}
                 hasIn={i > 0}
+                hasOut={showImpact || i < nodes.length - 1}
                 picked={isNode(i)}
                 faded={focus && !isNode(i)}
                 onClick={() => toggle({ kind: 'node', index: i })}
@@ -137,18 +156,21 @@ export function PathView({ chain, scanId }: { chain: AttackChain; scanId: string
                 caption={node.accountTail ? `${node.kind} · …${node.accountTail}` : node.kind}
               />
             ))}
-            <Card
-              x={left(nodes.length)}
-              hasIn
-              impact
-              picked={impactPicked}
-              faded={focus && !impactPicked}
-              onClick={() => toggle({ kind: 'impact' })}
-              title={impactLabel(chain.terminal_impact)}
-              icon={<IconCrown size={14} />}
-              name={impactLabel(chain.terminal_impact)}
-              caption="Impact"
-            />
+            {showImpact && (
+              <Card
+                x={left(nodes.length)}
+                hasIn
+                hasOut={false}
+                impact
+                picked={impactPicked}
+                faded={focus && !impactPicked}
+                onClick={() => toggle({ kind: 'impact' })}
+                title={impactLabel(chain.terminal_impact)}
+                icon={<IconCrown size={14} />}
+                name={impactLabel(chain.terminal_impact)}
+                caption="Impact"
+              />
+            )}
 
             {edges.map(({ i, step, mid }) => step && (
               <StepBadge
@@ -192,7 +214,9 @@ export function PathView({ chain, scanId }: { chain: AttackChain; scanId: string
             className="absolute -top-1.5 h-3 w-3 rotate-45 border-l border-t border-border bg-surface-card"
           />
           {selected.kind === 'step' && <StepDetail chain={chain} index={selected.index} />}
-          {selected.kind === 'node' && <NodeDetail chain={chain} nodes={nodes} index={selected.index} scanId={scanId} />}
+          {selected.kind === 'node' && (
+            <NodeDetail chain={chain} nodes={nodes} index={selected.index} scanId={scanId} endNote={endNote} onReach={onReach} />
+          )}
           {selected.kind === 'impact' && <ImpactDetail chain={chain} />}
         </div>
       )}
@@ -201,10 +225,11 @@ export function PathView({ chain, scanId }: { chain: AttackChain; scanId: string
 }
 
 function Card({
-  x, hasIn, impact = false, picked, faded, onClick, title, icon, name, caption,
+  x, hasIn, hasOut, impact = false, picked, faded, onClick, title, icon, name, caption,
 }: {
   x: number
   hasIn: boolean
+  hasOut: boolean
   impact?: boolean
   picked: boolean
   faded: boolean
@@ -228,7 +253,7 @@ function Card({
         hover:opacity-60 ${ring} ${faded ? 'opacity-40' : ''}`}
     >
       {hasIn && <Handle side="left" />}
-      {!impact && <Handle side="right" />}
+      {hasOut && <Handle side="right" />}
       <span
         className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md
           ${impact ? 'bg-danger-glow text-danger' : 'bg-white/5 text-content-secondary'}`}
@@ -327,7 +352,16 @@ function StepDetail({ chain, index }: { chain: AttackChain; index: number }) {
   )
 }
 
-function NodeDetail({ chain, nodes, index, scanId }: { chain: AttackChain; nodes: PathNode[]; index: number; scanId: string }) {
+function NodeDetail({
+  chain, nodes, index, scanId, endNote, onReach,
+}: {
+  chain: AttackChain
+  nodes: PathNode[]
+  index: number
+  scanId: string
+  endNote?: string
+  onReach?: (nodeId: string) => void
+}) {
   const node = nodes[index]
   const next = chain.steps[index]
   const nodeId = node?.id ?? ''
@@ -354,8 +388,17 @@ function NodeDetail({ chain, nodes, index, scanId }: { chain: AttackChain; nodes
         <h4 className="truncate text-sm font-semibold text-content-primary" title={node.name}>{node.name}</h4>
         <div className="text-xs text-content-dim">{node.kind}{node.accountTail ? ` · account …${node.accountTail}` : ''}</div>
         <p className="mt-2.5 text-sm text-content-secondary">
-          {next ? stepSentence(next) : `Holds ${impactLabel(chain.terminal_impact).toLowerCase()} at the end of this path.`}
+          {next ? stepSentence(next) : endNote ?? `Holds ${impactLabel(chain.terminal_impact).toLowerCase()} at the end of this path.`}
         </p>
+        {onReach && REACHABLE_KINDS.includes(node.kind) && (
+          <button
+            type="button"
+            onClick={() => onReach(node.id)}
+            className="mt-2.5 bg-transparent p-0 text-xs text-accent-blue transition-opacity hover:opacity-60"
+          >
+            See what it can reach
+          </button>
+        )}
       </div>
       <div>
         {next && (
@@ -390,9 +433,14 @@ function ImpactDetail({ chain }: { chain: AttackChain }) {
       <p className="mt-1.5 text-sm text-content-secondary">
         {chain.steps.length === 0
           ? 'This identity already holds it, with no escalation needed.'
-          : `Reached in ${chain.steps.length} step${chain.steps.length > 1 ? 's' : ''}.`}{' '}
-        Rated {severity.toLowerCase()} from Scout&apos;s risk score of {chain.score ?? 'unknown'}, which weighs what the path
-        reaches against how few steps it takes.
+          : `Reached in ${chain.steps.length} step${chain.steps.length > 1 ? 's' : ''}.`}
+        {/* A reach path is not one of Scout's ranked chains, so it has no score to explain. */}
+        {chain.score !== null && (
+          <>
+            {' '}Rated {severity.toLowerCase()} from Scout&apos;s risk score of {chain.score}, which weighs what the path
+            reaches against how few steps it takes.
+          </>
+        )}
       </p>
       {chain.alternate_mechanisms.length > 0 && (
         <p className="mt-2 text-xs text-content-dim">

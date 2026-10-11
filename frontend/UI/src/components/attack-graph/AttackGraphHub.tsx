@@ -16,6 +16,7 @@ import { useAuth } from '@/context/AuthContext'
 import { AboutAttackGraph, PlatformFit } from './AboutAttackGraph'
 import { LatestScanCard } from './LatestScanCard'
 import { ScoutConnectPanel } from './ScoutConnectPanel'
+import { TwoWaysSection } from './TwoWays'
 import { scanUrl, useScanList } from './useScans'
 
 export function AttackGraphHub() {
@@ -61,11 +62,13 @@ export function AttackGraphHub() {
           {managing && <ScoutConnectPanel manage onDone={() => setManaging(false)} />}
           <LatestScanCard scans={scans} />
           <AboutAttackGraph step={2} />
+          <TwoWaysSection />
           <PlatformFit />
         </div>
       ) : (
         <div className="space-y-7">
           <AboutAttackGraph step={1} />
+          <TwoWaysSection />
           <PlatformFit />
           <ScoutConnectPanel />
         </div>

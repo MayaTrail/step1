@@ -115,6 +115,7 @@ class GraphEndpointContractTests(SimpleTestCase):
         "_ScanGraphView",
         "ScoutScanGraphNodesView",
         "ScoutScanGraphEntityView",
+        "ScoutScanGraphReachView",
     )
 
     def test_node_ids_travel_as_query_parameters_not_path_segments(self):
@@ -129,7 +130,7 @@ class GraphEndpointContractTests(SimpleTestCase):
 
     def test_the_graph_routes_are_registered(self):
         urls = self._source("apps/attack_graph/urls.py")
-        for route in ("graph/nodes/", "graph/entity/"):
+        for route in ("graph/nodes/", "graph/entity/", "graph/reach/"):
             self.assertIn(route, urls)
 
     def test_the_graph_views_use_the_scout_gate(self):

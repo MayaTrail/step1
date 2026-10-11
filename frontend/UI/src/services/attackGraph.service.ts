@@ -6,10 +6,12 @@
  *   GET    /api/attack-graph/scan/<id>/                          → one scan, for polling
  *   DELETE /api/attack-graph/scan/<id>/                          → delete a finished scan
  *   GET    /api/attack-graph/scan/<id>/graph/entity/?id=          → one entity's full record
+ *   GET    /api/attack-graph/scan/<id>/graph/nodes/?kind=identity → every user and role
+ *   GET    /api/attack-graph/scan/<id>/graph/reach/?from=         → what one identity can become
  */
 
 import api from './api'
-import type { GraphEntity, ScanDetail, ScanSummary } from '@/types/attackGraph'
+import type { GraphEntity, IdentityList, ReachResult, ScanDetail, ScanSummary } from '@/types/attackGraph'
 
 /** Start a scan. Throws with a 409 when one is already in flight. */
 export async function triggerScan(): Promise<{ scanId: string }> {
@@ -39,6 +41,24 @@ export async function getGraphEntity(scanId: string, id: string): Promise<GraphE
   const { data } = await api.get<GraphEntity>(
     `/attack-graph/scan/${scanId}/graph/entity/`,
     { params: { id } },
+  )
+  return data
+}
+
+/** Every user and role in a scan, each with what it reaches, for the reach list. */
+export async function listIdentities(scanId: string): Promise<IdentityList> {
+  const { data } = await api.get<IdentityList>(
+    `/attack-graph/scan/${scanId}/graph/nodes/`,
+    { params: { kind: 'identity' } },
+  )
+  return data
+}
+
+/** Every identity `from` can become in a scan, with the shortest way to each. */
+export async function getReach(scanId: string, from: string): Promise<ReachResult> {
+  const { data } = await api.get<ReachResult>(
+    `/attack-graph/scan/${scanId}/graph/reach/`,
+    { params: { from } },
   )
   return data
 }
