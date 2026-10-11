@@ -199,7 +199,7 @@ startup.
 | `REDIS_URL` | Celery broker + result backend |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Platform AWS credentials (STS AssumeRole + state bucket) |
 | `AWS_DEFAULT_REGION` | Default AWS region (e.g. `ap-south-1`) |
-| `STATE_BUCKET` | S3 bucket for Pulumi state (e.g. `mayatrail-state-bucket`) |
+| `STATE_BUCKET` | Fallback Pulumi state bucket (e.g. `mayatrail-state-bucket`). Each stack's state normally lives in `mayatrail-state-<account id>` in the user's own account; this is used only when that account id cannot be read |
 | `PULUMI_CONFIG_PASSPHRASE` | Passphrase for Pulumi stack secrets |
 | `EMULATIONS_BASE_DIR` | Where emulation packages are mounted (`/opt/emulations`) |
 | `GOOGLE_CLIENT_ID` | Google SSO client ID |

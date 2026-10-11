@@ -170,28 +170,6 @@ components:
           type: string
           format: date-time
 
-    StackCreateRequest:
-      type: object
-      required: [name]
-      properties:
-        name:
-          type: string
-          example: dev-himan10
-        region:
-          type: string
-          default: us-east-1
-          example: us-west-2
-
-    StackActionResponse:
-      type: object
-      properties:
-        stack:
-          $ref: "#/components/schemas/Stack"
-        task_id:
-          type: string
-          description: Celery task ID for tracking the async operation.
-          example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-
     # ---- Emulations (Enterprise) ----------------------------------------
     Technique:
       type: object
@@ -659,6 +637,9 @@ paths:
       tags: [Stacks]
       summary: List all stacks owned by the current user
       operationId: stacksList
+      description: >
+        Read-only. Stacks are created, attacked and destroyed through
+        /api/emulations/, which runs Pulumi as the user's connected role.
       responses:
         "200":
           description: Array of stacks.
@@ -668,31 +649,6 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Stack"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-    post:
-      tags: [Stacks]
-      summary: Create a new stack
-      operationId: stacksCreate
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/StackCreateRequest"
-      responses:
-        "201":
-          description: Stack created.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Stack"
-        "400":
-          description: Validation error (e.g. duplicate name).
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -716,148 +672,49 @@ paths:
               schema:
                 $ref: "#/components/schemas/Stack"
         "404":
-          description: Stack not found.
+          description: Stack not found, or already destroyed (a successful destroy deletes the record).
         "401":
           $ref: "#/components/responses/Unauthorized"
-    delete:
+
+  /api/stacks/{id}/progress/:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
       tags: [Stacks]
-      summary: Delete a stack record
-      operationId: stacksDelete
+      summary: Live progress of a running deploy (enterprise users)
+      operationId: stacksProgress
       responses:
-        "204":
-          description: Stack deleted.
+        "200":
+          description: >
+            Progress read from the deploy task. A finished stack reports
+            percentage 100 and a failed one 0.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stack_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                  resources_created:
+                    type: integer
+                  total_resources:
+                    type: integer
+                  percentage:
+                    type: integer
+                  recent_logs:
+                    type: array
+                    items:
+                      type: string
         "404":
           description: Stack not found.
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/stacks/{id}/deploy/:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: uuid
-    post:
-      tags: [Stacks]
-      summary: Deploy a stack (async Pulumi up)
-      operationId: stacksDeploy
-      description: >
-        Enqueues a Celery task that spawns a Pulumi container to run `pulumi up`.
-        Returns immediately with 202 and includes the Celery task_id for polling.
-        Returns 409 if the stack is already deploying, destroying, or refreshing.
-      responses:
-        "202":
-          description: Deploy task enqueued.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/StackActionResponse"
-        "409":
-          description: Stack is busy (deploying, destroying, or refreshing).
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DetailError"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/stacks/{id}/destroy/:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: uuid
-    post:
-      tags: [Stacks]
-      summary: Destroy a stack (async Pulumi destroy)
-      operationId: stacksDestroy
-      description: >
-        Enqueues a Celery task that spawns a Pulumi container to run `pulumi destroy`.
-        Returns immediately with 202 and includes the Celery task_id.
-        Returns 409 if the stack is already deploying, destroying, or refreshing.
-      responses:
-        "202":
-          description: Destroy task enqueued.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/StackActionResponse"
-        "409":
-          description: Stack is busy (deploying, destroying, or refreshing).
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DetailError"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/stacks/{id}/refresh/:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: uuid
-    post:
-      tags: [Stacks]
-      summary: Refresh a stack (async Pulumi refresh)
-      operationId: stacksRefresh
-      description: >
-        Enqueues a Celery task that spawns a Pulumi container to run `pulumi refresh`.
-        Syncs the Pulumi state with the actual cloud resources without making any
-        infrastructure changes. Useful after manual changes in the AWS console.
-        Returns 409 if the stack is already deploying, destroying, or refreshing.
-      responses:
-        "202":
-          description: Refresh task enqueued.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/StackActionResponse"
-        "409":
-          description: Stack is busy (deploying, destroying, or refreshing).
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DetailError"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/stacks/{id}/preview/:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: uuid
-    post:
-      tags: [Stacks]
-      summary: Preview stack changes (async Pulumi preview)
-      operationId: stacksPreview
-      description: >
-        Enqueues a Celery task that spawns a Pulumi container to run `pulumi preview`.
-        This is a read-only operation that shows what changes would be made without
-        actually deploying. The stack status is not modified.
-        Returns 409 if the stack is already deploying, destroying, or refreshing.
-      responses:
-        "202":
-          description: Preview task enqueued.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/StackActionResponse"
-        "409":
-          description: Stack is busy (deploying, destroying, or refreshing).
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DetailError"
         "401":
           $ref: "#/components/responses/Unauthorized"
 

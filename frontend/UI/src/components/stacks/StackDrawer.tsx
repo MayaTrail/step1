@@ -38,7 +38,7 @@ import { SecurityContextTab } from './SecurityContextTab'
 /** Half the viewport, within bounds that stay readable on either extreme. */
 const PANEL_WIDTH = 'w-full sm:w-[min(760px,52vw)] sm:min-w-[480px]'
 
-/** Statuses where an emulation stack may hold live AWS resources to force-destroy. */
+/** Statuses where an emulation stack may hold live AWS resources to destroy. */
 const EMULATION_DESTROYABLE = new Set<StackStatus>([
     'deploying',
     'ec2_booting',
@@ -52,21 +52,20 @@ interface StackDrawerProps {
     stack: Stack
     isBusy: boolean
     actionMsg?: string
-    onAction: (action: 'deploy' | 'destroy') => void
-    onForceDestroy: () => void
+    onDestroy: () => void
     onClose: () => void
 }
 
 export function StackDrawer({
-    stack, isBusy, actionMsg, onAction, onForceDestroy, onClose,
+    stack, isBusy, actionMsg, onDestroy, onClose,
 }: StackDrawerProps) {
     const [shown, setShown] = useState(false)
     const [mapOpen, setMapOpen] = useState(false)
-    const [confirmForceDestroy, setConfirmForceDestroy] = useState(false)
+    const [confirmDestroy, setConfirmDestroy] = useState(false)
 
     const health = deriveHealth(stack)
     const meta = STACK_HEALTH[health]
-    const showForceDestroy = !!stack.emulation_type && EMULATION_DESTROYABLE.has(stack.status)
+    const canDestroy = !!stack.emulation_type && EMULATION_DESTROYABLE.has(stack.status)
     const resources = stack.resource_summary
 
     // Mount off-screen, then slide in on the next frame.
@@ -252,48 +251,42 @@ export function StackDrawer({
 
                 <footer className="shrink-0 px-5 py-3.5 border-t border-border">
                     <div className="flex flex-wrap items-center gap-2">
-                        <ActionBtn label="Deploy" variant="safe" disabled={isBusy} onClick={() => onAction('deploy')} />
-                        <ActionBtn label="Destroy" variant="orange" disabled={isBusy} onClick={() => onAction('destroy')} />
-
-                        {showForceDestroy && (
+                        {confirmDestroy ? (
                             <>
-                                <div className="w-px h-6 bg-border mx-0.5" />
-                                {confirmForceDestroy ? (
-                                    <>
-                                        <button
-                                            type="button"
-                                            onClick={() => { setConfirmForceDestroy(false); onForceDestroy() }}
-                                            className="px-3 py-1.5 rounded-btn font-mono text-[10px] font-medium
-                                                border border-orange-500/60 text-orange-400 bg-transparent
-                                                cursor-pointer transition-opacity hover:opacity-60"
-                                        >
-                                            Destroy AWS resources
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => setConfirmForceDestroy(false)}
-                                            className="px-3 py-1.5 rounded-btn font-mono text-[10px]
-                                                text-content-dim bg-transparent border-none cursor-pointer
-                                                transition-opacity hover:opacity-60"
-                                        >
-                                            Cancel
-                                        </button>
-                                    </>
-                                ) : (
-                                    <button
-                                        type="button"
-                                        onClick={() => setConfirmForceDestroy(true)}
-                                        disabled={stack.status === 'destroying'}
-                                        title="Force-destroy emulation stack and all AWS resources"
-                                        className="px-3 py-1.5 rounded-btn font-mono text-[10px] font-medium
-                                            bg-transparent border border-orange-500/30 text-orange-400
-                                            cursor-pointer transition-opacity hover:opacity-60
-                                            disabled:opacity-30 disabled:cursor-not-allowed"
-                                    >
-                                        Force Destroy
-                                    </button>
-                                )}
+                                <button
+                                    type="button"
+                                    onClick={() => { setConfirmDestroy(false); onDestroy() }}
+                                    className="px-3 py-1.5 rounded-btn font-mono text-[10px] font-medium
+                                        border border-orange-500/60 text-orange-400 bg-transparent
+                                        cursor-pointer transition-opacity hover:opacity-60"
+                                >
+                                    Destroy AWS resources
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setConfirmDestroy(false)}
+                                    className="px-3 py-1.5 rounded-btn font-mono text-[10px]
+                                        text-content-dim bg-transparent border-none cursor-pointer
+                                        transition-opacity hover:opacity-60"
+                                >
+                                    Cancel
+                                </button>
                             </>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={() => setConfirmDestroy(true)}
+                                disabled={!canDestroy}
+                                title={canDestroy
+                                    ? 'Destroy this stack and every AWS resource it created'
+                                    : 'Nothing to destroy in this state'}
+                                className="px-3 py-1.5 rounded-btn font-mono text-[10px] font-medium
+                                    bg-transparent border border-orange-500/30 text-orange-400
+                                    cursor-pointer transition-opacity hover:opacity-60
+                                    disabled:opacity-30 disabled:cursor-not-allowed"
+                            >
+                                Destroy
+                            </button>
                         )}
                     </div>
 
@@ -421,31 +414,5 @@ function Fact({
                 {value}
             </div>
         </div>
-    )
-}
-
-function ActionBtn({
-    label, variant, disabled, onClick,
-}: {
-    label: string
-    variant: 'safe' | 'orange'
-    disabled: boolean
-    onClick: () => void
-}) {
-    const tone = variant === 'safe'
-        ? 'border-safe/30 text-safe'
-        : 'border-orange-500/30 text-orange-400'
-
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            disabled={disabled}
-            className={`px-3 py-1.5 rounded-btn font-mono text-[10px] font-medium bg-transparent
-                border cursor-pointer transition-opacity hover:opacity-60
-                disabled:opacity-30 disabled:cursor-not-allowed ${tone}`}
-        >
-            {label}
-        </button>
     )
 }
