@@ -1,0 +1,116 @@
+{
+  "chains": [
+    {
+      "chain_id": "CHN-7540184B",
+      "origin_identity_arn": "arn:aws:iam::111122223333:user/ci-deploy",
+      "terminal_impact": "FULL_ACCOUNT_COMPROMISE",
+      "terminal_target_arn": "arn:aws:iam::111122223333:role/deploy-role",
+      "risk_score": 70,
+      "risk_drivers": [
+        "impact_base:FULL_ACCOUNT_COMPROMISE(7)",
+        "likelihood_start(10)"
+      ],
+      "impact_score": 7,
+      "likelihood_score": 10,
+      "impact_drivers": [
+        "impact_base:FULL_ACCOUNT_COMPROMISE(7)"
+      ],
+      "likelihood_drivers": [
+        "likelihood_start(10)"
+      ],
+      "mitre_techniques": [
+        "T1098.003"
+      ],
+      "foothold_filtered": false,
+      "target_filtered": false,
+      "scp_blocked": false,
+      "terminal_props": {},
+      "hops": [
+        {
+          "hop_number": 1,
+          "mechanism": "passrole_service",
+          "action": "PassRole+lambda",
+          "source_arn": "arn:aws:iam::111122223333:user/ci-deploy",
+          "target_arn": "arn:aws:iam::111122223333:role/deploy-role",
+          "concrete_api_sequence": [
+            "iam:PassRole(RoleArn=arn:aws:iam::111122223333:role/deploy-role)",
+            "<lambda: launch compute executing as deploy-role>"
+          ],
+          "catalog_path_ids": [
+            "lambda-001"
+          ],
+          "conditional": null,
+          "granted_by": [],
+          "granted_by_overflow": 0,
+          "bounded_by": null
+        }
+      ]
+    },
+    {
+      "chain_id": "CHN-E71635F0",
+      "origin_identity_arn": "arn:aws:iam::111122223333:user/intern",
+      "terminal_impact": "FULL_ACCOUNT_COMPROMISE",
+      "terminal_target_arn": "arn:aws:iam::111122223333:role/deploy-role",
+      "risk_score": 63,
+      "risk_drivers": [
+        "impact_base:FULL_ACCOUNT_COMPROMISE(7)",
+        "likelihood_start(10)",
+        "multi_hop:2(-1)"
+      ],
+      "impact_score": 7,
+      "likelihood_score": 9,
+      "impact_drivers": [
+        "impact_base:FULL_ACCOUNT_COMPROMISE(7)"
+      ],
+      "likelihood_drivers": [
+        "likelihood_start(10)",
+        "multi_hop:2(-1)"
+      ],
+      "mitre_techniques": [
+        "T1528",
+        "T1098.003"
+      ],
+      "foothold_filtered": false,
+      "target_filtered": false,
+      "scp_blocked": false,
+      "terminal_props": {},
+      "hops": [
+        {
+          "hop_number": 1,
+          "mechanism": "credential",
+          "action": "iam:createaccesskey",
+          "source_arn": "arn:aws:iam::111122223333:user/intern",
+          "target_arn": "arn:aws:iam::111122223333:user/ci-deploy",
+          "concrete_api_sequence": [
+            "iam:CreateAccessKey(UserName=ci-deploy)"
+          ],
+          "catalog_path_ids": [
+            "iam-002"
+          ],
+          "conditional": null,
+          "granted_by": [],
+          "granted_by_overflow": 0,
+          "bounded_by": null
+        },
+        {
+          "hop_number": 2,
+          "mechanism": "passrole_service",
+          "action": "PassRole+lambda",
+          "source_arn": "arn:aws:iam::111122223333:user/ci-deploy",
+          "target_arn": "arn:aws:iam::111122223333:role/deploy-role",
+          "concrete_api_sequence": [
+            "iam:PassRole(RoleArn=arn:aws:iam::111122223333:role/deploy-role)",
+            "<lambda: launch compute executing as deploy-role>"
+          ],
+          "catalog_path_ids": [
+            "lambda-001"
+          ],
+          "conditional": null,
+          "granted_by": [],
+          "granted_by_overflow": 0,
+          "bounded_by": null
+        }
+      ]
+    }
+  ]
+}

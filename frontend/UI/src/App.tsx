@@ -22,6 +22,8 @@ import { GuardrailsPage } from './components/guardrails/GuardrailsPage'
 import { EmulationsHub } from './components/emulations/EmulationsHub'
 import { DetectionsHub } from './components/detections/DetectionsHub'
 import { PlaybooksHub } from './components/playbooks/PlaybooksHub'
+import { AttackGraphHub } from './components/attack-graph/AttackGraphHub'
+import { AttackGraphScans } from './components/attack-graph/AttackGraphScans'
 import { LibraryPlaybookPage } from './components/playbooks/LibraryPlaybookPage'
 // Lazy-loaded: the block editor pulls TipTap and ProseMirror with it, and is
 // only ever reached from the playbooks hub.
@@ -85,6 +87,9 @@ export default function App() {
 
                 {/* Security Content hubs (cross-platform) */}
                 <Route path="emulations" element={<EmulationsHub />} />
+                <Route path="attack-graph" element={<AttackGraphHub />} />
+                <Route path="attack-graph/scans" element={<AttackGraphScans />} />
+                <Route path="attack-graph/scans/:scanId" element={<AttackGraphScans />} />
                 <Route path="detections" element={<DetectionsHub />} />
                 <Route
                   path="detections/studio/new"

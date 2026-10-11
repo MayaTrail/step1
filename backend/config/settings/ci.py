@@ -56,4 +56,7 @@ INSTALLED_APPS = [
     # workflow suite cannot import without the logs app registered. LogEntry's
     # foreign keys reach only users and infrastructure, both already here.
     "apps.logs",
+    # The attack graph suite tests the result envelope and the model's status
+    # vocabulary. Its only foreign key reaches users, already present.
+    "apps.attack_graph",
 ]
