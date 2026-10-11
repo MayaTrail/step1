@@ -5,6 +5,7 @@ Serializers for the attack_graph app.
 from rest_framework import serializers
 
 from .models import ScoutScan
+from .related import related_emulations
 
 
 class ScoutScanListSerializer(serializers.ModelSerializer):
@@ -30,10 +31,19 @@ class ScoutScanListSerializer(serializers.ModelSerializer):
 class ScoutScanDetailSerializer(serializers.ModelSerializer):
     """A scan with its result envelope — what the graph renders."""
 
+    # Emulations that rehearse each path, keyed by chain id. Computed on read
+    # against the current catalogue rather than stored with the scan, so a
+    # newly added emulation links to old scans too.
+    related = serializers.SerializerMethodField()
+
     class Meta:
         model = ScoutScan
         fields = [
-            "id", "status", "result", "error_message",
+            "id", "status", "result", "related", "error_message",
             "created_at", "started_at", "completed_at",
         ]
         read_only_fields = fields
+
+    def get_related(self, obj: ScoutScan) -> dict:
+        """The related emulations of each path; empty unless the scan found paths."""
+        return related_emulations(obj.result)

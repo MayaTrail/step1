@@ -248,7 +248,7 @@ mt-app-kyp.pem
 # large, and machine-specific; not committed.
 /graphify-out/
 
-# Named venvs used by this repo's docs/skills (backend/README-scout.md etc.)
+# Named venvs used by this repo's docs and skills
 # that don't match the generic venv/.venv patterns above.
 backend/venv-dev/
 backend/venv-ci-test/

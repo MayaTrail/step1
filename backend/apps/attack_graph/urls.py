@@ -6,9 +6,9 @@ Mounted at /api/attack-graph/ in config/urls.py.
 POST /api/attack-graph/scan/                              ScoutScanTriggerView
 GET  /api/attack-graph/scan/list/                          ScoutScanListView
 GET  /api/attack-graph/scan/<scan_id>/                     ScoutScanDetailView
+DELETE /api/attack-graph/scan/<scan_id>/                   ScoutScanDetailView
 GET  /api/attack-graph/scan/<scan_id>/graph/nodes/          ScoutScanGraphNodesView
 GET  /api/attack-graph/scan/<scan_id>/graph/entity/         ScoutScanGraphEntityView
-GET  /api/attack-graph/scan/<scan_id>/graph/path/           ScoutScanGraphPathView
 """
 
 from django.urls import path
@@ -17,7 +17,6 @@ from .views import (
     ScoutScanDetailView,
     ScoutScanGraphEntityView,
     ScoutScanGraphNodesView,
-    ScoutScanGraphPathView,
     ScoutScanListView,
     ScoutScanTriggerView,
 )
@@ -33,6 +32,4 @@ urlpatterns = [
          name="attack-graph-graph-nodes"),
     path("scan/<uuid:scan_id>/graph/entity/", ScoutScanGraphEntityView.as_view(),
          name="attack-graph-graph-entity"),
-    path("scan/<uuid:scan_id>/graph/path/", ScoutScanGraphPathView.as_view(),
-         name="attack-graph-graph-path"),
 ]

@@ -1,18 +1,15 @@
 /**
  * Attack Graph API.
  *
- *   POST /api/attack-graph/scan/                              → start a scan
- *   GET  /api/attack-graph/scan/list/                          → history, newest first
- *   GET  /api/attack-graph/scan/<id>/                          → one scan, for polling
- *   GET  /api/attack-graph/scan/<id>/graph/nodes/?q=            → search graph entities
- *   GET  /api/attack-graph/scan/<id>/graph/entity/?id=          → one entity's full record
- *   GET  /api/attack-graph/scan/<id>/graph/path/?src=&dst=      → paths between two entities
+ *   POST   /api/attack-graph/scan/                              → start a scan
+ *   GET    /api/attack-graph/scan/list/                          → history, newest first
+ *   GET    /api/attack-graph/scan/<id>/                          → one scan, for polling
+ *   DELETE /api/attack-graph/scan/<id>/                          → delete a finished scan
+ *   GET    /api/attack-graph/scan/<id>/graph/entity/?id=          → one entity's full record
  */
 
 import api from './api'
-import type {
-  ChainNode, GraphEntity, PathQueryResult, ScanDetail, ScanSummary,
-} from '@/types/attackGraph'
+import type { GraphEntity, ScanDetail, ScanSummary } from '@/types/attackGraph'
 
 /** Start a scan. Throws with a 409 when one is already in flight. */
 export async function triggerScan(): Promise<{ scanId: string }> {
@@ -32,20 +29,9 @@ export async function getScan(scanId: string): Promise<ScanDetail> {
   return data
 }
 
-/**
- * Search one scan's graph nodes. Backs both query pickers.
- *
- * Node ids go through axios `params`, never a hand-built query string: they
- * contain ":", "/" and sometimes "*", and `params` urlencodes them. Debounce
- * the caller at 200ms — this is an autocomplete, and the endpoint's cost
- * should track searches rather than keystrokes.
- */
-export async function searchGraphNodes(scanId: string, q: string): Promise<ChainNode[]> {
-  const { data } = await api.get<{ nodes: ChainNode[] }>(
-    `/attack-graph/scan/${scanId}/graph/nodes/`,
-    { params: { q } },
-  )
-  return data.nodes
+/** Delete one finished scan and its stored graph. Throws with a 409 while it runs. */
+export async function deleteScan(scanId: string): Promise<void> {
+  await api.delete(`/attack-graph/scan/${scanId}/`)
 }
 
 /** One entity's full record. 404s for a scan stored before graphs were kept. */
@@ -53,17 +39,6 @@ export async function getGraphEntity(scanId: string, id: string): Promise<GraphE
   const { data } = await api.get<GraphEntity>(
     `/attack-graph/scan/${scanId}/graph/entity/`,
     { params: { id } },
-  )
-  return data
-}
-
-/** Paths between two entities. Both ids must be exact — the pickers supply them. */
-export async function findPaths(
-  scanId: string, src: string, dst: string,
-): Promise<PathQueryResult> {
-  const { data } = await api.get<PathQueryResult>(
-    `/attack-graph/scan/${scanId}/graph/path/`,
-    { params: { src, dst } },
   )
   return data
 }

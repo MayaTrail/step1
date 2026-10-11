@@ -42,17 +42,9 @@ export function useScoutConnection(): { connected: boolean } {
 export function ConnectPrompt({
   title,
   body,
-  cta = 'Connect AWS account',
 }: {
   title: string
   body: string
-  /**
-   * The action's label. Overridden by the Attack Graph page, which needs a
-   * read-only audit role rather than the emulation connection — a user who
-   * has already connected an account and is told to "Connect AWS account"
-   * reads the page as broken.
-   */
-  cta?: string
 }) {
   return (
     <div className="px-5 py-16 text-center">
@@ -68,7 +60,7 @@ export function ConnectPrompt({
         className="mt-5 inline-block rounded-btn border border-border px-4 py-2 text-[13px] font-semibold
           text-accent-blue no-underline transition-opacity hover:opacity-60"
       >
-        {cta}
+        Connect AWS account
       </Link>
     </div>
   )

@@ -1,21 +1,26 @@
 """
 Views for the attack_graph app.
 
-ScoutScanTriggerView — start a scan.
-ScoutScanListView    — the user's scan history.
-ScoutScanDetailView  — one scan, for polling and for viewing a past result.
+ScoutScanTriggerView: start a scan.
+ScoutScanListView: the user's scan history.
+ScoutScanDetailView: one scan, for polling and viewing a past result, and for
+deleting it.
 """
 
 import logging
 
 from rest_framework import status
 from rest_framework.generics import ListAPIView
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from . import graph_query, graph_search
-from .models import ScoutScan, active_scans
+from apps.logs.models import LogEntry
+from apps.logs.record import record_activity
+
+from . import graph_search
+from .models import SCANS_KEPT_PER_USER, ScoutScan, active_scans, prune_old_scans
 from .permissions import HasScoutConnection
 from .serializers import ScoutScanDetailSerializer, ScoutScanListSerializer
 
@@ -67,6 +72,14 @@ class ScoutScanTriggerView(APIView):
             )
 
         scan = ScoutScan.objects.create(user=request.user)
+        pruned = prune_old_scans(request.user)
+        if pruned:
+            record_activity(
+                LogEntry.Event.SCAN_DELETED,
+                f"{pruned} older attack graph scan(s) removed: only the newest "
+                f"{SCANS_KEPT_PER_USER} are kept.",
+                actor=request.user,
+            )
 
         from .tasks import run_scout_scan  # noqa: PLC0415
         task = run_scout_scan.apply_async(args=[str(scan.id)], queue="enterprise")
@@ -106,13 +119,28 @@ class ScoutScanDetailView(APIView):
     """
     One scan, with its result envelope.
 
-    GET /api/attack-graph/scan/<scan_id>/
+    GET    /api/attack-graph/scan/<scan_id>/
+    DELETE /api/attack-graph/scan/<scan_id>/
     Returns:
-      200 — the scan
-      404 — no such scan belonging to this user
+      200: the scan
+      204: deleted
+      404: no such scan belonging to this user
+      409: the scan is still running
     """
 
     permission_classes = [HasScoutConnection]
+
+    def get_permissions(self):
+        """
+        Deleting needs only a signed-in owner, not a live audit connection.
+
+        HasScoutConnection refuses writes once the audit role is disconnected,
+        and a user who disconnects is exactly the one most likely to want
+        their stored IAM maps gone. Ownership is enforced by the lookup.
+        """
+        if self.request.method == "DELETE":
+            return [IsAuthenticated()]
+        return super().get_permissions()
 
     def get(self, request: Request, scan_id: str) -> Response:
         """
@@ -136,6 +164,33 @@ class ScoutScanDetailView(APIView):
             )
         return Response(ScoutScanDetailSerializer(scan).data)
 
+    def delete(self, request: Request, scan_id: str) -> Response:
+        """
+        Delete one scan the requesting user owns, with its stored graph.
+
+        Refused while the scan is in flight: the task reads the row when it
+        starts and writes it when it finishes, so deleting it underneath would
+        fail the task rather than stop it.
+        """
+        scan = ScoutScan.objects.filter(id=scan_id, user=request.user).only("id").first()
+        if scan is None:
+            return Response(
+                {"detail": "No such scan."}, status=status.HTTP_404_NOT_FOUND,
+            )
+        if active_scans(request.user).filter(id=scan.id).exists():
+            return Response(
+                {"detail": "This scan is still running. Wait for it to finish, then delete it."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        scan.delete()
+        record_activity(
+            LogEntry.Event.SCAN_DELETED,
+            "Attack graph scan deleted.",
+            actor=request.user,
+        )
+        logger.info("Attack graph scan deleted: user=%s scan=%s", request.user.username, scan_id)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 # Why a scan has no graph, in the user's terms. All four are 404s — the
 # resource genuinely is not there — but they are four different situations and
@@ -152,10 +207,10 @@ GRAPH_FAILED = "This scan failed, so no graph was stored."
 
 class _ScanGraphView(APIView):
     """
-    Shared resolution for the three graph endpoints.
+    Shared resolution for the two graph endpoints.
 
     One place that answers "does this user own a scan with a usable graph",
-    because three copies of an ownership check is three places for one of them
+    because two copies of an ownership check is two places for one of them
     to drift into a global lookup.
     """
 
@@ -168,7 +223,7 @@ class _ScanGraphView(APIView):
         Scoped to the requesting user, matching ScoutScanDetailView: a 404 for
         someone else's scan is the correct answer and does not confirm the id
         exists. The ownership filter is inside this method and nowhere else,
-        so there is one place to read to know the three endpoints are scoped.
+        so there is one place to read to know the two endpoints are scoped.
 
         The graph itself comes through graph_search's LRU, so a hit skips both
         the SELECT of a multi-MB jsonb column and psycopg's parse of it. The
@@ -263,56 +318,3 @@ class ScoutScanGraphEntityView(_ScanGraphView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response(entity)
-
-
-class ScoutScanGraphPathView(_ScanGraphView):
-    """
-    Paths between two entities in this scan's graph.
-
-    GET /api/attack-graph/scan/<scan_id>/graph/path/?src=<id>&dst=<id>
-    Returns:
-      200 — { src, dst, max_depth, edge_types, nodes, paths, truncated, search_capped }
-      400 — src or dst missing, or not a node in this graph
-      404 — no such scan, or the scan has no stored graph
-
-    Exact node ids, not fuzzy tokens: both pickers are backed by
-    /graph/nodes/, so the client already has an exact id. Scout's CLI-side
-    token-matching helper (scout/chains/builder.py) is deliberately not
-    used — its warnings are CLI copy and its suffix match is unbounded.
-    """
-
-    def get(self, request: Request, scan_id: str) -> Response:
-        """Run the query and return its result, truncation flags included."""
-        graph, error = self._resolve(request, scan_id)
-        if error is not None:
-            return error
-
-        src = request.query_params.get("src", "")
-        dst = request.query_params.get("dst", "")
-        if not src or not dst:
-            return Response(
-                {"detail": "Both 'src' and 'dst' query parameters are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        known = graph_search.node_ids(graph)
-        unknown = [i for i in (src, dst) if i not in known]
-        if unknown:
-            return Response(
-                {"detail": f"Not an entity in this scan's graph: {', '.join(unknown)}."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # iter_paths' `if node_id == dst and path` never yields a zero-length
-        # path, so this would otherwise come back as an ordinary empty result
-        # and the panel would say "no escalation path found from alice to
-        # alice within 10 hops" — which is true, useless, and reads like a
-        # finding. The pickers do not stop a user choosing the same entity
-        # twice, so it is stopped here.
-        if src == dst:
-            return Response(
-                {"detail": "Pick two different entities — a path needs somewhere to go."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        return Response(graph_query.query_paths(graph, str(scan_id), src, dst))

@@ -1,11 +1,11 @@
 """
 Reading the stored graph — search, entity lookup, and hop assembly.
 
-Pure on purpose. config/settings/ci.py installs six packages and Scout is not
-one of them, so a module that imports scout.chains.builder is a module CI
-cannot load and therefore cannot defend. Everything here works on the plain
-dict Graph.to_dict() produced; graph_query.py holds the half that needs a real
-scout.graph.Graph and defers its imports.
+Pure on purpose. Scout runs as its own service and is never installed in
+this backend, so everything here works on the plain dict Scout's
+Graph.to_dict() produced and the scan task stored. chain_nodes_for_steps and
+hop_dict are the hop-assembly half of the path query, kept for its return
+(the query itself was removed until it no longer needs Scout in this process).
 
 Not rehydrating is part of the performance answer, not all of it.
 Graph.from_dict() walks every node and edge and rebuilds two adjacency
@@ -18,8 +18,7 @@ The other two terms are easy to miss because they are not in this file:
 
 - the SELECT of a multi-MB jsonb column, and psycopg deserializing it into a
   Python dict, happen per request whether or not anything rehydrates. That is
-  what graph_dict_for_scan() below caches, and why the cache lives here rather
-  than only in graph_query.
+  what graph_dict_for_scan() below caches.
 - search_nodes uses heapq.nsmallest, not sort. The short-query branch does not
   filter at all, and an autocomplete opened on focus sends q="" — a full sort
   there is a sort of every node in the account to return fifty of them.
@@ -35,11 +34,8 @@ from typing import Any
 # unbounded q="" on a large account is otherwise the whole node list.
 MAX_NODE_RESULTS = 50
 
-# Matches graph_query._GRAPH_CACHE_SIZE, and the two caches are deliberately
-# separate: this one holds the parsed dict (what search and entity lookup
-# read), that one holds the rehydrated Graph (what the traversal needs). A
-# worker running against four scans therefore holds up to four of each —
-# budget for both, not one.
+# The parsed graph dicts of the last few scans, per web process. Each can be
+# several MB, so a process holds at most this many.
 _DICT_CACHE_SIZE = 4
 _DICT_CACHE: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
 
@@ -231,9 +227,8 @@ def graph_dict_for_scan(scan_id: str, load: Callable[[], dict[str, Any] | None])
     as the parse. Both matter, and the parse is the one that is easy to miss:
     the column is jsonb, so psycopg deserializes the whole blob into a Python
     dict on every fetch — comparable to Graph.from_dict(), and paid by
-    /graph/nodes/, which is an autocomplete. Caching only the rehydrated Graph
-    (graph_query.graph_for_scan) would leave the search path paying full price
-    per keystroke while appearing to be "the cheap one".
+    /graph/nodes/, which is an autocomplete, so without the cache the search
+    path would pay that price per keystroke.
 
     Keyed on scan_id alone: a completed scan is immutable — nothing writes
     `graph` after the task sets it — so there is nothing to invalidate.
@@ -263,9 +258,7 @@ def payload_bytes(graph_dict: dict[str, Any]) -> int:
     """
     Serialized size of a stored graph — the storage measurement from Task 0.
 
-    Here rather than in graph_query.py because it needs no Scout, and the
-    split in this app is "stdlib goes in the file CI can import". Scout has
-    its own (scout/viz.py:66) against an 8MB ceiling; this one exists so the
-    number can be taken from a stored row without importing Scout at all.
+    Scout has its own (scout/viz.py:66) against an 8MB ceiling; this one
+    exists so the number can be taken from a stored row without Scout.
     """
     return len(json.dumps(graph_dict))

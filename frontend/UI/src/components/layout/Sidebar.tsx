@@ -17,6 +17,7 @@ import {
   IconGear,
   IconBook,
   IconBroadcast,
+  IconGraph,
   IconLaunch,
   IconChevron,
 } from '@/components/ui/Icons'
@@ -169,7 +170,7 @@ export function Sidebar({ isOpen }: SidebarProps) {
       {!isClosed('Security Content') && (
         <>
         <NavItem to="/emulations" icon={<IconFlask size={17} />} label="Emulations" collapsed={collapsed} />
-        <NavItem to="/attack-graph" icon={<IconBroadcast size={17} />} label="Attack Graph" collapsed={collapsed} />
+        <NavItem to="/attack-graph" icon={<IconGraph size={17} />} label="Attack Graph" collapsed={collapsed} />
         <NavItem to="/detections" icon={<IconSearch size={17} />} label="Detections" collapsed={collapsed} />
         <NavItem to="/playbooks" icon={<IconClipboard size={17} />} label="Playbooks" collapsed={collapsed} />
         <NavItem to="/guardrails" icon={<IconShield size={17} />} label="Guardrails" collapsed={collapsed} />

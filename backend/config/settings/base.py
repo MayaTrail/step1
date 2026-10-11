@@ -303,6 +303,14 @@ WORKFLOW_FERNET_KEY = config("WORKFLOW_FERNET_KEY", default="")
 # rather than per user, because nobody has asked to tune it yet.
 COVERAGE_TARGET_PCT = config("COVERAGE_TARGET_PCT", default=90, cast=int)
 
+# Attack graph.
+# Scout runs as its own container (image ghcr.io/mayatrail/scout) and the
+# worker sends it scans over the internal network. The token is the bearer
+# secret Scout's service requires; empty makes every scan fail with a message
+# saying so, rather than the scan silently never running.
+SCOUT_SERVICE_URL = config("SCOUT_SERVICE_URL", default="http://scout:8080")
+SCOUT_SERVICE_TOKEN = config("SCOUT_SERVICE_TOKEN", default="")
+
 # ---------------------------------------------------------------------------
 # Email
 # ---------------------------------------------------------------------------

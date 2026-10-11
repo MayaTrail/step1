@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
+import { fetchProfile, type UserProfile } from '@/services/auth.service'
 import { AIAssistantTab } from './AIAssistantTab'
 import { SectionHeader } from './SectionHeader'
 
@@ -103,7 +105,6 @@ function AccountSection() {
     const rows: [string, string][] = [
         ['Sign-in method', user.method === 'google_sso' ? 'Google SSO' : 'Email & password'],
         ['Account status', user.isVerified ? 'Verified' : 'Unverified'],
-        ['AWS connection', user.isVerified ? 'Connected' : 'Not connected'],
     ]
 
     return (
@@ -139,7 +140,101 @@ function AccountSection() {
                     </button>
                 </div>
             </div>
+
+            <ConnectedRoles />
         </>
+    )
+}
+
+/**
+ * "role/deploy-role" in arn:aws:iam::111122223333:role/deploy-role, with the
+ * account shortened to its last four digits so the row identifies the account
+ * without printing its full number.
+ */
+function describeRole(arn: string): { name: string; account: string } {
+    const parts = arn.split(':')
+    const account = parts[4] ?? ''
+    const resource = parts.slice(5).join(':')
+    return {
+        name: resource.replace(/^role\//, '') || arn,
+        account: account.length >= 4 ? `…${account.slice(-4)}` : '',
+    }
+}
+
+/**
+ * Read-only list of the AWS roles this workspace uses. Each role is managed
+ * where it is used: the emulation role on Profile, the Scout audit role on
+ * Attack Graph. The ARNs come from the profile endpoint, as the session token
+ * only says whether a role is connected.
+ */
+function ConnectedRoles() {
+    const [profile, setProfile] = useState<UserProfile | null>(null)
+    const [failed, setFailed] = useState(false)
+
+    useEffect(() => {
+        fetchProfile().then(setProfile).catch(() => setFailed(true))
+    }, [])
+
+    const regions = profile?.aws_audit_regions ?? []
+    const roles = [
+        {
+            label: 'Emulation role',
+            purpose: 'Deploys labs and runs emulations in your account.',
+            arn: profile?.aws_role_arn ?? '',
+            detail: '',
+            to: '/me',
+            manage: 'Manage in Profile',
+        },
+        {
+            label: 'Scout audit role',
+            purpose: 'Reads IAM configuration for Attack Graph. Read-only.',
+            arn: profile?.aws_audit_role_arn ?? '',
+            detail: regions.length ? `${regions.length} region${regions.length > 1 ? 's' : ''}` : 'IAM only',
+            to: '/attack-graph',
+            manage: 'Manage on Attack Graph',
+        },
+    ]
+
+    return (
+        <div className="mt-8">
+            <SectionHeader title="Connected roles" description="The AWS roles MayaTrail assumes in your account, and where to change each one." />
+
+            <div className="rounded-card border border-border bg-surface-card px-6 shadow-ring md:px-8">
+                {failed && <p className="py-4 text-sm text-content-dim">Could not load your roles. Reload the page to try again.</p>}
+                {!failed && (
+                    <ul className="divide-y divide-border">
+                        {roles.map((role) => {
+                            const { name, account } = describeRole(role.arn)
+                            return (
+                                <li key={role.label} className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 py-4">
+                                    <div className="min-w-0">
+                                        <p className="text-sm font-semibold text-content-primary">{role.label}</p>
+                                        <p className="mt-0.5 text-xs text-content-dim">{role.purpose}</p>
+                                    </div>
+                                    <div className="flex items-center gap-6">
+                                        <div className="text-right">
+                                            {!profile && <p className="text-xs text-content-dim">Loading…</p>}
+                                            {profile && role.arn && (
+                                                <>
+                                                    <p className="font-mono text-xs text-content-primary">{name}</p>
+                                                    <p className="text-xs text-content-dim">
+                                                        {[account && `account ${account}`, role.detail].filter(Boolean).join(' · ')}
+                                                    </p>
+                                                </>
+                                            )}
+                                            {profile && !role.arn && <p className="text-xs text-content-dim">Not connected</p>}
+                                        </div>
+                                        <Link to={role.to} className="text-xs text-accent-blue no-underline transition-opacity hover:opacity-60">
+                                            {role.arn ? role.manage : 'Connect'}
+                                        </Link>
+                                    </div>
+                                </li>
+                            )
+                        })}
+                    </ul>
+                )}
+            </div>
+        </div>
     )
 }
 

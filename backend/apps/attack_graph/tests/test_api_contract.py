@@ -56,26 +56,32 @@ class ScanPermissionTests(SimpleTestCase):
 
 class ScanTaskStoresTheGraphTests(SimpleTestCase):
     """
-    The task keeps Scout's graph instead of discarding it.
+    The task keeps Scout's graph instead of discarding it, and never imports Scout.
 
-    pipeline.run() has always returned (report, graph) and the task bound the
-    second value to `_graph` — the underscore that says "intentionally
-    unused". Reading the source rather than running the task: tasks.py imports
-    boto3 and Scout, neither of which is installed under config.settings.ci.
+    Scout runs as its own service; the task receives its report and graph as
+    JSON and stores both. Reading the source rather than running the task:
+    the task test module exercises behaviour, this holds the two invariants
+    that are cheapest to check textually.
     """
 
-    def _tasks_source(self):
-        path = BACKEND_ROOT / "apps/attack_graph/tasks.py"
-        return path.read_text(encoding="utf-8")
-
-    def test_the_graph_return_value_is_no_longer_discarded(self):
-        source = self._tasks_source()
-        self.assertNotIn("report, _graph = pipeline.run", source)
-        self.assertIn("report, graph = pipeline.run", source)
+    def _source(self, relative):
+        return (BACKEND_ROOT / relative).read_text(encoding="utf-8")
 
     def test_the_completion_update_writes_the_graph(self):
-        source = self._tasks_source()
-        self.assertIn("graph=graph.to_dict()", source)
+        self.assertIn('graph=outcome["graph"]', self._source("apps/attack_graph/tasks.py"))
+
+    def test_no_module_in_the_app_imports_scout(self):
+        # Scout is not installed in the backend or worker images any more. An
+        # import would pass every test that does not reach it and fail the
+        # first real scan.
+        app = BACKEND_ROOT / "apps/attack_graph"
+        for module in app.rglob("*.py"):
+            if "tests" in module.relative_to(app).parts:
+                continue
+            text = module.read_text(encoding="utf-8")
+            with self.subTest(module=str(module.relative_to(BACKEND_ROOT))):
+                self.assertNotIn("from scout", text)
+                self.assertNotIn("import scout\n", text)
 
 
 class GraphEndpointContractTests(SimpleTestCase):
@@ -109,7 +115,6 @@ class GraphEndpointContractTests(SimpleTestCase):
         "_ScanGraphView",
         "ScoutScanGraphNodesView",
         "ScoutScanGraphEntityView",
-        "ScoutScanGraphPathView",
     )
 
     def test_node_ids_travel_as_query_parameters_not_path_segments(self):
@@ -122,9 +127,9 @@ class GraphEndpointContractTests(SimpleTestCase):
         self.assertNotIn("<str:arn>", urls)
         self.assertNotIn("<path:arn>", urls)
 
-    def test_all_three_routes_are_registered(self):
+    def test_the_graph_routes_are_registered(self):
         urls = self._source("apps/attack_graph/urls.py")
-        for route in ("graph/nodes/", "graph/entity/", "graph/path/"):
+        for route in ("graph/nodes/", "graph/entity/"):
             self.assertIn(route, urls)
 
     def test_the_graph_views_use_the_scout_gate(self):
@@ -156,7 +161,7 @@ class GraphEndpointContractTests(SimpleTestCase):
         views = self._source("apps/attack_graph/views.py")
         body = self._class_body(views, "_ScanGraphView")
         self.assertEqual(body.count("user=request.user"), 2)   # row + graph loader
-        # And nothing else in the three subclasses queries the model at all:
+        # And nothing else in the subclasses queries the model at all:
         # one resolver is the point.
         for name in self.GRAPH_VIEWS[1:]:
             self.assertNotIn("ScoutScan.objects", self._class_body(views, name))
@@ -183,35 +188,3 @@ class GraphEndpointContractTests(SimpleTestCase):
         )
         self.assertIn('values_list("graph", flat=True)', body)
         self.assertIn("graph_search.graph_dict_for_scan", body)
-
-    def test_a_query_to_the_same_entity_is_rejected(self):
-        # iter_paths never yields a zero-length path, so without this the
-        # answer is an empty result rendered as "no escalation path found from
-        # alice to alice" — which reads like a finding.
-        body = self._class_body(
-            self._source("apps/attack_graph/views.py"), "ScoutScanGraphPathView",
-        )
-        self.assertIn("src == dst", body)
-
-    def test_render_path_is_never_used(self):
-        # It drops `action` and `conditional`; every query hop would then
-        # render deterministic. See graph_query's module docstring.
-        self.assertNotIn("render_path", self._source("apps/attack_graph/graph_query.py"))
-        self.assertNotIn("render_path", self._source("apps/attack_graph/views.py"))
-
-    def test_resolve_arn_tokens_is_never_used(self):
-        # Its warnings are Scout CLI copy ("--foothold/--target ... matched
-        # zero nodes") and its matching is unbounded. The pickers submit exact
-        # ids; an unknown one is a 400.
-        self.assertNotIn("resolve_arn_tokens",
-                         self._source("apps/attack_graph/graph_query.py"))
-        self.assertNotIn("resolve_arn_tokens", self._source("apps/attack_graph/views.py"))
-
-    def test_scout_is_not_imported_at_module_scope_in_the_query_module(self):
-        # views.py imports graph_query, config/urls.py imports the views, and
-        # Django imports the URLconf during system checks. A module-scope Scout
-        # import breaks every management command and the CI suite.
-        source = self._source("apps/attack_graph/graph_query.py")
-        head = source.split("def ", 1)[0]
-        self.assertNotIn("from scout", head)
-        self.assertNotIn("import scout", head)

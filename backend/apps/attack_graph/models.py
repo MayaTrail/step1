@@ -23,9 +23,12 @@ class ScoutScan(models.Model):
     """
     A single Attack Graph scan.
 
-    Every scan is its own row and history is kept, matching EmulationRun: a
-    customer comparing this month's paths to last month's is the point of
-    keeping them, and an overwritten latest-only row cannot answer that.
+    Every scan is its own row, matching EmulationRun: a customer comparing
+    this month's paths to last month's is the point of keeping them, and an
+    overwritten latest-only row cannot answer that. History is bounded,
+    though: each row holds a map of the customer's whole IAM configuration,
+    so only the newest SCANS_KEPT_PER_USER are kept (see prune_old_scans), and
+    a user can delete any finished scan.
 
     `result` holds the versioned envelope produced by envelope.serialize_scan,
     never Scout's own objects — Scout is maintained independently and its
@@ -117,17 +120,22 @@ ACTIVE_SCAN_STATUSES = (ScoutScan.Status.PENDING, ScoutScan.Status.RUNNING)
 # between the row being created and the worker picking it up.
 SCAN_STALE_AFTER_SECONDS = SCAN_TIME_LIMIT + 300
 
+# Scans kept per user. Enough to compare a few months of monthly scans, few
+# enough that a user's stored IAM maps do not grow without bound.
+SCANS_KEPT_PER_USER = 10
+
 
 def active_scans(user):
     """
     Return this user's scans that are genuinely still in flight.
 
     The one definition of "in flight", used by ScoutScanTriggerView (which
-    refuses a second concurrent scan) and by AWSAuditConnectorView.delete
-    (which refuses to pull the role out from under a running task). Two
-    copies of this filter would be two places for the staleness cutoff to go
-    missing, and the symptom of it going missing is a user locked out with no
-    error to search for.
+    refuses a second concurrent scan), by AWSAuditConnectorView.delete
+    (which refuses to pull the role out from under a running task) and by
+    ScoutScanDetailView.delete (which refuses to delete a scan the worker is
+    still writing). Several copies of this filter would be several places for
+    the staleness cutoff to go missing, and the symptom of it going missing is
+    a user locked out with no error to search for.
 
     Args:
         user: The owner whose scans to consider.
@@ -142,3 +150,25 @@ def active_scans(user):
         status__in=ACTIVE_SCAN_STATUSES,
         created_at__gte=cutoff,
     )
+
+
+def prune_old_scans(user, keep: int = SCANS_KEPT_PER_USER) -> int:
+    """
+    Delete this user's scans beyond the newest `keep`.
+
+    Called when a scan is started, so the new row counts towards the limit
+    and the oldest one makes room for it. A scan still in flight is always
+    among the newest, so it is never the one removed.
+
+    Args:
+        user: The owner whose scans to prune.
+        keep: How many of the newest scans to keep.
+
+    Returns:
+        The number of scans deleted.
+    """
+    newest = list(
+        ScoutScan.objects.filter(user=user).order_by("-created_at").values_list("id", flat=True)[:keep]
+    )
+    deleted, _ = ScoutScan.objects.filter(user=user).exclude(id__in=newest).delete()
+    return deleted

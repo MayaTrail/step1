@@ -130,7 +130,7 @@ export interface ScanEnvelope {
    */
   regions?: string[]
   truncated: boolean
-  /** Computed by the backend. Never re-derive it here — see chainGraph.ts. */
+  /** Computed by the backend. Never re-derive it here: a partial scan must never read as clean. */
   state: ScanState
   chains: AttackChain[]
 }
@@ -153,8 +153,30 @@ export interface ScanSummary {
   completed_at: string | null
 }
 
+/** An emulation that performs some of a path's escalation calls. */
+export interface RelatedEmulation {
+  id: string
+  name: string
+  platform: string
+  /** "atomic" or "campaign". */
+  tier: string
+  /** The path's escalation calls this emulation performs, in path order. */
+  sharedCalls: string[]
+  detectionCount: number
+}
+
+/** What MayaTrail has for one path, computed on read against the current catalogue. */
+export interface PathRelated {
+  /** The path's calls that grant access; reads and sts:AssumeRole are left out. */
+  escalationCalls: string[]
+  /** Best match first; empty when no emulation rehearses the path yet. */
+  emulations: RelatedEmulation[]
+}
+
 export interface ScanDetail extends ScanSummary {
   result: ScanEnvelope | null
+  /** Keyed by chain id; empty unless the scan found paths. */
+  related: Record<string, PathRelated>
 }
 
 /** One entity's full record from the stored graph (GET .../graph/entity/). */
@@ -167,32 +189,4 @@ export interface GraphEntity {
   /** Everything Scout recorded. Rendered raw in a disclosure; may include a
    *  role's full trust policy document and its tags. */
   properties: Record<string, unknown>
-}
-
-/** One path from a query. No id, rank, score or narrative: a query result has
- *  none of those, and the panel must not imply it does. */
-export interface QueryPath {
-  hop_count: number
-  /** Identical shape to a ranked chain's steps — same renderer, no new cases. */
-  steps: ChainStep[]
-}
-
-export interface PathQueryResult {
-  src: string
-  dst: string
-  /** Echoed by the backend so the "within N hops" copy cannot drift. */
-  max_depth: number
-  /** Which edge types were followed. "No path found" is only true of these,
-   *  so the panel names them. */
-  edge_types: string[]
-  /** A real ChainNode for every id the steps reference. Not optional: without
-   *  it stepsToGraph synthesizes an untyped grey box for every node. */
-  nodes: ChainNode[]
-  paths: QueryPath[]
-  /** More paths existed than were returned. The shown ones are the shortest —
-   *  the backend consumes them in BFS order. */
-  truncated: boolean
-  /** The search budget ran out before the graph was explored. The only state
-   *  where "no path found" would be an unsafe thing to say. */
-  search_capped: boolean
 }

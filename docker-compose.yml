@@ -2,10 +2,12 @@ version: "3.9"
 
 # MayaTrail step1 — enterprise stack
 # Services: PostgreSQL, Redis, Django backend, Celery enterprise worker,
-#           Celery Beat scheduler, React UI, Edge nginx proxy.
+#           Celery Beat scheduler, Scout attack-graph engine, React UI,
+#           Edge nginx proxy.
 #
 # Usage:
 #   cp backend/.env.example backend/.env   # fill in SECRET_KEY & AWS creds
+#   cp .env.example .env                   # fill in SCOUT_SERVICE_TOKEN
 #   docker-compose up --build
 
 services:
@@ -118,6 +120,10 @@ services:
       EMULATIONS_BASE_DIR: /opt/emulations
       PLAYBOOKS_BASE_DIR: /opt/playbooks
       THREATINTEL_DIR: /var/lib/mayatrail/threatintel
+      # Attack graph scans run in the scout container; the token is shared
+      # with it through the project .env.
+      SCOUT_SERVICE_URL: http://scout:8080
+      SCOUT_SERVICE_TOKEN: ${SCOUT_SERVICE_TOKEN:?set SCOUT_SERVICE_TOKEN in .env (see .env.example)}
     volumes:
       # Emulation packages: attack scripts and per-emulation infra/ programs.
       # Also read by the threat feed ingest, which matches feed items against
@@ -132,6 +138,17 @@ services:
       redis:
         condition: service_healthy
     command: celery -A config worker --queues=enterprise --concurrency=4 --loglevel=info
+
+  # Scout attack-graph engine (MayaTrail/scout), run as its own container and
+  # pinned to a released image. The worker sends it scans over this network;
+  # it publishes no port. It gets only its token, never backend/.env: it
+  # receives a tenant's temporary credentials and has no use for MayaTrail's.
+  # Pulling the image needs `docker login ghcr.io` once per machine.
+  scout:
+    image: ghcr.io/mayatrail/scout:v0.1.0
+    restart: unless-stopped
+    environment:
+      SCOUT_SERVICE_TOKEN: ${SCOUT_SERVICE_TOKEN:?set SCOUT_SERVICE_TOKEN in .env (see .env.example)}
 
   # Celery Beat scheduler — runs auto_destroy_expired_stacks every 15 minutes.
   beat:
