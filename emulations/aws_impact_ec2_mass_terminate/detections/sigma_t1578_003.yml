@@ -1,0 +1,145 @@
+title: Bulk EC2 Instance Enumeration by Non-Standard Principal
+id: 3d522057-fcf7-5322-aa9d-fb30e1da9b60
+status: experimental
+description: >
+  Detects DescribeInstances API calls from identity types or principals that would
+  not normally perform fleet-wide enumeration. Adversaries validate their target
+  scope by enumerating all running instances before bulk termination. This is
+  particularly high-fidelity when the calling principal is an ops automation
+  role that has never previously performed instance enumeration.
+references:
+    - https://attack.mitre.org/techniques/T1578/003/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1578.003
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: DescribeInstances
+        eventSource: ec2.amazonaws.com
+    filter_common_services:
+        userIdentity.type:
+            - 'AWSService'
+            - 'AWSAccount'
+        userIdentity.invokedBy|contains:
+            - 'ec2.amazonaws.com'
+            - 'autoscaling.amazonaws.com'
+            - 'ssm.amazonaws.com'
+            - 'health.amazonaws.com'
+    condition: selection and not filter_common_services
+falsepositives:
+    - Security scanners and compliance tools (AWS Config, Security Hub, Inspector)
+    - Monitoring agents performing routine inventory
+    - DevOps tooling (Ansible, Chef, Puppet) enumerating managed nodes
+level: informational
+---
+title: Denied EC2 Termination Attempt - Possible Scope Probing
+id: 40fd540c-875f-570f-81a9-b6f99107bb87
+status: experimental
+description: >
+  Detects TerminateInstances API calls that were denied with UnauthorizedOperation.
+  Adversaries or misconfigured automation may probe the blast radius of compromised
+  credentials by attempting termination on instances outside their allowed scope.
+  This rule fires on the denied bait-bastion probe pattern emulated in the
+  ATOMIC_EC2_MASS_TERMINATE scenario where the attacker tests an untagged instance
+  before pivoting to tagged production targets.
+references:
+    - https://attack.mitre.org/techniques/T1578/003/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1578.003
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: TerminateInstances
+        eventSource: ec2.amazonaws.com
+        errorCode: UnauthorizedOperation
+    condition: selection
+falsepositives:
+    - Overly broad automation scripts that catch permission errors silently
+    - Developer testing IAM policies in non-prod environments
+level: medium
+---
+title: EC2 Termination Protection Disabled via ModifyInstanceAttribute
+id: d4c36b18-ad88-5ca3-ba95-bb854d8268c1
+status: experimental
+description: >
+  Detects ModifyInstanceAttribute API calls that disable EC2 instance termination
+  protection (disableApiTermination set to false). Attackers disable this safeguard
+  immediately before bulk instance termination to achieve maximum impact.
+references:
+    - https://attack.mitre.org/techniques/T1578/003/
+    - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifyInstanceAttribute.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1578.003
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: ModifyInstanceAttribute
+        eventSource: ec2.amazonaws.com
+        requestParameters|contains: '"disableApiTermination"'
+        requestParameters|contains: '"value":false'
+    filter_legitimate_automation:
+        userIdentity.arn|contains:
+            - '/terraform'
+            - '/pulumi'
+            - '/cdk'
+            - 'AWSServiceRoleFor'
+    condition: selection and not filter_legitimate_automation
+falsepositives:
+    - Infrastructure-as-code pipelines (Terraform, Pulumi, CDK) decommissioning instances
+      as part of a planned scale-down
+    - Authorized cloud operations teams performing planned decommission of instances
+level: high
+---
+title: Mass EC2 Instance Termination via Single API Call
+id: 3cb309fa-4fd2-5dbc-bc8a-53f4210434fd
+status: experimental
+description: >
+  Detects TerminateInstances API calls that target multiple instances simultaneously.
+  A single TerminateInstances call listing three or more instance IDs is a strong
+  indicator of destructive mass-termination behavior (T1578.003). Adversaries with
+  compromised ops credentials may bulk-terminate production workloads to deny service.
+references:
+    - https://attack.mitre.org/techniques/T1578/003/
+    - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_TerminateInstances.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1578.003
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: TerminateInstances
+        eventSource: ec2.amazonaws.com
+    filter_error:
+        errorCode|exists: true
+    filter_legitimate_automation:
+        userIdentity.arn|contains:
+            - '/terraform'
+            - '/pulumi'
+            - '/cdk'
+            - 'AWSServiceRoleFor'
+            - 'autoscaling.amazonaws.com'
+    condition: selection and not filter_error and not filter_legitimate_automation
+falsepositives:
+    - Auto Scaling group scale-in events terminating multiple instances
+    - Legitimate IaC teardown of multi-instance stacks
+    - Spot instance interruptions processed in batch
+level: critical

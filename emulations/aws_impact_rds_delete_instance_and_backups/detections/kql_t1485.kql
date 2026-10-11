@@ -1,0 +1,117 @@
+// FILE: kql_t1485_rds_data_destruction.kql
+// T1485 - Data Destruction: RDS Instance and Backup Deletion
+// Platform: AWS (AWSCloudTrail table in Microsoft Sentinel / Log Analytics)
+//
+// This query surfaces the full attack chain:
+//   1. STS AssumeRole credential bootstrap into an RDS management role
+//   2. RDS recon (DescribeDBInstances, DescribeDBSnapshots)
+//   3. ModifyDBInstance disabling DeletionProtection (leading-edge signal)
+//   4. DeleteDBSnapshot removing the manual backup
+//   5. DeleteDBInstance with skipFinalSnapshot + deleteAutomatedBackups (primary signal)
+//
+// Deploy as a scheduled analytics rule with 10m lookback, 5m frequency.
+// Severity: Critical when steps 3+5 from same principal; High for step 5 alone.
+
+// ---- Section 1: Deletion Protection Disabled (high-fidelity leading edge) ----
+let ProtectionDisabled = AWSCloudTrail
+| where TimeGenerated > ago(1h)
+| where EventSource == "rds.amazonaws.com"
+| where EventName == "ModifyDBInstance"
+| where RequestParameters has '"deletionProtection":false'
+| where UserIdentityArn !contains "AWSServiceRole"
+| project
+    TimeDisabled = TimeGenerated,
+    Actor = UserIdentityArn,
+    PrincipalId = UserIdentityPrincipalid,
+    SourceIP = SourceIpAddress,
+    DBInstance = tostring(parse_json(RequestParameters).dBInstanceIdentifier),
+    ApplyImmediately = tostring(parse_json(RequestParameters).applyImmediately),
+    SessionName = tostring(parse_json(RequestParameters).roleSessionName);
+
+// ---- Section 2: DB Instance Deleted Without Final Snapshot (primary signal) ----
+let InstanceDeleted = AWSCloudTrail
+| where TimeGenerated > ago(1h)
+| where EventSource == "rds.amazonaws.com"
+| where EventName == "DeleteDBInstance"
+| where RequestParameters has '"skipFinalSnapshot":true'
+| where RequestParameters has '"deleteAutomatedBackups":true'
+| project
+    TimeDeleted = TimeGenerated,
+    Actor = UserIdentityArn,
+    PrincipalId = UserIdentityPrincipalid,
+    SourceIP = SourceIpAddress,
+    DBInstance = tostring(parse_json(RequestParameters).dBInstanceIdentifier),
+    SkipFinalSnapshot = tostring(parse_json(RequestParameters).skipFinalSnapshot),
+    DeleteAutomatedBackups = tostring(parse_json(RequestParameters).deleteAutomatedBackups);
+
+// ---- Section 3: Manual Snapshot Deleted ----
+let SnapshotDeleted = AWSCloudTrail
+| where TimeGenerated > ago(1h)
+| where EventSource == "rds.amazonaws.com"
+| where EventName == "DeleteDBSnapshot"
+| where UserIdentityArn !contains "AWSBackup"
+| where UserIdentityArn !contains "AWSServiceRole"
+| project
+    TimeSnapshotDeleted = TimeGenerated,
+    Actor = UserIdentityArn,
+    SourceIP = SourceIpAddress,
+    SnapshotId = tostring(parse_json(RequestParameters).dBSnapshotIdentifier);
+
+// ---- Section 4: Full Chain Correlation (highest confidence) ----
+ProtectionDisabled
+| join kind=inner (
+    InstanceDeleted
+    | project TimeDeleted, Actor, DBInstance, SkipFinalSnapshot, DeleteAutomatedBackups
+) on Actor
+| where (TimeDeleted - TimeDisabled) between (0s .. 10m)
+| join kind=leftouter (
+    SnapshotDeleted
+    | project TimeSnapshotDeleted, Actor, SnapshotId
+) on Actor
+| extend
+    MinutesBetweenDisableAndDelete = datetime_diff('minute', TimeDeleted, TimeDisabled),
+    AttackChainComplete = isnotempty(SnapshotId)
+| project
+    TimeDisabled,
+    TimeDeleted,
+    TimeSnapshotDeleted,
+    Actor,
+    SourceIP,
+    DBInstance,
+    SnapshotId,
+    SkipFinalSnapshot,
+    DeleteAutomatedBackups,
+    MinutesBetweenDisableAndDelete,
+    AttackChainComplete
+| extend Severity = iff(AttackChainComplete, "Critical", "High")
+| sort by TimeDisabled desc;
+
+// ---- Section 5: Standalone High-Severity Alert - Delete Without Snapshot ----
+// Run this as a separate rule if the chain join above misses partial executions
+//
+// AWSCloudTrail
+// | where TimeGenerated > ago(10m)
+// | where EventSource == "rds.amazonaws.com"
+// | where EventName == "DeleteDBInstance"
+// | where RequestParameters has '"skipFinalSnapshot":true'
+//     and RequestParameters has '"deleteAutomatedBackups":true'
+// | where UserIdentityArn !contains "-dev-"
+//     and UserIdentityArn !contains "-sandbox-"
+// | project TimeGenerated, UserIdentityArn, SourceIpAddress,
+//           DBInstance = tostring(parse_json(RequestParameters).dBInstanceIdentifier)
+// | sort by TimeGenerated desc
+
+// ---- Section 6: Recon Events (correlate to confirm intent) ----
+// AWSCloudTrail
+// | where TimeGenerated > ago(30m)
+// | where EventSource == "rds.amazonaws.com"
+// | where EventName in ("DescribeDBInstances", "DescribeDBSnapshots")
+// | where UserIdentityType == "AssumedRole"
+// | summarize
+//     Events = make_list(EventName),
+//     EventCount = count(),
+//     FirstSeen = min(TimeGenerated),
+//     LastSeen = max(TimeGenerated)
+//   by UserIdentityArn, SourceIpAddress
+// | where EventCount >= 2
+// | project FirstSeen, LastSeen, UserIdentityArn, SourceIpAddress, Events

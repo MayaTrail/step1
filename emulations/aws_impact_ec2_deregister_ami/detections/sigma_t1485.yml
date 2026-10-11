@@ -1,0 +1,187 @@
+title: EC2 AMI Enumeration by Non-Service Principal
+id: f311dbe8-66c5-5ae0-a6f8-719612399a9b
+status: experimental
+description: >
+  Detects DescribeImages calls made by human or assumed-role principals rather than AWS
+  service accounts. In the context of the AMI destruction chain, DescribeImages is the
+  reconnaissance step used to resolve AMI IDs and their backing snapshot IDs before
+  DisableImageDeregistrationProtection and DeregisterImage are invoked. On its own this
+  is low-signal; correlate with subsequent DeregisterImage or DeleteSnapshot from the same
+  principalId within the same session to elevate confidence to high.
+references:
+    - https://attack.mitre.org/techniques/T1485/
+    - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeImages.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1485
+    - attack.discovery
+    - attack.t1580
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: ec2.amazonaws.com
+        eventName: DescribeImages
+    filter_service_accounts:
+        userIdentity.type:
+            - 'AWSService'
+            - 'Root'
+    filter_known_automation:
+        userIdentity.arn|contains:
+            - 'AWSServiceRole'
+            - 'aws-backup'
+    condition: selection and not filter_service_accounts and not filter_known_automation
+falsepositives:
+    - Developers and operators browsing available AMIs via console or CLI
+    - Configuration management tools inventorying base image versions
+    - Security scanning tools enumerating EC2 resources for compliance
+level: informational
+---
+title: STS AssumeRole Targeting EC2 AMI Victim Role
+id: fd97990b-46e4-5b11-a0e6-22a40bdaf38e
+status: experimental
+description: >
+  Detects an AssumeRole call targeting an IAM role with naming patterns consistent with
+  pre-seeded victim roles used in EC2 AMI destruction scenarios. An operator or compromised
+  principal assuming a role scoped to EC2 image management (especially from an unexpected
+  caller or IP) is an early indicator of a lateral-move-to-destruction chain under T1485.
+references:
+    - https://attack.mitre.org/techniques/T1485/
+    - https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1485
+    - attack.privilege_escalation
+    - attack.t1078
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: sts.amazonaws.com
+        eventName: AssumeRole
+        requestParameters.roleArn|contains:
+            - 'deregister-ami'
+            - 'ec2-image'
+            - 'ami-victim'
+            - 'ami-operator'
+    filter_known_services:
+        userIdentity.type: 'AWSService'
+    condition: selection and not filter_known_services
+falsepositives:
+    - Authorized infrastructure automation assuming an AMI management role for scheduled builds
+    - Security tooling assuming roles for inventory or compliance scans
+level: medium
+---
+title: EBS Snapshot Deletion - AMI Backing Storage Destroyed
+id: ada46fee-bfce-5771-9544-ca46c517f599
+status: experimental
+description: >
+  Detects DeleteSnapshot API calls on EBS snapshots. When an adversary deregisters AMIs and
+  then deletes the backing EBS snapshots, the destruction chain (T1485) is complete: no image
+  and no block-device data remain. Standalone snapshot deletion is also used in ransomware
+  pre-encryption phases to eliminate backup recovery paths. Elevated severity when correlated
+  with prior DeregisterImage events from the same principal or session within a short window.
+references:
+    - https://attack.mitre.org/techniques/T1485/
+    - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DeleteSnapshot.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1485
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: ec2.amazonaws.com
+        eventName: DeleteSnapshot
+    filter_automated_backup_services:
+        userIdentity.arn|contains:
+            - 'AWSBackup'
+            - 'aws-backup'
+            - 'dlm'
+            - 'DataLifecycleManager'
+            - 'AWSServiceRole'
+    condition: selection and not filter_automated_backup_services
+falsepositives:
+    - AWS Backup lifecycle policy expiring old snapshots
+    - DLM (Data Lifecycle Manager) automated retention cleanup
+    - Manual cleanup of personal development snapshots
+level: medium
+---
+title: EC2 AMI Deregistration - Data Destruction
+id: 961938e8-de3d-580a-9aac-1599f8f9e2d8
+status: experimental
+description: >
+  Detects DeregisterImage API calls against EC2 AMIs. Deregistering a production or backup AMI
+  is a T1485 Data Destruction technique that permanently removes the image from the AMI registry,
+  preventing new instances from being launched from it. Legitimate deregistration is rare and
+  should be change-controlled.
+references:
+    - https://attack.mitre.org/techniques/T1485/
+    - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DeregisterImage.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1485
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: ec2.amazonaws.com
+        eventName: DeregisterImage
+    filter_automated_pipelines:
+        userIdentity.arn|contains:
+            - 'codepipeline'
+            - 'codebuild'
+            - 'AWSServiceRole'
+    condition: selection and not filter_automated_pipelines
+falsepositives:
+    - Planned AMI lifecycle management removing deprecated golden images
+    - CI/CD pipeline post-bake cleanup removing temporary build AMIs
+    - Automated AMI rotation scripts with controlled retention windows
+level: high
+---
+title: EC2 AMI Deregistration Protection Disabled
+id: 518a7dd0-b677-5cc3-97a2-0c85eb3d2202
+status: experimental
+description: >
+  Detects DisableImageDeregistrationProtection API calls on EC2 AMIs. This action removes
+  the guard that prevents accidental or malicious deregistration of an AMI. In an adversary
+  scenario this is the precursor step to DeregisterImage (T1485). The sequence
+  DisableImageDeregistrationProtection -> DeregisterImage constitutes deliberate destruction
+  of machine images and is almost never a legitimate single-session operation.
+references:
+    - https://attack.mitre.org/techniques/T1485/
+    - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DisableImageDeregistrationProtection.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1485
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: ec2.amazonaws.com
+        eventName: DisableImageDeregistrationProtection
+    filter_automated_pipelines:
+        userIdentity.arn|contains:
+            - 'codepipeline'
+            - 'codebuild'
+            - 'AWSServiceRole'
+    condition: selection and not filter_automated_pipelines
+falsepositives:
+    - Scheduled AMI decommission workflows that explicitly remove protection before deletion
+    - Infrastructure-as-code pipelines rotating base AMIs with explicit deprotect step
+level: high

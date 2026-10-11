@@ -1,0 +1,22 @@
+{
+  "campaign": "ATOMIC-iam-oidc-provider-backdoor",
+  "csp": "aws",
+  "resources": {
+    "exec_role_name": "atomic-iam-oidc-provider-backdoor-exec-role",
+    "bait_deploy_role_name": "acme-prod-deploy-github",
+    "trail_name": "atomic-iam-oidc-provider-backdoor-trail",
+    "github_oidc_url": "https://token.actions.githubusercontent.com",
+    "github_oidc_thumbprint": "6938fd4d98bab03faadb97b34396831e3780aea1",
+    "bait_oidc_subject": "repo:acme-corp/prod-deploy:ref:refs/heads/main"
+  },
+  "pulumi_export_keys": {
+    "exec_role_arn": "exec_role_arn",
+    "exec_role_name": "exec_role_name",
+    "github_provider_arn": "github_provider_arn",
+    "bait_provider_created": "bait_provider_created",
+    "bait_deploy_role_arn": "bait_deploy_role_arn",
+    "bait_deploy_role_name": "bait_deploy_role_name",
+    "trail_name": "trail_name",
+    "cloudtrail_bucket_name": "cloudtrail_bucket_name"
+  }
+}

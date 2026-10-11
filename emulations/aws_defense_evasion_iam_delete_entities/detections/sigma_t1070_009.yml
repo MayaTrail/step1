@@ -1,0 +1,186 @@
+title: Assumed-Role Session Performing Bulk IAM Entity Deletions
+id: 0f564f3e-bb5d-5786-8693-ae074f2d3b97
+status: experimental
+description: >
+    Detects an assumed-role session issuing multiple IAM destructive API calls
+    (DeleteAccessKey, DeleteLoginProfile, DeleteUserPolicy, DeleteUser,
+    DeleteRolePolicy, DeleteRole) in a single CloudTrail session. This
+    combination is characteristic of an attacker who has assumed a
+    purpose-built IAM-deletion-scoped role to remove previously planted
+    backdoor identities, as part of covering their tracks after completing
+    their mission. Legitimate automation typically issues these calls from
+    a well-known provisioner role ARN and rarely combines user and role
+    deletions in the same session.
+references:
+    - https://attack.mitre.org/techniques/T1070/009/
+    - https://attack.mitre.org/techniques/T1098/
+author: MayaTrail
+date: 2026/10/10
+tags:
+    - attack.defense_evasion
+    - attack.t1070.009
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_bulk_iam_delete:
+        eventSource: iam.amazonaws.com
+        userIdentity.type: AssumedRole
+        eventName:
+            - DeleteAccessKey
+            - DeleteLoginProfile
+            - DeleteUserPolicy
+            - DetachUserPolicy
+            - DeleteUser
+            - DeleteRolePolicy
+            - DetachRolePolicy
+            - DeleteRole
+    # Attacker session will first call GetCallerIdentity to confirm role assumption
+    selection_caller_recon:
+        eventSource: sts.amazonaws.com
+        eventName: GetCallerIdentity
+        userIdentity.type: AssumedRole
+    filter_known_automation:
+        userIdentity.sessionContext.sessionIssuer.arn|contains:
+            - 'arn:aws:iam::*:role/aws-service-role/'
+            - '/StackSet-'
+            - '/AWSControlTowerExecution'
+    # Use this rule to pivot: after seeing DeleteUser/DeleteRole, query the same
+    # principalId for the preceding AssumeRole and GetCallerIdentity calls.
+    # SIGMA cannot express time-window aggregation natively; see KQL for correlation.
+    condition: selection_bulk_iam_delete and not filter_known_automation
+falsepositives:
+    - IaC destroy pipelines (Pulumi/Terraform) tearing down a full IAM stack
+      -- filter by the specific deployer role ARN in filter_known_automation
+    - Offboarding runbooks executed by a temporary admin session
+level: high
+fields:
+    - eventName
+    - eventSource
+    - userIdentity.arn
+    - userIdentity.principalId
+    - userIdentity.sessionContext.sessionIssuer.arn
+    - userIdentity.sessionContext.sessionIssuer.userName
+    - requestParameters.userName
+    - requestParameters.roleName
+    - sourceIPAddress
+    - userAgent
+    - awsRegion
+---
+title: IAM Backdoor Role Deletion Chain (Clear Persistence)
+id: 5c6f6d8c-3e8d-599a-abba-f7b6adcf3f60
+status: experimental
+description: >
+    Detects the sequential deletion of an IAM role and its inline policies
+    consistent with an attacker removing a role used as a cross-account or
+    federated-access persistence mechanism. The pattern of DeleteRolePolicy
+    followed immediately by DeleteRole from the same assumed-role session
+    is a strong indicator of persistence cleanup rather than normal lifecycle
+    management, especially when the deleted role name matches service/shadow
+    naming conventions (e.g. OrganizationAccountAccessRole-shadow,
+    svc-prod-*).
+references:
+    - https://attack.mitre.org/techniques/T1070/009/
+    - https://docs.aws.amazon.com/IAM/latest/APIReference/API_DeleteRole.html
+author: MayaTrail
+date: 2026/10/10
+tags:
+    - attack.defense_evasion
+    - attack.t1070.009
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_events:
+        eventSource: iam.amazonaws.com
+        eventName|contains:
+            - DeleteRolePolicy
+            - DetachRolePolicy
+            - DeleteRole
+    selection_caller_type:
+        userIdentity.type: AssumedRole
+    # High-confidence IOC: role name matching known APT shadow-naming patterns
+    selection_suspicious_role_name:
+        requestParameters.roleName|contains:
+            - 'shadow'
+            - 'backup-access'
+            - 'recovery-admin'
+            - 'OrganizationAccountAccessRole-'
+    filter_service_roles:
+        userIdentity.sessionContext.sessionIssuer.arn|contains:
+            - 'arn:aws:iam::*:role/aws-service-role/'
+    # Rule A: any assumed-role session deleting a role (medium confidence)
+    # Rule B: specifically suspicious role names (high confidence)
+    condition: (selection_events and selection_caller_type and not filter_service_roles) or
+               (selection_events and selection_suspicious_role_name)
+falsepositives:
+    - Cloud governance / cleanup automation removing unused roles
+    - Terraform/CDK destroy pipelines during environment teardown
+    - Security team removing over-privileged roles after an access review
+level: medium
+fields:
+    - eventName
+    - eventSource
+    - userIdentity.arn
+    - userIdentity.sessionContext.sessionIssuer.arn
+    - requestParameters.roleName
+    - requestParameters.policyName
+    - sourceIPAddress
+    - awsRegion
+---
+title: IAM Backdoor User Deletion Chain (Clear Persistence)
+id: 9e978c03-3eff-5771-86a0-80cf24d4b7d8
+status: experimental
+description: >
+    Detects the sequential deletion of an IAM user and its sub-resources
+    (access keys, login profile, inline policies) consistent with an attacker
+    removing a backdoor user created for persistence. Legitimate administrative
+    user deprovisioning rarely follows this exact rapid sequence from an
+    assumed-role session; automated provisioning systems use dedicated roles
+    and are filterable by known ARNs.
+references:
+    - https://attack.mitre.org/techniques/T1070/009/
+    - https://docs.aws.amazon.com/IAM/latest/APIReference/API_DeleteUser.html
+author: MayaTrail
+date: 2026/10/10
+tags:
+    - attack.defense_evasion
+    - attack.t1070.009
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    # Match any event in the IAM user teardown sequence
+    selection_events:
+        eventSource: iam.amazonaws.com
+        eventName|contains:
+            - DeleteAccessKey
+            - DeleteLoginProfile
+            - DeleteUserPolicy
+            - DetachUserPolicy
+            - DeleteUser
+    # The caller is an assumed-role session (not a long-lived IAM user or CI/CD role)
+    selection_caller_type:
+        userIdentity.type: AssumedRole
+    # Filter known automation/provisioning roles that legitimately deprovision users
+    filter_provisioning:
+        userIdentity.sessionContext.sessionIssuer.arn|contains:
+            - 'arn:aws:iam::*:role/aws-service-role/'
+            - 'arn:aws:iam::*:role/OrganizationAccountAccessRole'
+    condition: selection_events and selection_caller_type and not filter_provisioning
+falsepositives:
+    - Legitimate user lifecycle automation running under an assumed-role session
+      (add the specific provisioner role ARN to filter_provisioning)
+    - Break-glass or on-call admin manually cleaning up stale accounts via AssumeRole
+    - HR-driven deprovisioning workflows using temporary credentials
+level: medium
+fields:
+    - eventName
+    - eventSource
+    - userIdentity.arn
+    - userIdentity.principalId
+    - userIdentity.sessionContext.sessionIssuer.arn
+    - requestParameters.userName
+    - requestParameters.accessKeyId
+    - sourceIPAddress
+    - awsRegion

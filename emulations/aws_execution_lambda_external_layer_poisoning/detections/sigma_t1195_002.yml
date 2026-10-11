@@ -1,0 +1,118 @@
+title: Lambda Function Layer List Modified by Non-Deployment Principal
+id: e8ab96e5-1dd4-593a-8002-9cd6551c410d
+status: experimental
+description: >
+  Detects UpdateFunctionConfiguration calls that modify the Layers field of a
+  Lambda function, attributed to a principal that is not the expected deployment
+  identity. This is the definitive CloudTrail indicator for T1195.002 Lambda
+  layer poisoning: the adversary overwrites the victim function's layers list
+  with a poisoned LayerVersionArn they published moments earlier. Correlate
+  with a preceding PublishLayerVersion20181031 from the same principal within
+  a short time window to confirm the injection chain.
+references:
+    - https://attack.mitre.org/techniques/T1195/002/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.initial_access
+    - attack.t1195.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: 'UpdateFunctionConfiguration20150331v2'
+        eventSource: 'lambda.amazonaws.com'
+        requestParameters.layers|exists: true
+    filter_cicd:
+        # Suppress known deployment identities that legitimately update layers.
+        # Replace with your actual deployer role ARNs.
+        userIdentity.arn|contains:
+            - 'pulumi'
+            - 'cicd'
+            - 'deploy'
+            - 'github-actions'
+    condition: selection and not filter_cicd
+falsepositives:
+    - Infrastructure-as-code runs (Pulumi, Terraform, CDK) that update function layers as part of a normal deployment
+    - AWS SAM or Serverless Framework deployments from developer machines using personal credentials
+level: high
+---
+title: Lambda Layer Published by Unexpected Principal (Supply Chain Poisoning)
+id: 239d62f6-0620-5c38-969c-f71df4f25366
+status: experimental
+description: >
+  Detects PublishLayerVersion calls attributed to a principal that does not
+  match the original layer deployer identity. In a Lambda layer supply-chain
+  attack (T1195.002), the adversary publishes a new poisoned version of a
+  shared dependency layer under their own role. This event is the point of
+  injection: the new LayerVersionArn will later be pushed into victim functions
+  via UpdateFunctionConfiguration. The principal mismatch between the original
+  deployer and this publisher is the primary indicator.
+references:
+    - https://attack.mitre.org/techniques/T1195/002/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.initial_access
+    - attack.t1195.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: 'PublishLayerVersion20181031'
+        eventSource: 'lambda.amazonaws.com'
+    filter_legitimate_publishers:
+        # Suppress the actual layer owners - CI/CD and Pulumi deploy roles.
+        # Replace with your environment's specific deployer role ARNs.
+        userIdentity.arn|contains:
+            - 'pulumi'
+            - 'cicd'
+            - 'deploy'
+            - 'github-actions'
+            - 'layer-publisher'
+    condition: selection and not filter_legitimate_publishers
+falsepositives:
+    - Developers publishing experimental layer versions from personal AWS credentials
+    - Terraform or Pulumi runs authenticated with a personal IAM user rather than a deployment role
+    - One-off layer patches performed by an ops engineer during an incident
+level: high
+---
+title: Lambda Function Reconnaissance by Non-Deployment Principal
+id: b7500cae-27b9-5bb0-ba8f-6e0838be34a9
+status: experimental
+description: >
+  Detects GetFunction calls against Lambda functions attributed to a role or user
+  that is not the expected CI/CD deployment identity. Adversaries performing
+  supply-chain layer poisoning (T1195.002) call GetFunction first to read the
+  current Layers list before injecting a malicious version. A single GetFunction
+  from an unexpected principal is a low-cost pre-attack recon indicator.
+references:
+    - https://attack.mitre.org/techniques/T1195/002/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.initial_access
+    - attack.t1195.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: 'GetFunction20150331v2'
+        eventSource: 'lambda.amazonaws.com'
+    filter_cicd:
+        # Suppress known CI/CD and Pulumi deployment identities.
+        # Extend this list with your actual deployment role ARNs.
+        userIdentity.arn|contains:
+            - 'pulumi'
+            - 'cicd'
+            - 'deploy'
+            - 'github-actions'
+    condition: selection and not filter_cicd
+falsepositives:
+    - Developers inspecting Lambda configuration interactively via AWS Console or CLI
+    - Legitimate runbook automation reading function config before a manual deploy
+    - Security scanners or asset-inventory tools calling GetFunction across all functions
+level: low

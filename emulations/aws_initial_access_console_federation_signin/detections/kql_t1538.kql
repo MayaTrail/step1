@@ -1,0 +1,118 @@
+// T1538 - Cloud Service Dashboard: ConsoleLogin with FederatedUser Identity
+// Highest-fidelity detection for T1538 federation abuse. A ConsoleLogin where
+// userIdentity.type is FederatedUser and the session issuer is NOT a known
+// corporate IdP role is a near-certain indicator that an attacker constructed
+// a console login URL from a stolen IAM user key via GetFederationToken.
+// Tune filter_known_idp to include your organization's actual SSO role ARNs.
+AWSCloudTrail
+| where EventName == "ConsoleLogin"
+| where EventSource == "signin.amazonaws.com"
+| where UserIdentityType == "FederatedUser"
+// Filter corporate IdP-issued sessions by role naming convention
+| where UserIdentitySessionContextSessionIssuerArn !contains ":role/SSO"
+    and UserIdentitySessionContextSessionIssuerArn !contains ":role/Federated"
+    and UserIdentitySessionContextSessionIssuerArn !contains ":role/SAML"
+| extend
+    LoginResult = tostring(parse_json(AdditionalEventData).LoginTo),
+    MFAUsed = tostring(parse_json(AdditionalEventData).MFAUsed),
+    MobileVersion = tostring(parse_json(AdditionalEventData).MobileVersion),
+    FederatedIssuer = UserIdentitySessionContextSessionIssuerArn,
+    FederatedPrincipal = UserIdentityArn
+| project
+    TimeGenerated,
+    EventName,
+    FederatedPrincipal,
+    FederatedIssuer,
+    LoginResult,
+    MFAUsed,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1538 - Cloud Service Dashboard: GetFederationToken by IAM User
+// Detects a static IAM user key calling GetFederationToken to obtain short-lived
+// federation credentials, indicating an attempt to convert a compromised key
+// into console access. CI/CD service accounts are filtered to reduce noise.
+AWSCloudTrail
+| where EventName == "GetFederationToken"
+| where EventSource == "sts.amazonaws.com"
+| where UserIdentityType == "IAMUser"
+// Filter known CI/deploy service accounts by naming convention
+| where UserIdentityArn !contains ":user/ci-"
+    and UserIdentityArn !contains ":user/deploy-"
+    and UserIdentityArn !contains ":user/svc-"
+| extend
+    ActorUser = UserIdentityArn,
+    FederationName = tostring(parse_json(RequestParameters).name),
+    DurationSeconds = tostring(parse_json(RequestParameters).durationSeconds)
+| project
+    TimeGenerated,
+    EventName,
+    ActorUser,
+    FederationName,
+    DurationSeconds,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    SessionCreationDate
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1538 - Cloud Service Dashboard: GetSigninToken from Programmatic Client
+// Detects GetSigninToken requests to signin.amazonaws.com where the user agent
+// is not a browser, indicating an attacker is programmatically constructing a
+// console login URL from stolen STS federation credentials.
+AWSCloudTrail
+| where EventName == "GetSigninToken"
+| where EventSource == "signin.amazonaws.com"
+// Flag non-browser user agents -- legitimate IdP flows use browser redirects
+| where UserAgent !contains "Mozilla/"
+    and UserAgent !contains "Chrome/"
+    and UserAgent !contains "Safari/"
+    and UserAgent !contains "Edge/"
+| extend
+    ActorArn = UserIdentityArn,
+    ActorType = UserIdentityType,
+    SessionIssuer = tostring(parse_json(UserIdentitySessionContextSessionIssuerArn))
+| project
+    TimeGenerated,
+    EventName,
+    ActorArn,
+    ActorType,
+    SessionIssuer,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1538 - Cloud Service Dashboard: SecretsManager Enumeration by FederatedUser
+// Detects ListSecrets or DescribeSecret calls from a FederatedUser session.
+// Secrets Manager access in production typically comes from Lambda/ECS task roles
+// or IAM service accounts -- not federated console sessions. FederatedUser access
+// is a strong indicator of post-federation discovery activity by an attacker.
+AWSCloudTrail
+| where EventSource == "secretsmanager.amazonaws.com"
+| where EventName in ("ListSecrets", "DescribeSecret")
+| where UserIdentityType == "FederatedUser"
+| extend
+    FederatedPrincipal = UserIdentityArn,
+    FederatedIssuer = UserIdentitySessionContextSessionIssuerArn,
+    SecretId = tostring(parse_json(RequestParameters).secretId)
+| project
+    TimeGenerated,
+    EventName,
+    FederatedPrincipal,
+    FederatedIssuer,
+    SecretId,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    ErrorCode,
+    ErrorMessage
+| sort by TimeGenerated desc

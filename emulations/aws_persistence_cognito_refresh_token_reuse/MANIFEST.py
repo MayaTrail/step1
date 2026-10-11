@@ -1,0 +1,81 @@
+"""MANIFEST for Persist with a Stolen Cognito Refresh Token After a Password Reset.
+
+Generated from the atomic spec by backend_package.generate_atomic_manifest (schema_version 3).
+Review the notes the pipeline printed before shipping to step1/emulations/.
+
+"""
+
+MANIFEST = {   'schema_version': 3,
+    'name': 'aws_persistence_cognito_refresh_token_reuse',
+    'display_name': 'Persist with a Stolen Cognito Refresh Token After a Password Reset',
+    'description': "Sign in as a lab user (USER_PASSWORD_AUTH) and keep the refresh token. The 'victim' "
+                   'resets the password (AdminSetUserPassword) but does not call GlobalSignOut. The attacker '
+                   'exchanges the old refresh token (REFRESH_TOKEN_AUTH) for fresh tokens and calls GetUser, '
+                   'showing a password reset alone does not evict them. Then AdminUserGlobalSignOut and show '
+                   'the refresh now fails.',
+    'tier': 'atomic',
+    'platform': 'aws',
+    'added': '2026-10',
+    'services': ['Cognito', 'IAM'],
+    'readiness': {'type': 'none'},
+    'origin': 'mayatrail',
+    'origin_label': 'ATOMIC TECHNIQUE',
+    'tags': ['Persistence', 'Cognito'],
+    'technique_count': 1,
+    'severity': 'HIGH',
+    'aliases': 'aws.persistence.cognito-refresh-token-reuse',
+    'attribution': 'Atomic adversary technique - no specific threat actor',
+    'active_since': 'Atomic technique (MayaTrail pipeline)',
+    'targets': 'AWS accounts where a principal holds: cognito-idp:InitiateAuth, '
+               'cognito-idp:AdminSetUserPassword, cognito-idp:GetUser, cognito-idp:AdminUserGlobalSignOut',
+    'incidents': [],
+    'identities': {   'attacker_role': {   'kind': 'lab_role',
+                                           'label': "The lab's attacker role",
+                                           'output': 'attacker_role_arn'}},
+    'attack_path': [   {   'phase': 1,
+                           'name': 'Persistence',
+                           'aws_actions': [   'cognito-idp:AdminUserGlobalSignOut',
+                                              'cognito-idp:GetUser',
+                                              'cognito-idp:InitiateAuth',
+                                              'sts:AssumeRole'],
+                           'acting_as': {   'connected_role': ['sts:AssumeRole'],
+                                            'attacker_role': [   'cognito-idp:AdminUserGlobalSignOut',
+                                                                 'cognito-idp:GetUser',
+                                                                 'cognito-idp:InitiateAuth']},
+                           'aws_resources': {   'cognito-idp:AdminUserGlobalSignOut': '{user_pool_arn}',
+                                                'cognito-idp:GetUser': '{user_pool_arn}',
+                                                'cognito-idp:InitiateAuth': '{user_pool_arn}',
+                                                'sts:AssumeRole': '{attacker_role_arn}'},
+                           'techniques': [{'id': 'T1550.001', 'name': 'Application Access Token'}]}],
+    'mitre_mappings': [   {   'id': 'T1550.001',
+                              'name': 'Application Access Token',
+                              'tactic': 'Persistence',
+                              'platform': 'AWS',
+                              'description': 'Token refreshes for a user after AdminSetUserPassword without '
+                                             "a GlobalSignOut; Cognito threat protection 'compromised "
+                                             "credentials' events."}],
+    'references': [   {   'icon': '>',
+                          'title': 'aws-samples.github.io - reference',
+                          'source': 'aws-samples.github.io',
+                          'type': 'REFERENCE',
+                          'color': 'cyan',
+                          'url': 'https://aws-samples.github.io/threat-technique-catalog-for-aws/Techniques/T1098.A006.html'},
+                      {   'icon': '>',
+                          'title': 'docs.aws.amazon.com - reference',
+                          'source': 'docs.aws.amazon.com',
+                          'type': 'REFERENCE',
+                          'color': 'cyan',
+                          'url': 'https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-the-refresh-token.html'},
+                      {   'icon': '#',
+                          'title': 'MITRE ATT&CK - T1550.001',
+                          'source': 'MITRE ATT&CK · mitre.org',
+                          'type': 'MITRE',
+                          'color': 'purple',
+                          'url': 'https://attack.mitre.org/techniques/T1550/001/'}],
+    'phase_count': 1,
+    'estimated_duration_minutes': 5,
+    'estimated_cost_per_hour_usd': 0.0,
+    'default_ttl_hours': 1,
+    'total_resources': 13,
+    'resources': {'ec2_count': 0, 'instance_types': []},
+    'resource_costs': []}

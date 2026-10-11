@@ -1,0 +1,218 @@
+// T1484.002 - Failed OIDC Federation Probe (AssumeRoleWithWebIdentity / InvalidIdentityToken)
+// Attacker verifies a backdoor role using a synthetic JWT; real GH Actions tokens are valid.
+// InvalidIdentityToken from an unexpected IP or principal is a reliable probing signal.
+AWSCloudTrail
+| where EventName == "AssumeRoleWithWebIdentity"
+| where EventSource == "sts.amazonaws.com"
+| where ErrorCode == "InvalidIdentityToken"
+| extend TargetRoleArn = extract('"roleArn":"([^"]+)"', 1, RequestParameters)
+| extend RoleSessionName = extract('"roleSessionName":"([^"]+)"', 1, RequestParameters)
+| project
+    TimeGenerated,
+    EventName,
+    ErrorCode,
+    ErrorMessage,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    TargetRoleArn,
+    RoleSessionName,
+    AwsRegion
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1484.002 - Backdoor Federated IAM Role Creation (CreateRole with OIDC trust)
+// Primary persistence primitive: IAM role reachable by any OIDC-compliant token.
+// The Federated principal in requestParameters.assumeRolePolicyDocument is the signal.
+AWSCloudTrail
+| where EventName == "CreateRole"
+| where EventSource == "iam.amazonaws.com"
+| where RequestParameters contains "oidc-provider"
+    or RequestParameters contains "token.actions.githubusercontent.com"
+| where UserIdentityArn !contains "terraform"
+    and UserIdentityArn !contains "pulumi"
+    and UserIdentityArn !contains "cdk"
+    and UserIdentityArn !contains "AWSServiceRole"
+| extend RoleName = extract('"roleName":"([^"]+)"', 1, RequestParameters)
+| extend RoleArn = extract('"arn":"([^"]+)"', 1, ResponseElements)
+| extend FederatedPrincipal = extract('"Federated":"([^"]+)"', 1, RequestParameters)
+| extend SubCondition = extract('"sub"\\s*:\\s*\\{[^}]*"StringLike"\\s*:\\s*"([^"]+)"', 1, RequestParameters)
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    RoleName,
+    RoleArn,
+    FederatedPrincipal,
+    SubCondition,
+    AwsRegion
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1484.002 - OIDC Provider Backdoor Installation (CreateOpenIDConnectProvider)
+// Detects out-of-band creation of an IAM OIDC provider for GitHub Actions.
+// Legitimate providers are provisioned once by IaC; ad-hoc calls are high-fidelity.
+AWSCloudTrail
+| where EventName == "CreateOpenIDConnectProvider"
+| where EventSource == "iam.amazonaws.com"
+| where RequestParameters contains "token.actions.githubusercontent.com"
+| where UserIdentityArn !contains "terraform"
+    and UserIdentityArn !contains "pulumi"
+    and UserIdentityArn !contains "cdk"
+    and UserIdentityArn !contains "AWSServiceRole"
+| extend OIDCProviderUrl = extract('"url":"([^"]+)"', 1, RequestParameters)
+| extend NewProviderArn = extract('"openIDConnectProviderArn":"([^"]+)"', 1, ResponseElements)
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    OIDCProviderUrl,
+    NewProviderArn,
+    AwsRegion
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1484.002 - Backdoor IAM Role Deletion (indicator removal phase)
+// DeleteRole by a non-IaC principal may indicate cleanup after OIDC backdoor installation.
+// Low fidelity alone; correlate with CreateRole (Federated) within the same session/hour.
+AWSCloudTrail
+| where EventName == "DeleteRole"
+| where EventSource == "iam.amazonaws.com"
+| where UserIdentityArn !contains "terraform"
+    and UserIdentityArn !contains "pulumi"
+    and UserIdentityArn !contains "cdk"
+    and UserIdentityArn !contains "AWSServiceRole"
+| extend DeletedRoleName = extract('"roleName":"([^"]+)"', 1, RequestParameters)
+// Correlate: look for a CreateRole (Federated) by the same principal in the last 60 min
+| join kind=inner (
+    AWSCloudTrail
+    | where EventName == "CreateRole"
+    | where RequestParameters contains "oidc-provider"
+        or RequestParameters contains "Federated"
+    | extend CreatedRoleName = extract('"roleName":"([^"]+)"', 1, RequestParameters)
+    | project CreateTime = TimeGenerated, CreatedRoleName, CreatingPrincipal = UserIdentityArn
+) on $left.DeletedRoleName == $right.CreatedRoleName
+    and $left.UserIdentityArn == $right.CreatingPrincipal
+| where TimeGenerated > CreateTime
+    and TimeGenerated < datetime_add('minute', 60, CreateTime)
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    SourceIpAddress,
+    DeletedRoleName,
+    CreateTime,
+    AwsRegion
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1484.002 - OIDC Provider Deletion (indicator removal after backdoor role creation)
+// Attacker deletes the provider they created once the federated role is in place.
+// Legitimate OIDC provider deletion is extremely rare outside full IaC teardown.
+AWSCloudTrail
+| where EventName == "DeleteOpenIDConnectProvider"
+| where EventSource == "iam.amazonaws.com"
+| where UserIdentityArn !contains "terraform"
+    and UserIdentityArn !contains "pulumi"
+    and UserIdentityArn !contains "cdk"
+    and UserIdentityArn !contains "AWSServiceRole"
+| extend DeletedProviderArn = extract('"openIDConnectProviderArn":"([^"]+)"', 1, RequestParameters)
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    DeletedProviderArn,
+    AwsRegion
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1484.002 - OIDC Provider Enumeration (ListOpenIDConnectProviders)
+// Detects IAM enumeration calls that precede OIDC backdoor installation.
+// Attacker enumerates existing providers to find a trust anchor for the backdoor role.
+AWSCloudTrail
+| where EventName == "ListOpenIDConnectProviders"
+| where EventSource == "iam.amazonaws.com"
+| where UserIdentityArn !contains "terraform"
+    and UserIdentityArn !contains "pulumi"
+    and UserIdentityArn !contains "cdk"
+    and UserIdentityArn !contains "AWSServiceRole"
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    SessionCreationDate
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1484.002 - Full OIDC Backdoor Chain Correlation
+// Surfaces principals that performed 3+ steps of the attack sequence within 2 hours:
+//   1. ListOpenIDConnectProviders  (enumeration)
+//   2. CreateOpenIDConnectProvider (shadow IdP creation)
+//   3. CreateRole with Federated OIDC trust (backdoor role)
+//   4. AssumeRoleWithWebIdentity / InvalidIdentityToken (probe)
+// A single principal hitting >=3 of these in sequence is high-confidence.
+let window = 2h;
+let iac_filter = dynamic(["terraform","pulumi","cdk","AWSServiceRole"]);
+let oidc_events = AWSCloudTrail
+| where EventSource in ("iam.amazonaws.com","sts.amazonaws.com")
+| where EventName in (
+    "ListOpenIDConnectProviders",
+    "CreateOpenIDConnectProvider",
+    "CreateRole",
+    "AssumeRoleWithWebIdentity",
+    "DeleteRole",
+    "DeleteOpenIDConnectProvider"
+  )
+| where not(UserIdentityArn has_any (iac_filter))
+| extend StepFlag = case(
+    EventName == "ListOpenIDConnectProviders", 1,
+    EventName == "CreateOpenIDConnectProvider", 2,
+    EventName == "CreateRole" and (RequestParameters contains "oidc-provider" or RequestParameters contains "Federated"), 3,
+    EventName == "AssumeRoleWithWebIdentity" and ErrorCode == "InvalidIdentityToken", 4,
+    EventName == "DeleteRole", 5,
+    EventName == "DeleteOpenIDConnectProvider", 6,
+    0
+  )
+| where StepFlag > 0;
+oidc_events
+| summarize
+    StepsObserved = make_set(StepFlag),
+    StepCount = dcount(StepFlag),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated),
+    SourceIPs = make_set(SourceIpAddress),
+    Events = make_list(EventName)
+    by UserIdentityArn
+| where StepCount >= 3
+| where (LastSeen - FirstSeen) <= window
+| extend ChainDuration = LastSeen - FirstSeen
+| project
+    FirstSeen,
+    LastSeen,
+    ChainDuration,
+    UserIdentityArn,
+    StepCount,
+    StepsObserved,
+    SourceIPs,
+    Events
+| sort by StepCount desc, FirstSeen asc

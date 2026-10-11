@@ -1,0 +1,148 @@
+// T1213 - Full RDS Credential Theft Chain Correlation
+// Correlates all five attack steps within a 1-hour window on the same assumed-role
+// session: AssumeRole -> Secrets enum (incl. AccessDenied) -> DescribeDBInstances
+// -> ModifyDBInstance with masterUserPassword. Any session hitting ModifyDBInstance
+// with a prior Secrets Manager probe is high-confidence T1213.
+let LookbackWindow = 1h;
+let PasswordResets =
+    AWSCloudTrail
+    | where EventSource == "rds.amazonaws.com"
+    | where EventName == "ModifyDBInstance"
+    | where RequestParameters has "masterUserPassword"
+    | where not (UserIdentityArn has_any ("secrets-rotation", "rds-rotation"))
+    | extend ResetActor = UserIdentityArn, ResetTime = TimeGenerated
+    | project ResetTime, ResetActor, DBIdentifier = tostring(parse_json(RequestParameters).dBInstanceIdentifier), AwsRegion;
+let SecretsProbes =
+    AWSCloudTrail
+    | where EventSource == "secretsmanager.amazonaws.com"
+    | where EventName in ("ListSecrets", "GetSecretValue")
+    | extend ProbeActor = UserIdentityArn, ProbeTime = TimeGenerated
+    | project ProbeTime, ProbeActor;
+PasswordResets
+| join kind=inner (SecretsProbes) on $left.ResetActor == $right.ProbeActor
+| where ProbeTime between ((ResetTime - LookbackWindow) .. ResetTime)
+| summarize
+    FirstSecretsProbe = min(ProbeTime),
+    PasswordResetTime = min(ResetTime),
+    DBTargets = make_set(DBIdentifier),
+    Regions = make_set(AwsRegion)
+    by ResetActor
+| extend ChainDurationMinutes = datetime_diff("minute", PasswordResetTime, FirstSecretsProbe)
+| project
+    ResetActor,
+    FirstSecretsProbe,
+    PasswordResetTime,
+    ChainDurationMinutes,
+    DBTargets,
+    Regions
+| sort by PasswordResetTime desc
+
+// ----- next query -----
+
+// T1213 - RDS Master Password Reset via ModifyDBInstance
+// Primary detection signal: requestParameters contains 'masterUserPassword'
+// CloudTrail masks the value as HIDDEN_DUE_TO_SECURITY_REASONS, so the field
+// presence itself is the indicator. Filter out known rotation principals.
+AWSCloudTrail
+| where EventSource == "rds.amazonaws.com"
+| where EventName == "ModifyDBInstance"
+| where RequestParameters has "masterUserPassword"
+| where not (UserIdentityArn has_any ("secrets-rotation", "rds-rotation", "db-rotation"))
+| extend
+    DBIdentifier = tostring(parse_json(RequestParameters).dBInstanceIdentifier),
+    Actor = UserIdentityArn,
+    SessionName = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.userName)
+| project
+    TimeGenerated,
+    EventName,
+    DBIdentifier,
+    Actor,
+    SessionName,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    ErrorCode,
+    RequestParameters
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1213 - RDS Instance Reconnaissance from AssumedRole Session
+// Attacker calls DescribeDBInstances to confirm target identifier and 'available'
+// state before the password reset. Filter known monitoring identities.
+// High-fidelity when correlated with prior Secrets Manager AccessDenied in same session.
+AWSCloudTrail
+| where EventSource == "rds.amazonaws.com"
+| where EventName == "DescribeDBInstances"
+| where UserIdentityType == "AssumedRole"
+| where not (UserIdentityArn has_any ("cloudwatch-agent", "monitoring-role", "health-check", "rds-enhanced-monitoring"))
+| extend
+    SessionName = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.userName),
+    FilterApplied = tostring(parse_json(RequestParameters).filters)
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    SessionName,
+    UserIdentityType,
+    FilterApplied,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1213 - Secrets Manager Enumeration or AccessDenied from Non-Rotation Principal
+// Covers both ListSecrets (inventory) and GetSecretValue (direct access).
+// AccessDenied results are equally important: denied probes indicate a principal
+// testing for credential stores outside its authorization boundary.
+AWSCloudTrail
+| where EventSource == "secretsmanager.amazonaws.com"
+| where EventName in ("ListSecrets", "GetSecretValue")
+| where not (UserIdentityArn has_any ("secrets-rotation", "SecretsManagerRotation", "lambda-rotation", "app-service-account"))
+| extend
+    SecretId = tostring(parse_json(RequestParameters).secretId),
+    AccessResult = iff(isnotempty(ErrorCode), strcat("DENIED: ", ErrorCode), "ALLOWED"),
+    Actor = UserIdentityArn,
+    IdentityType = UserIdentityType
+| project
+    TimeGenerated,
+    EventName,
+    SecretId,
+    AccessResult,
+    ErrorCode,
+    Actor,
+    IdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1213 - STS AssumeRole into Database Management Role
+// Detects the initial credential pivot step: an unexpected principal assuming
+// a DB-management role before issuing rds:ModifyDBInstance.
+// Tune RoleArnFilter to match your specific victim/db-mgmt role name patterns.
+let RoleArnFilter = dynamic(["victim", "db-mgmt", "database-mgmt", "rds-admin"]);
+let KnownAutomation = dynamic(["pipeline-deployer", "ci-role", "terraform"]);
+AWSCloudTrail
+| where EventSource == "sts.amazonaws.com"
+| where EventName == "AssumeRole"
+| extend TargetRoleArn = tostring(parse_json(RequestParameters).roleArn)
+| extend SessionName = tostring(parse_json(RequestParameters).roleSessionName)
+| where TargetRoleArn has_any (RoleArnFilter)
+| where not (UserIdentityArn has_any (KnownAutomation))
+| project
+    TimeGenerated,
+    EventName,
+    TargetRoleArn,
+    SessionName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    ErrorCode
+| sort by TimeGenerated desc

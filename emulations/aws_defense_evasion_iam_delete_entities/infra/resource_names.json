@@ -1,0 +1,19 @@
+{
+  "campaign": "ATOMIC-iam-delete-entities",
+  "csp": "aws",
+  "resources": {
+    "backdoor_user_name": "svc-prod-recovery-admin",
+    "backdoor_role_name": "OrganizationAccountAccessRole-shadow",
+    "attacker_exec_role_name": "atomic-iam-delete-attacker-exec-role"
+  },
+  "pulumi_export_keys": {
+    "backdoor_user_name": "backdoor_user_name",
+    "backdoor_role_name": "backdoor_role_name",
+    "attacker_exec_role_name": "attacker_exec_role_name",
+    "backdoor_user_arn": "backdoor_user_arn",
+    "backdoor_role_arn": "backdoor_role_arn",
+    "attacker_exec_role_arn": "attacker_exec_role_arn",
+    "backdoor_user_key_id": "backdoor_user_key_id",
+    "backdoor_user_key_secret": "backdoor_user_key_secret"
+  }
+}

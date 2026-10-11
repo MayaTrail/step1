@@ -1,0 +1,3 @@
+name: mayatrail-atomic-route53-dangling
+runtime: python
+description: MayaTrail emulation - Route53 subdomain takeover via dangling CNAME (T1491.002)

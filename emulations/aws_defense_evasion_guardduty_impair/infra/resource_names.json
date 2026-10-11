@@ -1,0 +1,23 @@
+{
+  "campaign": "ATOMIC-guardduty-impair",
+  "csp": "aws",
+  "resources": {
+    "attacker_role_name": "atomic-guardduty-impair-attacker-role",
+    "attacker_allow_policy_name": "atomic-guardduty-impair-attacker-allow",
+    "attacker_deny_policy_name": "atomic-guardduty-impair-attacker-deny",
+    "trail_name": "atomic-guardduty-impair-trail",
+    "cw_log_group_name": "/mayatrail/atomic-guardduty-impair/trail",
+    "cw_delivery_role_name": "atomic-guardduty-impair-cw-delivery"
+  },
+  "pulumi_export_keys": {
+    "detector_id": "detector_id",
+    "detector_is_lab_owned": "detector_is_lab_owned",
+    "attacker_role_arn": "attacker_role_arn",
+    "attacker_role_name": "attacker_role_name",
+    "trusted_ip_bucket_name": "trusted_ip_bucket_name",
+    "trail_name": "trail_name",
+    "trail_bucket_name": "trail_bucket_name",
+    "account_id": "account_id",
+    "region": "region"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "campaign": "ATOMIC-APIGATEWAY-BACKDOOR-PROXY",
+  "csp": "aws",
+  "resources": {
+    "victim_rest_api_name": "prod-customer-api",
+    "backdoor_lambda_name": "internal-health-check",
+    "legit_lambda_name": "atomic-apigateway-backdoor-proxy-legit-backend",
+    "legit_lambda_role_name": "atomic-apigateway-backdoor-proxy-legit-role",
+    "backdoor_lambda_role_name": "atomic-apigateway-backdoor-proxy-backdoor-role",
+    "victim_role_name": "atomic-apigateway-backdoor-proxy-victim-role",
+    "api_stage_name": "prod",
+    "tfstate_object_key": "infra/prod/terraform.tfstate",
+    "access_log_group_name": "/aws/apigateway/prod-customer-api/prod"
+  },
+  "pulumi_export_keys": {
+    "victim_rest_api_id": "victim_rest_api_id",
+    "victim_rest_api_name": "victim_rest_api_name",
+    "backdoor_lambda_arn": "backdoor_lambda_arn",
+    "backdoor_lambda_name": "backdoor_lambda_name",
+    "compromised_victim_role_arn": "compromised_victim_role_arn",
+    "api_invoke_url": "api_invoke_url",
+    "api_stage_name": "api_stage_name",
+    "bait_bucket_name": "bait_bucket_name",
+    "legit_lambda_arn": "legit_lambda_arn"
+  }
+}

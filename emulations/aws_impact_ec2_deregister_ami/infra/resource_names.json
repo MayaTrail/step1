@@ -1,0 +1,26 @@
+{
+  "campaign": "ATOMIC_EC2_DEREGISTER_AMI",
+  "csp": "aws",
+  "resources": {
+    "trail_bucket_prefix": "atomic-ec2-deregister-ami-trail",
+    "trail_name": "atomic-ec2-deregister-ami-trail",
+    "victim_role_name": "atomic-ec2-deregister-ami-victim-role",
+    "victim_policy_name": "atomic-ec2-deregister-ami-victim-policy",
+    "golden_ami_name": "prod-golden-image-2024",
+    "bait_ami_name": "prod-database-backup-ami-v3",
+    "source_volume_tag_name": "atomic-ec2-deregister-ami-source-volume",
+    "source_snapshot_description": "lab-snapshot-for-ami-deregister-emulation"
+  },
+  "pulumi_export_keys": {
+    "trail_name": "trail_name",
+    "trail_bucket_name": "trail_bucket_name",
+    "victim_role_arn": "victim_role_arn",
+    "victim_role_name": "victim_role_name",
+    "source_volume_id": "source_volume_id",
+    "source_snapshot_id": "source_snapshot_id",
+    "golden_ami_id": "golden_ami_id",
+    "bait_ami_id": "bait_ami_id",
+    "account_id": "account_id",
+    "region": "region"
+  }
+}

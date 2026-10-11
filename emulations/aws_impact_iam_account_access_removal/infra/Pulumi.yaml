@@ -1,0 +1,3 @@
+name: mayatrail-atomic-iam-account-access-removal
+runtime: python
+description: Atomic T1531 IAM account access removal emulation lab

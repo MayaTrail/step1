@@ -1,0 +1,305 @@
+// T1190 - API Gateway Backdoor Injection - Full Attack Sequence (Temporal Correlation)
+// Detects the complete backdoor proxy attack chain: CreateResource + PutMethod(NONE) +
+// PutIntegration(AWS_PROXY) + CreateDeployment from the same principal within 15 minutes.
+// This is the highest-confidence detection for the attack chain (CRITICAL severity).
+// No legitimate CI/CD pipeline executes this sequence outside a known pipeline identity.
+// Table: AWSCloudTrail (Microsoft Sentinel)
+let time_window = 15m;
+let filter_pipeline_patterns = dynamic([
+    'CodeBuildRole', 'CodePipelineRole', 'GitHubActionsRole',
+    'TerraformRole', 'PulumiRole'
+]);
+// Step A: CreateResource events (new route injected)
+let create_resource_events =
+    AWSCloudTrail
+    | where EventName == "CreateResource"
+    | where EventSource == "apigateway.amazonaws.com"
+    | where UserIdentityType != "Service"
+    | where not(filter_pipeline_patterns has_any (UserIdentityArn))
+    | extend RestApiId = tostring(parse_json(RequestParameters).restApiId)
+    | project TimeGenerated, RestApiId, Actor = UserIdentityArn, SourceIP = SourceIpAddress, Region = AWSRegion;
+// Step B: PutMethod with authorizationType=NONE
+let putmethod_unauth_events =
+    AWSCloudTrail
+    | where EventName == "PutMethod"
+    | where EventSource == "apigateway.amazonaws.com"
+    | where tostring(parse_json(RequestParameters).authorizationType) == "NONE"
+    | extend RestApiId = tostring(parse_json(RequestParameters).restApiId)
+    | project TimeGenerated, RestApiId, Actor = UserIdentityArn;
+// Step C: PutIntegration with AWS_PROXY
+let putintegration_proxy_events =
+    AWSCloudTrail
+    | where EventName == "PutIntegration"
+    | where EventSource == "apigateway.amazonaws.com"
+    | where tostring(parse_json(RequestParameters).type) == "AWS_PROXY"
+    | extend
+        RestApiId      = tostring(parse_json(RequestParameters).restApiId),
+        IntegrationUri = tostring(parse_json(RequestParameters).uri)
+    | project TimeGenerated, RestApiId, Actor = UserIdentityArn, IntegrationUri;
+// Step D: CreateDeployment activating the backdoor
+let createdeployment_events =
+    AWSCloudTrail
+    | where EventName == "CreateDeployment"
+    | where EventSource == "apigateway.amazonaws.com"
+    | where UserIdentityType != "Service"
+    | where not(filter_pipeline_patterns has_any (UserIdentityArn))
+    | extend
+        RestApiId = tostring(parse_json(RequestParameters).restApiId),
+        StageName = tostring(parse_json(RequestParameters).stageName)
+    | project TimeGenerated, RestApiId, Actor = UserIdentityArn, StageName;
+// Correlate: same Actor, same RestApiId, all 4 steps within time_window
+create_resource_events
+| join kind=inner (putmethod_unauth_events)    on Actor, RestApiId
+| join kind=inner (putintegration_proxy_events) on Actor, RestApiId
+| join kind=inner (createdeployment_events)    on Actor, RestApiId
+| where abs(datetime_diff('minute', TimeGenerated, TimeGenerated1)) <= toint(time_window / 1m)
+| where abs(datetime_diff('minute', TimeGenerated, TimeGenerated2)) <= toint(time_window / 1m)
+| where abs(datetime_diff('minute', TimeGenerated, TimeGenerated3)) <= toint(time_window / 1m)
+| project
+    FirstSeen      = TimeGenerated,
+    Actor,
+    RestApiId,
+    TargetStage    = StageName,
+    BackdoorLambda = IntegrationUri,
+    SourceIP,
+    Region,
+    CreateResourceAt  = TimeGenerated,
+    PutMethodAt       = TimeGenerated1,
+    PutIntegrationAt  = TimeGenerated2,
+    CreateDeploymentAt = TimeGenerated3
+| sort by FirstSeen desc
+
+// ----- next query -----
+
+// T1190 - API Gateway Production Deployment Outside Approved Pipeline
+// Detects CreateDeployment calls from non-pipeline principals. In the backdoor proxy
+// attack chain (Step 7), this is the moment the backdoor /health-check-v2 route goes
+// live and becomes exploitable. Also fires on Step 10 (cleanup redeployment). Any
+// API Gateway deployment to a prod stage outside the known CI/CD pipeline identity
+// should be investigated immediately.
+// Table: AWSCloudTrail (Microsoft Sentinel)
+let filter_pipeline_patterns = dynamic([
+    'CodeBuildRole', 'CodePipelineRole', 'GitHubActionsRole',
+    'TerraformRole', 'PulumiRole'
+]);
+AWSCloudTrail
+| where EventName == "CreateDeployment"
+| where EventSource == "apigateway.amazonaws.com"
+| where UserIdentityType != "Service"
+| where not(filter_pipeline_patterns has_any (UserIdentityArn))
+| extend
+    RestApiId   = tostring(parse_json(RequestParameters).restApiId),
+    StageName   = tostring(parse_json(RequestParameters).stageName),
+    Description = tostring(parse_json(RequestParameters).description),
+    DeploymentId = tostring(parse_json(ResponseElements).id)
+| project
+    TimeGenerated,
+    EventName,
+    RestApiId,
+    StageName,
+    DeploymentId,
+    Description,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1190 - API Gateway Resource Created Outside Deployment Pipeline
+// Detects CreateResource calls from non-pipeline principals. In the backdoor proxy
+// attack chain (Step 3), the attacker creates /health-check-v2 to blend with
+// legitimate health-check infrastructure.
+// Table: AWSCloudTrail (Microsoft Sentinel)
+let filter_pipeline_patterns = dynamic([
+    'CodeBuildRole', 'CodePipelineRole', 'GitHubActionsRole',
+    'TerraformRole', 'PulumiRole'
+]);
+AWSCloudTrail
+| where EventName == "CreateResource"
+| where EventSource == "apigateway.amazonaws.com"
+| where UserIdentityType != "Service"
+| where not(filter_pipeline_patterns has_any (UserIdentityArn))
+| extend
+    RestApiId   = tostring(parse_json(RequestParameters).restApiId),
+    ParentId    = tostring(parse_json(RequestParameters).parentId),
+    PathPart    = tostring(parse_json(RequestParameters).pathPart),
+    NewResourceId = tostring(parse_json(ResponseElements).id)
+| project
+    TimeGenerated,
+    EventName,
+    RestApiId,
+    PathPart,
+    ParentId,
+    NewResourceId,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1190 - API Gateway AWS_PROXY Integration Wired to Unapproved Lambda
+// Detects PutIntegration calls that configure AWS_PROXY pointing to a Lambda function
+// from a non-pipeline principal. In the backdoor proxy attack chain (Step 5), the
+// attacker wires the unauthenticated /health-check-v2 route to an attacker-controlled
+// Lambda. Enrich with the approved integration baseline for the restApiId to determine
+// if the Lambda function URI is authorized.
+// Table: AWSCloudTrail (Microsoft Sentinel)
+let filter_pipeline_patterns = dynamic([
+    'CodeBuildRole', 'CodePipelineRole', 'GitHubActionsRole',
+    'TerraformRole', 'PulumiRole'
+]);
+AWSCloudTrail
+| where EventName == "PutIntegration"
+| where EventSource == "apigateway.amazonaws.com"
+| where UserIdentityType != "Service"
+| where not(filter_pipeline_patterns has_any (UserIdentityArn))
+| extend
+    RestApiId       = tostring(parse_json(RequestParameters).restApiId),
+    ResourceId      = tostring(parse_json(RequestParameters).resourceId),
+    HttpMethod      = tostring(parse_json(RequestParameters).httpMethod),
+    IntegrationType = tostring(parse_json(RequestParameters).type),
+    IntegrationUri  = tostring(parse_json(RequestParameters).uri)
+| where IntegrationType == "AWS_PROXY"
+| project
+    TimeGenerated,
+    EventName,
+    RestApiId,
+    ResourceId,
+    HttpMethod,
+    IntegrationType,
+    IntegrationUri,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1190 - API Gateway Method Configured with No Authentication (HIGH CONFIDENCE)
+// Detects PutMethod calls where authorizationType=NONE, meaning the route is publicly
+// accessible without any credentials. This is the primary high-confidence indicator
+// of the backdoor proxy attack chain (Step 4). No pipeline filter is applied because
+// authorizationType=NONE on a production API is never an expected deployment outcome.
+// Table: AWSCloudTrail (Microsoft Sentinel)
+AWSCloudTrail
+| where EventName == "PutMethod"
+| where EventSource == "apigateway.amazonaws.com"
+| extend
+    RestApiId         = tostring(parse_json(RequestParameters).restApiId),
+    ResourceId        = tostring(parse_json(RequestParameters).resourceId),
+    HttpMethod        = tostring(parse_json(RequestParameters).httpMethod),
+    AuthType          = tostring(parse_json(RequestParameters).authorizationType)
+| where AuthType == "NONE"
+| project
+    TimeGenerated,
+    EventName,
+    RestApiId,
+    ResourceId,
+    HttpMethod,
+    AuthType,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1190 - API Gateway Resource Enumeration by Non-Pipeline Principal
+// Detects GetResources calls on API Gateway REST APIs from non-pipeline principals.
+// In the backdoor proxy attack chain (Step 2), the attacker enumerates resource paths
+// to extract the root resource ID needed to inject the backdoor route.
+// Table: AWSCloudTrail (Microsoft Sentinel)
+let filter_pipeline_patterns = dynamic([
+    'CodeBuildRole', 'CodePipelineRole', 'GitHubActionsRole',
+    'TerraformRole', 'PulumiRole'
+]);
+AWSCloudTrail
+| where EventName == "GetResources"
+| where EventSource == "apigateway.amazonaws.com"
+| where UserIdentityType != "Service"
+| where not(filter_pipeline_patterns has_any (UserIdentityArn))
+| extend RestApiId = tostring(parse_json(RequestParameters).restApiId)
+| project
+    TimeGenerated,
+    EventName,
+    RestApiId,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1190 - AssumeRole for Over-Permissioned API Gateway DevOps Role
+// Detects AssumeRole calls from non-pipeline principals, particularly when followed
+// by a GetCallerIdentity probe confirming the session is valid. Matches Step 1 of
+// the API Gateway backdoor proxy attack chain.
+// Table: AWSCloudTrail (Microsoft Sentinel)
+// Tune: replace filter_pipeline_patterns with your actual pipeline role ARN substrings.
+let filter_pipeline_patterns = dynamic([
+    'CodeBuildRole', 'CodePipelineRole', 'GitHubActionsRole',
+    'TerraformRole', 'PulumiRole'
+]);
+AWSCloudTrail
+| where EventName in ("AssumeRole", "GetCallerIdentity")
+| where EventSource == "sts.amazonaws.com"
+| where UserIdentityType != "Service"
+| where not(filter_pipeline_patterns has_any (UserIdentityArn))
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RequestParameters,
+    ResponseElements
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1190 - Lambda Resource Policy Modified to Allow API Gateway Invocation Outside Pipeline
+// Detects AddPermission calls on Lambda that grant apigateway.amazonaws.com invoke rights
+// from a non-pipeline principal. In the backdoor proxy attack chain (Step 6), this is
+// required to wire the backdoor route to the attacker-controlled Lambda. The sourceArn
+// in the new statement reveals the exact API/stage/route being granted access.
+// Table: AWSCloudTrail (Microsoft Sentinel)
+let filter_pipeline_patterns = dynamic([
+    'CodeBuildRole', 'CodePipelineRole', 'GitHubActionsRole',
+    'TerraformRole', 'PulumiRole'
+]);
+AWSCloudTrail
+| where EventName == "AddPermission20150331v2"
+| where EventSource == "lambda.amazonaws.com"
+| where UserIdentityType != "Service"
+| where not(filter_pipeline_patterns has_any (UserIdentityArn))
+| extend
+    FunctionName = tostring(parse_json(RequestParameters).functionName),
+    StatementId  = tostring(parse_json(RequestParameters).statementId),
+    Action       = tostring(parse_json(RequestParameters).action),
+    Principal    = tostring(parse_json(RequestParameters).principal),
+    SourceArn    = tostring(parse_json(RequestParameters).sourceArn)
+| where Principal == "apigateway.amazonaws.com"
+| project
+    TimeGenerated,
+    EventName,
+    FunctionName,
+    StatementId,
+    Action,
+    Principal,
+    SourceArn,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion
+| sort by TimeGenerated desc

@@ -1,0 +1,96 @@
+"""MANIFEST for Backdoor Trust with a Rogue OIDC Identity Provider.
+
+Generated from the atomic spec by backend_package.generate_atomic_manifest (schema_version 3).
+Review the notes the pipeline printed before shipping to step1/emulations/.
+
+"""
+
+MANIFEST = {   'schema_version': 3,
+    'name': 'aws_persistence_iam_oidc_provider_backdoor',
+    'display_name': 'Backdoor Trust with a Rogue OIDC Identity Provider',
+    'description': 'Register an OIDC identity provider for an attacker-chosen issuer '
+                   '(token.actions.githubusercontent.com with an attacker org/repo in the sub condition), '
+                   'and create a role whose trust policy accepts web identity tokens from it, giving a '
+                   'key-less, rotation-proof way back in. The emulation uses a lab-only audience and a sub '
+                   'condition naming a non-existent repo, then attempts AssumeRoleWithWebIdentity with a '
+                   'self-signed token (expected InvalidIdentityToken, still logged). Teardown deletes the '
+                   'provider and role.',
+    'tier': 'atomic',
+    'platform': 'aws',
+    'added': '2026-10',
+    'services': ['IAM'],
+    'readiness': {'type': 'none'},
+    'origin': 'mayatrail',
+    'origin_label': 'ATOMIC TECHNIQUE',
+    'tags': ['Persistence', 'IAM'],
+    'technique_count': 1,
+    'severity': 'HIGH',
+    'aliases': 'aws.persistence.iam-oidc-provider-backdoor',
+    'attribution': 'Atomic adversary technique - no specific threat actor',
+    'active_since': 'Atomic technique (MayaTrail pipeline)',
+    'targets': 'AWS accounts where a principal holds: iam:CreateOpenIDConnectProvider, iam:CreateRole, '
+               'iam:UpdateAssumeRolePolicy, sts:AssumeRoleWithWebIdentity, iam:DeleteOpenIDConnectProvider, '
+               'iam:DeleteRole',
+    'incidents': [],
+    'attack_path': [   {   'phase': 1,
+                           'name': 'Persistence',
+                           'aws_actions': [   'iam:CreateOpenIDConnectProvider',
+                                              'iam:CreateRole',
+                                              'iam:DeleteOpenIDConnectProvider',
+                                              'iam:DeleteRole',
+                                              'sts:AssumeRole',
+                                              'sts:AssumeRoleWithWebIdentity'],
+                           'acting_as': {   'connected_role': ['sts:AssumeRole'],
+                                            'exec_role': [   'iam:CreateOpenIDConnectProvider',
+                                                             'iam:CreateRole',
+                                                             'iam:DeleteOpenIDConnectProvider',
+                                                             'iam:DeleteRole'],
+                                            'anonymous': ['sts:AssumeRoleWithWebIdentity']},
+                           'aws_resources': {   'iam:CreateOpenIDConnectProvider': '*',
+                                                'iam:CreateRole': '*',
+                                                'iam:DeleteOpenIDConnectProvider': '*',
+                                                'iam:DeleteRole': '*',
+                                                'sts:AssumeRole': '{exec_role_arn}',
+                                                'sts:AssumeRoleWithWebIdentity': '*'},
+                           'techniques': [{'id': 'T1484.002', 'name': 'Trust Modification'}]}],
+    'mitre_mappings': [   {   'id': 'T1484.002',
+                              'name': 'Trust Modification',
+                              'tactic': 'Persistence',
+                              'platform': 'AWS',
+                              'description': 'iam:CreateOpenIDConnectProvider or CreateSAMLProvider outside '
+                                             'IaC, and any CreateRole/UpdateAssumeRolePolicy adding a '
+                                             'Federated principal for a provider created minutes earlier.'}],
+    'references': [   {   'icon': '>',
+                          'title': 'aws-samples.github.io - reference',
+                          'source': 'aws-samples.github.io',
+                          'type': 'REFERENCE',
+                          'color': 'cyan',
+                          'url': 'https://aws-samples.github.io/threat-technique-catalog-for-aws/Techniques/T1484.002.html'},
+                      {   'icon': '>',
+                          'title': 'docs.aws.amazon.com - reference',
+                          'source': 'docs.aws.amazon.com',
+                          'type': 'REFERENCE',
+                          'color': 'cyan',
+                          'url': 'https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_create_oidc.html'},
+                      {   'icon': '>',
+                          'title': 'www.datadoghq.com - reference',
+                          'source': 'www.datadoghq.com',
+                          'type': 'REFERENCE',
+                          'color': 'cyan',
+                          'url': 'https://www.datadoghq.com/blog/securing-github-actions-oidc-aws/'},
+                      {   'icon': '#',
+                          'title': 'MITRE ATT&CK - T1484.002',
+                          'source': 'MITRE ATT&CK · mitre.org',
+                          'type': 'MITRE',
+                          'color': 'purple',
+                          'url': 'https://attack.mitre.org/techniques/T1484/002/'}],
+    'phase_count': 1,
+    'estimated_duration_minutes': 5,
+    'estimated_cost_per_hour_usd': 0.0,
+    'default_ttl_hours': 1,
+    'total_resources': 16,
+    'resources': {'ec2_count': 0, 'instance_types': []},
+    'resource_costs': [],
+    'identities': {   'exec_role': {   'kind': 'lab_role',
+                                       'label': "The lab's exec role",
+                                       'output': 'exec_role_arn'}}}

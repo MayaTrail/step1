@@ -1,0 +1,270 @@
+title: GuardDuty DeleteDetector Attempted - Access Denied
+id: a5e134c6-7310-5879-8a54-efb594a8d8c4
+status: experimental
+description: >
+    Detects an AccessDenied CloudTrail event for guardduty:DeleteDetector. Even when
+    the call fails, the CloudTrail record represents a confirmed adversarial intent to
+    destroy the account's primary threat detection capability. Detection rules MUST NOT
+    filter on errorCode IS NULL; this event is meaningful precisely because it was denied.
+    An attacker who has reached this step likely already performed enumeration, IPSet
+    creation, and filter creation in the same session. Correlate with other T1685 events.
+    Corresponds to ATOMIC-guardduty-impair step 7.
+references:
+    - https://attack.mitre.org/techniques/T1685/
+    - https://docs.aws.amazon.com/guardduty/latest/APIReference/API_DeleteDetector.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1685
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: guardduty.amazonaws.com
+        eventName: DeleteDetector
+        errorCode: AccessDenied
+    filter_legitimate:
+        userIdentity.arn|contains:
+            - 'security-automation'
+            - 'guardduty-service-role'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - Misconfigured automation script targeting wrong detector ID; unlikely to hit AccessDenied unless the role also lacks delete permission
+    - Permission boundary test by cloud security team
+level: critical
+---
+title: GuardDuty DeletePublishingDestination Attempted - Access Denied
+id: 64412f4b-d927-5c3c-8c85-a0a0e139a73d
+status: experimental
+description: >
+    Detects an AccessDenied CloudTrail event for guardduty:DeletePublishingDestination.
+    Deleting a publishing destination would stop GuardDuty from exporting findings to S3
+    or a SIEM, effectively blinding log aggregation. The AccessDenied errorCode is a
+    high-confidence IOC: IAM authorization is evaluated before resource existence, so
+    this event fires even with a placeholder destination ID. Detection rules MUST NOT
+    filter this out on errorCode. Correlate with DeleteDetector (step 7) in the same
+    CloudTrail session to confirm the full impairment chain.
+    Corresponds to ATOMIC-guardduty-impair step 8.
+references:
+    - https://attack.mitre.org/techniques/T1685/
+    - https://docs.aws.amazon.com/guardduty/latest/APIReference/API_DeletePublishingDestination.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1685
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: guardduty.amazonaws.com
+        eventName: DeletePublishingDestination
+        errorCode: AccessDenied
+    filter_legitimate:
+        userIdentity.arn|contains:
+            - 'security-automation'
+            - 'guardduty-service-role'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - Automation pipeline with stale destination ID attempting cleanup; would need AccessDenied on the delete permission itself, not just wrong resource
+level: high
+---
+title: GuardDuty Detector Enumeration by Non-Security Principal
+id: a9eaa482-2494-5619-aba7-2609b050c7f8
+status: experimental
+description: >
+    Detects ListDetectors followed by GetDetector calls from a principal that is not a
+    recognized security service account. GuardDuty enumeration is the reconnaissance
+    phase of a detector impairment attack chain: the adversary discovers the active
+    detector ID and its current configuration (findingPublishingFrequency) before
+    crafting targeted modification or deletion calls. A single GetDetector call in
+    isolation may be benign; ListDetectors + GetDetector together from an assumed-role
+    session outside the security team warrants investigation.
+    Corresponds to ATOMIC-guardduty-impair steps 2-3.
+references:
+    - https://attack.mitre.org/techniques/T1685/
+    - https://docs.aws.amazon.com/guardduty/latest/APIReference/API_ListDetectors.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1685
+    - attack.discovery
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_list:
+        eventSource: guardduty.amazonaws.com
+        eventName: ListDetectors
+    selection_get:
+        eventSource: guardduty.amazonaws.com
+        eventName: GetDetector
+    filter_legitimate:
+        userIdentity.arn|contains:
+            - 'security-automation'
+            - 'guardduty-service-role'
+            - 'SecurityAudit'
+            - 'ReadOnlyAccess'
+    condition: (selection_list or selection_get) and not filter_legitimate
+falsepositives:
+    - Cloud governance tooling performing regular compliance checks against GuardDuty
+    - Developer troubleshooting GuardDuty configuration with broad permissions during an incident
+level: low
+---
+title: GuardDuty Suppression Filter Created with ARCHIVE Action
+id: 620c79cc-8a44-58b6-8847-eaca089b21fa
+status: experimental
+description: >
+    Detects creation of a GuardDuty findings filter with Action=ARCHIVE by a principal
+    outside the security team. An ARCHIVE filter auto-archives matching findings before
+    analysts see them in the GuardDuty console, silently suppressing alerts. This is a
+    high-confidence indicator of an adversary attempting to blind the detection pipeline.
+    Corresponds to ATOMIC-guardduty-impair step 5.
+references:
+    - https://attack.mitre.org/techniques/T1685/
+    - https://docs.aws.amazon.com/guardduty/latest/APIReference/API_CreateFilter.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1685
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: guardduty.amazonaws.com
+        eventName: CreateFilter
+        requestParameters.action: 'ARCHIVE'
+    filter_legitimate:
+        userIdentity.arn|contains:
+            - 'security-automation'
+            - 'guardduty-service-role'
+            - 'SecurityAudit'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - Security team creating known-good suppression filters for approved noisy findings
+    - Automated tuning pipelines that create filters with ARCHIVE action under a custom role name
+level: high
+---
+title: GuardDuty Trusted IP Set Created and Activated by Non-Security Principal
+id: 30d13bef-1fed-58c4-9748-79c635d9a9d3
+status: experimental
+description: >
+    Detects creation of an active GuardDuty IPSet (trusted-IP list) by a principal
+    that is not a recognized security-automation service account. When activated,
+    an IPSet suppresses GuardDuty findings for traffic sourced from the listed CIDRs,
+    allowing an adversary to whitelist C2 infrastructure and evade detection.
+    Corresponds to ATOMIC-guardduty-impair step 4.
+references:
+    - https://attack.mitre.org/techniques/T1685/
+    - https://docs.aws.amazon.com/guardduty/latest/APIReference/API_CreateIPSet.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1685
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: guardduty.amazonaws.com
+        eventName: CreateIPSet
+        requestParameters.activate: 'true'
+    filter_legitimate:
+        userIdentity.arn|contains:
+            - 'security-automation'
+            - 'guardduty-service-role'
+            - 'SecurityAudit'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - Security team onboarding a new trusted-IP list via automation pipeline
+    - Legitimate CI/CD pipeline updating threat intel whitelists under a non-standard role name
+level: high
+---
+title: GuardDuty Detector Finding Frequency Degraded by Non-Security Principal
+id: 5796ffa9-88df-5ea9-8ab4-712375f5c3db
+status: experimental
+description: >
+    Detects a GuardDuty UpdateDetector call that lowers the findingPublishingFrequency
+    to SIX_HOURS from a principal outside the security team. Reducing the publish
+    frequency delays EventBridge/SNS delivery of findings, extending an attacker's
+    operational window before alerts fire. This is a targeted degradation technique
+    that does not disable GuardDuty but meaningfully weakens alert velocity.
+    Corresponds to ATOMIC-guardduty-impair step 6.
+references:
+    - https://attack.mitre.org/techniques/T1685/
+    - https://docs.aws.amazon.com/guardduty/latest/APIReference/API_UpdateDetector.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1685
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: guardduty.amazonaws.com
+        eventName: UpdateDetector
+        requestParameters.findingPublishingFrequency:
+            - 'SIX_HOURS'
+            - 'TWELVE_HOURS'
+    filter_legitimate:
+        userIdentity.arn|contains:
+            - 'security-automation'
+            - 'guardduty-service-role'
+            - 'SecurityAudit'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - Cost-optimization change approved by security team reducing publish frequency in low-risk environments
+    - Infrastructure-as-code deployment updating detector settings via a deployment role
+level: medium
+---
+title: STS AssumeRole into Broad GuardDuty Scope Role Outside Security Team
+id: acee89da-aaaa-5b53-a0aa-dacbe254aa9a
+status: experimental
+description: >
+    Detects an STS AssumeRole call into a role whose name suggests broad GuardDuty
+    permissions (impair, disable, admin) when performed by a principal outside the
+    security team. This is the entry point of a GuardDuty impairment chain: the
+    adversary uses a compromised identity to assume a seeded or over-permissioned role
+    granting guardduty:CreateIPSet, guardduty:CreateFilter, guardduty:UpdateDetector,
+    and guardduty:DeleteDetector. Tune the role name pattern to your environment's
+    naming convention for GuardDuty-scoped roles.
+    Corresponds to ATOMIC-guardduty-impair step 1.
+references:
+    - https://attack.mitre.org/techniques/T1685/
+    - https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1685
+    - attack.privilege_escalation
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: sts.amazonaws.com
+        eventName: AssumeRole
+        requestParameters.roleArn|contains:
+            - 'guardduty-impair'
+            - 'guardduty-disable'
+            - 'guardduty-admin'
+            - 'gd-impair'
+    filter_legitimate:
+        userIdentity.arn|contains:
+            - 'security-automation'
+            - 'SecurityAudit'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - Security team automation deploying or tearing down GuardDuty emulation labs
+    - IaC pipeline (Pulumi, Terraform) deploying or destroying GuardDuty resources under a deployment role whose ARN matches the pattern
+level: medium

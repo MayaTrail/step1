@@ -1,0 +1,191 @@
+// FILE: kql_T1486_rds_copy_snapshot_attacker_kms.kql
+// T1486 - RDS Snapshot Re-encrypted Under Attacker-Controlled KMS Key
+//
+// Core ransomware signal: CopyDBSnapshot where kmsKeyId references a CMK that
+// is NOT the standard account backup key. The attacker copies a production
+// snapshot encrypted under their own CMK, making it irrecoverable by the victim.
+//
+// AWS CloudTrail table (Microsoft Sentinel / AWS Security Lake)
+// Table: AWSCloudTrail
+
+AWSCloudTrail
+| where EventSource == "rds.amazonaws.com"
+| where EventName == "CopyDBSnapshot"
+// Exclude AWS Backup and RDS native service calls
+| where UserIdentityInvokedBy !in ("backup.amazonaws.com", "rds.amazonaws.com")
+// Parse KMS key from requestParameters - the primary ransomware signal field
+| extend kmsKeyId = tostring(parse_json(RequestParameters).kmsKeyId)
+| extend sourceSnapshotId = tostring(parse_json(RequestParameters).sourceDBSnapshotIdentifier)
+| extend targetSnapshotId = tostring(parse_json(RequestParameters).targetDBSnapshotIdentifier)
+| extend principalArn = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.arn)
+// Flag where KMS key ARN is present (encrypted copy) and does not match standard alias pattern
+| where isnotempty(kmsKeyId)
+// Optionally restrict to keys not matching your org's standard backup key alias:
+// | where kmsKeyId !contains "alias/aws/rds"
+// | where kmsKeyId !contains "alias/backup-key"
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    principalArn,
+    sourceSnapshotId,
+    targetSnapshotId,
+    kmsKeyId,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// FILE: kql_T1486_rds_delete_attempts_access_denied.kql
+// T1486 - RDS Delete Attempts Including AccessDenied (Steps 7 and 8)
+//
+// Detects DeleteDBInstance and DeleteDBSnapshot calls from any principal,
+// INCLUDING calls that returned AccessDenied. This is critical: in the RDS
+// ransomware kill chain, both delete events are typically denied by an IAM
+// deny-guard, but they are still high-fidelity indicators that confirm the
+// attacker completed the full ransomware sequence after re-encrypting under
+// their KMS key.
+//
+// IMPORTANT: This query deliberately does NOT filter ErrorCode. Filtering
+// errorCode == null (success-only) would miss the primary IoC pattern.
+//
+// Table: AWSCloudTrail
+
+AWSCloudTrail
+| where EventSource == "rds.amazonaws.com"
+| where EventName in ("DeleteDBInstance", "DeleteDBSnapshot")
+// Include both succeeded (no errorCode) and AccessDenied -- both matter
+| extend outcome = iff(isempty(ErrorCode), "Succeeded", ErrorCode)
+| extend targetResource = coalesce(
+    tostring(parse_json(RequestParameters).dBInstanceIdentifier),
+    tostring(parse_json(RequestParameters).dBSnapshotIdentifier)
+)
+| extend principalArn = UserIdentityArn
+| extend sessionIssuerArn = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.arn)
+// Flag succeeded deletes as critical - permanent data destruction
+| extend severity = iff(outcome == "Succeeded", "CRITICAL", "HIGH")
+// Filter recognized lifecycle automation
+| where principalArn !contains "backup.amazonaws.com"
+| where sessionIssuerArn !contains "/AWSBackup"
+| project
+    TimeGenerated,
+    severity,
+    EventName,
+    outcome,
+    principalArn,
+    sessionIssuerArn,
+    targetResource,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    ErrorCode,
+    ErrorMessage
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// FILE: kql_T1486_rds_ransomware_full_chain.kql
+// T1486 - RDS KMS Ransomware Full Kill-Chain Correlation
+//
+// Correlates all 8 steps of the RDS ransomware kill chain within a 2-hour window
+// per principal session. Surfaces any principal that touched >= 3 distinct ransomware
+// API events, ranked by severity score.
+//
+// Kill-chain sequence (steps map to attack plan phases 1-8):
+//   AssumeRole                     (credential bootstrap)
+//   DescribeDBInstances            (target confirmation recon)
+//   DescribeDBSnapshots            (snapshot enumeration recon)
+//   CreateDBSnapshot               (stage live instance snapshot)
+//   CopyDBSnapshot                 (RE-ENCRYPT under attacker KMS key - core signal)
+//   ModifyDBInstance               (disable deletion protection)
+//   DeleteDBInstance               (destroy original - typically AccessDenied)
+//   DeleteDBSnapshot               (destroy backup - typically AccessDenied)
+//
+// NOTE: DeleteDBInstance and DeleteDBSnapshot rows are included even when
+// errorCode == "AccessDenied" -- they are expected denied events and MUST NOT be
+// filtered out.
+//
+// Table: AWSCloudTrail
+
+let ransomwareEvents = AWSCloudTrail
+| where EventSource in ("rds.amazonaws.com", "sts.amazonaws.com")
+| where EventName in (
+    "AssumeRole",
+    "DescribeDBInstances",
+    "DescribeDBSnapshots",
+    "CreateDBSnapshot",
+    "CopyDBSnapshot",
+    "ModifyDBInstance",
+    "DeleteDBInstance",
+    "DeleteDBSnapshot"
+)
+// DO NOT filter on ErrorCode -- AccessDenied on Delete* events are high-fidelity IoCs
+| extend principalArn = UserIdentityArn
+| extend sessionIssuerArn = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.arn)
+| extend kmsKeyId = tostring(parse_json(RequestParameters).kmsKeyId)
+| extend dbInstanceId = tostring(parse_json(RequestParameters).dBInstanceIdentifier)
+| extend snapshotId = coalesce(
+    tostring(parse_json(RequestParameters).dBSnapshotIdentifier),
+    tostring(parse_json(RequestParameters).sourceDBSnapshotIdentifier)
+)
+| extend deletionProtection = tostring(parse_json(RequestParameters).deletionProtection)
+// Assign severity weight per event
+| extend eventWeight = case(
+    EventName == "CopyDBSnapshot" and isnotempty(kmsKeyId), 40,
+    EventName == "DeleteDBInstance", 30,
+    EventName == "DeleteDBSnapshot", 20,
+    EventName == "ModifyDBInstance" and deletionProtection == "false", 20,
+    EventName == "CreateDBSnapshot", 15,
+    EventName == "DescribeDBInstances", 5,
+    EventName == "DescribeDBSnapshots", 5,
+    EventName == "AssumeRole", 5,
+    0
+);
+
+ransomwareEvents
+| summarize
+    eventCount = count(),
+    distinctEvents = dcount(EventName),
+    totalWeight = sum(eventWeight),
+    eventSequence = make_list(EventName, 20),
+    kmsKeysUsed = make_set(kmsKeyId, 5),
+    dbInstances = make_set(dbInstanceId, 5),
+    snapshots = make_set(snapshotId, 10),
+    sourceIPs = make_set(SourceIpAddress, 5),
+    errorCodes = make_set(ErrorCode, 5),
+    firstSeen = min(TimeGenerated),
+    lastSeen = max(TimeGenerated)
+    by principalArn, sessionIssuerArn, AwsRegion, bin(TimeGenerated, 2h)
+// Require at least 3 distinct ransomware-related events from the same principal
+| where distinctEvents >= 3
+// Filter out pure monitoring/backup service principals
+| where principalArn !contains "backup.amazonaws.com"
+| where principalArn !contains "config.amazonaws.com"
+| extend
+    chainDurationMinutes = datetime_diff('minute', lastSeen, firstSeen),
+    hasCopyWithKMS = iff(eventSequence has "CopyDBSnapshot" and array_length(kmsKeysUsed) > 0, true, false),
+    hasDeleteAttempt = iff(eventSequence has "DeleteDBInstance" or eventSequence has "DeleteDBSnapshot", true, false),
+    hasDisabledProtection = iff(eventSequence has "ModifyDBInstance", true, false)
+| extend riskScore = totalWeight + (hasCopyWithKMS ? 50 : 0) + (hasDeleteAttempt ? 30 : 0) + (hasDisabledProtection ? 20 : 0)
+| project
+    TimeGenerated,
+    AwsRegion,
+    principalArn,
+    sessionIssuerArn,
+    riskScore,
+    distinctEvents,
+    eventSequence,
+    hasCopyWithKMS,
+    hasDeleteAttempt,
+    hasDisabledProtection,
+    kmsKeysUsed,
+    dbInstances,
+    snapshots,
+    errorCodes,
+    sourceIPs,
+    firstSeen,
+    lastSeen,
+    chainDurationMinutes
+| sort by riskScore desc, firstSeen asc

@@ -1,0 +1,162 @@
+title: Adversary Role Assumption for SNS SMS Pumping Operation
+id: 3120e959-e211-5d1b-b8c4-1578f816bfc0
+status: experimental
+description: >
+    Detects AssumeRole calls where the RoleSessionName contains keywords
+    associated with SMS pumping tooling or automated OTP-abuse frameworks.
+    Adversaries staging an SMS pumping campaign commonly adopt a stolen or
+    attacker-controlled IAM role using a descriptive session name baked into
+    their tooling (e.g. "sms-pumping", "otp-abuse", "smspump").
+references:
+    - https://attack.mitre.org/techniques/T1496/003/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.resource_hijacking
+    - attack.t1496.003
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: AssumeRole
+        eventSource: sts.amazonaws.com
+    filter_session_keywords:
+        requestParameters.roleSessionName|contains:
+            - sms-pump
+            - smspump
+            - sms_pump
+            - otp-abuse
+            - otpabuse
+            - sms-fraud
+            - smsbomb
+    condition: selection and filter_session_keywords
+falsepositives:
+    - Automated deployment pipelines that happen to include "sms" in a role session name
+    - Developers testing SNS SMS functionality with descriptive session labels
+level: medium
+---
+title: SNS Spend Limit Raise Attempt - SetSMSAttributes AccessDenied
+id: f703b083-552c-57c7-9dbe-558bea8d9bf0
+status: experimental
+description: >
+    Detects a denied attempt to raise the SNS SMS monthly spend limit via
+    SetSMSAttributes. Adversaries who have obtained SNS Publish rights but
+    lack sns:SetSMSAttributes will still generate a CloudTrail event with
+    errorCode AccessDenied. This event is the intent signal for a pumping
+    campaign — the adversary is probing whether they can remove the billing
+    guard before launching the Publish burst.
+
+    IMPORTANT: Detection rules that filter on errorCode IS NULL or only match
+    successful events will miss this step entirely. This rule MUST include the
+    AccessDenied errorCode to be effective.
+references:
+    - https://attack.mitre.org/techniques/T1496/003/
+    - https://docs.aws.amazon.com/sns/latest/api/API_SetSMSAttributes.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.resource_hijacking
+    - attack.t1496.003
+    - attack.defense_evasion
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: SetSMSAttributes
+        eventSource: sns.amazonaws.com
+        errorCode: AccessDenied
+    filter_legitimate_change:
+        userIdentity.arn|contains:
+            - AWSServiceRoleForSNS
+            - sns-service-role
+    condition: selection and not filter_legitimate_change
+falsepositives:
+    - Overly-permissioned automation scripts that attempt SetSMSAttributes without
+      having been granted the required IAM permission
+    - Misconfigured IAM policies during initial SNS SMS account setup
+level: high
+---
+title: SNS Publish to Direct Phone Number - Potential SMS Pumping
+id: 0c879c7a-56b7-55a6-b872-0756f117f142
+status: experimental
+description: >
+    Detects SNS Publish calls that target a direct phone number (E.164 format)
+    rather than a topic ARN or target ARN. In most application architectures,
+    SNS messages are published to topics; direct-to-phone-number calls are
+    unusual and characteristic of SMS pumping tooling. When correlated with
+    the SNS SMS recon events (GetSMSAttributes, GetSMSSandboxAccountStatus)
+    from the same principal in the same session, confidence is high.
+
+    Burst detection: a high volume of Publish calls to distinct phone numbers
+    from the same userIdentity.arn within a 60-second window, all with
+    SMSType Promotional, is the primary pumping pattern. Threshold rules
+    should alert at >= 10 distinct phone number destinations per minute.
+references:
+    - https://attack.mitre.org/techniques/T1496/003/
+    - https://docs.aws.amazon.com/sns/latest/api/API_Publish.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.resource_hijacking
+    - attack.t1496.003
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: Publish
+        eventSource: sns.amazonaws.com
+    filter_phone_destination:
+        requestParameters.phoneNumber|startswith: '+'
+    filter_not_topic:
+        requestParameters.topicArn: ''
+    filter_not_target:
+        requestParameters.targetArn: ''
+    condition: selection and filter_phone_destination and filter_not_topic and filter_not_target
+falsepositives:
+    - Two-factor authentication (2FA) or one-time password (OTP) delivery services
+      that publish directly to phone numbers as a normal operational pattern
+    - Marketing platforms with legitimate SMS campaigns using SNS direct-publish
+    - Customer notification systems for appointment reminders or alerts
+level: medium
+---
+title: SNS SMS Account Reconnaissance - Spend Limit and Sandbox Status Enumeration
+id: bf97e41b-7ece-5e25-beac-2520fcaa74b7
+status: experimental
+description: >
+    Detects enumeration of SNS SMS account attributes preceding a pumping
+    campaign. Adversaries who have obtained SNS Publish rights call
+    GetSMSAttributes to discover the MonthlySpendLimit and DefaultSMSType,
+    then call GetSMSSandboxAccountStatus to determine whether delivery is
+    gated by the SMS sandbox. Both calls together — especially from the same
+    principal within a short window — indicate pre-attack reconnaissance.
+    GetSMSSandboxAccountStatus is rarely called in normal operations; its
+    presence alone is a weak signal worth correlating.
+references:
+    - https://attack.mitre.org/techniques/T1496/003/
+    - https://docs.aws.amazon.com/sns/latest/api/API_GetSMSAttributes.html
+    - https://docs.aws.amazon.com/sns/latest/api/API_GetSMSSandboxAccountStatus.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.resource_hijacking
+    - attack.t1496.003
+    - attack.reconnaissance
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_attrs:
+        eventName: GetSMSAttributes
+        eventSource: sns.amazonaws.com
+    selection_sandbox:
+        eventName: GetSMSSandboxAccountStatus
+        eventSource: sns.amazonaws.com
+    condition: selection_attrs or selection_sandbox
+falsepositives:
+    - Cloud cost monitoring tools polling SMS spend limits
+    - Developers onboarding a new AWS account to SNS SMS for legitimate use
+    - Infrastructure-as-code tooling that reads SMS config before applying changes
+level: low

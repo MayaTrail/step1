@@ -1,0 +1,27 @@
+{
+  "campaign": "ATOMIC-EBS-RANSOMWARE-KMS",
+  "csp": "aws",
+  "resources": {
+    "lab_kms_key_description": "atomic-ebs-ransomware-kms lab data CMK",
+    "attacker_kms_key_description": "atomic-ebs-ransomware-kms attacker ransom CMK",
+    "victim_ebs_volume_name": "atomic-ebs-ransomware-kms-victim-data",
+    "victim_ebs_snapshot_name": "prod-database-backup",
+    "victim_ebs_snapshot_description": "prod-database-backup-2026-10-10",
+    "attacker_role_name": "atomic-ebs-ransomware-kms-attacker-role",
+    "attacker_allow_policy_name": "atomic-ebs-ransomware-kms-attacker-allow",
+    "deny_guard_policy_name": "atomic-ebs-ransomware-kms-deny-guard",
+    "cloudtrail_bucket_name_prefix": "atomic-ebs-ransomware-kms-ct",
+    "cloudtrail_trail_name": "atomic-ebs-ransomware-kms-trail"
+  },
+  "pulumi_export_keys": {
+    "lab_kms_key_arn": "lab_kms_key_arn",
+    "attacker_kms_key_arn": "attacker_kms_key_arn",
+    "victim_ebs_volume_id": "victim_ebs_volume_id",
+    "victim_ebs_snapshot_id": "victim_ebs_snapshot_id",
+    "attacker_role_arn": "attacker_role_arn",
+    "attacker_role_name": "attacker_role_name",
+    "cloudtrail_bucket_name": "cloudtrail_bucket_name",
+    "trail_name": "trail_name",
+    "region": "region"
+  }
+}

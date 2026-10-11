@@ -1,0 +1,180 @@
+# FILE: sigma_T1531_access_key_revocation.yml
+title: AWS IAM Access Key Set Inactive by Non-Owner (T1531)
+id: 1690c28e-5e93-5065-b8e2-15fa87a765a7
+status: experimental
+description: |
+    Detects UpdateAccessKey calls that set an access key status to Inactive. When performed
+    by a principal other than the key owner's own session, this is a strong indicator that
+    an adversary with IAM write permissions is revoking programmatic access for victim users.
+    Disabling keys blocks all CLI, SDK, and API-based authentication for the targeted user.
+references:
+    - https://attack.mitre.org/techniques/T1531/
+author: MayaTrail
+date: 2026/10/11
+tags:
+    - attack.impact
+    - attack.t1531
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: iam.amazonaws.com
+        eventName: UpdateAccessKey
+        requestParameters.status: Inactive
+    filter_self_rotation:
+        userIdentity.type: IAMUser
+    condition: selection and not filter_self_rotation
+falsepositives:
+    - IAM lifecycle automation disabling keys of departed users
+    - Security tooling responding to leaked-credential findings from GuardDuty or Macie
+level: high
+---
+# FILE: sigma_T1531_account_access_removal.yml
+title: AWS IAM Account Access Removal - Bulk Credential Revocation (T1531)
+id: 64b6e8cc-7731-55c8-b239-0b7245f4eed9
+status: experimental
+description: |
+    Detects bulk removal of AWS IAM account access across multiple users in a short window.
+    Adversaries revoke console login profiles, disable access keys, deactivate MFA, remove group
+    memberships, detach managed policies, and apply restrictive permissions boundaries to lock
+    out legitimate users. Correlates any 3+ distinct T1531 sub-actions within 10 minutes as
+    a single campaign signal.
+references:
+    - https://attack.mitre.org/techniques/T1531/
+author: MayaTrail
+date: 2026/10/11
+tags:
+    - attack.impact
+    - attack.t1531
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_iam_access_removal:
+        eventSource: iam.amazonaws.com
+        eventName|contains:
+            - DeleteLoginProfile
+            - UpdateAccessKey
+            - DeactivateMFADevice
+            - RemoveUserFromGroup
+            - DetachUserPolicy
+            - PutUserPermissionsBoundary
+    filter_legitimate_automation:
+        userIdentity.arn|contains:
+            - ':assumed-role/aws-service-role/'
+            - ':assumed-role/AWSServiceRoleFor'
+    condition: selection_iam_access_removal and not filter_legitimate_automation
+falsepositives:
+    - Automated IAM lifecycle scripts during employee offboarding
+    - SCIMv2 provisioning integrations (Okta, Azure AD) performing bulk deprovision
+    - Large-scale IAM cleanup by cloud operations team
+level: high
+---
+# FILE: sigma_T1531_console_lockout.yml
+title: AWS IAM Console Login Profile Deleted (T1531)
+id: 04066c74-73c0-52e0-b480-8ef61b75dc05
+status: experimental
+description: |
+    Detects deletion of an IAM user console login profile via DeleteLoginProfile. This
+    immediately revokes all interactive AWS Management Console access for the target user.
+    An adversary who has gained IAM write permissions may bulk-delete login profiles across
+    multiple users to lock out the engineering team or prevent incident response actions.
+references:
+    - https://attack.mitre.org/techniques/T1531/
+author: MayaTrail
+date: 2026/10/11
+tags:
+    - attack.impact
+    - attack.t1531
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: iam.amazonaws.com
+        eventName: DeleteLoginProfile
+    filter_legitimate:
+        userIdentity.arn|contains:
+            - ':assumed-role/aws-service-role/'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - Automated offboarding pipeline removing console access after employee departure
+    - Security team enforcing a break-glass policy that removes all console passwords
+level: high
+---
+# FILE: sigma_T1531_mfa_deactivation.yml
+title: AWS IAM MFA Device Deactivated (T1531)
+id: 1021cdfe-3c8c-59ee-9975-115a202c21cf
+status: experimental
+description: |
+    Detects DeactivateMFADevice calls against any IAM user. MFA deactivation removes the
+    second factor required for console sign-in (and for some API calls gated by MFA conditions),
+    making further lockout or account takeover easier. Combined with DeleteLoginProfile and
+    UpdateAccessKey deactivation in the same session, this pattern indicates adversarial
+    account access removal rather than routine MFA device replacement.
+references:
+    - https://attack.mitre.org/techniques/T1531/
+author: MayaTrail
+date: 2026/10/11
+tags:
+    - attack.impact
+    - attack.t1531
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: iam.amazonaws.com
+        eventName: DeactivateMFADevice
+    filter_self_managed:
+        userIdentity.type: IAMUser
+    condition: selection and not filter_self_managed
+falsepositives:
+    - User replacing a lost or broken MFA device (usually followed by a new EnableMFADevice call)
+    - Offboarding scripts removing MFA enrollments for departing employees
+level: medium
+---
+# FILE: sigma_T1531_policy_stripping.yml
+title: AWS IAM Bulk Policy Stripping and Group Removal (T1531)
+id: 4101907a-493f-5bc7-bf88-24daa34a8fd9
+status: experimental
+description: |
+    Detects combinations of DetachUserPolicy, RemoveUserFromGroup, and PutUserPermissionsBoundary
+    that together strip effective permissions from IAM users. An adversary targeting account access
+    removal will typically chain these actions: remove group memberships (revoking group-inherited
+    policies), detach managed policies (removing directly-attached grants), and then apply a
+    restrictive permissions boundary so that even if identity policies are re-attached, effective
+    permissions remain zero. Any two of these three event types occurring within 5 minutes for the
+    same target user constitutes a high-confidence signal.
+references:
+    - https://attack.mitre.org/techniques/T1531/
+author: MayaTrail
+date: 2026/10/11
+tags:
+    - attack.impact
+    - attack.t1531
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_policy_strip:
+        eventSource: iam.amazonaws.com
+        eventName:
+            - DetachUserPolicy
+            - RemoveUserFromGroup
+            - PutUserPermissionsBoundary
+    filter_scim_provisioning:
+        userAgent|contains:
+            - 'Okta'
+            - 'SCIM'
+            - 'AzureAD'
+    filter_aws_org_service:
+        userIdentity.arn|contains:
+            - ':assumed-role/aws-service-role/'
+    condition: selection_policy_strip and not filter_scim_provisioning and not filter_aws_org_service
+falsepositives:
+    - Identity provider SCIM sync performing a deprovision event
+    - Cloud operations team performing a planned IAM cleanup
+    - AWS Organizations SCPs being enforced via permissions boundaries by a management account
+level: medium

@@ -1,0 +1,197 @@
+title: Route53 TestDNSAnswer Called to Verify Subdomain Takeover
+id: 5e8ab98d-24ae-5d1d-8eea-0c1492e99e22
+status: experimental
+description: >
+  Detects Route53 TestDNSAnswer API calls from non-service IAM principals. This
+  is an uncommon API that resolves a DNS record within a private hosted-zone
+  namespace. In subdomain takeover attacks (T1491.002), attackers call
+  TestDNSAnswer after claiming an unclaimed S3 static-website endpoint to confirm
+  the CNAME still resolves to their bucket, validating that the takeover is
+  active. Any non-service use of this API should be investigated; correlation
+  with preceding CreateBucket and PutBucketWebsite events from the same principal
+  provides high-confidence attribution.
+references:
+    - https://attack.mitre.org/techniques/T1491/002/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1491.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: route53.amazonaws.com
+        eventName: TestDNSAnswer
+    filter_service:
+        userIdentity.type:
+            - Service
+            - AWSService
+    condition: selection and not filter_service
+falsepositives:
+    - DNS troubleshooting by network engineers confirming record resolution
+    - Automated DNS validation tooling in deployment pipelines
+level: high
+---
+title: Route53 Hosted Zone and Record Set Enumeration by Non-Service Principal
+id: d55cffc5-ead9-579c-bb74-161f4c439fca
+status: experimental
+description: >
+  Detects enumeration of Route53 hosted zones and resource record sets by a
+  non-service IAM principal. Combined ListHostedZones and ListResourceRecordSets
+  calls from the same caller are the reconnaissance phase of a subdomain takeover
+  attack (T1491.002): the attacker identifies CNAME records pointing to unclaimed
+  S3 static-website endpoints before claiming them.
+references:
+    - https://attack.mitre.org/techniques/T1491/002/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1491.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_zones:
+        eventSource: route53.amazonaws.com
+        eventName: ListHostedZones
+    selection_records:
+        eventSource: route53.amazonaws.com
+        eventName: ListResourceRecordSets
+    filter_service:
+        userIdentity.type:
+            - Service
+            - AWSService
+    condition: (selection_zones or selection_records) and not filter_service
+falsepositives:
+    - DNS automation tools performing routine zone audits
+    - Terraform or Pulumi plan runs reading existing DNS state
+    - Cloud security scanners enumerating DNS infrastructure
+level: low
+---
+title: S3 Bucket Created by Non-IaC Principal - Potential Subdomain Takeover
+id: c97ff884-b377-5973-b59b-9ffa358154db
+status: experimental
+description: >
+  Detects S3 bucket creation by a non-service, non-IaC IAM principal. In subdomain
+  takeover attacks (T1491.002), the attacker creates a bucket whose name exactly
+  matches the hostname of a dangling Route53 CNAME target, claiming the unclaimed
+  S3 static-website endpoint. Correlate with preceding Route53 ListResourceRecordSets
+  events from the same source IP or principal ARN to identify high-confidence
+  takeover attempts where the bucket name matches a live CNAME value.
+references:
+    - https://attack.mitre.org/techniques/T1491/002/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1491.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: s3.amazonaws.com
+        eventName: CreateBucket
+    filter_service:
+        userIdentity.type:
+            - Service
+            - AWSService
+    filter_iac:
+        userIdentity.arn|contains:
+            - ':role/pulumi'
+            - ':role/terraform'
+            - ':role/cdk'
+            - ':role/CloudFormation'
+    condition: selection and not filter_service and not filter_iac
+falsepositives:
+    - Routine S3 bucket creation by developers
+    - CI/CD pipeline deployments creating ephemeral buckets
+    - IaC deployments using non-standard role naming conventions
+level: informational
+---
+title: S3 Bucket Deleted by Non-IaC Principal After Website Hosting Was Enabled
+id: 91e7e9f0-6abe-5bf9-aad3-7e62efaac54b
+status: experimental
+description: >
+  Detects S3 bucket deletion by a non-service, non-IaC principal following a
+  PutBucketWebsite event on the same bucket. In subdomain takeover attacks
+  (T1491.002), the attacker deletes the defacement content and claimed bucket
+  during cleanup, restoring the dangling CNAME condition. A DeleteBucket event
+  in isolation is benign; correlation with a prior PutBucketWebsite event from
+  the same principal raises confidence that this represents attacker-controlled
+  bucket lifecycle rather than legitimate cleanup. This rule fires on the
+  individual DeleteBucket event; correlation logic should be applied in the SIEM.
+references:
+    - https://attack.mitre.org/techniques/T1491/002/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1491.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: s3.amazonaws.com
+        eventName: DeleteBucket
+    filter_service:
+        userIdentity.type:
+            - Service
+            - AWSService
+    filter_iac:
+        userIdentity.arn|contains:
+            - ':role/pulumi'
+            - ':role/terraform'
+            - ':role/cdk'
+            - ':role/CloudFormation'
+    condition: selection and not filter_service and not filter_iac
+falsepositives:
+    - Routine bucket lifecycle management by developers
+    - IaC destroy operations using non-standard role naming
+    - Developer cleanup of test or ephemeral buckets
+level: informational
+---
+title: S3 Static Website Hosting Enabled by Non-IaC Principal
+id: da0aae58-b523-543d-b194-6788f7a62040
+status: experimental
+description: >
+  Detects PutBucketWebsite enabling S3 static website hosting by a non-service,
+  non-IaC IAM principal. In subdomain takeover attacks (T1491.002), enabling
+  website hosting on an attacker-created bucket that matches a dangling Route53
+  CNAME allows the attacker to serve defacement content at the victim subdomain.
+  PutBucketWebsite is a high-confidence takeover indicator when it follows
+  CreateBucket and Route53 enumeration events from the same principal, especially
+  if no IaC deployment is in progress.
+references:
+    - https://attack.mitre.org/techniques/T1491/002/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1491.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: s3.amazonaws.com
+        eventName: PutBucketWebsite
+    filter_service:
+        userIdentity.type:
+            - Service
+            - AWSService
+    filter_iac:
+        userIdentity.arn|contains:
+            - ':role/pulumi'
+            - ':role/terraform'
+            - ':role/cdk'
+            - ':role/CloudFormation'
+    condition: selection and not filter_service and not filter_iac
+falsepositives:
+    - Authorized static website deployments via IaC pipelines using non-standard role naming
+    - Manual developer configuration of S3 website hosting for legitimate projects
+level: medium

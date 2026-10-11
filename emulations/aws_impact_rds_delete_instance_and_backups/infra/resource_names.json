@@ -1,0 +1,23 @@
+{
+  "campaign": "ATOMIC-rds-delete-instance-and-backups",
+  "csp": "aws",
+  "resources": {
+    "sg_name": "atomic-rds-delete-sg",
+    "subnet_group_name": "atomic-rds-delete-subnet-group",
+    "attacker_role_name": "atomic-rds-delete-attacker-role",
+    "attacker_policy_name": "atomic-rds-delete-attacker-policy",
+    "db_instance_identifier": "atomic-rds-delete-db-instance",
+    "db_snapshot_identifier": "proddb-backup-weekly-2026-10-05",
+    "flow_log_bucket_prefix": "atomic-rds-delete-flogs"
+  },
+  "pulumi_export_keys": {
+    "attacker_role_arn": "attacker_role_arn",
+    "attacker_role_name": "attacker_role_name",
+    "db_instance_arn": "db_instance_arn",
+    "db_instance_identifier": "db_instance_identifier",
+    "db_snapshot_arn": "db_snapshot_arn",
+    "db_snapshot_identifier": "db_snapshot_identifier",
+    "flow_log_bucket_name": "flow_log_bucket_name",
+    "vpc_id": "vpc_id"
+  }
+}

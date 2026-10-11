@@ -1,0 +1,28 @@
+{
+  "campaign": "ATOMIC-COGNITO-REFRESH-TOKEN-REUSE",
+  "csp": "aws",
+  "resources": {
+    "user_pool_name": "atomic-cognito-refresh-token-reuse-user-pool",
+    "app_client_name": "atomic-cognito-refresh-token-reuse-app-client",
+    "victim_username": "prod.svc.account",
+    "victim_password": "LabVictim1!",
+    "param_pool_id": "/atomic-cognito-refresh-token-reuse/pool-id",
+    "param_client_id": "/atomic-cognito-refresh-token-reuse/client-id",
+    "param_victim_password": "/atomic-cognito-refresh-token-reuse/victim-password",
+    "attacker_role_name": "atomic-cognito-refresh-token-reuse-attacker-role"
+  },
+  "pulumi_export_keys": {
+    "user_pool_id": "user_pool_id",
+    "user_pool_arn": "user_pool_arn",
+    "app_client_id": "app_client_id",
+    "attacker_role_arn": "attacker_role_arn",
+    "victim_username": "victim_username",
+    "victim_password": "victim_password",
+    "param_pool_id_name": "param_pool_id_name",
+    "param_client_id_name": "param_client_id_name",
+    "param_victim_password_name": "param_victim_password_name",
+    "user_pool_name": "user_pool_name",
+    "app_client_name": "app_client_name",
+    "attacker_role_name": "attacker_role_name"
+  }
+}

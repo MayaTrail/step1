@@ -1,0 +1,22 @@
+{
+  "campaign": "ATOMIC-rds-reset-master-password",
+  "csp": "aws",
+  "resources": {
+    "vpc_name":                 "atomic-rds-reset-master-password-lab-vpc",
+    "subnet_a_name":            "atomic-rds-reset-master-password-lab-subnet-a",
+    "subnet_b_name":            "atomic-rds-reset-master-password-lab-subnet-b",
+    "sg_name":                  "atomic-rds-reset-master-password-rds-sg",
+    "subnet_group_name":        "atomic-rds-reset-master-password-rds-subnet-group",
+    "victim_role_name":         "atomic-rds-reset-master-password-victim-role",
+    "rds_instance_identifier":  "atomic-rds-reset-master-password-lab-rds-instance",
+    "db_name":                  "labdb",
+    "db_username":              "admin",
+    "bait_secret_name":         "prod/database/master_credentials"
+  },
+  "pulumi_export_keys": {
+    "victim_role_arn":          "victim_role_arn",
+    "rds_endpoint":             "rds_endpoint",
+    "rds_instance_arn":         "rds_instance_arn",
+    "bait_secret_arn":          "bait_secret_arn"
+  }
+}

@@ -1,0 +1,82 @@
+title: RDS Data API ExecuteStatement from Non-Application Principal
+id: d21cf877-338c-5f3a-819e-beecdf1f77d6
+status: experimental
+description: >
+  Detects rds-data:ExecuteStatement calls originating from an IAM principal
+  that is not the expected application service role. The RDS Data API allows
+  SQL queries over HTTPS without VPC network access, making it a viable
+  exfiltration vector for adversaries holding valid IAM credentials and
+  the Aurora cluster ARN + secret ARN. This rule requires CloudTrail data
+  events for the AWS::RDS::DBCluster resource type to be explicitly enabled.
+  Without data events, this activity is invisible in CloudTrail.
+references:
+    - https://attack.mitre.org/techniques/T1213/
+    - https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/data-api.html
+    - https://docs.aws.amazon.com/awscloudtrail/latest/userguide/logging-data-events-with-cloudtrail.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.collection
+    - attack.t1213
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: rds-data.amazonaws.com
+        eventName: ExecuteStatement
+    filter_known_app_roles:
+        # Tune to your environment - exclude all principals that legitimately
+        # run queries via the Data API (application roles, ORM connections, etc.)
+        userIdentity.arn|contains:
+            - ':assumed-role/app-service-role/'
+            - ':assumed-role/lambda-execution-role/'
+            - ':assumed-role/ecs-task-role/'
+    filter_aws_services:
+        userIdentity.type: AWSService
+    condition: selection and not (filter_known_app_roles or filter_aws_services)
+falsepositives:
+    - Data analysts running ad-hoc queries via Data API from personal IAM users
+    - Automated migration scripts using static credentials
+    - Third-party BI tools connecting via Data API with their own IAM credentials
+level: high
+---
+title: Suspicious SecretsManager GetSecretValue on DB Credential Secret
+id: 635c87bd-6502-5a5e-b32b-024bdcd2fe99
+status: experimental
+description: >
+  Detects GetSecretValue calls against a SecretsManager secret whose name
+  matches a database credential pattern (e.g. db-credentials, rds-password,
+  aurora-master). Adversaries retrieve these secrets to obtain username/password
+  pairs required for subsequent RDS Data API queries without VPC access.
+  Suspicious when the caller is not the expected application service role.
+references:
+    - https://attack.mitre.org/techniques/T1213/
+    - https://docs.aws.amazon.com/secretsmanager/latest/userguide/monitoring.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.collection
+    - attack.t1213
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: secretsmanager.amazonaws.com
+        eventName: GetSecretValue
+    filter_known_app_roles:
+        # Exclude normal application service accounts / Lambda execution roles
+        # Tune these to your environment's application principals
+        userIdentity.arn|contains:
+            - ':assumed-role/app-service-role/'
+            - ':assumed-role/lambda-execution-role/'
+            - ':assumed-role/ecs-task-role/'
+    filter_aws_services:
+        userIdentity.type: AWSService
+    condition: selection and not (filter_known_app_roles or filter_aws_services)
+falsepositives:
+    - Developers running one-off credential lookups via AWS CLI during legitimate debugging
+    - Rotation Lambda functions checking the current secret version
+    - CI/CD pipelines using static keys to fetch deployment credentials
+level: high

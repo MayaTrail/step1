@@ -1,0 +1,414 @@
+title: RDS Deletion Protection Disabled on DB Instance
+id: bd19d68a-152c-57c4-8648-7469a424d730
+status: experimental
+description: |
+    Detects ModifyDBInstance calls that explicitly disable DeletionProtection.
+    Disabling deletion protection immediately before a DeleteDBInstance call is
+    the primary behavioral leading-edge indicator for RDS data destruction (T1485).
+    Legitimate DBA operations rarely disable deletion protection without a documented
+    change-management window; an immediate follow-on delete within minutes is
+    a near-certain signal of malicious intent.
+references:
+    - https://attack.mitre.org/techniques/T1485/
+    - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_DeleteInstance.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1485
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: rds.amazonaws.com
+        eventName: ModifyDBInstance
+        requestParameters|contains: '"deletionProtection":false'
+    filter_automated_maintenance:
+        userIdentity.arn|contains:
+            - 'AWSServiceRole'
+            - 'aws-service-role'
+    condition: selection and not filter_automated_maintenance
+falsepositives:
+    - DBA explicitly removing deletion protection during a planned decommission with a documented change ticket
+    - Infrastructure-as-Code pipeline (Terraform, Pulumi, CloudFormation) updating a non-production instance
+    - AWS managed migration service temporarily disabling protection
+level: high
+fields:
+    - eventTime
+    - userIdentity.arn
+    - userIdentity.principalId
+    - sourceIPAddress
+    - requestParameters.dBInstanceIdentifier
+    - requestParameters.deletionProtection
+    - requestParameters.applyImmediately
+---
+title: RDS Data Destruction Attack Sequence - Disable Protection then Delete
+status: experimental
+description: 'Detects the full three-step RDS data destruction sequence within a short window:
+
+  (1) ModifyDBInstance disabling DeletionProtection,
+
+  (2) DeleteDBSnapshot removing manual backup,
+
+  (3) DeleteDBInstance with SkipFinalSnapshot + DeleteAutomatedBackups.
+
+  This sequence is the canonical T1485 attack pattern against RDS and leaves
+
+  zero recovery points. While individual events may have legitimate explanations,
+
+  all three events from the same principal identity within a short time window
+
+  constitutes a high-confidence ransomware or destructive attack indicator.
+
+  NOTE: This rule requires a SIEM capable of temporal correlation (e.g. Splunk
+
+  stats, Sentinel summarize, or Chronicle UDM with time-windowed aggregation).
+
+  For point-in-time SIEMs, deploy the individual per-event rules instead.'
+references:
+- https://attack.mitre.org/techniques/T1485/
+- https://unit42.paloaltonetworks.com/cloud-ransomware/
+author: MayaTrail
+date: 2026/04/15
+tags:
+- attack.impact
+- attack.t1485
+correlation:
+  type: temporal
+  rules:
+  - rds_modify_protection_off
+  - rds_delete_db_snapshot
+  - rds_delete_instance_skip_final
+  group-by:
+  - userIdentity.arn
+  timespan: 10m
+falsepositives:
+- IaC pipeline (Pulumi destroy, Terraform destroy) tearing down a dev environment that had deletion protection
+  enabled for parity — acceptable if the instance name pattern matches a dev/staging prefix
+level: critical
+---
+title: RDS Data Destruction Attack Sequence - Disable Protection then Delete - deletion protection disabled
+name: rds_modify_protection_off
+status: experimental
+description: Base rule for the correlation 'RDS Data Destruction Attack Sequence - Disable Protection
+  then Delete'. Matches the single event by design; deploy the correlation, not this rule.
+tags:
+- attack.impact
+- attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  modify_protection_off:
+    eventSource: rds.amazonaws.com
+    eventName: ModifyDBInstance
+    requestParameters|contains: '"deletionProtection":false'
+  condition: modify_protection_off
+falsepositives:
+- IaC pipeline (Pulumi destroy, Terraform destroy) tearing down a dev environment that had deletion protection
+  enabled for parity — acceptable if the instance name pattern matches a dev/staging prefix
+level: low
+---
+title: RDS Data Destruction Attack Sequence - Disable Protection then Delete - manual snapshot deleted
+name: rds_delete_db_snapshot
+status: experimental
+description: Base rule for the correlation 'RDS Data Destruction Attack Sequence - Disable Protection
+  then Delete'. Matches the single event by design; deploy the correlation, not this rule.
+tags:
+- attack.impact
+- attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  delete_snapshot:
+    eventSource: rds.amazonaws.com
+    eventName: DeleteDBSnapshot
+  condition: delete_snapshot
+falsepositives:
+- IaC pipeline (Pulumi destroy, Terraform destroy) tearing down a dev environment that had deletion protection
+  enabled for parity — acceptable if the instance name pattern matches a dev/staging prefix
+level: low
+---
+title: RDS Data Destruction Attack Sequence - Disable Protection then Delete - instance deleted without
+  final snapshot
+name: rds_delete_instance_skip_final
+status: experimental
+description: Base rule for the correlation 'RDS Data Destruction Attack Sequence - Disable Protection
+  then Delete'. Matches the single event by design; deploy the correlation, not this rule.
+tags:
+- attack.impact
+- attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  delete_instance:
+    eventSource: rds.amazonaws.com
+    eventName: DeleteDBInstance
+    requestParameters|contains: '"skipFinalSnapshot":true'
+  condition: delete_instance
+falsepositives:
+- IaC pipeline (Pulumi destroy, Terraform destroy) tearing down a dev environment that had deletion protection
+  enabled for parity — acceptable if the instance name pattern matches a dev/staging prefix
+level: low
+---
+title: RDS DB Instance Deleted Without Final Snapshot and Automated Backups Purged
+id: c79d0fbc-72f6-5491-9304-eea68f544aba
+status: experimental
+description: |
+    Detects DeleteDBInstance calls where both SkipFinalSnapshot=true and
+    DeleteAutomatedBackups=true are set. This combination permanently destroys
+    the database and all recovery points in a single API call. In isolation,
+    SkipFinalSnapshot may be legitimate in dev environments; the conjunction
+    with DeleteAutomatedBackups=true targeting a production-named instance
+    is the highest-confidence signal for deliberate data destruction (T1485).
+    A preceding ModifyDBInstance disabling DeletionProtection from the same
+    principal identity strengthens confidence to critical.
+references:
+    - https://attack.mitre.org/techniques/T1485/
+    - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_DeleteDBInstance.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1485
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: rds.amazonaws.com
+        eventName: DeleteDBInstance
+        requestParameters|contains|all:
+            - '"skipFinalSnapshot":true'
+            - '"deleteAutomatedBackups":true'
+    filter_dev_accounts:
+        requestParameters|contains:
+            - '-dev-'
+            - '-sandbox-'
+            - '-test-'
+            - '-staging-'
+    condition: selection and not filter_dev_accounts
+falsepositives:
+    - Automated cleanup of confirmed non-production instances (CI ephemeral DBs)
+    - IaC destroy run during a validated decommission of a development database
+level: critical
+fields:
+    - eventTime
+    - userIdentity.arn
+    - userIdentity.principalId
+    - userIdentity.type
+    - sourceIPAddress
+    - requestParameters.dBInstanceIdentifier
+    - requestParameters.skipFinalSnapshot
+    - requestParameters.deleteAutomatedBackups
+---
+title: RDS Manual DB Snapshot Deleted by Non-Backup Service Principal
+id: 600baf35-24c2-59e6-b342-cd0358ce82a6
+status: experimental
+description: |
+    Detects DeleteDBSnapshot calls against manual snapshots. Manual snapshots
+    are the last out-of-band recovery point for an RDS instance; deleting them
+    before or concurrent with instance deletion eliminates all restore paths
+    (T1485 - Data Destruction). Legitimate automated snapshot lifecycle management
+    is typically performed by AWS Backup or DBA service accounts with a predictable
+    schedule pattern. Ad-hoc deletion by an assumed-role or interactive principal
+    targeting a production-named snapshot warrants immediate investigation.
+references:
+    - https://attack.mitre.org/techniques/T1485/
+    - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_DeleteSnapshot.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1485
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: rds.amazonaws.com
+        eventName: DeleteDBSnapshot
+    filter_backup_service:
+        userIdentity.arn|contains:
+            - 'AWSBackup'
+            - 'aws-backup'
+            - 'backup-service'
+            - 'AWSServiceRole'
+    filter_dev_snapshots:
+        requestParameters|contains:
+            - '-dev-'
+            - '-sandbox-'
+            - '-test-'
+    condition: selection and not (filter_backup_service or filter_dev_snapshots)
+falsepositives:
+    - Authorized DBA manually pruning old manual snapshots under a retention policy
+    - AWS Backup service role executing a lifecycle expiration rule
+    - IaC destroy run cleaning up a dev environment snapshot
+level: high
+fields:
+    - eventTime
+    - userIdentity.arn
+    - userIdentity.principalId
+    - userIdentity.type
+    - sourceIPAddress
+    - requestParameters.dBSnapshotIdentifier
+---
+title: RDS Enumeration Before Destructive Operation - DescribeDBInstances and DescribeDBSnapshots
+status: experimental
+description: 'Detects DescribeDBInstances followed by DescribeDBSnapshots from the same
+
+  principal within a short window. While individual Describe calls are routine,
+
+  the sequential enumeration of instance state then manual snapshots by an
+
+  assumed-role identity is consistent with attacker target-confirmation and
+
+  backup-discovery steps preceding RDS data destruction (T1485 steps 2 and 3).
+
+  This rule generates low-severity findings to support correlation; escalate
+
+  when followed by ModifyDBInstance or DeleteDBInstance from the same identity.'
+references:
+- https://attack.mitre.org/techniques/T1485/
+author: MayaTrail
+date: 2026/04/15
+tags:
+- attack.impact
+- attack.t1485
+- attack.discovery
+correlation:
+  type: temporal
+  rules:
+  - rds_describe_db_instances
+  - rds_describe_db_snapshots
+  group-by:
+  - userIdentity.arn
+  timespan: 5m
+falsepositives:
+- Monitoring/observability tooling (Datadog, Dynatrace, CloudWatch dashboards)
+- DBA performing manual health checks
+- AWS Config periodic recorder
+- Backup orchestration service enumerating restore targets
+level: low
+---
+title: RDS Enumeration Before Destructive Operation - DescribeDBInstances and DescribeDBSnapshots - DescribeDBInstances
+name: rds_describe_db_instances
+status: experimental
+description: Base rule for the correlation 'RDS Enumeration Before Destructive Operation - DescribeDBInstances
+  and DescribeDBSnapshots'. Matches the single event by design; deploy the correlation, not this rule.
+tags:
+- attack.impact
+- attack.t1485
+- attack.discovery
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  describe_instances:
+    eventSource: rds.amazonaws.com
+    eventName: DescribeDBInstances
+  filter_monitoring_agents:
+    userIdentity.arn|contains:
+    - CloudWatchAgent
+    - AmazonCloudWatchAgent
+    - config-service
+    - AWSConfig
+  condition: describe_instances and not filter_monitoring_agents
+falsepositives:
+- Monitoring/observability tooling (Datadog, Dynatrace, CloudWatch dashboards)
+- DBA performing manual health checks
+- AWS Config periodic recorder
+- Backup orchestration service enumerating restore targets
+level: low
+---
+title: RDS Enumeration Before Destructive Operation - DescribeDBInstances and DescribeDBSnapshots - DescribeDBSnapshots
+name: rds_describe_db_snapshots
+status: experimental
+description: Base rule for the correlation 'RDS Enumeration Before Destructive Operation - DescribeDBInstances
+  and DescribeDBSnapshots'. Matches the single event by design; deploy the correlation, not this rule.
+tags:
+- attack.impact
+- attack.t1485
+- attack.discovery
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  describe_snapshots:
+    eventSource: rds.amazonaws.com
+    eventName: DescribeDBSnapshots
+  filter_monitoring_agents:
+    userIdentity.arn|contains:
+    - CloudWatchAgent
+    - AmazonCloudWatchAgent
+    - config-service
+    - AWSConfig
+  condition: describe_snapshots and not filter_monitoring_agents
+falsepositives:
+- Monitoring/observability tooling (Datadog, Dynatrace, CloudWatch dashboards)
+- DBA performing manual health checks
+- AWS Config periodic recorder
+- Backup orchestration service enumerating restore targets
+level: low
+---
+title: STS AssumeRole into RDS Management or Destructive-Privilege Role
+id: b60ae2a0-2959-5750-b1f8-4b585d2f8cad
+status: experimental
+description: |
+    Detects AssumeRole calls targeting IAM roles with naming patterns consistent
+    with RDS management, database administration, or broadly-scoped infrastructure
+    roles from non-automated principals. An attacker who has compromised a
+    developer or pipeline credential will assume a higher-privilege role before
+    executing RDS destructive operations. This rule catches the credential-bootstrap
+    step (T1485 step 1) that precedes the ModifyDBInstance / DeleteDBInstance sequence.
+    Low-fidelity on its own; combine with downstream RDS events from the same
+    assumed-role session for high-confidence correlation.
+references:
+    - https://attack.mitre.org/techniques/T1485/
+    - https://attack.mitre.org/techniques/T1078/004/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1485
+    - attack.privilege_escalation
+    - attack.t1078.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: sts.amazonaws.com
+        eventName: AssumeRole
+        requestParameters.roleArn|contains:
+            - 'rds'
+            - 'database'
+            - 'db-admin'
+            - 'db-management'
+            - 'infra-admin'
+            - 'attacker'
+    filter_ci_principals:
+        userIdentity.arn|contains:
+            - 'GitHubActions'
+            - 'CircleCI'
+            - 'codebuild'
+            - 'CodeBuild'
+    filter_service_roles:
+        userIdentity.type: 'Service'
+    condition: selection and not (filter_ci_principals or filter_service_roles)
+falsepositives:
+    - Authorized DBA using the break-glass role through a PAM solution (CyberArk, HashiCorp Vault)
+    - CI/CD pipeline deploying RDS infrastructure changes
+    - AWS Systems Manager Automation assuming the role for a maintenance window
+level: medium
+fields:
+    - eventTime
+    - userIdentity.arn
+    - userIdentity.principalId
+    - sourceIPAddress
+    - requestParameters.roleArn
+    - requestParameters.roleSessionName
+    - responseElements.assumedRoleUser.arn

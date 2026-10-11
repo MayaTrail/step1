@@ -1,0 +1,32 @@
+{
+  "campaign": "ATOMIC-rds-data-api-query",
+  "csp": "aws",
+  "resources": {
+    "vpc_name": "atomic-rds-data-api-query-sandbox-vpc",
+    "subnet_a_name": "atomic-rds-data-api-query-sandbox-subnet-a",
+    "subnet_b_name": "atomic-rds-data-api-query-sandbox-subnet-b",
+    "subnet_group_name": "atomic-rds-data-api-query-aurora-subnet-group",
+    "security_group_name": "atomic-rds-data-api-query-aurora-sg",
+    "secret_name": "prod/labcorp/aurora-master-creds",
+    "cluster_id": "atomic-rds-data-api-query-aurora-cluster",
+    "cluster_instance_id": "atomic-rds-data-api-query-aurora-instance",
+    "seed_function_name": "atomic-rds-data-api-query-seeder",
+    "seed_lambda_role_name": "atomic-rds-data-api-query-seeder-role",
+    "vpc_flow_log_role_name": "atomic-rds-data-api-query-flow-log-role",
+    "victim_role_name": "atomic-rds-data-api-query-victim-role"
+  },
+  "pulumi_export_keys": {
+    "vpc_id": "vpc_id",
+    "cluster_arn": "cluster_arn",
+    "cluster_endpoint": "cluster_endpoint",
+    "secret_arn": "secret_arn",
+    "victim_role_arn": "victim_role_arn",
+    "region": "region",
+    "account_id": "account_id",
+    "vpc_name": "vpc_name",
+    "secret_name": "secret_name",
+    "cluster_id": "cluster_id",
+    "seed_function_name": "seed_function_name",
+    "victim_role_name": "victim_role_name"
+  }
+}

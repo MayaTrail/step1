@@ -1,0 +1,135 @@
+// T1491.002 - Route53 TestDNSAnswer - Subdomain Takeover Verification
+// TestDNSAnswer is an uncommon Route53 API. After claiming a dangling CNAME
+// endpoint, attackers call this to confirm the CNAME still resolves to their
+// bucket, validating the takeover is active before serving defacement content.
+// Any non-service use should be investigated. Correlate with preceding
+// CreateBucket + PutBucketWebsite events from the same UserIdentityArn for
+// high-confidence attribution to a full subdomain takeover chain.
+AWSCloudTrail
+| where EventSource == "route53.amazonaws.com"
+| where EventName == "TestDNSAnswer"
+| where UserIdentityType !in ("Service", "AWSService")
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    RequestParameters
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1491.002 - Route53 Hosted Zone and Record Set Enumeration
+// Detects ListHostedZones and ListResourceRecordSets from non-service principals.
+// These two calls together are the reconnaissance phase of a subdomain takeover:
+// the attacker identifies hosted zones then iterates record sets looking for
+// CNAME values pointing to unclaimed S3 static-website endpoints.
+// Correlate caller ARN + source IP with subsequent CreateBucket events for
+// high-confidence subdomain takeover attribution.
+AWSCloudTrail
+| where EventSource == "route53.amazonaws.com"
+| where EventName in ("ListHostedZones", "ListResourceRecordSets")
+| where UserIdentityType !in ("Service", "AWSService")
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    RequestParameters
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1491.002 - S3 Bucket Created by Non-IaC Principal - Potential Subdomain Takeover
+// Flags CreateBucket events from non-service, non-IaC principals.
+// To increase fidelity, correlate the extracted BucketName with Route53
+// ListResourceRecordSets requestParameters from the same UserIdentityArn within
+// the preceding 30 minutes: a match indicates the bucket name was chosen to claim
+// a live CNAME target (high-confidence subdomain takeover indicator).
+AWSCloudTrail
+| where EventSource == "s3.amazonaws.com"
+| where EventName == "CreateBucket"
+| where UserIdentityType !in ("Service", "AWSService")
+| where UserIdentityArn !contains ":role/pulumi"
+| where UserIdentityArn !contains ":role/terraform"
+| where UserIdentityArn !contains ":role/cdk"
+| where UserIdentityArn !contains ":role/CloudFormation"
+| extend BucketName = tostring(parse_json(RequestParameters).bucketName)
+| project
+    TimeGenerated,
+    EventName,
+    BucketName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1491.002 - S3 Bucket Deleted After Website Hosting Enabled (Cleanup Pattern)
+// Correlates DeleteBucket with a preceding PutBucketWebsite event on the same
+// bucket from the same caller within a 24-hour window. This lifecycle pattern -
+// create, enable website, delete - is characteristic of post-takeover attacker
+// cleanup restoring the dangling CNAME condition after serving defacement content.
+let WebsiteEnabled = AWSCloudTrail
+    | where EventSource == "s3.amazonaws.com"
+    | where EventName == "PutBucketWebsite"
+    | where UserIdentityType !in ("Service", "AWSService")
+    | extend BucketName = tostring(parse_json(RequestParameters).bucketName)
+    | project WebsiteEnabledAt = TimeGenerated, BucketName, CallerArn = UserIdentityArn, CallerIP = SourceIpAddress;
+AWSCloudTrail
+| where EventSource == "s3.amazonaws.com"
+| where EventName == "DeleteBucket"
+| where UserIdentityType !in ("Service", "AWSService")
+| extend BucketName = tostring(parse_json(RequestParameters).bucketName)
+| join kind=inner WebsiteEnabled on BucketName
+| where TimeGenerated > WebsiteEnabledAt
+| where TimeGenerated < (WebsiteEnabledAt + 24h)
+| project
+    TimeGenerated,
+    EventName,
+    BucketName,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    WebsiteEnabledAt,
+    CallerArn,
+    CallerIP
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1491.002 - S3 Static Website Hosting Enabled - Subdomain Takeover
+// PutBucketWebsite from a non-IaC principal is a strong indicator of subdomain
+// takeover (T1491.002): attacker enables website hosting on the claimed bucket
+// so the victim CNAME resolves to attacker-controlled defacement content.
+// When combined with a preceding CreateBucket on the same BucketName from the
+// same caller, this is high-confidence evidence of an active takeover.
+AWSCloudTrail
+| where EventSource == "s3.amazonaws.com"
+| where EventName == "PutBucketWebsite"
+| where UserIdentityType !in ("Service", "AWSService")
+| where UserIdentityArn !contains ":role/pulumi"
+| where UserIdentityArn !contains ":role/terraform"
+| where UserIdentityArn !contains ":role/cdk"
+| where UserIdentityArn !contains ":role/CloudFormation"
+| extend BucketName = tostring(parse_json(RequestParameters).bucketName)
+| project
+    TimeGenerated,
+    EventName,
+    BucketName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion
+| sort by TimeGenerated desc

@@ -1,0 +1,93 @@
+// T1190 - EC2 IMDS Credential Exfiltration via SSRF
+// Detects EC2 instance-role credentials (ec2RoleDelivery=true) used from a
+// non-AWS source IP. Covers Step 3 (GetCallerIdentity) and Step 4 (ListBuckets)
+// of the SSRF -> IMDS harvest -> external credential use chain.
+//
+// CloudTrail field reference used here:
+//   UserIdentityType         -> userIdentity.type
+//   SessionIssuerType        -> userIdentity.sessionContext.sessionIssuer.type
+//   SessionIssuerArn         -> userIdentity.sessionContext.sessionIssuer.arn
+//   AdditionalEventData      -> raw JSON blob that may contain ec2RoleDelivery
+//   SourceIpAddress          -> sourceIPAddress
+//
+// NOTE: ec2RoleDelivery is not a top-level column in Sentinel's AWSCloudTrail
+// table. It is nested in the raw CloudTrail JSON under
+// userIdentity.sessionContext.ec2RoleDelivery. Parse it from AdditionalEventData
+// or from the raw ingestion field depending on your table schema.
+
+// -- Query 1: Primary detection using ec2RoleDelivery flag (highest precision) --
+AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventName in ("GetCallerIdentity", "ListBuckets")
+| where UserIdentityType == "AssumedRole"
+// Parse ec2RoleDelivery from the raw sessionContext JSON stored in AdditionalEventData.
+// Adjust the field name if your ingestion schema maps it differently.
+| extend RawSessionContext = tostring(parse_json(AdditionalEventData).sessionContext)
+| extend ec2RoleDelivery = tostring(
+    parse_json(tostring(parse_json(AdditionalEventData)["userIdentity.sessionContext.ec2RoleDelivery"]))
+  )
+// Fallback: check the column directly if your connector flattens sessionContext fields
+| extend ec2RoleDelivery = iif(
+    isempty(ec2RoleDelivery),
+    tostring(column_ifexists("UserIdentitySessionContextEc2RoleDelivery", "")),
+    ec2RoleDelivery
+  )
+| where ec2RoleDelivery == "true"
+// Exclude calls routed through AWS service endpoints (sourceIPAddress ends with amazonaws.com)
+| where SourceIpAddress !endswith "amazonaws.com"
+| where SourceIpAddress !endswith "amazon.com"
+| project
+    TimeGenerated,
+    EventName,
+    EventSource,
+    SourceIpAddress,
+    UserIdentityArn,
+    UserIdentityPrincipalid,
+    SessionIssuerArn,
+    ec2RoleDelivery,
+    AWSRegion,
+    UserAgent,
+    RequestParameters
+| sort by TimeGenerated desc
+
+
+// -- Query 2: Broader fallback - AssumedRole via instance profile used from external IP --
+// Use when ec2RoleDelivery parsing is unavailable. Higher false-positive rate but catches
+// all instance-role credential use from non-AWS IPs. Tune with known-legitimate IAM role ARNs.
+//
+// AWSCloudTrail
+// | where TimeGenerated > ago(24h)
+// | where EventName in ("GetCallerIdentity", "ListBuckets", "DescribeInstances",
+//                        "GetObject", "PutObject", "ListObjects")
+// | where UserIdentityType == "AssumedRole"
+// | where SessionIssuerType == "Role"
+// // Instance profile roles typically have "instance" or "ec2" in the role name - adjust to your naming
+// | where SessionIssuerArn matches regex @"arn:aws:iam::\d{12}:role/.*[Ii]nstance.*|.*[Ee][Cc]2.*"
+// | where SourceIpAddress !endswith "amazonaws.com"
+// | where SourceIpAddress !endswith "amazon.com"
+// | where SourceIpAddress !startswith "10."          // Remove if RFC1918 is not trusted
+// | where SourceIpAddress !startswith "172.16."
+// | where SourceIpAddress !startswith "192.168."
+// | project
+//     TimeGenerated,
+//     EventName,
+//     SourceIpAddress,
+//     UserIdentityArn,
+//     SessionIssuerArn,
+//     AWSRegion,
+//     UserAgent
+// | sort by TimeGenerated desc
+
+
+// -- Query 3: GuardDuty finding correlation --
+// Cross-reference CloudTrail hits with the GuardDuty finding fired by the same event.
+// Finding type: UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS
+//
+// AWSGuardDuty
+// | where TimeGenerated > ago(24h)
+// | where Type == "UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS"
+// | extend AffectedRole = tostring(parse_json(Detail).resource.accessKeyDetails.userName)
+// | extend SourceIP     = tostring(parse_json(Detail).service.action.awsApiCallAction.remoteIpDetails.ipAddressV4)
+// | extend CalledAPI    = tostring(parse_json(Detail).service.action.awsApiCallAction.api)
+// | project TimeGenerated, Type, AffectedRole, SourceIP, CalledAPI, Severity, Description
+// | sort by TimeGenerated desc

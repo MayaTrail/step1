@@ -1,0 +1,3 @@
+name: mayatrail-atomic-cognito-refresh-token-reuse
+runtime: python
+description: Atomic emulation - Cognito Refresh Token Reuse T1550.001

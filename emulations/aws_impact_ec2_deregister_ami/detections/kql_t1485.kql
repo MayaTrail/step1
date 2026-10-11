@@ -1,0 +1,166 @@
+// T1485 - STS AssumeRole Targeting AMI Victim Role
+// Detects assumption of IAM roles whose name suggests AMI management scope.
+// This is the first step in the destruction chain: obtain scoped credentials
+// before proceeding to DescribeImages -> DisableProtection -> DeregisterImage.
+AWSCloudTrail
+| where EventName == "AssumeRole"
+| where EventSource == "sts.amazonaws.com"
+| where tostring(parse_json(RequestParameters).roleArn) has_any (
+    "deregister-ami",
+    "ec2-image",
+    "ami-victim",
+    "ami-operator"
+  )
+| where UserIdentityType != "AWSService"
+| extend
+    TargetRole      = tostring(parse_json(RequestParameters).roleArn),
+    SessionName     = tostring(parse_json(RequestParameters).roleSessionName),
+    CallerArn       = UserIdentityArn,
+    CallerType      = UserIdentityType,
+    SourceIP        = SourceIpAddress,
+    Region          = AWSRegion,
+    ErrorCode       = ErrorCode
+| project
+    TimeGenerated,
+    TargetRole,
+    SessionName,
+    CallerArn,
+    CallerType,
+    SourceIP,
+    Region,
+    ErrorCode
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1485 - EBS Snapshot Deletion (DeleteSnapshot)
+// Detects deletion of EBS snapshots. When preceded by AMI deregistration from the same
+// principal, this completes the T1485 chain: no image and no block-device backing remain.
+// Also fires standalone for ransomware pre-encryption backup-wiping behavior.
+AWSCloudTrail
+| where EventName == "DeleteSnapshot"
+| where EventSource == "ec2.amazonaws.com"
+| where UserIdentityArn !contains "AWSBackup"
+    and UserIdentityArn !contains "aws-backup"
+    and UserIdentityArn !contains "DataLifecycleManager"
+    and UserIdentityArn !contains "dlm"
+    and UserIdentityArn !contains "AWSServiceRole"
+| extend
+    SnapshotID  = tostring(parse_json(RequestParameters).snapshotId),
+    Actor       = UserIdentityArn,
+    ActorType   = UserIdentityType,
+    SessionName = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.userName),
+    SourceIP    = SourceIpAddress,
+    Region      = AWSRegion,
+    ErrorCode   = ErrorCode
+| project
+    TimeGenerated,
+    SnapshotID,
+    Actor,
+    ActorType,
+    SessionName,
+    SourceIP,
+    Region,
+    ErrorCode
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1485 - EC2 AMI Deregistration (DeregisterImage)
+// Detects deliberate removal of EC2 AMIs from the registry.
+// Deregistering a production or backup AMI is a destructive, irreversible action.
+// Correlate with DisableImageDeregistrationProtection events from the same principal.
+AWSCloudTrail
+| where EventName == "DeregisterImage"
+| where EventSource == "ec2.amazonaws.com"
+| where UserIdentityArn !contains "codepipeline"
+    and UserIdentityArn !contains "codebuild"
+    and UserIdentityArn !contains "AWSServiceRole"
+| extend
+    AMI_ID           = tostring(parse_json(RequestParameters).imageId),
+    Actor            = UserIdentityArn,
+    ActorType        = UserIdentityType,
+    SessionName      = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.userName),
+    SourceIP         = SourceIpAddress,
+    Region           = AWSRegion,
+    ErrorCode        = ErrorCode,
+    ErrorMessage     = ErrorMessage
+| project
+    TimeGenerated,
+    AMI_ID,
+    Actor,
+    ActorType,
+    SessionName,
+    SourceIP,
+    Region,
+    ErrorCode,
+    ErrorMessage
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1485 - AMI Destruction Chain Correlation
+// Finds principals who performed DeregisterImage AND DeleteSnapshot within a 1-hour window.
+// This correlated query surfaces the full T1485 chain (deregister AMI + delete backing snapshot)
+// which is high-confidence evidence of deliberate data destruction, not routine maintenance.
+let DeregisterEvents = AWSCloudTrail
+| where EventName == "DeregisterImage"
+| where EventSource == "ec2.amazonaws.com"
+| extend
+    Actor       = UserIdentityArn,
+    SessionName = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.userName),
+    AMI_ID      = tostring(parse_json(RequestParameters).imageId)
+| project TimeGenerated, Actor, SessionName, AMI_ID;
+let DeleteSnapEvents = AWSCloudTrail
+| where EventName == "DeleteSnapshot"
+| where EventSource == "ec2.amazonaws.com"
+| extend
+    Actor       = UserIdentityArn,
+    SnapshotID  = tostring(parse_json(RequestParameters).snapshotId),
+    SourceIP    = SourceIpAddress,
+    Region      = AWSRegion
+| project TimeGenerated, Actor, SnapshotID, SourceIP, Region;
+DeregisterEvents
+| join kind=inner (DeleteSnapEvents) on Actor
+| where abs(datetime_diff('minute', TimeGenerated, TimeGenerated1)) <= 60
+| project
+    DeregisterTime  = TimeGenerated,
+    DeleteSnapTime  = TimeGenerated1,
+    Actor,
+    SessionName,
+    AMI_ID,
+    SnapshotID,
+    SourceIP,
+    Region
+| sort by DeregisterTime desc
+
+// ----- next query -----
+
+// T1485 - Disable AMI Deregistration Protection (DisableImageDeregistrationProtection)
+// Detects removal of the guard that prevents AMI deletion. By itself this is high-confidence
+// pre-destruction behavior; paired with a DeregisterImage event from the same principal
+// it confirms a deliberate T1485 destruction chain.
+AWSCloudTrail
+| where EventName == "DisableImageDeregistrationProtection"
+| where EventSource == "ec2.amazonaws.com"
+| where UserIdentityArn !contains "codepipeline"
+    and UserIdentityArn !contains "codebuild"
+    and UserIdentityArn !contains "AWSServiceRole"
+| extend
+    AMI_ID      = tostring(parse_json(RequestParameters).imageId),
+    Actor       = UserIdentityArn,
+    ActorType   = UserIdentityType,
+    SessionName = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.userName),
+    SourceIP    = SourceIpAddress,
+    Region      = AWSRegion,
+    ErrorCode   = ErrorCode
+| project
+    TimeGenerated,
+    AMI_ID,
+    Actor,
+    ActorType,
+    SessionName,
+    SourceIP,
+    Region,
+    ErrorCode
+| sort by TimeGenerated desc

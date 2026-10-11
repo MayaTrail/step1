@@ -1,0 +1,3 @@
+name: mayatrail-atomic-ses-send-abuse
+runtime: python
+description: Adversary emulation lab for T1496.004 SES bulk-send abuse

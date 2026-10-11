@@ -1,0 +1,149 @@
+// T1685 GuardDuty Impairment - Individual High-Severity Event Detections
+// Standalone queries for each high-severity event. Run independently or combine
+// with a union to feed a single alert rule.
+//
+// Table: AWSCloudTrail (Microsoft Sentinel AWS connector)
+// IMPORTANT: All queries include errorCode in output. Do NOT add filters that
+//            drop rows where ErrorCode is non-empty - denied deletes are IOCs.
+
+// --- Query 1: CreateIPSet with Activate=true (step 4) ---
+// High severity: adversary whitelisting C2 infrastructure in GuardDuty trusted-IP list
+AWSCloudTrail
+| where TimeGenerated > ago(1h)
+| where EventSource == "guardduty.amazonaws.com"
+| where EventName == "CreateIPSet"
+| where RequestParameters has "\"activate\":true"
+| where UserIdentityType == "AssumedRole"
+| where not(UserIdentityArn has_any (dynamic(["security-automation", "guardduty-service-role", "SecurityAudit"])))
+| project TimeGenerated, EventName, UserIdentityArn,
+          UserIdentitySessionContextSessionIssuerArn, SourceIpAddress,
+          AwsRegion, RequestParameters, ErrorCode
+| sort by TimeGenerated desc;
+
+// --- Query 2: CreateFilter with Action=ARCHIVE (step 5) ---
+// High severity: adversary silently suppressing findings before analysts see them
+AWSCloudTrail
+| where TimeGenerated > ago(1h)
+| where EventSource == "guardduty.amazonaws.com"
+| where EventName == "CreateFilter"
+| where RequestParameters has "\"action\":\"ARCHIVE\""
+| where UserIdentityType == "AssumedRole"
+| where not(UserIdentityArn has_any (dynamic(["security-automation", "guardduty-service-role", "SecurityAudit"])))
+| project TimeGenerated, EventName, UserIdentityArn,
+          UserIdentitySessionContextSessionIssuerArn, SourceIpAddress,
+          AwsRegion, RequestParameters, ErrorCode
+| sort by TimeGenerated desc;
+
+// --- Query 3: UpdateDetector frequency degradation (step 6) ---
+// Medium severity: adversary degrading alert velocity to extend dwell time
+AWSCloudTrail
+| where TimeGenerated > ago(1h)
+| where EventSource == "guardduty.amazonaws.com"
+| where EventName == "UpdateDetector"
+| where RequestParameters has_any ("SIX_HOURS", "TWELVE_HOURS")
+| where UserIdentityType == "AssumedRole"
+| where not(UserIdentityArn has_any (dynamic(["security-automation", "guardduty-service-role", "SecurityAudit"])))
+| project TimeGenerated, EventName, UserIdentityArn,
+          UserIdentitySessionContextSessionIssuerArn, SourceIpAddress,
+          AwsRegion, RequestParameters, ErrorCode
+| sort by TimeGenerated desc;
+
+// --- Query 4: DeleteDetector or DeletePublishingDestination - including AccessDenied (steps 7-8) ---
+// Critical severity: adversary attempting to destroy GuardDuty or blind log export.
+// AccessDenied rows MUST be included - they confirm adversarial intent even on denial.
+AWSCloudTrail
+| where TimeGenerated > ago(1h)
+| where EventSource == "guardduty.amazonaws.com"
+| where EventName in ("DeleteDetector", "DeletePublishingDestination")
+| where UserIdentityType == "AssumedRole"
+| where not(UserIdentityArn has_any (dynamic(["security-automation", "guardduty-service-role"])))
+| project TimeGenerated, EventName, UserIdentityArn,
+          UserIdentitySessionContextSessionIssuerArn, SourceIpAddress,
+          AwsRegion, ErrorCode, ErrorMessage, RequestParameters
+| sort by TimeGenerated desc;
+
+// --- Query 5: DeleteFilter or DeleteIPSet in same session as CreateFilter/CreateIPSet (step 9) ---
+// Confirms attack sequence complete: adversary cleaning up traces after impairment.
+// Correlate by UserIdentityArn to tie cleanup to prior creation events.
+let CreatorSessions =
+    AWSCloudTrail
+    | where TimeGenerated > ago(2h)
+    | where EventSource == "guardduty.amazonaws.com"
+    | where EventName in ("CreateIPSet", "CreateFilter")
+    | where UserIdentityType == "AssumedRole"
+    | where not(UserIdentityArn has_any (dynamic(["security-automation", "guardduty-service-role"])))
+    | distinct UserIdentityArn;
+AWSCloudTrail
+| where TimeGenerated > ago(2h)
+| where EventSource == "guardduty.amazonaws.com"
+| where EventName in ("DeleteFilter", "DeleteIPSet")
+| where UserIdentityType == "AssumedRole"
+| join kind=inner (CreatorSessions) on UserIdentityArn
+| project TimeGenerated, EventName, UserIdentityArn,
+          UserIdentitySessionContextSessionIssuerArn, SourceIpAddress,
+          AwsRegion, RequestParameters, ErrorCode
+| sort by TimeGenerated desc;
+
+// ----- next query -----
+
+// T1685 GuardDuty Impairment Chain - Full Attack Sequence
+// Detects the complete ATOMIC-guardduty-impair sequence in a single session:
+//   step 1: STS AssumeRole into broad-GD role
+//   steps 2-3: ListDetectors / GetDetector enumeration
+//   step 4: CreateIPSet (Activate=true)
+//   step 5: CreateFilter (Action=ARCHIVE)
+//   step 6: UpdateDetector (frequency degradation)
+//   steps 7-8: DeleteDetector / DeletePublishingDestination (denied)
+//   step 9: DeleteFilter / DeleteIPSet (cleanup - confirms sequence complete)
+//
+// Table: AWSCloudTrail (Microsoft Sentinel AWS connector)
+// NOTE: Detection rules MUST NOT filter on isempty(ErrorCode) - AccessDenied events
+//       for DeleteDetector and DeletePublishingDestination are high-confidence IOCs.
+
+let LookbackWindow = 1h;
+let HighRiskGDEvents = dynamic([
+    "CreateIPSet", "CreateFilter", "UpdateDetector",
+    "DeleteDetector", "DeletePublishingDestination",
+    "DeleteFilter", "DeleteIPSet"
+]);
+let LegitimateRoles = dynamic([
+    "security-automation", "guardduty-service-role", "SecurityAudit"
+]);
+// Step 1: Identify assumed-role sessions that touch GuardDuty impairment APIs
+let AttackerSessions =
+    AWSCloudTrail
+    | where TimeGenerated > ago(LookbackWindow)
+    | where EventSource == "guardduty.amazonaws.com"
+    | where EventName in (HighRiskGDEvents)
+    | where UserIdentityType == "AssumedRole"
+    | where not(UserIdentityArn has_any (LegitimateRoles))
+    | summarize
+        EventCount = count(),
+        DistinctActions = dcount(EventName),
+        ActionList = make_set(EventName),
+        AccessDeniedCount = countif(ErrorCode == "AccessDenied"),
+        FirstSeen = min(TimeGenerated),
+        LastSeen = max(TimeGenerated)
+        by UserIdentityArn, UserIdentitySessionContextSessionIssuerArn, SourceIpAddress
+    | where DistinctActions >= 2;  // Sequence of actions, not a one-off
+// Step 2: Surface the full event timeline for each flagged session
+AWSCloudTrail
+| where TimeGenerated > ago(LookbackWindow)
+| where EventSource in ("guardduty.amazonaws.com", "sts.amazonaws.com")
+| where EventName in (array_concat(HighRiskGDEvents, dynamic(["AssumeRole", "GetCallerIdentity", "ListDetectors", "GetDetector"])))
+| where UserIdentityType == "AssumedRole"
+| where not(UserIdentityArn has_any (LegitimateRoles))
+| join kind=inner (AttackerSessions | project UserIdentityArn) on UserIdentityArn
+| project
+    TimeGenerated,
+    EventName,
+    EventSource,
+    UserIdentityArn,
+    UserIdentitySessionContextSessionIssuerArn,
+    SourceIpAddress,
+    AwsRegion,
+    ErrorCode,
+    ErrorMessage,
+    RequestParameters,
+    ResponseElements
+| sort by TimeGenerated asc

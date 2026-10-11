@@ -1,0 +1,132 @@
+// T1550.001 - Application Access Token: Cognito AdminUserGlobalSignOut
+// Detects AdminUserGlobalSignOut events which invalidate all tokens for a user.
+// Surfaces both attacker disruption (sign out victim to force re-auth that
+// fails) and defender incident-response (sign out to revoke stolen sessions).
+// Correlate caller identity with the attacker role ARN from the AssumeRole
+// event to distinguish attacker vs. defender action.
+//
+// Table: AWSCloudTrail (Sentinel)
+
+AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "cognito-idp.amazonaws.com"
+| where EventName == "AdminUserGlobalSignOut"
+| extend TargetUsername = tostring(parse_json(RequestParameters).username)
+| extend UserPoolId = tostring(parse_json(RequestParameters).userPoolId)
+// Classify caller: is this the attacker role or a defender/admin principal?
+| extend CallerIsAttackerRole = (UserIdentityArn contains "cognito-refresh-token-reuse-attacker-role"
+                               or UserIdentityArn contains "attacker-role")
+| extend CallerIsAssumedRole = (UserIdentityType == "AssumedRole")
+// Exclude known service automation
+| where not (UserIdentityArn contains "svc-cognito-admin"
+          or UserIdentityArn contains "cognito-identity-pool-service-role")
+| project
+    TimeGenerated,
+    EventName,
+    TargetUsername,
+    UserPoolId,
+    UserIdentityArn,
+    UserIdentityType,
+    CallerIsAttackerRole,
+    CallerIsAssumedRole,
+    SourceIpAddress,
+    UserAgent,
+    ErrorCode,
+    AWSRegion,
+    RecipientAccountId
+| sort by TimeGenerated desc
+
+// Alert when the attacker role is the caller (not just defenders cleaning up):
+// | where CallerIsAttackerRole == true
+
+// ----- next query -----
+
+// T1550.001 - Application Access Token: Attacker Role AssumeRole
+// Detects STS AssumeRole targeting Cognito-attack-staged roles.
+// Correlate with subsequent SSM GetParameters on Cognito config paths
+// (within same sessionIssuer ARN) to raise confidence to critical.
+//
+// Table: AWSCloudTrail (Sentinel) or aws_cloudtrail (S3/Athena)
+// Adjust TimeGenerated window to your retention policy.
+
+AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "sts.amazonaws.com"
+| where EventName == "AssumeRole"
+| extend RoleArn = tostring(parse_json(RequestParameters).roleArn)
+| extend RoleSessionName = tostring(parse_json(RequestParameters).roleSessionName)
+| where RoleArn contains "cognito-refresh-token-reuse"
+      or RoleArn contains "attacker-role"
+      or RoleSessionName contains "atomic-cognito"
+| where UserIdentityType != "AWSService"
+// Exclude known service automation (tune to your environment)
+| where not (UserIdentityArn contains "AWSServiceRole"
+          or UserIdentityArn contains "lambda-execution")
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    RoleArn,
+    RoleSessionName,
+    AWSRegion,
+    RecipientAccountId
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1550.001 - Application Access Token: SSM GetParameters Cognito Config Read
+// Detects SSM GetParameters calls reading Cognito configuration values
+// (pool ID, client ID, credentials) from an assumed attacker role session.
+// High-confidence when correlated with a preceding AssumeRole from the same session.
+//
+// Table: AWSCloudTrail (Sentinel)
+
+AWSCloudTrail
+| where TimeGenerated > ago(24h)
+| where EventSource == "ssm.amazonaws.com"
+| where EventName == "GetParameters"
+| extend ParamNames = tostring(parse_json(RequestParameters).names)
+// Match Cognito-related SSM paths
+| where ParamNames contains "cognito"
+      or ParamNames contains "pool-id"
+      or ParamNames contains "app-client"
+      or ParamNames contains "/atomic-cognito-refresh-token-reuse/"
+// Exclude known legitimate automation (tune per environment)
+| where not (UserIdentityArn contains "AWSServiceRole"
+          or UserIdentityArn contains "lambda-execution"
+          or UserIdentityArn contains "ecs-task-execution")
+// Optionally restrict to assumed-role sessions (more suspicious than IAM user direct)
+| extend CallerIsAssumedRole = (UserIdentityType == "AssumedRole")
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityType,
+    CallerIsAssumedRole,
+    SourceIpAddress,
+    UserAgent,
+    ParamNames,
+    ErrorCode,
+    AWSRegion,
+    RecipientAccountId
+| sort by TimeGenerated desc
+
+// -- Correlated sequence query (AssumeRole -> GetParameters within 5 min) --
+//
+// let AttackerRoleAssumes = AWSCloudTrail
+//     | where EventSource == "sts.amazonaws.com" and EventName == "AssumeRole"
+//     | extend RoleArn = tostring(parse_json(RequestParameters).roleArn)
+//     | where RoleArn contains "cognito-refresh-token-reuse"
+//     | project AssumeTime = TimeGenerated, SessionIssuerArn = UserIdentityArn, RoleArn;
+// let SSMReads = AWSCloudTrail
+//     | where EventSource == "ssm.amazonaws.com" and EventName == "GetParameters"
+//     | extend ParamNames = tostring(parse_json(RequestParameters).names)
+//     | where ParamNames contains "cognito"
+//     | project SSMTime = TimeGenerated, SSMCallerArn = UserIdentityArn, ParamNames;
+// AttackerRoleAssumes
+// | join kind=inner (SSMReads) on $left.SessionIssuerArn == $right.SSMCallerArn
+// | where SSMTime between (AssumeTime .. (AssumeTime + 5m))
+// | project AssumeTime, SSMTime, SessionIssuerArn, RoleArn, ParamNames

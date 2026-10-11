@@ -1,0 +1,147 @@
+title: AWS Console Login via FederatedUser Session (Programmatic Origin)
+id: da87292c-ede5-54d9-9cee-c4bd890eefed
+status: experimental
+description: >
+  Detects an AWS ConsoleLogin event where the identity type is FederatedUser
+  and the source appears programmatic (non-browser user agent or non-corporate
+  issuer). This is the highest-fidelity detection signal for T1538 console
+  federation abuse: an attacker who obtained a static IAM key calls
+  GetFederationToken then constructs a console login URL, resulting in a
+  ConsoleLogin event with userIdentity.type=FederatedUser sourced from a
+  non-IdP issuer. Legitimate federated logins from a corporate IdP will carry
+  a recognizable issuer domain (e.g., accounts.google.com, your-okta-domain).
+references:
+    - https://attack.mitre.org/techniques/T1538/
+    - https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference-aws-console-sign-in-events.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1538
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: signin.amazonaws.com
+        eventName: ConsoleLogin
+        userIdentity.type: FederatedUser
+    filter_known_idp:
+        userIdentity.sessionContext.sessionIssuer.arn|contains:
+            - ':role/SSO'
+            - ':role/Federated'
+            - ':role/SAML'
+    condition: selection and not filter_known_idp
+falsepositives:
+    - Legitimate console federation from an internal IdP whose issuer role is not named with the above patterns -- expand filter_known_idp with your organization's actual federation role ARNs
+    - Authorized red team or emulation exercises
+level: critical
+---
+title: IAM User GetFederationToken for Console Federation
+id: 3680a604-0771-5c78-86c2-7ddc8fe5f293
+status: experimental
+description: >
+  Detects an IAM user calling GetFederationToken via STS to obtain short-lived
+  federated credentials. In production environments, console federation is
+  typically handled by an identity provider or dedicated role, not static IAM
+  user keys. A static user calling GetFederationToken is a high-signal indicator
+  that an attacker is converting a compromised key into console access (T1538).
+references:
+    - https://attack.mitre.org/techniques/T1538/
+    - https://docs.aws.amazon.com/STS/latest/APIReference/API_GetFederationToken.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1538
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: sts.amazonaws.com
+        eventName: GetFederationToken
+        userIdentity.type: IAMUser
+    filter_ci_roles:
+        userIdentity.arn|contains:
+            - ':user/ci-'
+            - ':user/deploy-'
+            - ':user/svc-'
+    condition: selection and not filter_ci_roles
+falsepositives:
+    - Legitimate console federation via an internal federation broker service running as an IAM user
+    - CI/CD pipelines that explicitly issue short-lived scoped tokens for downstream consumers
+level: high
+---
+title: AWS Console GetSigninToken from Non-Browser User-Agent
+id: 9ce96215-91a9-5e42-91ac-20320abcc582
+status: experimental
+description: >
+  Detects a GetSigninToken request to the AWS sign-in federation endpoint
+  (signin.amazonaws.com) originating from a non-browser user agent such as
+  Python, curl, or other HTTP libraries. Legitimate console federation flows
+  issued by identity providers use browser redirects; programmatic calls are
+  a strong indicator that an attacker is constructing a console login URL from
+  stolen credentials (T1538).
+references:
+    - https://attack.mitre.org/techniques/T1538/
+    - https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_providers_enable-console-custom-url.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1538
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: signin.amazonaws.com
+        eventName: GetSigninToken
+    filter_browser_agents:
+        userAgent|contains:
+            - 'Mozilla/'
+            - 'Chrome/'
+            - 'Safari/'
+            - 'Edge/'
+    condition: selection and not filter_browser_agents
+falsepositives:
+    - Internal federation broker tooling that issues sign-in tokens programmatically as part of a headless SSO flow
+    - Security tooling or emulation labs performing authorized red team exercises
+level: high
+---
+title: SecretsManager Enumeration from FederatedUser Session
+id: 7a69ff80-b425-5897-9bbe-08167b31b627
+status: experimental
+description: >
+  Detects ListSecrets or DescribeSecret API calls made by a FederatedUser
+  session principal. In most production environments, Secrets Manager access
+  comes from Lambda execution roles, ECS task roles, or IAM service accounts --
+  not from FederatedUser sessions. A FederatedUser enumerating secrets is a
+  strong indicator that an attacker has obtained console-level access via a
+  federation token and is performing discovery of credential material (T1538).
+references:
+    - https://attack.mitre.org/techniques/T1538/
+    - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_ListSecrets.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1538
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_list:
+        eventSource: secretsmanager.amazonaws.com
+        eventName: ListSecrets
+        userIdentity.type: FederatedUser
+    selection_describe:
+        eventSource: secretsmanager.amazonaws.com
+        eventName: DescribeSecret
+        userIdentity.type: FederatedUser
+    condition: selection_list or selection_describe
+falsepositives:
+    - Developers or administrators who access the console via a legitimate federated SSO and manually inspect secrets
+    - Security auditing tools that enumerate secrets using short-lived federated credentials
+level: medium
