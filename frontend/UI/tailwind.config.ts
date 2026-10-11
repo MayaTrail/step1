@@ -83,6 +83,13 @@ export default {
       backgroundImage: {
         // Keyboard key-cap gradient (DESIGN.md gradient system) — used on the avatar tile
         key: 'linear-gradient(180deg, #121212 0%, #0d0d0d 100%)',
+        // Graph-paper canvas behind the attack path, in the subtle border colour
+        'grid-lines':
+          'linear-gradient(var(--border-subtle) 1px, transparent 1px), linear-gradient(90deg, var(--border-subtle) 1px, transparent 1px)',
+      },
+
+      backgroundSize: {
+        'grid-cell': '22px 22px',
       },
 
       fontFamily: {
@@ -185,6 +192,15 @@ export default {
           from: { transform: 'translateY(0)',    opacity: '0.9' },
           to:   { transform: 'translateY(24px)', opacity: '0.5' },
         },
+        // Attack Graph: the clickable dot on each step of a path breathing gently.
+        hopPulse: {
+          '0%, 100%': { boxShadow: '0 0 0 3px hsla(202, 100%, 67%, 0.15), 0 0 8px hsla(202, 100%, 67%, 0.4)' },
+          '50%':      { boxShadow: '0 0 0 6px hsla(202, 100%, 67%, 0.15), 0 0 16px hsla(202, 100%, 67%, 0.7)' },
+        },
+        hopPulseWarn: {
+          '0%, 100%': { boxShadow: '0 0 0 3px rgba(255, 188, 51, 0.15), 0 0 8px rgba(255, 188, 51, 0.4)' },
+          '50%':      { boxShadow: '0 0 0 6px rgba(255, 188, 51, 0.15), 0 0 16px rgba(255, 188, 51, 0.7)' },
+        },
       },
 
       animation: {
@@ -201,6 +217,8 @@ export default {
         radarBlip:     'radarBlip 1.6s linear infinite',
         bellRing:      'bellRing 1.8s ease-in-out infinite',
         scanBeam:      'scanBeam 1.6s ease-in-out infinite alternate',
+        hopPulse:      'hopPulse 2.2s ease-in-out infinite',
+        hopPulseWarn:  'hopPulseWarn 2.2s ease-in-out infinite',
       },
     },
   },

@@ -15,6 +15,18 @@ export function useAWSConnection(): { connected: boolean } {
 }
 
 /**
+ * Whether a read-only Scout audit role is connected.
+ *
+ * Deliberately not useAWSConnection(): that reads isVerified, which the
+ * emulation role's verification sets. An org that provisioned only the
+ * auditor role would be told to connect an account it has already connected.
+ */
+export function useScoutConnection(): { connected: boolean } {
+  const { user } = useAuth()
+  return { connected: Boolean(user?.hasAuditRole) }
+}
+
+/**
  * Replaces a page whose content requires an AWS connection.
  *
  * Shown instead of an error or an unexplained empty grid. An unconnected user

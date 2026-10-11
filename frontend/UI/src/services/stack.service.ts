@@ -1,16 +1,15 @@
 /**
- * Stack Service — API calls for managing Pulumi infrastructure stacks.
+ * Stack Service: reads the user's Pulumi infrastructure stacks.
  *
- * Endpoints:
- *   GET    /api/stacks/              → list user's stacks
- *   POST   /api/stacks/              → create a new stack record
- *   GET    /api/stacks/{id}/         → get a single stack
- *   POST   /api/stacks/{id}/deploy/  → deploy (pulumi up)
- *   POST   /api/stacks/{id}/destroy/ → destroy (pulumi destroy)
+ * Endpoints (read-only; stacks are deployed and destroyed through the
+ * emulation service):
+ *   GET /api/stacks/                → list user's stacks
+ *   GET /api/stacks/{id}/           → get a single stack
+ *   GET /api/stacks/{id}/progress/  → live deploy progress
  */
 
 import api from './api'
-import type { Stack, CreateStackRequest, StackActionResponse, StackProgress } from '@/types'
+import type { Stack, StackProgress } from '@/types'
 
 /** List all stacks owned by the authenticated user. */
 export async function listStacks(): Promise<Stack[]> {
@@ -26,36 +25,6 @@ export async function getStack(stackId: string): Promise<Stack> {
   return data
 }
 
-/** Create a new stack record (starts as "pending"). */
-export async function createStack(payload: CreateStackRequest): Promise<Stack> {
-  const { data } = await api.post<Stack>('/stacks/', payload)
-  return data
-}
-
-/** Trigger a deploy (pulumi up) for a stack. */
-export async function deployStack(stackId: string): Promise<StackActionResponse> {
-  const { data } = await api.post<StackActionResponse>(`/stacks/${stackId}/deploy/`)
-  return data
-}
-
-/** Trigger a destroy (pulumi destroy) for a stack. */
-export async function destroyStack(stackId: string): Promise<StackActionResponse> {
-  const { data } = await api.post<StackActionResponse>(`/stacks/${stackId}/destroy/`)
-  return data
-}
-
-/** Trigger a refresh (pulumi refresh) for a stack. */
-export async function refreshStack(stackId: string): Promise<StackActionResponse> {
-  const { data } = await api.post<StackActionResponse>(`/stacks/${stackId}/refresh/`)
-  return data
-}
-
-/** Trigger a preview (pulumi preview) for a stack. */
-export async function previewStack(stackId: string): Promise<StackActionResponse> {
-  const { data } = await api.post<StackActionResponse>(`/stacks/${stackId}/preview/`)
-  return data
-}
-
 /**
  * Fetch live deployment progress for a stack.
  *
@@ -67,19 +36,6 @@ export async function previewStack(stackId: string): Promise<StackActionResponse
  */
 export async function getStackProgress(stackId: string): Promise<StackProgress> {
   const { data } = await api.get<StackProgress>(`/stacks/${stackId}/progress/`)
-  return data
-}
-
-/**
- * Force-destroy a stack regardless of its current status.
- *
- * Use this for stacks stuck in deploying, refreshing, or other busy states
- * where the standard destroy endpoint returns 409 Conflict.
- *
- * @param stackId - UUID of the stack to force-destroy.
- */
-export async function forceDestroyStack(stackId: string): Promise<StackActionResponse> {
-  const { data } = await api.post<StackActionResponse>(`/stacks/${stackId}/force-destroy/`)
   return data
 }
 

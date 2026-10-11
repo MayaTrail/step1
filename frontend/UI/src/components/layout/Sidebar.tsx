@@ -17,6 +17,7 @@ import {
   IconGear,
   IconBook,
   IconBroadcast,
+  IconGraph,
   IconLaunch,
   IconChevron,
 } from '@/components/ui/Icons'
@@ -111,7 +112,7 @@ export function Sidebar({ isOpen }: SidebarProps) {
   return (
     <aside className={`
       ${collapsed ? RAIL_WIDTH : FULL_WIDTH}
-      bg-surface-base border-r border-border overflow-y-auto overflow-x-hidden shrink-0 py-4
+      bg-surface-deep border-r border-border overflow-y-auto overflow-x-hidden shrink-0 py-4
       flex flex-col
       fixed top-[58px] bottom-0 left-0 z-[150] transition-all duration-200 ease-in-out
       lg:static lg:top-auto lg:bottom-auto lg:z-auto lg:translate-x-0
@@ -169,6 +170,7 @@ export function Sidebar({ isOpen }: SidebarProps) {
       {!isClosed('Security Content') && (
         <>
         <NavItem to="/emulations" icon={<IconFlask size={17} />} label="Emulations" collapsed={collapsed} />
+        <NavItem to="/attack-graph" icon={<IconGraph size={17} />} label="Attack Graph" collapsed={collapsed} />
         <NavItem to="/detections" icon={<IconSearch size={17} />} label="Detections" collapsed={collapsed} />
         <NavItem to="/playbooks" icon={<IconClipboard size={17} />} label="Playbooks" collapsed={collapsed} />
         <NavItem to="/guardrails" icon={<IconShield size={17} />} label="Guardrails" collapsed={collapsed} />

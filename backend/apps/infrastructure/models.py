@@ -20,8 +20,8 @@ class Stack(models.Model):
     Represents a provisioned (or pending) Pulumi stack.
 
     Each stack is owned by a user and tracks its deployment lifecycle.
-    The `outputs` field is populated by the deploy_stack Celery task once
-    `pulumi up` completes successfully.
+    The `outputs` field is populated by the deploy_emulation_stack Celery task
+    once `pulumi up` completes successfully.
 
     Two new fields distinguish enterprise emulation stacks from demo stacks:
       - emulation_type: the emulation package name (e.g. "scarleteel").

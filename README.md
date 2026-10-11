@@ -83,6 +83,7 @@ MayaTrail is built for the people responsible for cloud and cluster security pos
 - **Plugin-based emulation packages** — drop in a new emulation package and it's auto-discovered, infra and detections included.
 - **Validates your SIEM, not ours** — a workflow deploys the emulation, runs the attack, then waits for your SIEM to post alerts to a signed webhook and scores which expected detections actually fired.
 - **Coverage history** — reliability per detection across every run of an emulation, with run-to-run comparison that shows the alert behind each change. A rule no run reached is reported as unmeasured, never as a failure.
+- **Attack Graph**: a read-only scan of your account's IAM (and, optionally, its resources) that finds the privilege-escalation paths already there and links each one to the emulations that rehearse it.
 - **Detection authoring and SIEM export** — write or AI-draft Sigma rules, validate them against synthetic events, and compile them to Splunk or OpenSearch.
 - **Playbook authoring** — incident-response playbooks as shipped documentation, plus an editor for writing your own.
 - **Auditable** — an immutable log records every connect, deploy, attack, destroy, and archive.
@@ -172,8 +173,14 @@ that's the identity the `connectors` app assumes the role as.
 # 1. Configure environment
 cp backend/.env.example backend/.env
 # Fill in SECRET_KEY, AWS credentials, and STATE_BUCKET in backend/.env
+cp .env.example .env
+# Set SCOUT_SERVICE_TOKEN to a long random string:
+#   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 
-# 2. Start the full stack
+# 2. Log in to GitHub's registry once per machine (the Scout image is private)
+docker login ghcr.io -u <github-user> --password-stdin   # token with read:packages
+
+# 3. Start the full stack
 docker-compose up --build
 ```
 
@@ -192,7 +199,7 @@ startup.
 | `REDIS_URL` | Celery broker + result backend |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Platform AWS credentials (STS AssumeRole + state bucket) |
 | `AWS_DEFAULT_REGION` | Default AWS region (e.g. `ap-south-1`) |
-| `STATE_BUCKET` | S3 bucket for Pulumi state (e.g. `mayatrail-state-bucket`) |
+| `STATE_BUCKET` | Fallback Pulumi state bucket (e.g. `mayatrail-state-bucket`). Each stack's state normally lives in `mayatrail-state-<account id>` in the user's own account; this is used only when that account id cannot be read |
 | `PULUMI_CONFIG_PASSPHRASE` | Passphrase for Pulumi stack secrets |
 | `EMULATIONS_BASE_DIR` | Where emulation packages are mounted (`/opt/emulations`) |
 | `GOOGLE_CLIENT_ID` | Google SSO client ID |
@@ -205,6 +212,11 @@ startup.
 
 See `backend/.env.example` for the full set with inline notes. A test keeps the
 two in step, so a new setting cannot ship undocumented.
+
+The project-root `.env` is read by Docker Compose itself and holds one value,
+`SCOUT_SERVICE_TOKEN`: the shared secret between the worker and the `scout`
+container. Compose refuses to start without it. Use a different value on every
+machine and never commit the file.
 
 ### Frontend development
 
@@ -254,9 +266,83 @@ Each emulation packages a documented threat-actor campaign or a disclosed CVE/mi
   <img width="1915" height="995" alt="image" src="https://github.com/user-attachments/assets/332e1c22-4edd-48a1-8f9e-fd12da46bc0f" />
 </p>
 
+## Attack Graph
+
+Emulations show what an attack does in a lab. The Attack Graph shows which
+privilege-escalation paths already exist in your real account: which identity
+can become which, through which IAM calls, and how far that gets an attacker.
+It only reads; nothing is created or changed.
+
+**Connecting.** Scans use a second role, separate from the emulation role, so
+a security team can grant and revoke it on its own. It needs a trust policy
+like the emulation role's and, for an IAM-only scan, exactly one permission:
+`iam:GetAccountAuthorizationDetails`. Choosing regions when connecting also
+reads the resources in them (S3 buckets, Secrets Manager secrets, KMS keys,
+SQS queues, DynamoDB tables, Lambda functions, SNS topics and ECR
+repositories), which needs AWS's read-only `SecurityAudit` policy instead.
+Without regions a scan covers identities only. Connect it on the Attack Graph
+overview page. MayaTrail assumes the role and calls
+`iam:GetAccountAuthorizationDetails` before saving it, since a role that
+cannot read the whole account would produce scans that look clean. If an
+emulation role is connected, the audit role must be in the same account.
+
+**Scanning.** Scans run on the Scans page (`/attack-graph/scans`) and take a
+few minutes. The worker assumes the audit role and passes its short-lived
+credentials to the `scout` service. Scout reads the account with them, finds
+and ranks the paths, and drops the result as soon as the worker has stored it
+(or after an hour if it is never collected). Credentials are never stored. A
+scan is cut off after 25 minutes. Each result is one of:
+
+| State | Meaning |
+|---|---|
+| Findings | The whole account was read and escalation paths were found, ranked by severity (Critical 75+, High 60 to 74, Medium 40 to 59, Low below 40) |
+| Clean | The whole account was read and no path was found |
+| Partial | The scan could not confirm it read the whole account, so its result is not a verdict, even when it lists paths |
+
+**Acting on a path.** Each path shows its steps, the emulations that rehearse
+it, how to detect it, a guardrail check and how to close it. An emulation is
+linked through the calls that grant new access on the path (reads and
+`sts:AssumeRole` never count). A single-technique emulation links when it
+performs one of those calls. A campaign must share at least two of them, and
+all of them on a two- or three-call path (three on a longer one), so a campaign
+never links on a single shared call. Links are worked out each time a scan is opened, so
+new emulations appear on old scans.
+
+**What an identity can reach.** The second tab on a scan answers a question
+you already have, such as "this role's keys leaked; what can an attacker turn
+it into?". Every user and role in the scan is listed with its result before
+you pick it: how many identities it reaches and how many of those lead to
+administrator access, that it is already an administrator, or that it reaches
+nothing. Pick one and the scan's stored graph is searched for every identity it
+can become, grouped by whether that identity has
+administrator access, can make itself an administrator, or neither. Each comes
+with the shortest way there (fewest conditional steps when several are equally
+short), drawn like a ranked path and linked to emulations the same way. Only
+escalation steps Scout verified are followed, so a role it may assume counts
+only when both the role's trust policy and the caller's own permissions allow
+it. It works on scans already taken and needs no new scan. A user or role card
+on a ranked path links straight to it.
+
+**Data kept.** The newest 10 scans per user are kept and a finished scan can
+be deleted by its owner. Starts, completions, failures and deletions are
+recorded in the activity log.
+
+**Limits.**
+- When several identities lead to the same target, Scout reports the path
+  from the one closest to it, so paths are usually short.
+- Steps that steal credentials (reading a parameter or instance metadata) are
+  reads, so they never link to an emulation.
+- The reach tab follows identities only, not resources, and shows one path
+  per identity. Asking whether one chosen identity can reach one chosen target
+  is not available yet.
+
+**Updating Scout.** The `scout` service is built and released from the
+`MayaTrail/scout` repository. To move to a new release, change the image tag in
+`docker-compose.yml` and `docker-compose-ec2.yaml`.
+
 ## Docker Compose stack
 
-The full platform runs as a Docker Compose stack with 7 services:
+The full platform runs as a Docker Compose stack with 8 services:
 
 | Service | Purpose |
 |---|---|
@@ -264,6 +350,7 @@ The full platform runs as a Docker Compose stack with 7 services:
 | `redis` | Celery message broker + result backend |
 | `backend` | Django REST API (Gunicorn) |
 | `worker_enterprise` | Celery worker — deploys, attacks, and destroys emulations in the user's AWS account via STS AssumeRole (Pulumi Automation API, in-process) |
+| `scout` | Attack Graph scan service (`ghcr.io/mayatrail/scout`, pinned by tag). No published port; every request needs its token, which only the worker holds. Receives no settings but that token |
 | `beat` | Celery Beat scheduler — auto-destroys expired stacks every 15 minutes |
 | `ui` | React SPA (Nginx, non-root) |
 | `nginx` | Edge reverse proxy (routes `/` to UI, `/api/` + `/admin/` to backend) |

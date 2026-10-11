@@ -230,6 +230,22 @@ def emulation_actions(attack_path: list[dict[str, Any]]) -> list[str]:
 # declares the calls it makes, and a call is never "s3:*".
 _ACTION_RE = re.compile(r"[a-z0-9-]+:[A-Z][A-Za-z0-9]*")
 
+# boto3 client names whose IAM service prefix is different. Copying the
+# client name ("elbv2") into a MANIFEST gives an action no policy names, so
+# the account check asks AWS about a call that does not exist and the
+# emulation link never matches. Maps the client name to the prefix to use.
+_BOTO3_NOT_IAM_PREFIX = {
+    "elb": "elasticloadbalancing",
+    "elbv2": "elasticloadbalancing",
+    "stepfunctions": "states",
+    "apigatewayv2": "apigateway",
+    "s3control": "s3",
+    "sso-admin": "sso",
+    "opensearch": "es",
+    "dynamodbstreams": "dynamodb",
+    "resourcegroupstaggingapi": "tag",
+}
+
 
 def validate_aws_actions(entry: dict[str, Any]) -> list[str]:
     """
@@ -268,6 +284,13 @@ def validate_aws_actions(entry: dict[str, Any]) -> list[str]:
         for action in actions:
             if not isinstance(action, str) or not _ACTION_RE.fullmatch(action):
                 errors.append(f"{label}: {action!r} is not an IAM action like 's3:DeleteObject'")
+                continue
+            prefix, name = action.split(":", 1)
+            if prefix in _BOTO3_NOT_IAM_PREFIX:
+                errors.append(
+                    f"{label}: {action!r} uses the boto3 client name; IAM spells it "
+                    f"'{_BOTO3_NOT_IAM_PREFIX[prefix]}:{name}'"
+                )
     return errors
 
 

@@ -92,6 +92,12 @@ class ValidateAwsActionsTests(SimpleTestCase):
             errors = validate_aws_actions(_manifest(aws_actions=[bad]))
             self.assertEqual(len(errors), 1, bad)
 
+    def test_a_boto3_client_name_is_rejected_with_the_iam_spelling(self):
+        """boto3's "elbv2" client signs calls as elasticloadbalancing, which is what policies name."""
+        errors = validate_aws_actions(_manifest(aws_actions=["elbv2:CreateRule"]))
+        self.assertEqual(len(errors), 1)
+        self.assertIn("'elasticloadbalancing:CreateRule'", errors[0])
+
     def test_other_platforms_are_skipped(self):
         """Kubernetes emulations are not governed by AWS policies."""
         manifest = _manifest()

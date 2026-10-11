@@ -250,3 +250,51 @@ export const IconHistory = (p: IconProps) => (
         <path d="M12 7.5V12l3 1.8" />
     </Icon>
 )
+
+/** Attack Graph: identities linked into a path that converges on one target. */
+export const IconGraph = (p: IconProps) => (
+    <Icon {...p}>
+        <circle cx="5" cy="6" r="2.2" />
+        <circle cx="5" cy="18" r="2.2" />
+        <circle cx="19" cy="12" r="2.6" />
+        <path d="M7.1 6.9 16.6 11M7.1 17.1 16.6 13M5 8.2v7.6" />
+    </Icon>
+)
+
+/** An IAM user. */
+export const IconUser = (p: IconProps) => (
+    <Icon {...p}>
+        <circle cx="12" cy="8" r="3.5" />
+        <path d="M5 20a7 7 0 0 1 14 0" />
+    </Icon>
+)
+
+/** An IAM role: a padlock, since a role is assumed rather than signed in to. */
+export const IconRole = (p: IconProps) => (
+    <Icon {...p}>
+        <rect x="4" y="8.5" width="16" height="12" rx="2" />
+        <path d="M9 8.5v-2a3 3 0 0 1 6 0v2M12 13.5v3" />
+    </Icon>
+)
+
+/** A non-IAM resource such as an S3 bucket. */
+export const IconResource = (p: IconProps) => (
+    <Icon {...p}>
+        <ellipse cx="12" cy="6" rx="7" ry="2.5" />
+        <path d="M5 6l1.6 12.3c.2 1.5 2.7 2.7 5.4 2.7s5.2-1.2 5.4-2.7L19 6" />
+    </Icon>
+)
+
+/** What a path gains: the impact at its end. */
+export const IconCrown = (p: IconProps) => (
+    <Icon {...p}>
+        <path d="M4 17h16l-1.5-9-4.5 4-2-6-2 6-4.5-4z" />
+    </Icon>
+)
+
+/** A fix: what closes an attack path. */
+export const IconWrench = (p: IconProps) => (
+    <Icon {...p}>
+        <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.4 2.4-2.6-.6-.6-2.6z" />
+    </Icon>
+)
