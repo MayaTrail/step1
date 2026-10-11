@@ -6,13 +6,19 @@ exactly which calls an emulation performs and the rule under test is the only
 thing that can make it link or not.
 """
 
+import unittest
 from unittest import mock
 
 from django.test import SimpleTestCase
 
 from apps.attack_graph.models import ScoutScan
 from apps.attack_graph.related import escalation_calls, related_emulations
-from apps.attack_graph.serializers import ScoutScanDetailSerializer
+
+try:
+    from apps.attack_graph.serializers import ScoutScanDetailSerializer
+    HAS_DRF = True
+except ImportError:  # DRF is not installed under config.settings.ci
+    HAS_DRF = False
 
 
 def _emulation(name, tier, actions, platform="aws"):
@@ -135,6 +141,7 @@ class RelatedEmulationsTests(SimpleTestCase):
             self.assertEqual(related_emulations(envelope), {})
 
 
+@unittest.skipUnless(HAS_DRF, "DRF is not installed under config.settings.ci")
 class DetailResponseTests(SimpleTestCase):
     """The scan detail response carries the links beside the stored result."""
 
