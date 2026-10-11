@@ -22,6 +22,7 @@ from apps.logs.record import record_activity
 from . import graph_search
 from .models import SCANS_KEPT_PER_USER, ScoutScan, active_scans, prune_old_scans
 from .permissions import HasScoutConnection
+from .related import related_for_paths
 from .serializers import ScoutScanDetailSerializer, ScoutScanListSerializer
 
 logger = logging.getLogger(__name__)
@@ -270,8 +271,12 @@ class ScoutScanGraphNodesView(_ScanGraphView):
     Search this scan's graph nodes.
 
     GET /api/attack-graph/scan/<scan_id>/graph/nodes/?q=<term>
+    GET /api/attack-graph/scan/<scan_id>/graph/nodes/?kind=identity
     Returns:
-      200 — { nodes: [...] }, at most graph_search.MAX_NODE_RESULTS
+      200: { nodes: [...] }, at most graph_search.MAX_NODE_RESULTS. With
+            kind=identity, every user and role with its level and how many
+            identities it reaches (`reaches`, `reaches_admin`), plus
+            `truncated` (at most graph_search.MAX_IDENTITY_RESULTS)
       404 — no such scan, or the scan has no stored graph
     """
 
@@ -280,6 +285,9 @@ class ScoutScanGraphNodesView(_ScanGraphView):
         graph, error = self._resolve(request, scan_id)
         if error is not None:
             return error
+        if request.query_params.get("kind") == "identity":
+            nodes, truncated = graph_search.list_identities(graph)
+            return Response({"nodes": nodes, "truncated": truncated})
         return Response(
             {"nodes": graph_search.search_nodes(graph, request.query_params.get("q", ""))},
         )
@@ -318,3 +326,42 @@ class ScoutScanGraphEntityView(_ScanGraphView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response(entity)
+
+
+class ScoutScanGraphReachView(_ScanGraphView):
+    """
+    Every identity one identity in this scan can become.
+
+    GET /api/attack-graph/scan/<scan_id>/graph/reach/?from=<node id>
+    Returns:
+      200: graph_search.reach_from's result, plus `related`: the emulations
+            linked to the path to each reached identity, keyed by its node id
+      400: `from` missing, or not a node in this graph
+      404: no such scan, or the scan has no stored graph
+
+    Not written to the activity log: like the entity lookup, it is a read of
+    the user's own stored scan, and logging every pick would bury the scan
+    events the log is there for.
+    """
+
+    def get(self, request: Request, scan_id: str) -> Response:
+        """Walk the stored graph from one identity."""
+        graph, error = self._resolve(request, scan_id)
+        if error is not None:
+            return error
+        origin = request.query_params.get("from", "")
+        if not origin:
+            return Response(
+                {"detail": "A 'from' query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if origin not in graph_search.node_ids(graph):
+            return Response(
+                {"detail": f"No entity '{origin}' in this scan's graph."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        result = graph_search.reach_from(graph, origin)
+        result["related"] = related_for_paths(
+            [{"id": r["node"]["id"], "steps": r["steps"]} for r in result["reached"]],
+        )
+        return Response(result)

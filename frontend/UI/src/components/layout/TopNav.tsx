@@ -67,38 +67,30 @@ export function TopNav({ onOpenSearch, onToggleSidebar }: TopNavProps) {
         </button>
       </div>
 
-      {/* Search trigger — hidden on small screens to preserve space.
+      {/* Search trigger, hidden on small screens to preserve space. Styled as
+          the DESIGN.md input (page colour, hairline border) and names what it
+          searches, since a bare "Search..." gave no hint of its scope.
           min-w-0 lets it give way first on a narrow window, so the logo and the
           account chip keep their full width instead of being clipped. */}
-      <div
-        className="hidden md:flex w-full max-w-[400px] min-w-0 relative items-center cursor-pointer group"
+      <button
+        type="button"
         onClick={onOpenSearch}
+        className="hidden md:flex w-full max-w-md min-w-0 items-center gap-2.5 h-9 pl-3 pr-2 rounded-btn
+          bg-surface-deep border border-border-active text-left cursor-pointer transition-opacity hover:opacity-60"
       >
         <svg
-          className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-content-dim pointer-events-none"
-          viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+          className="w-4 h-4 shrink-0 text-content-dim"
+          viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"
         >
           <circle cx="11" cy="11" r="7" />
-          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          <path d="m21 21-4.3-4.3" />
         </svg>
-        <input
-          type="text"
-          readOnly
-          placeholder="Search..."
-          className="w-full bg-surface-elevated border border-border rounded-btn py-2 pl-10 pr-14 text-content-primary font-mono text-xs outline-none cursor-pointer
-            transition-colors group-hover:border-border-active
-            placeholder:text-content-dim"
-        />
-        <kbd
-          className="absolute right-2.5 top-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded text-[10px] font-mono text-content-secondary pointer-events-none"
-          style={{
-            background: 'linear-gradient(180deg, #121212 0%, #0d0d0d 100%)',
-            boxShadow: 'inset 0 1px 0 0 rgba(255,255,255,0.08), 0 1px 1px 0 rgba(0,0,0,0.4)',
-          }}
-        >
-          &#8984;K
-        </kbd>
-      </div>
+        <span className="flex-1 truncate text-sm text-content-muted">Search emulations, detections, playbooks</span>
+        <span className="flex shrink-0 gap-1">
+          <Key>&#8984;</Key>
+          <Key>K</Key>
+        </span>
+      </button>
 
       {/* Right group. flex-1 with justify-end rather than ml-auto: an auto
           margin would eat the free space and push the search off centre again. */}
@@ -109,74 +101,61 @@ export function TopNav({ onOpenSearch, onToggleSidebar }: TopNavProps) {
 
         {/* Account dropdown */}
         <div className="relative" ref={dropdownRef}>
-          {/* Squared to the 8px button radius rather than a pill. DESIGN.md
-              reserves the pill shape for primary CTAs; this is a secondary
-              control, and 6px to 8px is the scale it belongs on. */}
+          {/* No box: the avatar, first name and chevron are the control. The
+              dot on the avatar is the one place connection status shows here;
+              the menu spells it out. */}
           <button
+            type="button"
             onClick={() => setDropdownOpen((v) => !v)}
-            className="bg-surface-elevated border border-border rounded-btn pl-1 pr-3 py-1 text-content-primary font-display text-sm font-medium
-              flex items-center gap-2 cursor-pointer transition-all hover:border-border-active"
+            aria-expanded={dropdownOpen}
+            className="flex items-center gap-2 rounded-pill bg-transparent border-none py-1 pl-1 pr-2
+              text-sm text-content-secondary cursor-pointer transition-opacity hover:opacity-60"
           >
-            {/* Avatar ring encodes one fact: whether a cloud account is
-                connected. Not connected is a normal starting state rather than
-                an error, so it reads as a neutral ring, not a red one. */}
-            <div
-              className={`w-[26px] h-[26px] rounded-full bg-surface-card flex items-center justify-center text-[11px] font-bold text-content-primary
-                ring-2 ${connected ? 'ring-safe/70' : 'ring-border-active'}`}
-            >
-              {user?.initials ?? 'U'}
-            </div>
+            <Avatar initials={user?.initials ?? 'U'} connected={connected} />
             <span className="hidden sm:inline">{user?.name?.split(' ')[0] ?? 'User'}</span>
-            {/* Stated plainly and permanently rather than as a dismissable
-                banner, because whether an account is connected changes what the
-                product can do. The chip is deliberately terse; the dropdown
-                spells out which kind of status this is. */}
-            <span
-              className={`hidden md:inline-flex items-center gap-1.5 font-mono text-[9px] font-semibold tracking-wider rounded px-1.5 py-0.5 border
-                ${connected
-                  ? 'text-safe border-safe/30'
-                  : 'text-content-dim border-border'}`}
-            >
-              <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-safe' : 'bg-content-dim'}`} />
-              {connected ? 'ACTIVE' : 'INACTIVE'}
-            </span>
-            <svg className="w-2.5 h-2.5 text-content-dim" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg className="w-2.5 h-2.5 text-content-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M6 9l6 6 6-6" />
             </svg>
           </button>
 
           {/* Dropdown menu */}
           {dropdownOpen && (
-            <div className="absolute top-[calc(100%+8px)] right-0 bg-surface-card border border-border rounded-card w-[200px] shadow-[0_12px_40px_rgba(0,0,0,0.6)] z-[300] overflow-hidden animate-fadeIn">
-              <div className="px-4 py-3.5 border-b border-border">
-                <div className="text-sm font-bold text-content-primary">{user?.name ?? 'User'}</div>
-                <div className="font-mono text-[10px] text-content-dim mt-0.5">{user?.username ?? ''}</div>
-                {/* The chip above has room for one word, which on its own could
-                    be read as whether the login is enabled. This says which
-                    status it is. */}
-                <div className={`text-[11px] mt-1.5 ${connected ? 'text-safe' : 'text-content-dim'}`}>
-                  {connected ? 'Cloud account connected' : 'No cloud account connected'}
+            <div className="absolute top-full right-0 mt-2 w-64 bg-surface-card border border-border rounded-card shadow-float z-[300] overflow-hidden animate-fadeIn">
+              <div className="flex items-center gap-3 px-4 py-3.5 border-b border-border">
+                <Avatar initials={user?.initials ?? 'U'} connected={connected} large />
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-content-primary">{user?.name ?? 'User'}</div>
+                  <div className="truncate font-mono text-2xs text-content-muted">{user?.username ?? ''}</div>
                 </div>
               </div>
-              <div className="py-1">
+              {/* Which status the avatar's dot reports, so it is never read as
+                  whether the login itself is enabled. */}
+              <div className={`mx-4 flex items-center gap-2 whitespace-nowrap border-b border-border py-2.5 text-xs
+                ${connected ? 'text-safe' : 'text-content-dim'}`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-safe' : 'bg-content-muted'}`} />
+                {connected ? 'AWS account connected' : 'No cloud account yet'}
                 {!connected && (
-                  <DropdownItem
-                    icon={<IconCloud />}
-                    label="Connect AWS"
-                    className="text-accent-blue"
+                  <button
+                    type="button"
                     onClick={() => { setDropdownOpen(false); navigate('/me') }}
-                  />
+                    className="ml-auto bg-transparent border-none p-0 text-xs text-accent-blue cursor-pointer transition-opacity hover:opacity-60"
+                  >
+                    Connect AWS
+                  </button>
                 )}
+              </div>
+              <div className="py-1">
                 <DropdownItem icon={<IconUser />} label="Profile" onClick={() => { setDropdownOpen(false); navigate('/me') }} />
                 <DropdownItem icon={<IconGear />} label="Settings" onClick={() => { setDropdownOpen(false); navigate('/settings') }} />
-                <DropdownItem icon={<IconKey />} label="API Keys" onClick={() => setDropdownOpen(false)} />
+                <DropdownItem icon={<IconKey />} label="API keys" onClick={() => setDropdownOpen(false)} />
                 <DropdownItem icon={<IconUsers />} label="Team" onClick={() => setDropdownOpen(false)} />
               </div>
               <div className="h-px bg-border" />
               <div className="py-1">
                 <DropdownItem
                   icon={<IconSignOut />}
-                  label="Sign Out"
+                  label="Sign out"
                   className="text-danger"
                   onClick={() => {
                     setDropdownOpen(false)
@@ -190,6 +169,44 @@ export function TopNav({ onOpenSearch, onToggleSidebar }: TopNavProps) {
       </div>
     </nav>
   )
+}
+
+/**
+ * The user's initials in a raised circle, with a dot for cloud connection:
+ * green when an AWS account is connected, grey when not. Not connected is a
+ * normal starting state, so it is neutral rather than red.
+ */
+function Avatar({ initials, connected, large = false }: { initials: string; connected: boolean; large?: boolean }) {
+  return (
+    <span
+      className={`relative flex shrink-0 items-center justify-center rounded-full bg-surface-elevated border border-border-active
+        font-semibold text-content-primary ${large ? 'w-9 h-9 text-xs' : 'w-7 h-7 text-2xs'}`}
+    >
+      {initials}
+      <span
+        aria-hidden="true"
+        className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ring-2 ring-surface-deep
+          ${connected ? 'bg-safe' : 'bg-content-muted'}`}
+      />
+    </span>
+  )
+}
+
+/** One keyboard key cap, in the DESIGN.md key gradient. */
+function Key({ children }: { children: ReactNode }) {
+  return (
+    <kbd
+      className="min-w-5 px-1.5 py-0.5 rounded text-center font-mono text-2xs text-content-secondary"
+      style={KEY_STYLE}
+    >
+      {children}
+    </kbd>
+  )
+}
+
+const KEY_STYLE = {
+  background: 'linear-gradient(180deg, #121212 0%, #0d0d0d 100%)',
+  boxShadow: 'inset 0 1px 0 0 rgba(255,255,255,0.08), 0 1px 1px 0 rgba(0,0,0,0.4)',
 }
 
 function DropdownItem({
@@ -206,8 +223,8 @@ function DropdownItem({
   return (
     <div
       onClick={onClick}
-      className={`px-4 py-2.5 cursor-pointer text-sm text-content-secondary flex items-center gap-2.5
-        transition-colors hover:bg-surface-elevated hover:text-content-primary ${className}`}
+      className={`px-4 py-2.5 cursor-pointer text-sm flex items-center gap-2.5 transition-opacity hover:opacity-60
+        ${className || 'text-content-secondary'}`}
     >
       <span className="shrink-0">{icon}</span>
       {label}
@@ -218,14 +235,6 @@ function DropdownItem({
 /* ── Inline SVG icons (no emoji, per the design system; all inherit currentColor) ── */
 
 const MENU_ICON = 'w-4 h-4'
-
-function IconCloud() {
-  return (
-    <svg className={MENU_ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.3A3.5 3.5 0 0 1 17 18H7Z" />
-    </svg>
-  )
-}
 
 function IconUser() {
   return (

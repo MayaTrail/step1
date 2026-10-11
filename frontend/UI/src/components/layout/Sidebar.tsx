@@ -112,7 +112,7 @@ export function Sidebar({ isOpen }: SidebarProps) {
   return (
     <aside className={`
       ${collapsed ? RAIL_WIDTH : FULL_WIDTH}
-      bg-surface-base border-r border-border overflow-y-auto overflow-x-hidden shrink-0 py-4
+      bg-surface-deep border-r border-border overflow-y-auto overflow-x-hidden shrink-0 py-4
       flex flex-col
       fixed top-[58px] bottom-0 left-0 z-[150] transition-all duration-200 ease-in-out
       lg:static lg:top-auto lg:bottom-auto lg:z-auto lg:translate-x-0

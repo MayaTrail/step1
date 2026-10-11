@@ -19,7 +19,9 @@ Two kinds of call never count:
 An atomic emulation matches when it performs at least one of the path's
 escalation calls. A campaign performs many calls on its own, so it matches only
 when it covers all of the path's escalation calls, or at least three of them on
-a longer path. Matches are ranked by how many of the path's calls they cover.
+a longer path, and never on a single shared call: a PassRole step lists only
+iam:PassRole, which most campaigns call along the way. Matches are ranked by how
+many of the path's calls they cover.
 
 Computed when a scan is read, never stored: the catalogue changes as
 emulations are added, and a stored link would go stale.
@@ -36,8 +38,10 @@ from apps.emulations.registry import list_emulations
 _READ_PREFIXES = ("Get", "List", "Describe", "Head")
 _SETUP_CALLS = frozenset({"sts:AssumeRole"})
 
-# A campaign must cover every escalation call of the path, up to this many.
+# A campaign must cover every escalation call of the path, up to this many,
+# and never fewer than CAMPAIGN_MIN_SHARED.
 CAMPAIGN_MIN_COVERAGE = 3
+CAMPAIGN_MIN_SHARED = 2
 
 # "iam:CreateAccessKey(UserName=x)" -> "iam:CreateAccessKey". Anchored at the
 # start of an entry (or of a ";"-separated part of one), so ARNs and arguments
@@ -92,7 +96,7 @@ def _matches(tier: str, covered: int, wanted: int) -> bool:
     if covered == 0:
         return False
     if tier == "enterprise":
-        return covered >= min(wanted, CAMPAIGN_MIN_COVERAGE)
+        return covered >= max(CAMPAIGN_MIN_SHARED, min(wanted, CAMPAIGN_MIN_COVERAGE))
     return True
 
 
@@ -118,7 +122,20 @@ def related_emulations(envelope: dict[str, Any] | None) -> dict[str, dict[str, A
     """
     if not envelope or envelope.get("state") != "findings":
         return {}
+    return related_for_paths(envelope.get("chains") or [])
 
+
+def related_for_paths(paths: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """
+    The emulations linked to each path, keyed by the path's id.
+
+    Args:
+        paths: Anything with an "id" and chain-shaped "steps": a scan's
+            ranked chains, or the reach view's path to each identity.
+
+    Returns:
+        The same shape as related_emulations.
+    """
     catalogue = [
         (entry, _emulation_calls(entry))
         for entry in list_emulations()
@@ -127,7 +144,7 @@ def related_emulations(envelope: dict[str, Any] | None) -> dict[str, dict[str, A
     detections: dict[str, int] = {}
 
     related: dict[str, dict[str, Any]] = {}
-    for chain in envelope.get("chains") or []:
+    for chain in paths:
         wanted = escalation_calls(chain)
         links = []
         for entry, performs in catalogue:

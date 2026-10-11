@@ -19,10 +19,10 @@ const SHOWN = 3
 const ROW = 'flex items-center gap-3.5 px-1 py-3'
 const LINK_ROW = `${ROW} no-underline transition-opacity hover:opacity-60`
 
-/** "a", "a and b", "a, b and c". */
-function listCalls(calls: string[]): string {
+/** "a", "a and b", "a, b and c" (or "a or b" with `joiner`). */
+function listCalls(calls: string[], joiner = 'and'): string {
   if (calls.length <= 1) return calls.join('')
-  return `${calls.slice(0, -1).join(', ')} and ${calls[calls.length - 1]}`
+  return `${calls.slice(0, -1).join(', ')} ${joiner} ${calls[calls.length - 1]}`
 }
 
 /** Why a path has no emulation, in the reader's terms. */
@@ -33,7 +33,10 @@ function noMatchReason(chain: AttackChain, wanted: string[]): string {
   if (wanted.length === 0) {
     return 'Its steps make no call that grants access on its own, such as only assuming a role, so there is nothing to match.'
   }
-  return `No MayaTrail emulation performs ${listCalls(wanted)}.`
+  // A campaign may still perform one of these calls without covering enough of
+  // the path to link (see related.py), so only single-technique emulations can
+  // be said not to perform them.
+  return `No single-technique emulation performs ${listCalls(wanted, 'or')}, and no campaign shares enough of this path's calls.`
 }
 
 export function ActOnPath({ chain, related }: { chain: AttackChain; related: PathRelated | undefined }) {
@@ -82,12 +85,16 @@ export function ActOnPath({ chain, related }: { chain: AttackChain; related: Pat
           </div>
         )}
 
-        {chain.detection && (
+        {/* A reach path has no Scout analysis, so no detection idea; the rules
+            shipped with its best match still say how to spot it. */}
+        {(chain.detection || (top && top.detectionCount > 0)) && (
           <div className={ROW}>
             <RowIcon><IconSearch size={16} /></RowIcon>
             <div className="min-w-0 flex-1">
               <div className="text-sm font-semibold text-content-primary">How to spot it</div>
-              <div className="text-xs text-content-dim">{chain.detection}</div>
+              <div className="text-xs text-content-dim">
+                {chain.detection || (top && `Use the detection rules shipped with ${top.name}, which performs ${listCalls(top.sharedCalls)}.`)}
+              </div>
             </div>
             {top && top.detectionCount > 0 && (
               <Link

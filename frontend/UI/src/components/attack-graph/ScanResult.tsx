@@ -1,24 +1,31 @@
 /**
- * A completed scan: its verdict, the ranked paths, and the selected path.
+ * A completed scan: its verdict, then two tabs. Ranked paths are the paths
+ * Scout chose and scored; the reach tab answers what one identity, picked by
+ * the reader, can become.
  *
  * `envelope.state` is the backend's verdict and is never re-derived here: a
  * partial scan is never framed as clean, whatever it found.
  */
 
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
 import { formatWhen } from '@/components/threatfeed/feedMeta'
 import { IconChevron } from '@/components/ui/Icons'
-import type { PathRelated, ScanEnvelope } from '@/types/attackGraph'
+import type { AttackChain, PathRelated, ScanEnvelope } from '@/types/attackGraph'
 
 import { ActOnPath } from './ActOnPath'
-
-import { PathMap } from './PathMap'
 import { PathView } from './PathView'
 import { SEVERITY_TEXT, impactLabel, pathTitle, severityOf } from './pathModel'
+import type { Severity } from './pathModel'
+import { ReachView } from './ReachView'
+import { CARD, FILTER_ROW, FilterChip, PANEL_HEIGHT } from './SplitPanels'
+import { TwoWays } from './TwoWays'
 
 const FULL_COMPROMISE = 'FULL_ACCOUNT_COMPROMISE'
+
+type Tab = 'ranked' | 'reach'
 
 export function ScanResult({
   envelope, scanId, related,
@@ -37,13 +44,27 @@ function Findings({
   envelope, scanId, related,
 }: { envelope: ScanEnvelope; scanId: string; related: Record<string, PathRelated> }) {
   const [selected, setSelected] = useState(0)
-  const [view, setView] = useState<'path' | 'map'>('path')
-  useEffect(() => setSelected(0), [scanId])
+  const [tab, setTab] = useState<Tab>('ranked')
+  const [origin, setOrigin] = useState('')
+  const [explained, setExplained] = useState(false)
+  useEffect(() => {
+    setSelected(0)
+    setTab('ranked')
+    setOrigin('')
+  }, [scanId])
+
+  const reachFrom = (nodeId: string) => {
+    setOrigin(nodeId)
+    setTab('reach')
+  }
+  const openRanked = (index: number) => {
+    setSelected(index)
+    setTab('ranked')
+  }
 
   const chains = envelope.chains
-  const chain = chains[Math.min(selected, chains.length - 1)]
   const compromise = chains.filter((c) => c.terminal_impact === FULL_COMPROMISE).length
-  if (!chain) return null
+  if (chains.length === 0) return null
 
   return (
     <div>
@@ -66,22 +87,99 @@ function Findings({
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-1 items-start gap-4 xl:grid-cols-3">
-        <ol className="divide-y divide-border rounded-card border border-border bg-surface-card shadow-ring">
-          {chains.map((c, i) => {
+      <div className="mt-5 flex items-end justify-between gap-3 border-b border-border">
+        <div className="flex gap-6" role="tablist">
+          <TabButton on={tab === 'ranked'} onClick={() => setTab('ranked')}>Ranked paths ({chains.length})</TabButton>
+          <TabButton on={tab === 'reach'} onClick={() => setTab('reach')}>What can an identity reach?</TabButton>
+        </div>
+        <button
+          type="button"
+          onClick={() => setExplained((open) => !open)}
+          aria-expanded={explained}
+          className="bg-transparent px-0 pb-2.5 text-xs text-accent-blue transition-opacity hover:opacity-60"
+        >
+          {explained ? 'Hide' : 'How these differ'}
+        </button>
+      </div>
+      {explained && (
+        <div className="mt-3 animate-fadeSlideIn rounded-card border border-border bg-surface-card px-6 pb-4 pt-1 shadow-ring">
+          <TwoWays />
+        </div>
+      )}
+
+      {tab === 'reach' && (
+        <ReachView envelope={envelope} scanId={scanId} origin={origin} onOrigin={setOrigin} onOpenRanked={openRanked} />
+      )}
+      {tab === 'ranked' && (
+        <RankedPaths
+          chains={chains}
+          selected={Math.min(selected, chains.length - 1)}
+          onSelect={setSelected}
+          scanId={scanId}
+          related={related}
+          onReach={reachFrom}
+        />
+      )}
+    </div>
+  )
+}
+
+type SeverityFilter = Severity | 'all'
+
+const SEVERITIES: Severity[] = ['Critical', 'High', 'Medium', 'Low']
+
+function RankedPaths({
+  chains, selected, onSelect, scanId, related, onReach,
+}: {
+  chains: AttackChain[]
+  selected: number
+  onSelect: (index: number) => void
+  scanId: string
+  related: Record<string, PathRelated>
+  onReach: (nodeId: string) => void
+}) {
+  const [filter, setFilter] = useState<SeverityFilter>('all')
+
+  const chain = chains[selected]
+  if (!chain) return null
+  const shown = chains.map((c, i) => ({ c, i })).filter(({ c }) => filter === 'all' || severityOf(c.score) === filter)
+
+  // Filtering away the open path opens the first one left, so the card always matches a visible row.
+  const pickFilter = (next: SeverityFilter) => {
+    setFilter(next)
+    const first = chains.findIndex((c) => next === 'all' || severityOf(c.score) === next)
+    if (next !== 'all' && severityOf(chain.score) !== next && first >= 0) onSelect(first)
+  }
+
+  return (
+    <div className="mt-4 grid grid-cols-1 items-start gap-4 xl:grid-cols-3">
+      <div style={{ maxHeight: PANEL_HEIGHT }} className={`${CARD} overflow-y-auto`}>
+        <div className={FILTER_ROW}>
+          <FilterChip on={filter === 'all'} count={chains.length} onClick={() => pickFilter('all')}>All</FilterChip>
+          {SEVERITIES.map((severity) => {
+            const count = chains.filter((c) => severityOf(c.score) === severity).length
+            return (
+              <FilterChip key={severity} on={filter === severity} count={count} onClick={() => pickFilter(severity)}>
+                {severity}
+              </FilterChip>
+            )
+          })}
+        </div>
+        <ol className="divide-y divide-border">
+          {shown.map(({ c, i }) => {
             const severity = severityOf(c.score)
             const on = c.id === chain.id
             return (
               <li key={c.id}>
                 <button
                   type="button"
-                  onClick={() => setSelected(i)}
+                  onClick={() => onSelect(i)}
                   aria-current={on}
                   className="flex w-full items-center gap-3 bg-transparent px-4 py-3 text-left transition-opacity hover:opacity-60"
                 >
                   <span className="w-5 font-mono text-xs text-content-dim">{c.rank}</span>
                   <span className="min-w-0 flex-1">
-                    <span className={`block truncate text-sm font-semibold ${on ? 'text-accent-blue' : 'text-content-primary'}`}>
+                    <span className={`line-clamp-2 break-words text-sm font-semibold ${on ? 'text-accent-blue' : 'text-content-primary'}`}>
                       {pathTitle(c)}
                     </span>
                     <span className="block truncate text-xs text-content-dim">
@@ -95,41 +193,39 @@ function Findings({
             )
           })}
         </ol>
-
-        <section className="rounded-card border border-border bg-surface-card px-6 py-5 shadow-ring xl:col-span-2">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="font-mono text-2xs uppercase tracking-label text-danger">
-                Path {chain.rank} · score {chain.score ?? 'unknown'}
-              </div>
-              <div className="text-base font-semibold text-content-primary">{pathTitle(chain)}</div>
-              {chain.narrative && <p className="mt-1.5 max-w-2xl text-sm text-content-secondary">{chain.narrative}</p>}
-            </div>
-            <div className="inline-flex overflow-hidden rounded-btn border border-border" role="tablist">
-              {(['path', 'map'] as const).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  role="tab"
-                  aria-selected={view === v}
-                  onClick={() => setView(v)}
-                  className={`px-3 py-1 text-xs transition-opacity hover:opacity-60
-                    ${view === v ? 'bg-surface-elevated text-content-primary' : 'bg-transparent text-content-dim'}`}
-                >
-                  {v === 'path' ? 'Path' : 'Map'}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {view === 'path'
-            ? <PathView chain={chain} scanId={scanId} />
-            : <PathMap chains={chains} selected={chains.indexOf(chain)} onSelect={setSelected} />}
-
-          <ActOnPath key={chain.id} chain={chain} related={related[chain.id]} />
-        </section>
       </div>
+
+      <section
+        key={chain.id}
+        style={{ height: PANEL_HEIGHT }}
+        className={`${CARD} min-w-0 overflow-y-auto px-6 py-5 xl:col-span-2`}
+      >
+        <div className="font-mono text-2xs uppercase tracking-label text-danger">
+          Path {chain.rank} · score {chain.score ?? 'unknown'}
+        </div>
+        <div className="text-base font-semibold text-content-primary">{pathTitle(chain)}</div>
+        {chain.narrative && <p className="mt-1.5 max-w-2xl text-sm text-content-secondary">{chain.narrative}</p>}
+
+        <PathView chain={chain} scanId={scanId} onReach={onReach} />
+
+        <ActOnPath key={chain.id} chain={chain} related={related[chain.id]} />
+      </section>
     </div>
+  )
+}
+
+function TabButton({ on, onClick, children }: { on: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={on}
+      onClick={onClick}
+      className={`-mb-px border-b-2 bg-transparent px-0 pb-2.5 text-sm font-medium transition-opacity hover:opacity-60
+        ${on ? 'border-content-primary text-content-primary' : 'border-transparent text-content-dim'}`}
+    >
+      {children}
+    </button>
   )
 }
 

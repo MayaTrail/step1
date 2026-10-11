@@ -190,3 +190,45 @@ export interface GraphEntity {
    *  role's full trust policy document and its tags. */
   properties: Record<string, unknown>
 }
+
+/**
+ * How much an identity can already do, from Scout's node flags: "admin" holds
+ * administrator access, "self" can make itself an administrator.
+ */
+export type ReachLevel = 'admin' | 'self' | 'other'
+
+/** A user or role in the reach list (GET .../graph/nodes/?kind=identity). */
+export interface IdentityNode extends ChainNode {
+  level: ReachLevel
+  /** How many identities it can become. */
+  reaches: number
+  /** How many of those are, or can make themselves, administrators. */
+  reaches_admin: number
+}
+
+export interface IdentityList {
+  nodes: IdentityNode[]
+  /** The account has more users and roles than the list was sent. */
+  truncated: boolean
+}
+
+/** One identity the origin can become, with the shortest way there. */
+export interface ReachTarget {
+  node: ChainNode
+  level: ReachLevel
+  steps: ChainStep[]
+}
+
+/** What one identity can become (GET .../graph/reach/?from=). */
+export interface ReachResult {
+  origin: ChainNode
+  origin_level: ReachLevel
+  /** Worst level first, then fewest steps. */
+  reached: ReachTarget[]
+  /** How many reached identities were left off the list. */
+  truncated: number
+  /** The search budget ran out: the list may be missing identities. */
+  search_capped: boolean
+  /** Keyed by the reached identity's node id. */
+  related: Record<string, PathRelated>
+}

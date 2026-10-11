@@ -397,16 +397,6 @@ export interface Stack {
   lifecycle: StackPhase[]
 }
 
-export interface CreateStackRequest {
-  name: string
-  region?: string
-}
-
-export interface StackActionResponse {
-  stack: Stack
-  task_id: string
-}
-
 /**
  * Live deployment progress for a stack, returned by GET /api/stacks/{id}/progress/.
  *

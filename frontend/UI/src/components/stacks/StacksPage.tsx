@@ -4,15 +4,14 @@
  * Responsibilities:
  *   - List the user's stacks as operational cards (health, metadata, progress)
  *   - Search and filter the list (client-side)
- *   - Drive Deploy / Destroy / Refresh / Preview / Force-Destroy
+ *   - Destroy a stack and its AWS resources (through the emulation endpoint)
  *   - Open a per-stack deployment logs modal
  *   - Live-poll while an action is in progress
  *
  * This page is manage/monitor-only. Stacks are created by deploying an emulation
  * (POST /api/emulations/deploy/, via RunEmulationModal on the emulation pages),
- * which is the only path that produces a deployable stack — the generic create
- * endpoint produced un-deployable records (no emulation_type) and was removed
- * from the UI.
+ * which is the only path that produces a deployable stack. /api/stacks/ is
+ * read-only.
  *
  * This page is the orchestrator: it owns all stack state and operations and
  * delegates presentation to StackRow, StackDrawer, and StackFilters.
@@ -27,11 +26,6 @@ import { StackFilters, filterStacks, EMPTY_FILTERS, type StackFilterState } from
 import {
     listStacks,
     getStack,
-    deployStack,
-    destroyStack,
-    refreshStack,
-    previewStack,
-    forceDestroyStack,
     pollStackUntilReady,
 } from '@/services/stack.service'
 import { destroyEmulationStack } from '@/services/emulation.service'
@@ -130,75 +124,16 @@ export function StacksPage() {
         return () => clearInterval(id)
     }, [hasLiveStack])
 
-    // ── Stack action (deploy/destroy/refresh/preview) ──
-    const handleAction = useCallback(async (
-        stackId: string,
-        action: 'deploy' | 'destroy' | 'refresh' | 'preview',
-    ) => {
-        const actionFn = { deploy: deployStack, destroy: destroyStack, refresh: refreshStack, preview: previewStack }[action]
-        const label = action.charAt(0).toUpperCase() + action.slice(1)
-
-        setPolling((prev) => new Set(prev).add(stackId))
-        setActionMsg((prev) => ({ ...prev, [stackId]: `${label} request sent...` }))
-        setError(null)
-
-        try {
-            await actionFn(stackId)
-
-            if (action !== 'preview') {
-                const newStatus = action === 'deploy' ? 'deploying' : action === 'destroy' ? 'destroying' : 'refreshing'
-                setStacks((prev) => prev.map((s) => s.id === stackId ? { ...s, status: newStatus as StackStatus } : s))
-            }
-
-            const controller = new AbortController()
-            abortRefs.current.set(stackId, controller)
-            setActionMsg((prev) => ({
-                ...prev,
-                [stackId]: action === 'preview'
-                    ? 'Preview running...'
-                    : `${label}ing infrastructure... This may take a few minutes.`,
-            }))
-
-            const final = await pollStackUntilReady(
-                stackId,
-                3000,
-                (updated) => setStacks((prev) => prev.map((s) => s.id === updated.id ? updated : s)),
-                controller.signal,
-            )
-
-            setStacks((prev) => prev.map((s) => s.id === final.id ? final : s))
-            setActionMsg((prev) => ({
-                ...prev,
-                [stackId]: final.status === 'ready'
-                    ? `${label} completed successfully.`
-                    : final.status === 'failed'
-                        ? `${label} failed. Check logs.`
-                        : `${label} finished. Status: ${final.status}`,
-            }))
-        } catch (err: unknown) {
-            if (err instanceof DOMException && err.name === 'AbortError') return
-            const apiDetail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-            setActionMsg((prev) => ({ ...prev, [stackId]: `Error: ${apiDetail ?? (err instanceof Error ? err.message : 'Action failed.')}` }))
-        } finally {
-            setPolling((prev) => { const next = new Set(prev); next.delete(stackId); return next })
-            abortRefs.current.delete(stackId)
-        }
-    }, [])
-
-    // ── Force-destroy a stuck or completed emulation stack ──
-    const handleForceDestroy = useCallback(async (stack: Stack) => {
+    // ── Destroy an emulation stack and its AWS resources ──
+    const handleDestroy = useCallback(async (stack: Stack) => {
         setPolling((prev) => new Set(prev).add(stack.id))
         setActionMsg((prev) => ({ ...prev, [stack.id]: 'Destroy queued...' }))
         setError(null)
 
         try {
-            // Enterprise emulation stacks use the STS-aware emulation destroy endpoint
-            // so Pulumi runs in the user's account, not the platform account.
-            if (stack.emulation_type) {
-                await destroyEmulationStack(stack.id)
-            } else {
-                await forceDestroyStack(stack.id)
-            }
+            // The emulation endpoint runs Pulumi as the user's connected role,
+            // against the state kept in the user's own account.
+            await destroyEmulationStack(stack.id)
 
             setStacks((prev) => prev.map((s) => s.id === stack.id ? { ...s, status: 'destroying' as StackStatus } : s))
             setActionMsg((prev) => ({ ...prev, [stack.id]: 'Destroying infrastructure... This may take a few minutes.' }))
@@ -221,7 +156,7 @@ export function StacksPage() {
         } catch (err: unknown) {
             if (err instanceof DOMException && err.name === 'AbortError') return
             const apiDetail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-            setActionMsg((prev) => ({ ...prev, [stack.id]: `Error: ${apiDetail ?? (err instanceof Error ? err.message : 'Force destroy failed.')}` }))
+            setActionMsg((prev) => ({ ...prev, [stack.id]: `Error: ${apiDetail ?? (err instanceof Error ? err.message : 'Destroy failed.')}` }))
         } finally {
             setPolling((prev) => { const next = new Set(prev); next.delete(stack.id); return next })
             abortRefs.current.delete(stack.id)
@@ -366,8 +301,7 @@ export function StacksPage() {
                     stack={openStack}
                     isBusy={BUSY_STATUSES.has(openStack.status) || polling.has(openStack.id)}
                     actionMsg={actionMsg[openStack.id]}
-                    onAction={(action) => handleAction(openStack.id, action)}
-                    onForceDestroy={() => handleForceDestroy(openStack)}
+                    onDestroy={() => handleDestroy(openStack)}
                     onClose={() => setOpenId(null)}
                 />
             )}

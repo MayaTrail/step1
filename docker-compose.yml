@@ -145,7 +145,7 @@ services:
   # receives a tenant's temporary credentials and has no use for MayaTrail's.
   # Pulling the image needs `docker login ghcr.io` once per machine.
   scout:
-    image: ghcr.io/mayatrail/scout:v0.1.0
+    image: ghcr.io/mayatrail/scout:v0.2.0
     restart: unless-stopped
     environment:
       SCOUT_SERVICE_TOKEN: ${SCOUT_SERVICE_TOKEN:?set SCOUT_SERVICE_TOKEN in .env (see .env.example)}

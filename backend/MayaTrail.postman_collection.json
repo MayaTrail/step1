@@ -426,7 +426,7 @@
     },
     {
       "name": "Stacks",
-      "description": "Read-only stack state endpoints used during the emulation lifecycle.\n\nAll write operations (deploy, destroy, refresh, preview) are routed through the Emulations folder \u2014 POST /api/emulations/deploy/ creates and deploys an emulation stack in one step, and POST /api/emulations/{id}/destroy/ tears it down. The legacy write actions on /api/stacks/{id}/* require an `emulation_type` that cannot be set via the create endpoint, so they are not exposed here.\n\nKeep this folder open while running the emulation flow to poll status and progress.",
+      "description": "Read-only stack state endpoints used during the emulation lifecycle.\n\nAll write operations (deploy, destroy, refresh, preview) are routed through the Emulations folder \u2014 POST /api/emulations/deploy/ creates and deploys an emulation stack in one step, and POST /api/emulations/{id}/destroy/ tears it down. /api/stacks/ is read-only: it has no create, delete or write actions.\n\nKeep this folder open while running the emulation flow to poll status and progress.",
       "item": [
         {
           "name": "List Stacks",
@@ -504,26 +504,6 @@
               ]
             },
             "description": "Poll live deployment progress for a stack currently being deployed.\n\nReads Celery task state from the Redis result backend and returns how many AWS resources have been created so far. The deploy task calls update_state(state='PROGRESS') every 2 Pulumi log lines.\n\n**Response fields:**\n- `resources_created` \u2014 number of Pulumi resources successfully created\n- `total_resources` \u2014 expected total (19 for SCARLETEEL)\n- `percentage` \u2014 0\u201399 while deploying, 100 once the stack reaches a terminal state\n- `recent_logs` \u2014 last 10 Pulumi output lines\n- `status` \u2014 current Stack status\n\n**Recommended polling interval:** every 3\u20135 seconds while `status == deploying`.\nStop polling when `percentage == 100` or `status` is no longer `deploying`."
-          },
-          "response": []
-        },
-        {
-          "name": "Delete Stack Record",
-          "request": {
-            "method": "DELETE",
-            "url": {
-              "raw": "{{base_url}}/api/stacks/{{stack_id}}/",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "api",
-                "stacks",
-                "{{stack_id}}",
-                ""
-              ]
-            },
-            "description": "Delete the stack database record only. Does NOT run `pulumi destroy`.\n\nUse this to clean up orphaned DB records after manually destroying resources in AWS.\n\nThe stack is simply removed from the database \u2014 no cloud resources are touched."
           },
           "response": []
         }

@@ -1,11 +1,12 @@
 """
-Reading the stored graph — search, entity lookup, and hop assembly.
+Reading the stored graph: search, entity lookup, reach, and hop assembly.
 
 Pure on purpose. Scout runs as its own service and is never installed in
 this backend, so everything here works on the plain dict Scout's
-Graph.to_dict() produced and the scan task stored. chain_nodes_for_steps and
-hop_dict are the hop-assembly half of the path query, kept for its return
-(the query itself was removed until it no longer needs Scout in this process).
+Graph.to_dict() produced and the scan task stored. reach_from answers "what can
+this identity become" by walking that dict; it needs no Scout code because
+Scout writes each escalation edge's API calls (and, from v0.2.0, its mechanism
+name) onto the edge when it builds the graph.
 
 Not rehydrating is part of the performance answer, not all of it.
 Graph.from_dict() walks every node and edge and rebuilds two adjacency
@@ -28,11 +29,38 @@ import heapq
 import json
 from collections import OrderedDict
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any
+
+from .envelope import _conditional_summary, _step
 
 # A hard cap, not a page size: this feeds a picker, not a browse view. An
 # unbounded q="" on a large account is otherwise the whole node list.
 MAX_NODE_RESULTS = 50
+
+# The reach list loads every user and role once and filters in the browser,
+# so this is a ceiling for unusually large accounts, not a page size.
+IDENTITY_NODE_TYPES = ("IAM_USER", "IAM_ROLE")
+MAX_IDENTITY_RESULTS = 2000
+
+# The reach view walks escalation edges only, the same rule Scout's own chain
+# builder follows. A CAN_ASSUME edge means only that the role's trust policy
+# names the caller; when the caller may also call sts:AssumeRole, Scout adds a
+# PRIVESC_TO edge of category "assume". Following CAN_ASSUME would report role
+# assumptions AWS can still refuse, and CAN_PASS_ROLE alone is not a step
+# anyone can take (Scout adds the PRIVESC_TO only when a launch is possible).
+REACH_EDGE_TYPE = "PRIVESC_TO"
+
+# Scout's own traversal budget. Counted in identities expanded, so a dense
+# account cannot make one request expensive.
+MAX_REACH_VISITED = 50_000
+
+# Every reached identity carries its path, so the list is capped. Sorted worst
+# first, so a cap drops the least severe rows.
+MAX_REACH_RESULTS = 500
+
+# How bad an identity is, from Scout's own node flags, worst first.
+REACH_LEVELS = ("admin", "self", "other")
 
 # The parsed graph dicts of the last few scans, per web process. Each can be
 # several MB, so a process holds at most this many.
@@ -144,6 +172,277 @@ def get_entity(graph_dict: dict[str, Any], node_id: str) -> dict[str, Any] | Non
 def node_ids(graph_dict: dict[str, Any]) -> set[str]:
     """Every node id, for validating a query's src/dst before traversing."""
     return {n.get("id") or "" for n in graph_dict.get("nodes") or []}
+
+
+def identity_level(node: dict[str, Any]) -> str:
+    """
+    How much an identity can already do, from the flags Scout sets on it.
+
+    "admin" when it holds administrator access, "self" when it can make
+    itself an administrator, otherwise "other".
+    """
+    properties = node.get("properties") or {}
+    if properties.get("already_admin"):
+        return "admin"
+    if properties.get("self_escalation"):
+        return "self"
+    return "other"
+
+
+def reach_counts(graph_dict: dict[str, Any]) -> dict[str, tuple[int, int]]:
+    """
+    For every node, how many identities reach_from would report it reaching,
+    and how many of those are or can make themselves administrators.
+
+    The identity list shows each identity's result before it is picked, so
+    this runs for the whole graph in one pass instead of one search per
+    identity. A search per identity re-walks the same edges again and again:
+    on an account where many identities reach an administrator, that is
+    identities times edges, which is minutes, not milliseconds.
+
+    How: identities that can reach each other (a cycle of escalations) reach
+    exactly the same set, so they are first collapsed into one group
+    (Tarjan's strongly connected components). The groups form a graph with no
+    cycles, and Tarjan finishes a group only after every group it points to,
+    so each group's set is the union of its successors' sets, built once.
+    Sets are Python ints used as bitmasks: one bit per node, so a union is a
+    single `|` on big integers.
+
+    Returns:
+        {node id: (reached, reached that lead to administrator access)}. The
+        counts are exact; reach_from stops at MAX_REACH_VISITED, so on an
+        account beyond that budget it can list fewer.
+    """
+    ids: dict[str, int] = {}
+    successors: list[set[int]] = []
+
+    def index(node_id: str) -> int:
+        """The node's bit position, assigned on first sight."""
+        if node_id not in ids:
+            ids[node_id] = len(ids)
+            successors.append(set())
+        return ids[node_id]
+
+    for node in graph_dict.get("nodes") or []:
+        index(node.get("id") or "")
+    for edge in graph_dict.get("edges") or []:
+        if edge.get("type") == REACH_EDGE_TYPE:
+            source = index(edge.get("source") or "")
+            successors[source].add(index(edge.get("target") or ""))
+
+    admin_mask = 0
+    for node in graph_dict.get("nodes") or []:
+        if identity_level(node) != "other":
+            admin_mask |= 1 << ids[node.get("id") or ""]
+
+    # Iterative Tarjan: a recursive one overflows Python's stack on a long
+    # chain of roles. `work` holds (node, iterator over its successors).
+    count = len(ids)
+    order = [-1] * count
+    low = [0] * count
+    on_stack = [False] * count
+    stack: list[int] = []
+    group_of = [-1] * count
+    group_members: list[int] = []
+    group_below: list[int] = []
+    counter = 0
+    for start in range(count):
+        if order[start] != -1:
+            continue
+        work = [(start, iter(successors[start]))]
+        order[start] = low[start] = counter
+        counter += 1
+        stack.append(start)
+        on_stack[start] = True
+        while work:
+            node, pending = work[-1]
+            advanced = False
+            for nxt in pending:
+                if order[nxt] == -1:
+                    order[nxt] = low[nxt] = counter
+                    counter += 1
+                    stack.append(nxt)
+                    on_stack[nxt] = True
+                    work.append((nxt, iter(successors[nxt])))
+                    advanced = True
+                    break
+                if on_stack[nxt]:
+                    low[node] = min(low[node], order[nxt])
+            if advanced:
+                continue
+            work.pop()
+            if work:
+                parent = work[-1][0]
+                low[parent] = min(low[parent], low[node])
+            if low[node] != order[node]:
+                continue
+            # `node` roots a finished group. Every group it points to was
+            # finished before it, so their sets are already complete.
+            group = len(group_members)
+            popped = []
+            while True:
+                member = stack.pop()
+                on_stack[member] = False
+                group_of[member] = group
+                popped.append(member)
+                if member == node:
+                    break
+            members = 0
+            below = 0
+            for member in popped:
+                members |= 1 << member
+                for nxt in successors[member]:
+                    other = group_of[nxt]
+                    if other != group:
+                        below |= group_members[other] | group_below[other]
+            group_members.append(members)
+            group_below.append(below)
+
+    counts = {}
+    for node_id, position in ids.items():
+        group = group_of[position]
+        members = group_members[group]
+        # Everyone in a group reaches everyone else in it. reach_from never
+        # lists the origin itself, so the node's own bit is cleared.
+        reached = (group_below[group] | members) & ~(1 << position)
+        counts[node_id] = (reached.bit_count(), (reached & admin_mask).bit_count())
+    return counts
+
+
+def list_identities(
+    graph_dict: dict[str, Any], limit: int = MAX_IDENTITY_RESULTS,
+) -> tuple[list[dict[str, Any]], bool]:
+    """
+    Every user and role in the graph, for the reach list.
+
+    Returns:
+        (nodes, truncated): ChainNodes in the same order search_nodes uses,
+        each with its `level`, how many identities it reaches (`reaches`) and
+        how many of those lead to administrator access (`reaches_admin`), and
+        whether the account had more than `limit`.
+    """
+    identities = [
+        n for n in graph_dict.get("nodes") or []
+        if n.get("type") in IDENTITY_NODE_TYPES
+    ]
+    head = heapq.nsmallest(limit, identities, key=_sort_key)
+    counts = reach_counts(graph_dict)
+    nodes = []
+    for n in head:
+        reaches, reaches_admin = counts.get(n.get("id") or "", (0, 0))
+        nodes.append({
+            **chain_node(n), "level": identity_level(n),
+            "reaches": reaches, "reaches_admin": reaches_admin,
+        })
+    return nodes, len(identities) > limit
+
+
+def _is_conditional(edge: dict[str, Any]) -> bool:
+    """Whether Scout found a condition that gates this edge."""
+    properties = edge.get("properties") or {}
+    return _conditional_summary(properties.get("conditional"))[0] == "conditional"
+
+
+def _reach_step(edge: dict[str, Any], hop_number: int) -> dict[str, Any]:
+    """
+    One stored escalation edge as a step, the shape ranked chains use.
+
+    Scout v0.2.0 writes the mechanism name onto the edge. A graph stored by an
+    earlier release has only the category, which is the same name for most
+    mechanisms; a few differ ("trust" where a chain says "trust_rewrite"), and
+    the frontend names those plainly rather than with a sentence.
+    """
+    properties = edge.get("properties") or {}
+    mechanism = properties.get("mechanism") or properties.get("category") or ""
+    hop = hop_dict(
+        SimpleNamespace(**edge), hop_number, mechanism,
+        properties.get("concrete_api_sequence") or [],
+    )
+    return _step(hop)
+
+
+def reach_from(
+    graph_dict: dict[str, Any], origin: str, *, max_visited: int = MAX_REACH_VISITED,
+) -> dict[str, Any]:
+    """
+    Every identity `origin` can become, each with the shortest way there.
+
+    Breadth first, one layer of steps at a time, so an identity is always
+    reached first by a shortest path. Within a layer the same identity can be
+    reached over several edges; the one whose path has the fewest conditional
+    steps wins, so the path shown is the easiest of the shortest. Only one path
+    per identity is kept: listing every path grows combinatorially, and the
+    question this answers is "what", not "in how many ways".
+
+    Returns:
+        origin / origin_level: the starting identity and its level.
+        reached: {node, level, steps} per identity, worst level first, then
+            fewest steps, then name. At most MAX_REACH_RESULTS.
+        truncated: how many reached identities were left off the list.
+        search_capped: the visit budget ran out, so the list may be missing
+            identities. Never phrased as "unreachable" when true.
+    """
+    nodes = {n.get("id"): n for n in graph_dict.get("nodes") or []}
+    out_edges: dict[str, list[dict[str, Any]]] = {}
+    for edge in graph_dict.get("edges") or []:
+        if edge.get("type") == REACH_EDGE_TYPE:
+            out_edges.setdefault(edge.get("source") or "", []).append(edge)
+
+    # conditional_steps doubles as the visited set: an identity in it was
+    # reached in an earlier layer (or is the origin), by a shorter path.
+    conditional_steps = {origin: 0}
+    via: dict[str, dict[str, Any]] = {}
+    frontier = [origin]
+    expanded = 0
+    search_capped = False
+    while frontier and not search_capped:
+        layer: dict[str, tuple[int, dict[str, Any]]] = {}
+        for node_id in frontier:
+            if expanded >= max_visited:
+                search_capped = True
+                break
+            expanded += 1
+            for edge in out_edges.get(node_id, ()):
+                target = edge.get("target") or ""
+                if target in conditional_steps:
+                    continue
+                cost = conditional_steps[node_id] + _is_conditional(edge)
+                best = layer.get(target)
+                if best is None or cost < best[0]:
+                    layer[target] = (cost, edge)
+        for target, (cost, edge) in layer.items():
+            conditional_steps[target] = cost
+            via[target] = edge
+        # Sorted so the same graph always yields the same paths.
+        frontier = sorted(layer)
+
+    reached = []
+    for target in via:
+        edges = []
+        node_id = target
+        while node_id in via:
+            edges.append(via[node_id])
+            node_id = via[node_id].get("source") or ""
+        edges.reverse()
+        node = nodes.get(target) or {"id": target, "type": "UNKNOWN"}
+        reached.append({
+            "node": chain_node(node),
+            "level": identity_level(node),
+            "steps": [_reach_step(e, i) for i, e in enumerate(edges, start=1)],
+        })
+    reached.sort(key=lambda r: (
+        REACH_LEVELS.index(r["level"]), len(r["steps"]),
+        r["node"]["label"].lower(), r["node"]["id"],
+    ))
+
+    origin_node = nodes.get(origin) or {"id": origin, "type": "UNKNOWN"}
+    return {
+        "origin": chain_node(origin_node),
+        "origin_level": identity_level(origin_node),
+        "reached": reached[:MAX_REACH_RESULTS],
+        "truncated": max(0, len(reached) - MAX_REACH_RESULTS),
+        "search_capped": search_capped,
+    }
 
 
 def chain_nodes_for_steps(

@@ -22,7 +22,6 @@ BACKEND_ROOT = pathlib.Path(__file__).resolve().parents[3]
 TRANSITION_SOURCES = [
     "apps/emulations/tasks.py",
     "apps/infrastructure/tasks.py",
-    "apps/infrastructure/views.py",
 ]
 
 
