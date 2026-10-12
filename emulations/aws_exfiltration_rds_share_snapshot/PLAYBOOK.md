@@ -7,7 +7,7 @@
 | Incident Type | Data exfiltration (a complete, restorable copy of the database is released to accounts outside this one — publicly, or to a named party) |
 | Threat Actor | N/A — single use case, not actor-attributed |
 | Platform | aws |
-| Severity | **Critical** where the value added is `all`, **High** where it is a 12-digit account ID. The source rates both **P2**. Critical is right for the public case because the disclosure set is unbounded and unidentifiable and no subsequent action undoes it — there is containment of the *window*, never of the *data*. High is right for a named account because the recipient can be identified and asked, which is a materially different incident one parameter apart |
+| Severity | **High** for a named 12-digit account ID; **Critical** where the value added is `all` (public). The source rates both **P2**. Critical is right for the public case because the disclosure set is unbounded and unidentifiable and no subsequent action undoes it: there is containment of the *window*, never of the *data*. High is right for a named account because the recipient can be identified and asked, which is a materially different incident one parameter apart |
 | MITRE Tactics | Exfiltration, Defense Impairment |
 | MITRE Techniques | T1537 (primary), T1578.001 (secondary) — both verified live 2026-08-29 |
 | Services in Scope | RDS, KMS, CloudTrail (management), IAM, Organizations (SCP), AWS Config, Security Hub, Trusted Advisor, and every system whose credentials the database held |

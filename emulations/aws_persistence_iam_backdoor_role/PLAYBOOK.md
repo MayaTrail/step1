@@ -8,7 +8,7 @@
 | Emulation Tier | Atomic technique |
 | Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High, a trust-policy backdoor grants a foreign account standing access to the role that **survives rotation of the original credentials**; it is durable, quiet persistence (`MANIFEST.py` rates MEDIUM; the IR view is High because it is an enduring cross-account foothold) |
+| Severity | High, a trust-policy backdoor grants a foreign account standing access to the role that **survives rotation of the original credentials**; it is durable, quiet persistence |
 | MITRE Tactics | Persistence |
 | MITRE Techniques | T1098 |
 | Services in Scope | IAM, STS, CloudTrail, IAM Access Analyzer |

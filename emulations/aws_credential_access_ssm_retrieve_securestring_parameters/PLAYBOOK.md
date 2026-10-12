@@ -8,7 +8,7 @@
 | Emulation Tier | Atomic technique |
 | Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High, every SecureString decrypted is disclosed plaintext and must be treated as compromised (`MANIFEST.py` rates MEDIUM; the IR view is High because this exfiltrates live secret material, not just a log signal) |
+| Severity | High, every SecureString decrypted is disclosed plaintext and must be treated as compromised |
 | MITRE Tactics | Credential Access |
 | MITRE Techniques | T1552.007 (see mapping caveat in §6) |
 | Services in Scope | SSM Parameter Store, KMS, CloudTrail, IAM, plus every downstream system whose credentials live in the decrypted parameters |

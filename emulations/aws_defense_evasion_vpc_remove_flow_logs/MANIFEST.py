@@ -22,7 +22,7 @@ MANIFEST = {
     'origin_label': 'ATOMIC TECHNIQUE',
     'tags': ['Defense Evasion', 'VPC'],
     'technique_count': 1,
-    'severity': 'MEDIUM',
+    'severity': 'HIGH',
     'aliases': 'aws.defense-evasion.vpc-remove-flow-logs',
     'attribution': 'Stratus Red Team — atomic technique',
     'active_since': 'Atomic technique (Stratus Red Team)',

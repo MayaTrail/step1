@@ -8,7 +8,7 @@
 | Emulation Tier | Atomic technique |
 | Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High, a new role trusting a foreign account and holding `AdministratorAccess` is a standing, cross-account admin foothold that survives password/key/MFA changes on the compromised identity (`MANIFEST.py` rates MEDIUM; the IR view is High) |
+| Severity | High, a new role trusting a foreign account and holding `AdministratorAccess` is a standing, cross-account admin foothold that survives password/key/MFA changes on the compromised identity |
 | MITRE Tactics | Persistence |
 | MITRE Techniques | T1098 (see mapping note in §6) |
 | Services in Scope | IAM, STS, CloudTrail, IAM Access Analyzer, GuardDuty |

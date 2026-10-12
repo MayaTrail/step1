@@ -6,7 +6,7 @@
 | Incident Type | SSRF-driven IMDSv1 credential exfiltration and external credential use |
 | Threat Actor | ATOMIC-ec2-ssrf-imdsv1 (technique emulation) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Initial Access (T1190 — Exploit Public-Facing Application) |
 | MITRE Techniques | T1190 x4 steps: SSRF role probe, SSRF credential harvest, STS GetCallerIdentity from foreign IP, S3 ListBuckets from foreign IP |
 

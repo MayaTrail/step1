@@ -6,7 +6,7 @@
 | Incident Type | Application Access Token Abuse / Session Hijacking |
 | Threat Actor | ATOMIC-cognito-refresh-token-reuse (technique emulation) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Credential Access |
 | MITRE Techniques | T1550.001 — Use Alternate Authentication Material: Application Access Token |
 | Data Sources | CloudTrail management events, Cognito user-pool data plane logs, Cognito advanced security logging |

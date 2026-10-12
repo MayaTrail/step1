@@ -1,5 +1,16 @@
 # K8s PSA Bypass via PV Abuse — IR & Detection Playbook
 
+## Classification
+
+| Field | Value |
+|-------|-------|
+| Incident Type | K8s PSA Bypass via PV Abuse |
+| Threat Actor | N/A — single technique, not actor-attributed |
+| Platform | k8s |
+| Severity | High |
+| MITRE Tactics | Defense Evasion, Privilege Escalation |
+| MITRE Techniques | T1211 (Exploitation for Stealth), T1611 (Escape to Host) |
+
 ## Summary
 Demonstrates bypassing baseline Pod Security Admission (PSA) by mounting
 host-paths using raw PersistentVolume and PersistentVolumeClaims, then reading

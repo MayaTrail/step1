@@ -42,7 +42,7 @@ uniformly formatted across services - EC2 uses `Client.UnauthorizedOperation`;
 IAM and S3 use `AccessDenied` / `AccessDeniedException`. Match the
 service-appropriate string and confirm against a sample.
 
-**Severity:** the manifest rates this LOW; the IR view is **Medium**, recon
+**Severity:** **Medium**, recon
 from an instance role signals an active foothold on a host. The tactic label
 (*Discovery*) is correct here.
 

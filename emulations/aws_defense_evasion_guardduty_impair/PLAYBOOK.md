@@ -7,7 +7,7 @@
 | Incident Type | Defense Evasion — Security Tool Tampering |
 | Threat Actor | ATOMIC-guardduty-impair (technique emulation) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Defense Evasion (TA0005) |
 | MITRE Techniques | T1685 — Disable or Modify Tools |
 | Attack Surface | AWS GuardDuty, STS, IAM, S3 |

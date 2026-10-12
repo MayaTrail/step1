@@ -6,7 +6,7 @@
 | Incident Type | Defense Evasion — Persistence Cleanup / Identity Destruction |
 | Threat Actor | ATOMIC-iam-delete-entities |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Defense Evasion (TA0005) |
 | MITRE Techniques | T1070.009 — Indicator Removal: Clear Persistence |
 

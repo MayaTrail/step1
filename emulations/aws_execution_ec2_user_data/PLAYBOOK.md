@@ -8,7 +8,7 @@
 | Emulation Tier | Atomic technique |
 | Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High, successful execution runs attacker-controlled code **as root** on the instance at boot; the host must be treated as compromised (`MANIFEST.py` rates MEDIUM; the IR view is High because this is arbitrary root code execution, not just a control-plane change) |
+| Severity | High, successful execution runs attacker-controlled code **as root** on the instance at boot; the host must be treated as compromised |
 | MITRE Tactics | Execution |
 | MITRE Techniques | T1059 |
 | Services in Scope | EC2, CloudTrail, IAM, GuardDuty, VPC Flow Logs |

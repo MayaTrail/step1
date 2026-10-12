@@ -41,7 +41,7 @@ surface as `AccessDenied`, match both. A missing parameter gives
 API*, which is a poor fit for SSM Parameter Store. The mapping is inherited
 from the upstream technique catalogue and is retained for traceability.
 
-**Severity:** the manifest rates this MEDIUM; the IR view is **High**, the
+**Severity:** **High**, the
 technique discloses live credential plaintext.
 
 **GuardDuty:** no finding type specific to this technique.

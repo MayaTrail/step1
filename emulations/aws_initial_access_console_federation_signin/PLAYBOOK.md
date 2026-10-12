@@ -6,7 +6,7 @@
 | Incident Type | Unauthorized Console Access via IAM Federation |
 | Threat Actor | ATOMIC-console-federation-signin |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Discovery (T1538 - Cloud Service Dashboard) |
 | Key Techniques | GetFederationToken abuse, Console federation sign-in, SecretsManager enumeration, S3 enumeration |
 

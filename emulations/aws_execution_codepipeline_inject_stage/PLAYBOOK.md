@@ -6,7 +6,7 @@
 | Incident Type | Supply Chain Compromise — CI/CD Pipeline Stage Injection |
 | Threat Actor | ATOMIC-codepipeline-inject-stage (technique emulation; real-world analogue: UNC3944, Scattered Spider CI/CD abuse) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Initial Access |
 | MITRE Techniques | T1195 — Supply Chain Compromise |
 | Key AWS Services | AWS CodePipeline, AWS STS, AWS IAM, AWS CloudTrail, AWS CodeBuild, AWS Secrets Manager |

@@ -7,7 +7,7 @@
 | Incident Type | Software Supply Chain Compromise — Lambda Layer Injection |
 | Threat Actor | ATOMIC-lambda-external-layer-poisoning (technique emulation) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Initial Access |
 | MITRE Technique | T1195.002 — Compromise Software Supply Chain |
 | Attack Surface | Lambda Layer management APIs (control plane) + Lambda execution (data plane) |

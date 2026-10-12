@@ -7,7 +7,7 @@
 | Incident Type | Ransomware / data encrypted for impact (every object is read, re-uploaded encrypted under a key only the attacker holds, and the original deleted) |
 | Threat Actor | N/A — single technique, not actor-attributed (Stratus Red Team `aws.impact.s3-ransomware-client-side-encryption`) |
 | Platform | aws |
-| Severity | **Critical** (matches the emulation manifest). The read phase is exfiltration (assume extortion), and without versioning or a copy the originals are gone and the ciphertext is unrecoverable without the attacker's key |
+| Severity | **Critical**. The read phase is exfiltration (assume extortion), and without versioning or a copy the originals are gone and the ciphertext is unrecoverable without the attacker's key |
 | MITRE Tactics | Impact |
 | MITRE Techniques | T1486 |
 | Services in Scope | S3, IAM, STS, CloudTrail (S3 data events), CloudTrail Lake / Athena, GuardDuty S3 Protection, AWS Backup |

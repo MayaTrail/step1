@@ -6,7 +6,7 @@
 | Incident Type | Privilege Escalation via Serverless Execution (iam:PassRole + Lambda) |
 | Threat Actor | ATOMIC-lambda-passrole-invoke (Technique Emulation) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Discovery, Privilege Escalation, Execution, Collection, Defense Evasion |
 | MITRE Technique | T1648 - Serverless Execution |
 | Attack Duration | Under 60 seconds (create -> invoke -> delete lifecycle) |

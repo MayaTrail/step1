@@ -6,7 +6,7 @@
 | Incident Type | Data Exfiltration via RDS Data API |
 | Threat Actor | ATOMIC-rds-data-api-query (technique emulation) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Collection (T1213 — Data from Information Repositories) |
 | MITRE Techniques | T1213 — SecretsManager credential retrieval + RDS Data API PII dump |
 

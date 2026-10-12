@@ -8,7 +8,7 @@
 | Emulation Tier | Atomic technique |
 | Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | Medium, reconnaissance is not damage in itself, but a broad multi-service enumeration run from an instance role is a reliable indicator of an active foothold and precedes lateral movement (`MANIFEST.py` rates LOW; the IR view is Medium because the *context*, recon from a compromised instance, signals a live intrusion) |
+| Severity | Medium, reconnaissance is not damage in itself, but a broad multi-service enumeration run from an instance role is a reliable indicator of an active foothold and precedes lateral movement |
 | MITRE Tactics | Discovery |
 | MITRE Techniques | T1580 |
 | Services in Scope | SSM, EC2, S3, IAM, STS, GuardDuty, CloudTrail |

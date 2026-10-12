@@ -7,7 +7,7 @@
 | Incident Type | IAM Trust Policy Backdoor via OIDC Federation |
 | Threat Actor | ATOMIC-iam-oidc-provider-backdoor (technique emulation) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Techniques | T1484.002 — Domain or Tenant Policy Modification: Trust Modification |
 | MITRE Tactics | Defense Evasion, Privilege Escalation |
 | Attack Surface | AWS IAM (OIDC Providers, Roles), AWS STS |

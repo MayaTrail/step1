@@ -7,7 +7,7 @@
 | Incident Type | Credential Access / Data from Information Repositories |
 | Threat Actor | ATOMIC-rds-reset-master-password (technique emulation pattern) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Collection |
 | MITRE Techniques | T1213 — Data from Information Repositories |
 | Primary Signal | `ModifyDBInstance` with `masterUserPassword HIDDEN_DUE_TO_SECURITY_REASONS` from a non-DBA principal |

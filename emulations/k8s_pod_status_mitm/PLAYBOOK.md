@@ -1,5 +1,16 @@
 # K8s MITM via Pod status.podIP Mutation — IR & Detection Playbook
 
+## Classification
+
+| Field | Value |
+|-------|-------|
+| Incident Type | K8s MITM via Pod status.podIP Mutation |
+| Threat Actor | N/A — single technique, not actor-attributed |
+| Platform | k8s |
+| Severity | High |
+| MITRE Tactics | Credential Access |
+| MITRE Techniques | T1557 (Adversary-in-the-Middle) |
+
 ## Summary
 Emulates a traffic interception attack where an attacker patches the
 `status.podIP` of a target pod to redirect service traffic to an

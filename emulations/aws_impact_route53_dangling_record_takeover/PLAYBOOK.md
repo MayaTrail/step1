@@ -7,7 +7,7 @@
 | Incident Type | Subdomain Takeover / External Defacement |
 | Threat Actor | ATOMIC-route53-dangling-record-takeover |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Impact |
 | MITRE Techniques | T1491.002 — External Defacement |
 

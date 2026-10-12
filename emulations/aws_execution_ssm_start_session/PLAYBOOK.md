@@ -8,7 +8,7 @@
 | Emulation Tier | Atomic technique |
 | Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High, an interactive shell on multiple instances with no SSH key, no open port 22, and (absent session logging) no record of what was typed (`MANIFEST.py` rates MEDIUM; the IR view is High because of unlogged interactive access across the fleet) |
+| Severity | High, an interactive shell on multiple instances with no SSH key, no open port 22, and (absent session logging) no record of what was typed |
 | MITRE Tactics | Execution |
 | MITRE Techniques | T1021.004 (as mapped by Stratus, imprecise; T1021.008 Direct Cloud VM Connections is the real fit, see §6) |
 | Services in Scope | SSM (Session Manager), EC2, CloudTrail, IAM, VPC Flow Logs |

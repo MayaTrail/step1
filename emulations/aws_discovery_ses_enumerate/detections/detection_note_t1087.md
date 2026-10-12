@@ -40,7 +40,7 @@ an email-service capability probe. T1526 (*Cloud Service Discovery*) is closer.
 The mapping is inherited from the upstream catalogue and retained for
 traceability.
 
-**Severity:** the manifest rates this LOW; the IR view is **Medium**, recon is
+**Severity:** **Medium**, recon is
 a precursor to send abuse, which carries real reputational and deliverability
 damage.
 

@@ -7,7 +7,7 @@
 | Incident Type | Defense Evasion via Unused Cloud Region Foothold |
 | Threat Actor | ATOMIC-ec2-unused-region (technique emulation profile) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Defense Evasion (TA0005) |
 | MITRE Techniques | T1535 — Unused/Unsupported Cloud Regions |
 

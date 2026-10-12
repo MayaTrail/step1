@@ -71,7 +71,7 @@ MANIFEST = {
         "Phishing Infrastructure",
     ],
     "technique_count": 17,
-    "severity": "HIGH",
+    "severity": "CRITICAL",
     "aliases": "DangerDev@protonmail.me",
     "attribution": "DangerDev (Indonesia, financially motivated) — Cryptomining + SES/PayPal phishing",
     "active_since": "Documented by Invictus IR",

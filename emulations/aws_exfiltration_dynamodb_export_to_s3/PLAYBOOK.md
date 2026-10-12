@@ -7,7 +7,7 @@
 | Incident Type | Cloud Data Exfiltration via Native Export API |
 | Threat Actor | ATOMIC-dynamodb-export-to-s3 (technique emulation) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Collection |
 | MITRE Techniques | T1530 — Data from Cloud Storage |
 | Attack Surface | DynamoDB, S3, STS, IAM |

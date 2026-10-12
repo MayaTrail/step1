@@ -7,7 +7,7 @@
 | Incident Type | Unauthenticated Cognito Identity Pool Credential Abuse / Cloud Data Exfiltration |
 | Threat Actor | ATOMIC-cognito-identity-pool-unauth-creds (technique emulation) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Initial Access, Discovery, Credential Access, Collection |
 | MITRE Technique | T1078.004 — Valid Accounts: Cloud Accounts |
 | Primary Detection Surface | CloudTrail: anonymous/unauthenticated principal on Cognito GetId + GetCredentialsForIdentity |

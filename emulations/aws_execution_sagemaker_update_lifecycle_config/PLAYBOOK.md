@@ -8,7 +8,7 @@
 | Emulation Tier | Atomic technique |
 | Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High, the injected script executes with the notebook instance's execution-role privileges on every start/restart; it is code execution plus a persistence trigger (`MANIFEST.py` rates MEDIUM; the IR view is High because it yields recurring code execution under an IAM role, not just a config edit) |
+| Severity | High, the injected script executes with the notebook instance's execution-role privileges on every start/restart; it is code execution plus a persistence trigger |
 | MITRE Tactics | Execution (with a Persistence characteristic, see §6) |
 | MITRE Techniques | T1059 |
 | Services in Scope | SageMaker, CloudTrail, IAM, VPC Flow Logs |

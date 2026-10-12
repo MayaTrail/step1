@@ -7,7 +7,7 @@
 | Incident Type | SES Account Hijacking / Spam Campaign Launch |
 | Threat Actor | ATOMIC-ses-send-abuse (T1496.004) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Discovery, Impact, Defense Evasion |
 | MITRE Techniques | T1496.004 — Cloud Service Hijacking |
 | Detection Sources | CloudTrail, GuardDuty, SES CloudWatch Event Destinations |

@@ -34,7 +34,7 @@ against a real denied event in your account.
 `recovery_window_in_days = 0`, so tearing it down hard-deletes the secrets
 immediately rather than scheduling them for deletion.
 
-**Severity:** the manifest rates this MEDIUM; the IR view is **High**, the
+**Severity:** **High**, the
 technique discloses live secret plaintext.
 
 **GuardDuty:** no finding type specific to this technique.

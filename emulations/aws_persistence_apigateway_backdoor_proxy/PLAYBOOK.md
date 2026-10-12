@@ -7,7 +7,7 @@
 | Incident Type | API Gateway Backdoor / Unauthorized Route Injection |
 | Threat Actor | ATOMIC-apigateway-backdoor-proxy (technique emulation) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Initial Access (TA0001), Discovery (TA0007), Persistence (TA0003), Defense Evasion (TA0005) |
 | MITRE Technique | T1190 — Exploit Public-Facing Application |
 | Primary Signal | PutMethod with authorizationType=NONE on a new API Gateway resource created outside CI/CD |
