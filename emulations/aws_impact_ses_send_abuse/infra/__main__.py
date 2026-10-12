@@ -95,6 +95,25 @@ ses_policy = aws.iam.Policy(
                 },
             },
             {
+                # The attack registers (and later removes) its sender identity, which
+                # SES authorises per identity, and reads the account's sending posture.
+                "Sid": "SESManageLabSenderIdentity",
+                "Effect": "Allow",
+                "Action": [
+                    "ses:CreateEmailIdentity",
+                    "ses:GetEmailIdentity",
+                    "ses:TagResource",
+                    "ses:DeleteEmailIdentity",
+                ],
+                "Resource": f"arn:aws:ses:{region}:{account_id}:identity/{EMAIL_IDENTITY}",
+            },
+            {
+                "Sid": "SESReadAccountPosture",
+                "Effect": "Allow",
+                "Action": ["ses:GetAccount"],
+                "Resource": "*",
+            },
+            {
                 "Sid": "DenyProductionAccessEscalation",
                 "Effect": "Deny",
                 "Action": [
@@ -177,6 +196,7 @@ pulumi.export(
 # ============================================================
 campaigns_bucket = aws.s3.BucketV2(
     "campaigns-bucket",
+    force_destroy=True,  # lab bucket: CloudTrail/log objects must not block destroy
     bucket=f"{account_id}-ses-abuse-email-campaigns",
     tags=TAGS,
 )

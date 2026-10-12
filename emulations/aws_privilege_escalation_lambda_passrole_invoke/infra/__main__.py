@@ -192,10 +192,24 @@ victim_policy = aws.iam.RolePolicy(
                     "lambda:UpdateFunctionConfiguration",
                     "lambda:InvokeFunction",
                     "lambda:GetFunction",
+                    "lambda:GetFunctionConfiguration",
                     "lambda:ListFunctions",
                     "lambda:DeleteFunction",
                 ],
                 "Resource": "*",
+            },
+            {
+                # The attack enumerates roles to confirm its PassRole target.
+                "Sid":      "DiscoverRoles",
+                "Effect":   "Allow",
+                "Action":   ["iam:ListRoles", "secretsmanager:ListSecrets"],
+                "Resource": "*",
+            },
+            {
+                "Sid":      "ReadTargetRole",
+                "Effect":   "Allow",
+                "Action":   ["iam:GetRole"],
+                "Resource": target_arn,
             },
             {
                 "Sid":      "ScopedPassRole",

@@ -56,6 +56,7 @@ LOG_BUCKET_NAME = f"atomic-iam-account-access-removal-logs-{account_id}"
 # ── S3 Log Bucket ─────────────────────────────────────────────────────────────
 log_bucket = aws.s3.BucketV2(
     "log-bucket",
+    force_destroy=True,  # lab bucket: CloudTrail/log objects must not block destroy
     bucket=LOG_BUCKET_NAME,
     tags={"MayaTrail": "true", "Purpose": "adversary-emulation"},
 )
@@ -336,6 +337,6 @@ pulumi.export("lab_user_1_arn",           lab_user_1.arn)
 pulumi.export("lab_user_2_arn",           lab_user_2.arn)
 pulumi.export("lab_user_1_access_key_id", lab_user_1_key.id)
 pulumi.export("lab_user_2_access_key_id", lab_user_2_key.id)
-pulumi.export("lab_user_1_mfa_serial",    lab_user_1_mfa.virtual_mfa_device_arn)
+pulumi.export("lab_user_1_mfa_serial",    lab_user_1_mfa.arn)
 pulumi.export("lab_policy_arn",           lab_policy.arn)
 pulumi.export("log_bucket_name",          log_bucket.id)

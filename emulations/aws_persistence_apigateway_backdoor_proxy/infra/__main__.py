@@ -204,10 +204,8 @@ api_prod_stage = aws.apigateway.Stage(
     rest_api=victim_rest_api.id,
     stage_name=API_STAGE_NAME,
     deployment=api_prod_deployment.id,
-    access_log_settings=aws.apigateway.StageAccessLogSettingsArgs(
-        destination_arn=access_log_group.arn,
-        format='{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","caller":"$context.identity.caller","user":"$context.identity.user","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status"}',
-    ),
+    # Access logging is omitted on purpose: it needs the account-wide API Gateway
+    # CloudWatch role setting, which a lab must not change in a tenant account.
     xray_tracing_enabled=False,
     tags=TAGS,
 )
@@ -229,6 +227,7 @@ bait_bucket_name_str = "{}-prod-deployments-tfstate".format(account_id)
 
 bait_bucket = aws.s3.BucketV2(
     "bait-devops-bucket",
+    force_destroy=True,  # lab bucket: CloudTrail/log objects must not block destroy
     bucket=bait_bucket_name_str,
     tags=TAGS,
 )

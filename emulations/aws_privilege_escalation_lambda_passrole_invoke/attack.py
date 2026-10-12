@@ -154,9 +154,32 @@ def run(outputs: dict, region: str = 'us-east-1') -> None:
     # -- Build victim session (static long-lived key -- no STS assume needed) --
     # T1648: victim role holds lambda:Create/Invoke/Delete + iam:PassRole scoped
     # to a single target-role ARN; this is the precondition for the escalation.
-    victim_session = boto3.Session(
+    # The seeded user holds only sts:AssumeRole on the lab's victim role; the Lambda and
+    # PassRole permissions live on that role, so assume it (retrying while IAM propagates).
+    victim_role_arn = _p(outputs, 'victim_role_arn')
+    if not victim_role_arn:
+        raise RuntimeError("Missing required output: victim_role_arn")
+    _user_session = boto3.Session(
         aws_access_key_id=victim_key_id,
         aws_secret_access_key=victim_key_secret,
+        region_name=region,
+    )
+    _assumed = None
+    for _attempt in range(1, 7):
+        try:
+            _assumed = _user_session.client('sts').assume_role(
+                RoleArn=victim_role_arn, RoleSessionName='lambda-passrole-emulation',
+                DurationSeconds=3600)['Credentials']
+            break
+        except ClientError as _exc:
+            if _attempt < 6 and _exc.response['Error']['Code'] in ('AccessDenied', 'InvalidClientTokenId'):
+                time.sleep(5)
+                continue
+            raise
+    victim_session = boto3.Session(
+        aws_access_key_id=_assumed['AccessKeyId'],
+        aws_secret_access_key=_assumed['SecretAccessKey'],
+        aws_session_token=_assumed['SessionToken'],
         region_name=region,
     )
 

@@ -234,7 +234,7 @@ def phase3_unused_region_exploitation(session, home_region, target_region,
             )
         except ClientError as e:
             code = e.response["Error"]["Code"]
-            if code == "AccessDenied":
+            if code in ("AccessDenied", "AccessDeniedException"):
                 print_ok(
                     f"EnableRegion returned AccessDenied as expected -- "
                     f"CloudTrail records the attempt for {candidate}"

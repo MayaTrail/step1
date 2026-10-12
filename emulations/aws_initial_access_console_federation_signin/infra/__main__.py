@@ -48,6 +48,7 @@ TAGS = {
 # ---------------------------------------------------------------------------
 target_bucket = aws.s3.BucketV2(
     "atomic-console-federation-target-bucket",
+    force_destroy=True,  # lab bucket: CloudTrail/log objects must not block destroy
     bucket_prefix="acme-prod-app-configs-",
     tags=TAGS,
 )

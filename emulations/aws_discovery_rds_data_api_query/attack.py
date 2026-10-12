@@ -272,7 +272,7 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
                 events_generated.append(
                     f"ExecuteStatement SHOW TABLES DENIED ({code}) (rds-data.amazonaws.com)"
                 )
-            elif code == "BadRequestException":
+            elif code in ("BadRequestException", "DatabaseErrorException"):
                 # Aurora PostgreSQL rejects MySQL SHOW TABLES - fall back to pg syntax
                 print_err(f"SHOW TABLES not supported by this engine [{code}] - trying information_schema fallback")
                 try:

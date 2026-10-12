@@ -204,10 +204,10 @@ cluster = aws.rds.Cluster(
     CLUSTER_ID,
     cluster_identifier=CLUSTER_ID,
     engine="aurora-postgresql",
-    engine_version="15.4",
+    engine_version="16.8",
     engine_mode="provisioned",
     database_name="labcorp_hr",
-    master_username="admin",
+    master_username="dbadmin",
     master_password=db_password.result,
     db_subnet_group_name=subnet_group.name,
     vpc_security_group_ids=[aurora_sg.id],
@@ -236,7 +236,7 @@ cluster_instance = aws.rds.ClusterInstance(
 # recovery_window_in_days=0 prevents deletion-schedule conflicts on re-runs
 _secret_string = pulumi.Output.all(db_password.result, cluster.endpoint).apply(
     lambda args: json.dumps({
-        "username": "admin",
+        "username": "dbadmin",
         "password": args[0],
         "engine": "postgres",
         "host": args[1],

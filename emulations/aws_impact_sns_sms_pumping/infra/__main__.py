@@ -47,6 +47,7 @@ region          = aws.get_region().id  # .id not .name (pulumi-aws v7)
 # =========================================================================
 ct_bucket = aws.s3.BucketV2(
     "cloudtrail-logs-bucket",
+    force_destroy=True,  # lab bucket: CloudTrail/log objects must not block destroy
     tags=TAGS,
 )
 

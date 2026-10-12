@@ -205,19 +205,43 @@ attacker_allow_policy = aws.iam.Policy(
             "Version": "2012-10-17",
             "Statement": [
                 {
-                    "Sid": "EBSWriteOpsTagScoped",
+                    # Acting on EXISTING lab resources: gated by their MayaTrail tag.
+                    "Sid": "EBSWriteOpsOnTaggedResources",
                     "Effect": "Allow",
                     "Action": [
                         "ec2:CreateSnapshot",
                         "ec2:CopySnapshot",
-                        "ec2:CreateVolume",
                         "ec2:DeleteVolume",
                         "ec2:DeleteSnapshot",
-                        "ec2:CreateTags",
                     ],
-                    "Resource": "*",
+                    "Resource": [
+                        "arn:aws:ec2:*:*:volume/*",
+                        "arn:aws:ec2:*::snapshot/*",
+                    ],
                     "Condition": {
-                        "StringEquals": {"aws:ResourceTag/MayaTrail": "true"}
+                        "StringEquals": {"ec2:ResourceTag/MayaTrail": "true"}
+                    },
+                },
+                {
+                    # A snapshot being CREATED has no tags yet, so the tag gate above
+                    # cannot match it; require the tag in the request instead.
+                    "Sid": "EBSCreateTaggedSnapshots",
+                    "Effect": "Allow",
+                    "Action": ["ec2:CreateSnapshot", "ec2:CopySnapshot"],
+                    "Resource": "arn:aws:ec2:*::snapshot/*",
+                    "Condition": {
+                        "StringEquals": {"aws:RequestTag/MayaTrail": "true"}
+                    },
+                },
+                {
+                    "Sid": "EBSTagOnCreate",
+                    "Effect": "Allow",
+                    "Action": "ec2:CreateTags",
+                    "Resource": "arn:aws:ec2:*::snapshot/*",
+                    "Condition": {
+                        "StringEquals": {
+                            "ec2:CreateAction": ["CreateSnapshot", "CopySnapshot"]
+                        }
                     },
                 },
                 {

@@ -3,6 +3,9 @@
 Generated from the atomic spec by backend_package.generate_atomic_manifest (schema_version 3).
 Review the notes the pipeline printed before shipping to step1/emulations/.
 
+
+
+
 """
 
 MANIFEST = {   'schema_version': 3,
@@ -31,20 +34,35 @@ MANIFEST = {   'schema_version': 3,
     'incidents': [],
     'attack_path': [   {   'phase': 1,
                            'name': 'Privilege Escalation',
-                           'aws_actions': [   'iam:PassRole',
+                           'aws_actions': [   'iam:GetRole',
+                                              'iam:ListRoles',
+                                              'iam:PassRole',
                                               'lambda:CreateFunction',
                                               'lambda:DeleteFunction',
+                                              'lambda:GetFunctionConfiguration',
                                               'lambda:InvokeFunction',
+                                              'secretsmanager:ListSecrets',
+                                              'sts:AssumeRole',
                                               'sts:GetCallerIdentity'],
-                           'acting_as': {   'victim_user': [   'iam:PassRole',
+                           'acting_as': {   'victim_user': ['sts:AssumeRole'],
+                                            'victim_role': [   'iam:GetRole',
+                                                               'iam:ListRoles',
+                                                               'iam:PassRole',
                                                                'lambda:CreateFunction',
                                                                'lambda:DeleteFunction',
+                                                               'lambda:GetFunctionConfiguration',
                                                                'lambda:InvokeFunction',
+                                                               'secretsmanager:ListSecrets',
                                                                'sts:GetCallerIdentity']},
-                           'aws_resources': {   'iam:PassRole': '{target_role_arn}',
+                           'aws_resources': {   'iam:GetRole': '{target_role_arn}',
+                                                'iam:ListRoles': '*',
+                                                'iam:PassRole': '{target_role_arn}',
                                                 'lambda:CreateFunction': '*',
                                                 'lambda:DeleteFunction': '*',
+                                                'lambda:GetFunctionConfiguration': '*',
                                                 'lambda:InvokeFunction': '*',
+                                                'secretsmanager:ListSecrets': '*',
+                                                'sts:AssumeRole': '{victim_role_arn}',
                                                 'sts:GetCallerIdentity': '*'},
                            'techniques': [{'id': 'T1648', 'name': 'Serverless Execution'}]}],
     'mitre_mappings': [   {   'id': 'T1648',
@@ -87,4 +105,7 @@ MANIFEST = {   'schema_version': 3,
     'resource_costs': [],
     'identities': {   'victim_user': {   'kind': 'lab_user',
                                          'label': "The lab's victim user",
-                                         'output': 'victim_user_name'}}}
+                                         'output': 'victim_user_name'},
+                      'victim_role': {   'kind': 'lab_role',
+                                         'label': "The lab's victim role",
+                                         'output': 'victim_role_arn'}}}

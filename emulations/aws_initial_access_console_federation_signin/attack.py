@@ -187,21 +187,35 @@ def run(outputs: dict, region: str = "us-east-1") -> None:
             "sessionToken": fed_creds["SessionToken"],
         })
 
-        federation_endpoint = "https://signin.amazonaws.com/federation"
+        # signin.amazonaws.com is the documented endpoint; fall back to the regional
+        # sign-in host when the first name does not resolve from the runner's network.
+        federation_endpoints = [
+            "https://signin.amazonaws.com/federation",
+            "https://us-east-1.signin.aws.amazon.com/federation",
+        ]
+        federation_endpoint = federation_endpoints[0]
 
         try:
-            token_response = requests.get(
-                federation_endpoint,
-                params={
-                    "Action": "getSigninToken",
-                    "SessionDuration": "900",
-                    "Session": session_json,
-                },
-                timeout=20,
-            )
+            token_response = None
+            for federation_endpoint in federation_endpoints:
+                try:
+                    token_response = requests.get(
+                        federation_endpoint,
+                        params={
+                            "Action": "getSigninToken",
+                            "SessionDuration": "900",
+                            "Session": session_json,
+                        },
+                        timeout=20,
+                    )
+                    break
+                except requests.ConnectionError as conn_err:
+                    print_err(f"{federation_endpoint} unreachable ({type(conn_err).__name__}); trying the next endpoint")
+            if token_response is None:
+                raise requests.ConnectionError("no sign-in endpoint was reachable")
             token_response.raise_for_status()
             signin_token = token_response.json()["SigninToken"]
-            print_ok("GetSigninToken succeeded - SigninToken obtained from signin.amazonaws.com")
+            print_ok("GetSigninToken succeeded - SigninToken obtained from the AWS sign-in service")
             events_generated.append("signin.amazonaws.com: GetSigninToken")
         except requests.RequestException as e:
             raise RuntimeError(f"GetSigninToken HTTP request failed: {e}")

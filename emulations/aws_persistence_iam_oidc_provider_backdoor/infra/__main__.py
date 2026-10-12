@@ -44,6 +44,7 @@ account_id = caller.account_id
 # ── CloudTrail S3 Bucket ──────────────────────────────────────────────────────
 trail_bucket = aws.s3.BucketV2(
     "cloudtrail-log-bucket",
+    force_destroy=True,  # lab bucket: CloudTrail/log objects must not block destroy
     tags=TAGS,
 )
 

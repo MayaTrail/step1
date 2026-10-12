@@ -129,6 +129,17 @@ prod_ops_policy = aws.iam.RolePolicy(
         "Version": "2012-10-17",
         "Statement": [
             {
+                "Sid":      "ModifyScenarioInstanceAttributes",
+                "Effect":   "Allow",
+                "Action":   "ec2:ModifyInstanceAttribute",
+                "Resource": "*",
+                "Condition": {
+                    "StringEquals": {
+                        "aws:ResourceTag/MayaTrailScenario": SCENARIO_TAG_VALUE
+                    }
+                },
+            },
+            {
                 "Sid":      "TerminateScenarioInstances",
                 "Effect":   "Allow",
                 "Action":   "ec2:TerminateInstances",

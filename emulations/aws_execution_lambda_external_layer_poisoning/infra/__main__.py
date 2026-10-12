@@ -71,6 +71,7 @@ state_bucket_name_str = f"atomic-lambda-external-layer-poisoning-state-{account_
 
 state_bucket = aws.s3.BucketV2(
     "atomic-lambda-external-layer-poisoning-state-bucket",
+    force_destroy=True,  # lab bucket: CloudTrail/log objects must not block destroy
     bucket=state_bucket_name_str,
     tags=TAGS,
 )
@@ -247,10 +248,12 @@ attacker_policy_doc = pulumi.Output.all(
                 "lambda:DeleteLayerVersion",
             ],
             # Scoped to the lab layer name only - not a wildcard
-            "Resource": (
-                f"arn:aws:lambda:{region_id}:{account_id}"
-                f":layer:{BASELINE_LAYER_NAME}:*"
-            ),
+            # PublishLayerVersion authorises against the layer ARN without a version,
+            # Get/DeleteLayerVersion against a version ARN - both are needed.
+            "Resource": [
+                f"arn:aws:lambda:{region_id}:{account_id}:layer:{BASELINE_LAYER_NAME}",
+                f"arn:aws:lambda:{region_id}:{account_id}:layer:{BASELINE_LAYER_NAME}:*",
+            ],
         },
         {
             "Sid":    "FunctionActions",
@@ -258,6 +261,7 @@ attacker_policy_doc = pulumi.Output.all(
             "Action": [
                 "lambda:UpdateFunctionConfiguration",
                 "lambda:GetFunction",
+                "lambda:GetFunctionConfiguration",
                 "lambda:InvokeFunction",
             ],
             "Resource": args["victim_function_arn"],

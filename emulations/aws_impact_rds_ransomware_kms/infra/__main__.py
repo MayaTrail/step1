@@ -359,7 +359,7 @@ prod_customer_db = aws.rds.Instance(
 # ---------------------------------------------------------------------------
 prod_orders_snapshot = aws.rds.Snapshot(
     "prod-orders-snapshot",
-    db_instance_identifier=prod_customer_db.id,
+    db_instance_identifier=prod_customer_db.identifier,
     db_snapshot_identifier=SNAPSHOT_IDENTIFIER,
     tags={**TAGS, "Name": SNAPSHOT_IDENTIFIER},
 )

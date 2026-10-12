@@ -93,15 +93,32 @@ aws.iam.RolePolicy(
                 "Resource": "*"
             },
             {
-                "Sid": "EC2LaunchScopedToTarget",
+                # RunInstances is authorised per resource type. ec2:InstanceType only
+                # exists on the instance resource, so it must not gate the others.
+                "Sid": "EC2LaunchInstanceScopedToTarget",
                 "Effect": "Allow",
                 "Action": "ec2:RunInstances",
-                "Resource": "*",
+                "Resource": f"arn:aws:ec2:{TARGET_REGION}:{account_id}:instance/*",
                 "Condition": {
                     "StringEquals": {
                         "ec2:InstanceType": "t3.nano",
-                        "aws:RequestedRegion": "eu-north-1"
+                        "aws:RequestedRegion": TARGET_REGION
                     }
+                }
+            },
+            {
+                "Sid": "EC2LaunchSupportingResourcesInTarget",
+                "Effect": "Allow",
+                "Action": "ec2:RunInstances",
+                "Resource": [
+                    f"arn:aws:ec2:{TARGET_REGION}::image/*",
+                    f"arn:aws:ec2:{TARGET_REGION}:{account_id}:subnet/*",
+                    f"arn:aws:ec2:{TARGET_REGION}:{account_id}:security-group/*",
+                    f"arn:aws:ec2:{TARGET_REGION}:{account_id}:network-interface/*",
+                    f"arn:aws:ec2:{TARGET_REGION}:{account_id}:volume/*"
+                ],
+                "Condition": {
+                    "StringEquals": {"aws:RequestedRegion": TARGET_REGION}
                 }
             },
             {

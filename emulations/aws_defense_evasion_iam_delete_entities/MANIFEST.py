@@ -3,6 +3,7 @@
 Generated from the atomic spec by backend_package.generate_atomic_manifest (schema_version 3).
 Review the notes the pipeline printed before shipping to step1/emulations/.
 
+
 """
 
 MANIFEST = {   'schema_version': 3,
@@ -39,6 +40,8 @@ MANIFEST = {   'schema_version': 3,
                                               'iam:DeleteUserPolicy',
                                               'iam:DetachUserPolicy',
                                               'iam:ListAccessKeys',
+                                              'iam:ListAttachedUserPolicies',
+                                              'iam:ListUserPolicies',
                                               'sts:AssumeRole'],
                            'acting_as': {   'connected_role': ['sts:AssumeRole'],
                                             'attacker_role': [   'iam:DeleteAccessKey',
@@ -48,7 +51,9 @@ MANIFEST = {   'schema_version': 3,
                                                                  'iam:DeleteUser',
                                                                  'iam:DeleteUserPolicy',
                                                                  'iam:DetachUserPolicy',
-                                                                 'iam:ListAccessKeys']},
+                                                                 'iam:ListAccessKeys',
+                                                                 'iam:ListAttachedUserPolicies',
+                                                                 'iam:ListUserPolicies']},
                            'aws_resources': {   'iam:DeleteAccessKey': '{backdoor_user_arn}',
                                                 'iam:DeleteLoginProfile': '{backdoor_user_arn}',
                                                 'iam:DeleteRole': '{backdoor_role_arn}',
@@ -57,6 +62,8 @@ MANIFEST = {   'schema_version': 3,
                                                 'iam:DeleteUserPolicy': '{backdoor_user_arn}',
                                                 'iam:DetachUserPolicy': '{backdoor_user_arn}',
                                                 'iam:ListAccessKeys': '{backdoor_user_arn}',
+                                                'iam:ListAttachedUserPolicies': '{backdoor_user_arn}',
+                                                'iam:ListUserPolicies': '{backdoor_user_arn}',
                                                 'sts:AssumeRole': '{attacker_exec_role_arn}'},
                            'techniques': [{'id': 'T1070.009', 'name': 'Clear Persistence'}]}],
     'mitre_mappings': [   {   'id': 'T1070.009',
