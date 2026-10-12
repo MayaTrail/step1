@@ -21,7 +21,7 @@ import type {
 
 import { ActOnPath } from './ActOnPath'
 import { PathView } from './PathView'
-import { nodeFromArn } from './pathModel'
+import { impactLabel, nodeFromArn } from './pathModel'
 import { CARD, FILTER_ROW, FilterChip, PANEL_HEIGHT } from './SplitPanels'
 
 const LEVELS: { level: ReachLevel; label: string; tone: string }[] = [
@@ -36,6 +36,9 @@ const END_NOTE: Record<ReachLevel, string> = {
   self: 'Can make itself an administrator, so reaching it is as good as administrator access.',
   other: 'Not an administrator, and cannot make itself one directly.',
 }
+
+// Ranked-path impacts that end at a resource rather than an identity.
+const RESOURCE_IMPACTS = new Set(['DATA_EXFILTRATION', 'RESOURCE_CONTROL'])
 
 /** An identity's result, which sets its tag, its filter and its place in the list. */
 type Outcome = 'admin' | 'others' | 'already' | 'nothing'
@@ -261,12 +264,42 @@ function ReachCard({
 
   if (result.origin_level === 'other') {
     const regionsRead = (envelope.regions ?? []).length > 0
+    // This tab follows identities only. A ranked path from this identity that
+    // ends at a resource (data read, a function it can change) is still a
+    // finding, so the card points to it rather than reading as "nothing".
+    const resourcePaths = envelope.chains
+      .map((chain, index) => ({ chain, index }))
+      .filter(({ chain }) => chain.source.arn === origin && chain.steps.length > 0
+        && RESOURCE_IMPACTS.has(chain.terminal_impact ?? ''))
     return (
-      <MessageCard eyebrow="Reaches nothing" tone="text-content-dim" title={`${name} cannot become any other identity`}>
+      <MessageCard
+        eyebrow={resourcePaths.length > 0 ? 'Reaches resources only' : 'Reaches nothing'}
+        tone="text-content-dim"
+        title={`${name} cannot become any other identity`}
+      >
         {result.search_capped
           ? 'The search stopped early, so this is not a complete answer.'
           : 'Checked every role it may assume and every escalation it can perform in this scan.'}
         {!regionsRead && ' Identities only: this scan read no regions.'}
+        {resourcePaths.length > 0 && (
+          <>
+            {' '}It does reach resources:{' '}
+            {resourcePaths.map(({ chain, index }, i) => (
+              <span key={chain.id}>
+                {i > 0 && ', '}
+                <button
+                  type="button"
+                  onClick={() => onOpenRanked(index)}
+                  className="bg-transparent p-0 text-sm text-accent-blue transition-opacity hover:opacity-60"
+                >
+                  ranked path {chain.rank}
+                </button>
+                {' '}({impactLabel(chain.terminal_impact).toLowerCase()})
+              </span>
+            ))}
+            .
+          </>
+        )}
       </MessageCard>
     )
   }

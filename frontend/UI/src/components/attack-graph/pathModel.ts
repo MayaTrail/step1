@@ -127,6 +127,8 @@ const MECHANISM_SENTENCE: Record<string, (from: string, to: string) => string> =
   ec2_instance_connect: (from, to) => `${from} can open a shell on an instance that runs as ${to}.`,
   ecs_exec: (from, to) => `${from} can open a shell in a container that runs as ${to}.`,
   direct_iam: (from, to) => `${from} already holds permissions that reach ${to}.`,
+  resource_access: (from, to) => `${from} can read ${to}.`,
+  resource_control: (from, to) => `${from} can change or run ${to}.`,
 }
 
 export function stepSentence(step: ChainStep): string {
