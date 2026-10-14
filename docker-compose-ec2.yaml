@@ -3,13 +3,16 @@
 #           Celery Beat scheduler, Scout attack-graph engine, React UI,
 #           Edge nginx proxy.
 #
-# Every host-specific value comes from an untracked .env beside this file, so a
-# deploy never edits a tracked file and git pull never conflicts on the host.
+# The host pulls prebuilt images from GHCR and never builds. Every host-specific
+# value comes from an untracked .env beside this file, so a deploy never edits a
+# tracked file and git pull never conflicts on the host. IMAGE_TAG in .env is the
+# version to run (a sha-<...> from a main build, or a v<version> release).
 #
-# Usage:
+# Usage (pulling a private image needs `docker login ghcr.io` once on the host):
 #   cp backend/.env.example backend/.env   # fill in SECRET_KEY & AWS creds
-#   cp .env.example .env                   # fill in POSTGRES_HOST, POSTGRES_PASSWORD, SCOUT_SERVICE_TOKEN
-#   docker compose -f docker-compose-ec2.yaml up -d --build
+#   cp .env.example .env                   # POSTGRES_HOST, POSTGRES_PASSWORD, SCOUT_SERVICE_TOKEN, IMAGE_TAG
+#   docker compose -f docker-compose-ec2.yaml pull
+#   docker compose -f docker-compose-ec2.yaml up -d
 
 services:
   redis:
@@ -24,9 +27,9 @@ services:
       retries: 10
 
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    # Built and pushed by .github/workflows/build-images.yml; the host pulls,
+    # never builds. IMAGE_TAG is the sha-<...> or v<version> being deployed.
+    image: ghcr.io/mayatrail/step1-backend:${IMAGE_TAG:?set IMAGE_TAG in .env (the sha-<...> or v<version> to deploy)}
     restart: unless-stopped
     env_file:
       - ./backend/.env
@@ -65,9 +68,7 @@ services:
   # Runs against the user's own AWS account via STS AssumeRole.
   # No Docker socket required — Pulumi Automation API runs in-process.
   worker_enterprise:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.worker
+    image: ghcr.io/mayatrail/step1-worker:${IMAGE_TAG:?set IMAGE_TAG in .env}
     restart: unless-stopped
     env_file:
       - ./backend/.env
@@ -109,9 +110,8 @@ services:
 
   # Celery Beat scheduler — runs auto_destroy_expired_stacks every 15 minutes.
   beat:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    # Same image as backend, a different command.
+    image: ghcr.io/mayatrail/step1-backend:${IMAGE_TAG:?set IMAGE_TAG in .env}
     restart: unless-stopped
     env_file:
       - ./backend/.env
@@ -132,20 +132,10 @@ services:
       celery -A config beat --loglevel=info
       --scheduler django_celery_beat.schedulers:DatabaseScheduler
 
-  # UI (React SPA on nginx)
+  # UI (React SPA on nginx). VITE_GOOGLE_CLIENT_ID is baked in at CI build time
+  # (a repository variable), so there is no build arg here.
   ui:
-    build:
-      context: ./frontend/UI
-      dockerfile: Dockerfile
-      args:
-        # Baked into the SPA at build time; enables the "Continue with Google"
-        # button. Pass-through form (no value): the arg is forwarded when the
-        # variable is set in the shell or a root-level .env, and OMITTED when it
-        # is not. The `${VAR:-}` form always forwards it, and an empty build arg
-        # becomes an empty env var that overrides frontend/UI/.env, because Vite
-        # gives an existing environment variable precedence over a .env file.
-        # Leaving it unset here is what lets frontend/UI/.env act as the default.
-        - VITE_GOOGLE_CLIENT_ID
+    image: ghcr.io/mayatrail/step1-ui:${IMAGE_TAG:?set IMAGE_TAG in .env}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "kill -0 $$(cat /tmp/nginx.pid 2>/dev/null) 2>/dev/null || exit 1"]
