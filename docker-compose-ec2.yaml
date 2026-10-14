@@ -1,14 +1,15 @@
-version: "3.9"
-
 # MayaTrail step1 — enterprise stack
 # Services: PostgreSQL, Redis, Django backend, Celery enterprise worker,
 #           Celery Beat scheduler, Scout attack-graph engine, React UI,
 #           Edge nginx proxy.
 #
+# Every host-specific value comes from an untracked .env beside this file, so a
+# deploy never edits a tracked file and git pull never conflicts on the host.
+#
 # Usage:
 #   cp backend/.env.example backend/.env   # fill in SECRET_KEY & AWS creds
-#   cp .env.example .env                   # fill in SCOUT_SERVICE_TOKEN
-#   docker-compose up --build
+#   cp .env.example .env                   # fill in POSTGRES_HOST, POSTGRES_PASSWORD, SCOUT_SERVICE_TOKEN
+#   docker compose -f docker-compose-ec2.yaml up -d --build
 
 services:
   redis:
@@ -31,11 +32,11 @@ services:
       - ./backend/.env
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.dev
-      POSTGRES_HOST: <db_ec2_private_ip>
-      POSTGRES_PORT: "5432"
-      POSTGRES_DB: mayatrail
-      POSTGRES_USER: mayatrail
-      POSTGRES_PASSWORD: mayatrail
+      POSTGRES_HOST: ${POSTGRES_HOST:?set POSTGRES_HOST in .env (the db instance private IP)}
+      POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       REDIS_URL: redis://redis:6379/0
       EMULATIONS_BASE_DIR: /opt/emulations
     ports:
@@ -52,8 +53,12 @@ services:
       timeout: 5s
       retries: 15
       start_period: 30s
+    # Migrations are committed to the repo, never generated at boot. A boot-time
+    # makemigrations regenerated 0001_initial on every start; because the database
+    # already recorded that name as applied, a later migrate became a no-op and a
+    # new model or field silently never reached the schema. Only migrate runs here.
     command: >
-      sh -c "python manage.py makemigrations users infrastructure emulations logs && python manage.py migrate --noinput &&
+      sh -c "python manage.py migrate --noinput &&
              gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120"
 
   # Enterprise worker — handles emulation deploy/attack/destroy tasks.
@@ -68,11 +73,11 @@ services:
       - ./backend/.env
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.dev
-      POSTGRES_HOST: <db_ec2_private_ip>
-      POSTGRES_PORT: "5432"
-      POSTGRES_DB: mayatrail
-      POSTGRES_USER: mayatrail
-      POSTGRES_PASSWORD: mayatrail
+      POSTGRES_HOST: ${POSTGRES_HOST:?set POSTGRES_HOST in .env (the db instance private IP)}
+      POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       REDIS_URL: redis://redis:6379/0
       STATE_BUCKET: mayatrail-state-bucket
       STATE_BUCKET_REGION: ap-south-1
@@ -97,7 +102,7 @@ services:
   # receives a tenant's temporary credentials and has no use for MayaTrail's.
   # Pulling the image needs `docker login ghcr.io` once on the host.
   scout:
-    image: ghcr.io/mayatrail/scout:v0.2.0
+    image: ghcr.io/mayatrail/scout:v0.2.1
     restart: unless-stopped
     environment:
       SCOUT_SERVICE_TOKEN: ${SCOUT_SERVICE_TOKEN:?set SCOUT_SERVICE_TOKEN in .env (see .env.example)}
@@ -112,11 +117,11 @@ services:
       - ./backend/.env
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.dev
-      POSTGRES_HOST: <db_ec2_private_ip>
-      POSTGRES_PORT: "5432"
-      POSTGRES_DB: mayatrail
-      POSTGRES_USER: mayatrail
-      POSTGRES_PASSWORD: mayatrail
+      POSTGRES_HOST: ${POSTGRES_HOST:?set POSTGRES_HOST in .env (the db instance private IP)}
+      POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       REDIS_URL: redis://redis:6379/0
     depends_on:
       redis:
