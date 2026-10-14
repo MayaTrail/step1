@@ -1,0 +1,26 @@
+# Keep secrets and local cruft out of the backend image. The Dockerfile does
+# COPY . ., so without this the real backend/.env would be baked into every
+# image and shipped to any registry the image is pushed to.
+.env
+*.env
+!.env.example
+
+# Python build and cache artifacts, regenerated inside the image.
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local development databases and logs.
+*.sqlite3
+db.sqlite3
+*.log
+
+# Version control and editor state.
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
