@@ -27,6 +27,8 @@ declare global {
               size?: string
               width?: number
               text?: string
+              shape?: string
+              logo_alignment?: string
             }
           ) => void
         }
@@ -36,6 +38,19 @@ declare global {
 }
 
 type AuthTab = 'signin' | 'signup'
+
+/**
+ * Brand-panel step track: how a MayaTrail run works, left to right. Each step
+ * takes one design-system accent; the connecting line blends between them.
+ */
+const STEPS = [
+  { title: 'Deploy a lab', desc: 'Spin up a vulnerable stack in your test account.', color: '#FF6363', ring: 'rgba(255,99,99,0.5)' },
+  { title: 'Run the attack', desc: 'Replay a real adversary technique, step by step.', color: '#55b3ff', ring: 'rgba(85,179,255,0.5)' },
+  { title: 'Check detections', desc: 'See which of your detections fired, and which missed.', color: '#5fc992', ring: 'rgba(95,201,146,0.5)' },
+  { title: 'Close the gap', desc: 'Apply the guardrail and the playbook, then tear it down.', color: '#ffbc33', ring: 'rgba(255,188,51,0.5)' },
+] as const
+
+const COVERAGE = ['AWS', 'Azure', 'GCP', 'Kubernetes'] as const
 
 /** Root login page — full-screen two-column split layout. */
 export function LoginPage() {
@@ -100,107 +115,157 @@ export function LoginPage() {
         }}
       />
 
-      {/* ── Two-column card ── */}
-      <div
-        className="relative z-10 flex w-full"
-        style={{
-          maxWidth: 'min(960px, 92vw)',
-          minHeight: '580px',
-          border: '1px solid rgba(255,255,255,0.07)',
-          borderRadius: '16px',
-          overflow: 'hidden',
-          boxShadow: 'rgb(7,8,10) 0px 0px 0px 1px inset, rgba(0,0,0,0.45) 0px 24px 48px',
-        }}
-      >
-        {/* ── Left: Brand panel ── */}
+      {/* ── Full-screen two-column split ── */}
+      <div className="relative z-10 flex w-full" style={{ minHeight: '100vh' }}>
+        {/* ── Left: Brand panel (hidden on small screens) ── */}
         <div
-          className="flex flex-col justify-between"
+          className="hidden lg:flex flex-col justify-between"
           style={{
-            width: '42%',
-            minWidth: '280px',
-            background: '#101111',
+            width: '62%',
+            background: 'radial-gradient(120% 90% at 15% 0%, #0c0e12 0%, #07080a 55%)',
             borderRight: '1px solid rgba(255,255,255,0.06)',
-            padding: '48px 40px',
+            padding: '56px 64px 56px 80px',
             flexShrink: 0,
           }}
         >
-          {/* Logo + wordmark */}
-          <div>
-            <div className="flex items-center gap-2.5 mb-10">
-              <img src={mayatrailLogo} alt="MayaTrail" style={{ width: '28px', height: '28px', borderRadius: '6px', objectFit: 'cover' }} />
-              <span style={{ fontSize: '16px', fontWeight: 600, letterSpacing: '-0.2px', color: '#f9f9f9' }}>MayaTrail</span>
+          {/* Logo + wordmark (top-left) */}
+          <div className="flex items-center" style={{ gap: '9px' }}>
+            <img src={mayatrailLogo} alt="MayaTrail" style={{ width: '27px', height: '27px', objectFit: 'contain' }} />
+            <span style={{ fontSize: '16px', fontWeight: 600, letterSpacing: '0.3px', color: '#f9f9f9' }}>MayaTrail</span>
+          </div>
+
+          {/* Middle group: headline, step track, coverage — vertically centred */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '38px' }}>
+            <div>
+              <h1 style={{ fontSize: '38px', fontWeight: 600, lineHeight: 1.12, letterSpacing: '-0.3px', color: '#f9f9f9', maxWidth: '760px' }}>
+                Attack your cloud <span style={{ color: '#9a9b9c' }}>before someone else does.</span>
+              </h1>
+              <p style={{ fontSize: '15px', color: '#9a9b9c', lineHeight: 1.6, letterSpacing: '0.2px', marginTop: '16px', maxWidth: '480px' }}>
+                Provision intentionally vulnerable AWS environments, run real adversary emulations, and prove your detections actually fire.
+              </p>
             </div>
 
-            <h2 style={{ fontSize: '22px', fontWeight: 600, color: '#f9f9f9', lineHeight: 1.3, marginBottom: '10px', letterSpacing: '-0.2px' }}>
-              Adversary emulation,<br />built for security teams.
-            </h2>
-            <p style={{ fontSize: '13px', color: '#6a6b6c', lineHeight: 1.7, letterSpacing: '0.2px', marginBottom: '36px' }}>
-              Simulate real-world APT activity and validate your detection coverage — all in one platform.
-            </p>
-
-            {/* Feature list */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              {([
-                { icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z', text: 'Guided APT scenario playbooks' },
-                { icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z', text: 'SIEM telemetry & alert correlation' },
-                { icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2', text: 'Full audit trail & compliance logs' },
-              ] as const).map(({ icon, text }) => (
-                <div key={text} className="flex items-start gap-3">
-                  <svg style={{ width: '15px', height: '15px', color: '#FF6363', marginTop: '1px', flexShrink: 0 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d={icon} strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  <span style={{ fontSize: '13px', color: '#9c9c9d', letterSpacing: '0.2px', lineHeight: 1.5 }}>{text}</span>
+            {/* Step track: how a run works, left to right */}
+            <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '18px', maxWidth: '780px' }}>
+              <div
+                style={{
+                  position: 'absolute', left: '14px', right: '14px', top: '14px', height: '1px',
+                  background: 'linear-gradient(90deg, rgba(255,99,99,0.6), rgba(85,179,255,0.5), rgba(95,201,146,0.5), rgba(255,188,51,0.5))',
+                }}
+              />
+              {STEPS.map((s, i) => (
+                <div key={s.title} style={{ position: 'relative' }}>
+                  <div
+                    style={{
+                      position: 'relative', width: '29px', height: '29px', borderRadius: '50%',
+                      display: 'grid', placeItems: 'center', fontSize: '12px', fontWeight: 600,
+                      background: '#07080a', color: s.color, border: `1px solid ${s.ring}`,
+                    }}
+                  >
+                    {i + 1}
+                  </div>
+                  <p style={{ marginTop: '14px', fontSize: '14px', fontWeight: 600, color: '#f9f9f9' }}>{s.title}</p>
+                  <p style={{ marginTop: '5px', fontSize: '12.5px', color: '#9a9b9c', lineHeight: 1.45 }}>{s.desc}</p>
                 </div>
               ))}
+            </div>
+
+            {/* Coverage */}
+            <div className="flex items-center flex-wrap" style={{ gap: '20px' }}>
+              <span style={{ fontSize: '11px', letterSpacing: '0.7px', textTransform: 'uppercase', color: '#6a6b6c' }}>Coverage</span>
+              <div className="flex flex-wrap" style={{ gap: '8px' }}>
+                {COVERAGE.map((c) => (
+                  <span key={c} style={{ fontSize: '12px', fontWeight: 600, color: '#f9f9f9', background: '#1b1c1e', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '6px', padding: '5px 10px' }}>{c}</span>
+                ))}
+              </div>
             </div>
           </div>
 
           {/* Bottom disclaimer */}
-          <p style={{ fontSize: '10px', fontFamily: 'Geist Mono, monospace', color: '#434345', letterSpacing: '0.8px', marginTop: '40px' }}>
+          <p style={{ fontSize: '10px', fontFamily: 'Geist Mono, monospace', color: '#434345', letterSpacing: '0.8px' }}>
             USE ONLY IN ISOLATED TEST ACCOUNTS
           </p>
         </div>
 
-        {/* ── Right: Form panel ── */}
-        <div
-          className="flex flex-col justify-center"
-          style={{ flex: 1, background: '#07080a', padding: '48px 44px' }}
-        >
-          {/* Heading */}
-          <h1 style={{ fontSize: '26px', fontWeight: 600, letterSpacing: '-0.3px', color: '#f9f9f9', marginBottom: '4px' }}>
-            {activeTab === 'signin' ? 'Sign in to your account' : 'Create your account'}
-          </h1>
-          <p style={{ fontSize: '13px', color: '#6a6b6c', letterSpacing: '0.2px', marginBottom: '28px' }}>
-            {activeTab === 'signin'
-              ? <>No account? <button type="button" onClick={() => switchTab('signup')} style={{ color: '#FF6363', background: 'none', border: 'none', cursor: 'pointer', fontSize: '13px', padding: 0, fontFamily: 'inherit' }}>Create one →</button></>
-              : <>Already have an account? <button type="button" onClick={() => switchTab('signin')} style={{ color: '#FF6363', background: 'none', border: 'none', cursor: 'pointer', fontSize: '13px', padding: 0, fontFamily: 'inherit' }}>Sign in →</button></>
-            }
-          </p>
+        {/* ── Right: Auth card ── */}
+        <div className="flex-1 flex items-center justify-center" style={{ background: '#07080a', padding: '40px 24px' }}>
+          <div
+            style={{
+              width: '100%', maxWidth: '400px', background: '#101111',
+              border: '1px solid rgba(255,255,255,0.06)', borderRadius: '16px',
+              boxShadow: 'rgb(27,28,30) 0 0 0 1px, rgb(7,8,10) 0 0 0 1px inset',
+              padding: '32px 30px',
+            }}
+          >
+            {/* Heading */}
+            <h2 style={{ fontSize: '22px', fontWeight: 600, letterSpacing: '-0.1px', color: '#f9f9f9' }}>
+              {activeTab === 'signin' ? 'Welcome back' : 'Create your account'}
+            </h2>
+            <p style={{ marginTop: '6px', fontSize: '13.5px', color: '#9a9b9c', marginBottom: '22px' }}>
+              {activeTab === 'signin' ? 'Sign in to your MayaTrail workspace.' : 'Start emulating in minutes.'}
+            </p>
 
-          {/* Account verified banner */}
-          {signupSuccess && (
-            <div
-              className="mb-5 flex items-start gap-3"
-              style={{ background: 'rgba(95,201,146,0.07)', border: '1px solid rgba(95,201,146,0.18)', borderRadius: '8px', padding: '11px 14px' }}
-            >
-              <svg style={{ width: '14px', height: '14px', color: '#5fc992', marginTop: '1px', flexShrink: 0 }} viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-              </svg>
-              <div>
-                <p style={{ fontSize: '13px', fontWeight: 600, color: '#5fc992', marginBottom: '2px' }}>Account Verified</p>
-                <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.5 }}>Your email has been verified. Sign in below.</p>
-              </div>
+            {/* Tabs */}
+            <div style={{ display: 'flex', gap: '4px', background: '#07080a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '4px', marginBottom: '22px' }}>
+              {(['signin', 'signup'] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => switchTab(t)}
+                  style={{
+                    flex: 1, border: 0, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600, fontSize: '13px',
+                    padding: '8px 0', borderRadius: '7px',
+                    background: activeTab === t ? '#101111' : 'transparent',
+                    color: activeTab === t ? '#f9f9f9' : '#9a9b9c',
+                    boxShadow: activeTab === t ? 'rgb(27,28,30) 0 0 0 1px, rgb(7,8,10) 0 0 0 1px inset' : 'none',
+                  }}
+                >
+                  {t === 'signin' ? 'Sign in' : 'Create account'}
+                </button>
+              ))}
             </div>
-          )}
 
-          {/* Form area */}
-          <div style={{ opacity: formVisible ? 1 : 0, transition: 'opacity 0.12s ease' }}>
-            {activeTab === 'signin'
-              ? <SignInForm />
-              : <SignUpForm onComplete={handleSignupComplete} />
-            }
-
+            {/* Google — prominent, above the divider */}
             <GoogleSignInButton onCredential={handleGoogleCredential} />
+
+            {/* OR divider */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', margin: '18px 0', color: '#6a6b6c', fontSize: '11.5px', letterSpacing: '0.6px' }}>
+              <span style={{ height: '1px', flex: 1, background: 'rgba(255,255,255,0.06)' }} />
+              OR
+              <span style={{ height: '1px', flex: 1, background: 'rgba(255,255,255,0.06)' }} />
+            </div>
+
+            {/* Account verified banner */}
+            {signupSuccess && (
+              <div
+                className="mb-5 flex items-start gap-3"
+                style={{ background: 'rgba(95,201,146,0.07)', border: '1px solid rgba(95,201,146,0.18)', borderRadius: '8px', padding: '11px 14px' }}
+              >
+                <svg style={{ width: '14px', height: '14px', color: '#5fc992', marginTop: '1px', flexShrink: 0 }} viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                <div>
+                  <p style={{ fontSize: '13px', fontWeight: 600, color: '#5fc992', marginBottom: '2px' }}>Account Verified</p>
+                  <p style={{ fontSize: '12px', color: '#9c9c9d', lineHeight: 1.5 }}>Your email has been verified. Sign in below.</p>
+                </div>
+              </div>
+            )}
+
+            {/* Form */}
+            <div style={{ opacity: formVisible ? 1 : 0, transition: 'opacity 0.12s ease' }}>
+              {activeTab === 'signin'
+                ? <SignInForm />
+                : <SignUpForm onComplete={handleSignupComplete} />
+              }
+            </div>
+
+            {/* Switch tab link */}
+            <div style={{ marginTop: '18px', textAlign: 'center', color: '#9a9b9c', fontSize: '13px' }}>
+              {activeTab === 'signin'
+                ? <>No account? <button type="button" onClick={() => switchTab('signup')} style={{ color: '#55b3ff', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer', fontSize: '13px', padding: 0, fontFamily: 'inherit' }}>Create one &rarr;</button></>
+                : <>Already have one? <button type="button" onClick={() => switchTab('signin')} style={{ color: '#55b3ff', fontWeight: 500, background: 'none', border: 'none', cursor: 'pointer', fontSize: '13px', padding: 0, fontFamily: 'inherit' }}>Sign in &rarr;</button></>
+              }
+            </div>
           </div>
         </div>
       </div>
@@ -309,7 +374,7 @@ function SignInForm() {
           <button
             type="button"
             onClick={() => { clearError(); setForgotStep('email') }}
-            style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: '#FF6363', letterSpacing: '0.3px', background: 'none', border: 'none', cursor: 'pointer', padding: 0, transition: 'opacity 0.15s' }}
+            style={{ fontSize: '12px', fontFamily: 'inherit', fontWeight: 500, color: '#55b3ff', letterSpacing: '0.2px', background: 'none', border: 'none', cursor: 'pointer', padding: 0, transition: 'opacity 0.15s' }}
             onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.6')}
             onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
           >
@@ -328,7 +393,7 @@ function SignInForm() {
       {/* Remember me */}
       <div className="flex items-center">
         <label className="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" style={{ accentColor: '#FF6363', width: '13px', height: '13px' }} />
+          <input type="checkbox" style={{ accentColor: '#55b3ff', width: '13px', height: '13px' }} />
           <span style={{ fontSize: '12px', color: '#9c9c9d' }}>Remember me</span>
         </label>
       </div>
@@ -413,7 +478,7 @@ function ForgotPasswordForm({ onCodeSent, onBack }: {
         <button
           type="button"
           onClick={onBack}
-          style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: '#6a6b6c', background: 'none', border: 'none', cursor: 'pointer', padding: 0, transition: 'opacity 0.15s' }}
+          style={{ fontSize: '12.5px', fontFamily: 'inherit', color: '#9a9b9c', background: 'none', border: 'none', cursor: 'pointer', padding: 0, transition: 'opacity 0.15s' }}
           onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.6')}
           onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
         >
@@ -618,7 +683,7 @@ function ResetPasswordOTPForm({ email, onSuccess, onBack }: {
         <button
           type="button"
           onClick={onBack}
-          style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: '#6a6b6c', background: 'none', border: 'none', cursor: 'pointer', padding: 0, transition: 'opacity 0.15s' }}
+          style={{ fontSize: '12.5px', fontFamily: 'inherit', color: '#9a9b9c', background: 'none', border: 'none', cursor: 'pointer', padding: 0, transition: 'opacity 0.15s' }}
           onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.6')}
           onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
         >
@@ -628,7 +693,7 @@ function ResetPasswordOTPForm({ email, onSuccess, onBack }: {
           type="button"
           onClick={handleResend}
           disabled={resendCooldown > 0 || loading}
-          style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: resendCooldown > 0 ? '#434345' : '#FF6363', background: 'none', border: 'none', cursor: resendCooldown > 0 ? 'not-allowed' : 'pointer', padding: 0, transition: 'opacity 0.15s' }}
+          style={{ fontSize: '12.5px', fontFamily: 'inherit', fontWeight: 500, color: resendCooldown > 0 ? '#6a6b6c' : '#55b3ff', background: 'none', border: 'none', cursor: resendCooldown > 0 ? 'not-allowed' : 'pointer', padding: 0, transition: 'opacity 0.15s' }}
           onMouseEnter={(e) => { if (resendCooldown <= 0) e.currentTarget.style.opacity = '0.6' }}
           onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
         >
@@ -636,7 +701,7 @@ function ResetPasswordOTPForm({ email, onSuccess, onBack }: {
         </button>
       </div>
 
-      <p style={{ fontSize: '10px', fontFamily: 'Geist Mono, monospace', color: '#434345', textAlign: 'center', letterSpacing: '0.3px' }}>
+      <p style={{ fontSize: '11.5px', fontFamily: 'inherit', color: '#6a6b6c', textAlign: 'center', letterSpacing: '0.2px' }}>
         Expires in 10 minutes — up to 5 attempts
       </p>
     </form>
@@ -931,7 +996,7 @@ function OTPVerificationForm({
         <button
           type="button"
           onClick={onBack}
-          style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: '#6a6b6c', background: 'none', border: 'none', cursor: 'pointer', padding: 0, transition: 'opacity 0.15s' }}
+          style={{ fontSize: '12.5px', fontFamily: 'inherit', color: '#9a9b9c', background: 'none', border: 'none', cursor: 'pointer', padding: 0, transition: 'opacity 0.15s' }}
           onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.6')}
           onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
         >
@@ -941,7 +1006,7 @@ function OTPVerificationForm({
           type="button"
           onClick={handleResend}
           disabled={resendCooldown > 0 || loading}
-          style={{ fontSize: '11px', fontFamily: 'Geist Mono, monospace', color: resendCooldown > 0 ? '#434345' : '#FF6363', background: 'none', border: 'none', cursor: resendCooldown > 0 ? 'not-allowed' : 'pointer', padding: 0, transition: 'opacity 0.15s' }}
+          style={{ fontSize: '12.5px', fontFamily: 'inherit', fontWeight: 500, color: resendCooldown > 0 ? '#6a6b6c' : '#55b3ff', background: 'none', border: 'none', cursor: resendCooldown > 0 ? 'not-allowed' : 'pointer', padding: 0, transition: 'opacity 0.15s' }}
           onMouseEnter={(e) => { if (resendCooldown <= 0) e.currentTarget.style.opacity = '0.6' }}
           onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
         >
@@ -949,7 +1014,7 @@ function OTPVerificationForm({
         </button>
       </div>
 
-      <p style={{ fontSize: '10px', fontFamily: 'Geist Mono, monospace', color: '#434345', textAlign: 'center', letterSpacing: '0.3px' }}>
+      <p style={{ fontSize: '11.5px', fontFamily: 'inherit', color: '#6a6b6c', textAlign: 'center', letterSpacing: '0.2px' }}>
         Expires in 10 minutes — up to 5 attempts
       </p>
     </form>
@@ -993,10 +1058,15 @@ function GoogleSignInButton({ onCredential }: { onCredential: (idToken: string) 
     lastWidthRef.current = width
     containerRef.current.innerHTML = ''
     window.google.accounts.id.renderButton(containerRef.current, {
-      theme: 'filled_black',
+      // Light pill with the Google mark, to match the mockup's CTA. GIS renders
+      // its own button, so this is as close to the design as Google's theming
+      // allows; a fully custom button would require the OAuth code flow.
+      theme: 'outline',
       size: 'large',
       width,
       text: 'continue_with',
+      shape: 'pill',
+      logo_alignment: 'left',
     })
   }, [])
 
@@ -1064,16 +1134,29 @@ function GoogleSignInButton({ onCredential }: { onCredential: (idToken: string) 
 
   if (!clientId) return null
 
+  // The GIS button cannot be restyled (it renders in a sandboxed iframe and
+  // ignores the pill shape). To match the mockup we draw our own pill and lay
+  // the real Google button over it, invisible but still clickable, so the
+  // ID-token sign-in flow is unchanged.
   return (
-    <div className="flex flex-col gap-3 mt-1">
-      <div className="flex items-center gap-3">
-        <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.06)' }} />
-        <span style={{ fontSize: '10px', fontFamily: 'Geist Mono, monospace', color: '#434345', letterSpacing: '1px', textTransform: 'uppercase' }}>or</span>
-        <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.06)' }} />
+    <div ref={wrapperRef} style={{ position: 'relative', width: '100%', height: '44px' }}>
+      <div
+        style={{
+          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
+          background: 'hsla(0,0%,100%,0.815)', color: '#18191a', borderRadius: '86px',
+          fontWeight: 600, fontSize: '14px', letterSpacing: '0.2px', pointerEvents: 'none',
+          boxShadow: 'rgba(255,255,255,0.1) 0px 1px 0px 0px inset',
+        }}
+      >
+        <svg width="17" height="17" viewBox="0 0 48 48" aria-hidden="true">
+          <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.9 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.2C12.4 13.6 17.7 9.5 24 9.5z" />
+          <path fill="#4285F4" d="M46.1 24.6c0-1.6-.1-3.1-.4-4.6H24v9.3h12.4c-.5 2.9-2.1 5.4-4.6 7.1l7.1 5.5C43.3 38 46.1 31.9 46.1 24.6z" />
+          <path fill="#FBBC05" d="M10.5 28.6c-.5-1.4-.7-2.9-.7-4.6s.3-3.2.7-4.6l-7.9-6.2C1 16.5 0 20.1 0 24s1 7.5 2.6 10.8l7.9-6.2z" />
+          <path fill="#34A853" d="M24 48c6.3 0 11.6-2.1 15.5-5.7l-7.1-5.5c-2 1.3-4.6 2.1-8.4 2.1-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.2C6.5 42.6 14.6 48 24 48z" />
+        </svg>
+        Continue with Google
       </div>
-      <div ref={wrapperRef} style={{ width: '100%', minHeight: '44px' }}>
-        <div ref={containerRef} className="flex justify-center" />
-      </div>
+      <div ref={containerRef} style={{ position: 'absolute', inset: 0, opacity: 0.001, overflow: 'hidden' }} />
     </div>
   )
 }
@@ -1161,31 +1244,31 @@ function PrimaryButton({
       disabled={loading || disabled}
       style={{
         width: '100%',
-        padding: '10px 20px',
-        background: '#FF6363',
-        color: '#fff',
+        padding: '11px 20px',
+        background: 'hsla(0,0%,100%,0.815)',
+        color: '#18191a',
         border: 'none',
-        borderRadius: '6px',
-        fontSize: '13px',
+        borderRadius: '86px',
+        fontSize: '14px',
         fontWeight: 600,
-        letterSpacing: '0.3px',
+        letterSpacing: '0.2px',
         cursor: loading || disabled ? 'not-allowed' : 'pointer',
-        opacity: loading || disabled ? 0.5 : 1,
-        transition: 'opacity 0.15s',
+        opacity: loading || disabled ? 0.55 : 1,
+        transition: 'background 0.15s, opacity 0.15s',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         gap: '8px',
-        boxShadow: 'rgba(255,99,99,0.25) 0px 1px 0px 0px inset, rgba(0,0,0,0.2) 0px -1px 0px 0px inset',
+        boxShadow: 'rgba(255,255,255,0.1) 0px 1px 0px 0px inset',
       }}
-      onMouseEnter={(e) => { if (!loading && !disabled) e.currentTarget.style.opacity = '0.8' }}
-      onMouseLeave={(e) => { if (!loading && !disabled) e.currentTarget.style.opacity = '1' }}
+      onMouseEnter={(e) => { if (!loading && !disabled) e.currentTarget.style.background = '#fff' }}
+      onMouseLeave={(e) => { if (!loading && !disabled) e.currentTarget.style.background = 'hsla(0,0%,100%,0.815)' }}
     >
       <span>{children}</span>
       {loading && (
         <div
           className="animate-spin"
-          style={{ width: '13px', height: '13px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%' }}
+          style={{ width: '13px', height: '13px', border: '2px solid rgba(24,25,26,0.25)', borderTopColor: '#18191a', borderRadius: '50%' }}
         />
       )}
     </button>
@@ -1198,7 +1281,7 @@ function ErrorBanner({ message }: { message: string }) {
     <div
       style={{
         fontSize: '12px',
-        fontFamily: 'Geist Mono, monospace',
+        fontFamily: 'inherit',
         color: '#FF6363',
         background: 'rgba(255,99,99,0.06)',
         border: '1px solid rgba(255,99,99,0.15)',

@@ -55,7 +55,13 @@ export function AppLayout() {
         <Sidebar isOpen={sidebarOpen} onClose={closeSidebar} />
 
         <main className="flex-1 overflow-hidden relative min-w-0">
-          <div className="h-full overflow-y-auto px-6 lg:px-8 py-7 animate-fadeIn">
+          {/*
+           * Keyed by pathname so the fade-in replays on every route change.
+           * Without the key the wrapper mounts once and the swap between
+           * features is abrupt (a one-frame flicker); re-mounting it per route
+           * turns that into a short, consistent fade.
+           */}
+          <div key={location.pathname} className="h-full overflow-y-auto px-6 lg:px-8 py-7 animate-fadeIn">
             <Outlet />
           </div>
         </main>

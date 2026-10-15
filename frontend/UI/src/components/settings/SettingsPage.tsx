@@ -24,26 +24,30 @@ export function SettingsPage() {
 
     return (
         <div className="w-full">
+            {/* Page header: same pattern as the Security Content hubs */}
             <div className="mb-6">
-                <h1 className="font-display text-[28px] md:text-[32px] font-bold text-content-primary tracking-[-0.5px]">
+                <div className="font-mono text-[0.7rem] uppercase tracking-[2px] text-accent-blue font-medium mb-2">
+                    Workspace
+                </div>
+                <div className="font-display text-[1.8rem] font-[800] text-content-primary leading-tight tracking-[-1px]">
                     Settings
-                </h1>
-                <p className="text-content-secondary text-sm mt-1 tracking-[0.2px]">
+                </div>
+                <div className="text-[0.9rem] text-content-secondary mt-1.5">
                     Manage your preferences for this workspace.
-                </p>
+                </div>
             </div>
 
-            {/* Top tabs — Raycast-red underline marks the active section. */}
-            <div className="flex gap-1 border-b border-white/[0.05] mb-8 overflow-x-auto">
+            {/* Segmented tabs, matching the sign-in card's tab control. */}
+            <div className="inline-flex gap-1 rounded-btn border border-border bg-surface-deep p-1 mb-8 max-w-full overflow-x-auto">
                 {TABS.map((t) => (
                     <button
                         key={t.id}
                         type="button"
                         onClick={() => setActive(t.id)}
-                        className={`px-4 py-3 -mb-px text-sm font-medium whitespace-nowrap border-b-2 transition-colors cursor-pointer bg-transparent
+                        className={`px-4 py-2 rounded-btn text-sm font-semibold whitespace-nowrap transition-opacity cursor-pointer border-0
                             ${active === t.id
-                                ? 'text-content-primary border-danger'
-                                : 'text-content-dim border-transparent hover:text-content-secondary'}`}
+                                ? 'bg-surface-card text-content-primary shadow-ring'
+                                : 'bg-transparent text-content-dim hover:opacity-60'}`}
                     >
                         {t.label}
                     </button>
@@ -72,7 +76,7 @@ function AppearanceSection() {
         <>
             <SectionHeader title="Appearance" description="Customize the interface. Changes apply immediately." />
 
-            <div className="bg-surface-card rounded-[12px] border border-border p-6 md:p-8 shadow-ring divide-y divide-white/[0.05]">
+            <div className="bg-surface-card rounded-card border border-border p-6 md:p-8 shadow-ring divide-y divide-white/[0.05]">
                 {/* Reduce motion */}
                 <div className="pb-5">
                     <ToggleRow
@@ -111,7 +115,7 @@ function AccountSection() {
         <>
             <SectionHeader title="Account" description="Your identity and session for this workspace." />
 
-            <div className="bg-surface-card rounded-[12px] border border-border p-6 md:p-8 shadow-ring">
+            <div className="bg-surface-card rounded-card border border-border p-6 md:p-8 shadow-ring">
                 <div className="flex items-center gap-3 mb-6">
                     <div className="w-11 h-11 rounded-full bg-surface-elevated border border-border flex items-center justify-center font-mono text-sm text-content-primary">
                         {user.initials}
@@ -258,7 +262,7 @@ function ToggleRow({ label, description, checked, onToggle }: {
                 aria-checked={checked}
                 onClick={onToggle}
                 className="relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
-                style={{ backgroundColor: checked ? '#FF6363' : 'rgba(255,255,255,0.1)' }}
+                style={{ backgroundColor: checked ? '#55b3ff' : 'rgba(255,255,255,0.1)' }}
             >
                 <span
                     className={`pointer-events-none inline-block h-4 w-4 transform rounded-full shadow ring-0 transition duration-200 ease-in-out
