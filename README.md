@@ -340,6 +340,53 @@ recorded in the activity log.
 `MayaTrail/scout` repository. To move to a new release, change the image tag in
 `docker-compose.yml` and `docker-compose-ec2.yaml`.
 
+## Simulated SIEM replay (demo tool)
+
+`tools/siem_replay/replay.py` stands in for a SIEM when none is connected to a
+workflow. It posts one signed alert per Sigma rule an emulation ships, so the
+workflow's detection scorecard can be shown end to end. It is a standalone
+script, not part of the platform.
+
+The alerts are **simulated**: they are built from the emulation's rule files,
+not detected from logs. Each one carries `"source": "simulated-replay"` and
+`"simulated": true`, and the script says so on every run. Present any scorecard
+it produces as a simulation.
+
+Each alert is shaped like a SIEM alert built on CloudTrail: the rule's id,
+title, technique and severity, plus an `event` object with `eventVersion`,
+`eventTime`, `awsRegion`, `eventType`, and the `eventSource` and `eventName`
+the rule itself matches on. Identity, source address and request details are
+left out rather than made up.
+
+Scoring counts one expected detection per rule file (`sigma_*.yml`), not per
+rule inside it. Withholding two of CodeFinger's five rule files gives 3 fired
+and 2 silent, a coverage of 60%.
+
+Requirements: Python 3.9+ and `pip install pyyaml`, run from a clone of this
+repository. No AWS credentials are needed.
+
+1. Open the workflow's alert endpoint on the Workflows page and copy its URL
+   and secret.
+2. Start the workflow run, then while its alert window is open:
+
+```bash
+export MAYATRAIL_ALERT_SECRET='<endpoint secret>'
+python tools/siem_replay/replay.py \
+  --endpoint https://app.mayatrail.tech/api/workflows/alerts/<endpoint-id>/ \
+  --emulation codefinger --silent T1490 --silent T1530
+```
+
+| Flag | Effect |
+|---|---|
+| `--silent X` | Withhold a rule (Sigma id, technique such as `T1490`, or file stem). It shows as silent. Repeatable |
+| `--none` | Send nothing. The platform reports that run as not integrated |
+| `--dry-run` | Print what would be sent without posting |
+| `--region R` | `awsRegion` on the simulated CloudTrail record (default `us-east-1`) |
+| `--spacing N` | Seconds between alerts (default 3) |
+
+A 401 means a wrong secret, a wrong endpoint id, or a machine clock more than
+five minutes off.
+
 ## Docker Compose stack
 
 The full platform runs as a Docker Compose stack with 8 services:

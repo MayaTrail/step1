@@ -38,7 +38,7 @@ from apps.emulations.tasks import deploy_emulation_stack, run_emulation_attack
 
 from . import correlate, scoring
 from .expectations import expected_detections
-from .models import AlertEndpoint, IngestedAlert, WorkflowRun
+from .models import AlertEndpoint, WorkflowRun
 
 logger = logging.getLogger(__name__)
 
@@ -371,9 +371,8 @@ def attributed_alerts(workflow: WorkflowRun) -> list[dict[str, Any]]:
     """
     Collect the alerts that belong to a workflow's evidence window.
 
-    Attribution is by owner and arrival time rather than by anything the alert
-    claims, because the webhook is unauthenticated at the application level and
-    a posted body must never be able to choose which run it counts towards.
+    Attribution rules live on WorkflowRun.window_alerts, which the run detail
+    view also counts from, so the page and the score never disagree.
 
     Args:
         workflow: The run being settled.
@@ -381,18 +380,7 @@ def attributed_alerts(workflow: WorkflowRun) -> list[dict[str, Any]]:
     Returns:
         Normalised alert dicts, oldest first.
     """
-    if workflow.window_start is None:
-        return []
-
-    end = workflow.alert_deadline or timezone.now()
-    rows = (
-        IngestedAlert.objects.filter(
-            endpoint__owner=workflow.owner,
-            received_at__gte=workflow.window_start,
-            received_at__lte=end,
-        )
-        .order_by("received_at")
-    )
+    rows = workflow.window_alerts().order_by("received_at")
     return [
         {
             "id": str(row.id),
@@ -407,12 +395,14 @@ def attributed_alerts(workflow: WorkflowRun) -> list[dict[str, Any]]:
     ]
 
 
-def settle(workflow: WorkflowRun) -> dict[str, Any]:
+def settle(workflow: WorkflowRun, ended_early: bool = False) -> dict[str, Any]:
     """
     Score a workflow against whatever its window collected, and close it.
 
     Args:
         workflow: A workflow in AWAITING_ALERTS.
+        ended_early: True when the owner stopped waiting before the deadline,
+            which the activity trail records so a short window is explained.
 
     Returns:
         The score written to the run.
@@ -436,9 +426,10 @@ def settle(workflow: WorkflowRun) -> dict[str, Any]:
     workflow.completed_at = timezone.now()
     workflow.save(update_fields=["report", "score", "status", "completed_at"])
 
+    finished = "finished early, at the owner's request" if ended_early else "finished"
     record_activity(
         LogEntry.Event.WORKFLOW_COMPLETED,
-        f"{workflow.emulation_type} validation finished. {scoring.headline(score)}",
+        f"{workflow.emulation_type} validation {finished}. {scoring.headline(score)}",
         actor=workflow.owner,
         stack=workflow.stack,
     )

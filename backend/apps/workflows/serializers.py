@@ -15,7 +15,7 @@ from rest_framework import serializers
 
 from apps.emulations.registry import get_emulation
 
-from .models import AlertEndpoint, WorkflowRun
+from .models import AlertEndpoint, IngestedAlert, WorkflowRun
 from .scoring import headline
 
 
@@ -117,10 +117,38 @@ class WorkflowRunDetailSerializer(WorkflowRunSerializer):
         source="emulation_run.status", read_only=True, default=""
     )
     accountCheck = serializers.JSONField(source="account_check", read_only=True)
+    alertCount = serializers.SerializerMethodField()
 
     class Meta(WorkflowRunSerializer.Meta):
         fields = WorkflowRunSerializer.Meta.fields + [
             "report", "windowStart", "windowEnd",
             "stackId", "stackStatus", "emulationRunId", "emulationRunStatus",
-            "accountCheck",
+            "accountCheck", "alertCount",
         ]
+
+    def get_alertCount(self, obj) -> int:  # noqa: N802 - camelCase to match the API
+        """
+        Count the alerts attributed to the run so far.
+
+        Args:
+            obj: The workflow being serialised.
+
+        Returns:
+            Alerts in the run's window, live while it is still collecting. Only
+            the count travels here, because this view is polled; the bodies are
+            fetched by the alerts view when the reader asks for them.
+        """
+        return obj.window_alerts().count()
+
+
+class WindowAlertSerializer(serializers.ModelSerializer):
+    """One alert in a run's window, with the payload exactly as the SIEM posted it."""
+
+    ruleId = serializers.CharField(source="rule_id", read_only=True)
+    ruleName = serializers.CharField(source="rule_name", read_only=True)
+    firedAt = serializers.DateTimeField(source="fired_at", read_only=True)
+    receivedAt = serializers.DateTimeField(source="received_at", read_only=True)
+
+    class Meta:
+        model = IngestedAlert
+        fields = ["id", "ruleId", "ruleName", "technique", "severity", "firedAt", "receivedAt", "raw"]

@@ -9,6 +9,8 @@ GET  DELETE /api/workflows/endpoints/<id>/  AlertEndpointDetailView
 GET  POST /api/workflows/endpoints/<id>/secret/  AlertEndpointSecretView
 GET  POST /api/workflows/runs/              WorkflowRunListView
 GET  PATCH DELETE /api/workflows/runs/<workflow_id>/   WorkflowRunDetailView
+GET  /api/workflows/runs/<workflow_id>/alerts/   WorkflowRunAlertsView
+POST /api/workflows/runs/<workflow_id>/settle/   WorkflowRunSettleView
 GET  /api/workflows/coverage/?emulation=<type>   CoverageHistoryView
 
 The alerts route is the only one without a JWT, because a client's SIEM cannot
@@ -23,7 +25,9 @@ from .views import (
     AlertEndpointView,
     AlertWebhookView,
     CoverageHistoryView,
+    WorkflowRunAlertsView,
     WorkflowRunDetailView,
+    WorkflowRunSettleView,
     WorkflowDetectionExportView,
     WorkflowReportView,
     WorkflowRunListView,
@@ -45,6 +49,16 @@ urlpatterns = [
     path("coverage/", CoverageHistoryView.as_view(), name="workflow-coverage-history"),
     path("runs/", WorkflowRunListView.as_view(), name="workflow-runs"),
     path("runs/<uuid:workflow_id>/", WorkflowRunDetailView.as_view(), name="workflow-run-detail"),
+    path(
+        "runs/<uuid:workflow_id>/alerts/",
+        WorkflowRunAlertsView.as_view(),
+        name="workflow-run-alerts",
+    ),
+    path(
+        "runs/<uuid:workflow_id>/settle/",
+        WorkflowRunSettleView.as_view(),
+        name="workflow-run-settle",
+    ),
     path(
         "runs/<uuid:workflow_id>/report/",
         WorkflowReportView.as_view(),

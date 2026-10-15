@@ -135,6 +135,26 @@ export interface WorkflowRunDetail extends WorkflowRun {
   emulationRunStatus: string
   /** Null on runs that predate the check. */
   accountCheck: WorkflowAccountCheck | null
+  /** Alerts attributed to the run's window so far. */
+  alertCount: number
+}
+
+/** One alert in a run's window, with the payload exactly as the SIEM posted it. */
+export interface WindowAlert {
+  id: string
+  ruleId: string
+  ruleName: string
+  technique: string
+  severity: string
+  firedAt: string | null
+  receivedAt: string
+  raw: unknown
+}
+
+/** The newest alerts in a run's window, and how many there are in all. */
+export interface WindowAlerts {
+  count: number
+  alerts: WindowAlert[]
 }
 
 /** A webhook a client's SIEM posts alerts to. Never carries the secret. */

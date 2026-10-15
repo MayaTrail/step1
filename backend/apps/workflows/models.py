@@ -20,6 +20,7 @@ import uuid
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class AlertEndpoint(models.Model):
@@ -286,3 +287,24 @@ class WorkflowRun(models.Model):
     def __str__(self) -> str:
         """Return a label identifying the workflow and its emulation."""
         return f"{self.emulation_type} workflow {str(self.id)[:8]} ({self.status})"
+
+    def window_alerts(self) -> models.QuerySet:
+        """
+        Select the stored alerts that belong to this run's evidence window.
+
+        Attribution is by owner and arrival time rather than by anything the
+        alert claims, because the webhook is unauthenticated at the application
+        level and a posted body must never be able to choose which run it
+        counts towards. Runs whose windows overlap therefore share alerts.
+
+        Returns:
+            An IngestedAlert queryset, empty before the window opens. An open
+            window runs up to now.
+        """
+        if self.window_start is None:
+            return IngestedAlert.objects.none()
+        return IngestedAlert.objects.filter(
+            endpoint__owner=self.owner,
+            received_at__gte=self.window_start,
+            received_at__lte=self.alert_deadline or timezone.now(),
+        )
