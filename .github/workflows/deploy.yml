@@ -1,0 +1,124 @@
+name: Deploy to EC2
+
+# Phase 2c of the EC2 deploy pipeline. After the image build succeeds on main,
+# this runs in the protected "production" environment and pauses for a maintainer
+# to approve. On approval it gets short-lived AWS credentials via OIDC, stages the
+# run's GITHUB_TOKEN as an encrypted SSM parameter, and runs deploy/remote-deploy.sh
+# on the app instance over SSM (checkout the ref, pull the images, restart, verify).
+# The token parameter is deleted afterwards; no AWS key or registry credential is
+# stored anywhere.
+#
+# Manual runs (workflow_dispatch) deploy any tag, which is how a rollback is done.
+#
+# Required configuration (Settings -> Secrets and variables -> Actions):
+#   secret  AWS_DEPLOY_ROLE_ARN   arn of the mayatrail-github-deploy role
+#   var     DEPLOY_INSTANCE_ID    the app instance id (i-...)
+#   var     AWS_REGION            ap-south-1
+# Plus a "production" environment with the maintainer as a required reviewer.
+
+on:
+  workflow_run:
+    workflows: ["Build and push images"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to deploy (sha-<full sha> or v<version>)"
+        required: true
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # On a build completion, deploy only if the build actually succeeded.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+      packages: read
+    env:
+      TOKEN_PARAM: /mayatrail/deploy/ghcr-token
+      INSTANCE_ID: ${{ vars.DEPLOY_INSTANCE_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+    steps:
+      - name: Resolve the tag and git ref to deploy
+        id: target
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="sha-${{ github.event.workflow_run.head_sha }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # sha-<sha> deploys that commit; a version tag deploys the tag itself.
+          case "$TAG" in
+            sha-*) echo "ref=${TAG#sha-}" >> "$GITHUB_OUTPUT" ;;
+            *)     echo "ref=$TAG"        >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Stage a short-lived GHCR token (encrypted) for the host
+        run: |
+          aws ssm put-parameter --name "$TOKEN_PARAM" --type SecureString \
+            --overwrite --value "${{ secrets.GITHUB_TOKEN }}" --region "$AWS_REGION"
+
+      - name: Deploy over SSM
+        run: |
+          read -r -d '' CMD <<SSM || true
+          set -e
+          cd /home/ec2-user/step1
+          export HOME=/home/ec2-user
+          git -c safe.directory='*' fetch origin --tags --prune
+          git -c safe.directory='*' checkout --quiet ${{ steps.target.outputs.ref }}
+          IMAGE_TAG='${{ steps.target.outputs.tag }}' \
+          GIT_REF='${{ steps.target.outputs.ref }}' \
+          AWS_REGION='${{ env.AWS_REGION }}' \
+          TOKEN_PARAM='${{ env.TOKEN_PARAM }}' \
+          GHCR_USER='${{ github.actor }}' \
+          bash deploy/remote-deploy.sh
+          SSM
+
+          CID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy ${{ steps.target.outputs.tag }}" \
+            --parameters commands="$CMD" --region "$AWS_REGION" \
+            --query Command.CommandId --output text)
+          echo "command id: $CID"
+
+          for _ in $(seq 1 90); do
+            sleep 10
+            ST=$(aws ssm get-command-invocation --command-id "$CID" \
+              --instance-id "$INSTANCE_ID" --region "$AWS_REGION" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            echo "ssm status: $ST"
+            case "$ST" in
+              Success) break ;;
+              Failed|Cancelled|TimedOut)
+                echo "---- stderr ----"
+                aws ssm get-command-invocation --command-id "$CID" \
+                  --instance-id "$INSTANCE_ID" --region "$AWS_REGION" \
+                  --query StandardErrorContent --output text
+                exit 1 ;;
+            esac
+          done
+
+          echo "---- deploy output ----"
+          aws ssm get-command-invocation --command-id "$CID" \
+            --instance-id "$INSTANCE_ID" --region "$AWS_REGION" \
+            --query StandardOutputContent --output text
+          [ "$ST" = Success ]
+
+      - name: Remove the staged token
+        if: always()
+        run: |
+          aws ssm delete-parameter --name "$TOKEN_PARAM" --region "$AWS_REGION" || true
