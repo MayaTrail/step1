@@ -42,11 +42,19 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       REDIS_URL: redis://redis:6379/0
       EMULATIONS_BASE_DIR: /opt/emulations
+      PLAYBOOKS_BASE_DIR: /opt/playbooks
+      GUARDRAILS_BASE_DIR: /opt/guardrails
+      THREATINTEL_DIR: /var/lib/mayatrail/threatintel
     ports:
       - "8000:8000"
     volumes:
       # Mount emulations package so the API registry can discover packages.
       - ./emulations:/opt/emulations:ro
+      - ./playbooks:/opt/playbooks:ro
+      # Mount guardrails package so the API registry can discover policies.
+      - ./guardrails:/opt/guardrails:ro
+      # Threat feed document, written by the worker and only read here.
+      - threatintel_data:/var/lib/mayatrail/threatintel:ro
     depends_on: # waits for db and redis to be healthy before starting backend.
       redis:
         condition: service_healthy
@@ -85,13 +93,20 @@ services:
       # Base directory where emulation packages are mounted.
       # Infra programs are resolved as {EMULATIONS_BASE_DIR}/{type}/infra/
       EMULATIONS_BASE_DIR: /opt/emulations
+      PLAYBOOKS_BASE_DIR: /opt/playbooks
+      THREATINTEL_DIR: /var/lib/mayatrail/threatintel
       # Attack graph scans run in the scout container; the token is shared
       # with it through the project .env.
       SCOUT_SERVICE_URL: http://scout:8080
       SCOUT_SERVICE_TOKEN: ${SCOUT_SERVICE_TOKEN:?set SCOUT_SERVICE_TOKEN in .env (see .env.example)}
     volumes:
       # Emulation packages: attack scripts and per-emulation infra/ programs.
+      # Also read by the threat feed ingest, which matches feed items against
+      # the MANIFEST catalogue the registry discovers here.
       - ./emulations:/opt/emulations:ro
+      - ./playbooks:/opt/playbooks:ro
+      # Threat feed document. Writable here: this is the only writer.
+      - threatintel_data:/var/lib/mayatrail/threatintel
     depends_on:
       redis:
         condition: service_healthy
@@ -159,3 +174,6 @@ services:
       backend:
         condition: service_healthy
 
+volumes:
+  # Threat feed document shared by the worker (writer) and backend (reader).
+  threatintel_data:
