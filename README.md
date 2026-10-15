@@ -19,6 +19,7 @@
   [![Backend tests](https://github.com/MayaTrail/step1/actions/workflows/backend-tests.yml/badge.svg)](https://github.com/MayaTrail/step1/actions/workflows/backend-tests.yml)
   [![Detections](https://github.com/MayaTrail/step1/actions/workflows/detections.yml/badge.svg?branch=main)](https://github.com/MayaTrail/step1/actions/workflows/detections.yml)
   [![Dependency Graph](https://github.com/MayaTrail/step1/actions/workflows/dependabot/update-graph/badge.svg?branch=main)](https://github.com/MayaTrail/step1/actions/workflows/dependabot/update-graph)
+  [![Deploy to EC2](https://github.com/MayaTrail/step1/actions/workflows/deploy.yml/badge.svg)](https://github.com/MayaTrail/step1/actions/workflows/deploy.yml)
 </div>
 <!-- PLACEHOLDER: badges — add once CI / license / release are public -->
 <p align="center">
