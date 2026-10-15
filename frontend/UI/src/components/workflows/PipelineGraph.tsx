@@ -5,7 +5,9 @@ import type { AccountCheckSkipReason, WorkflowRunDetail } from '@/types/workflow
 import { Card } from '@/components/ui/Card'
 import { formatWhen } from '@/components/threatfeed/feedMeta'
 import { AccountCheckDrawer, CheckHeadline } from '@/components/emulations/AccountCheckDrawer'
-import { STEPS, stepStates, type StepKey, type StepState } from './workflowMeta'
+import { settleWorkflowRun } from '@/services/workflow.service'
+import { STEPS, stepStates, untilDeadline, type StepKey, type StepState } from './workflowMeta'
+import { AlertsDrawer } from './AlertsDrawer'
 import { JobIcon } from './JobIcon'
 
 /**
@@ -21,6 +23,9 @@ import { JobIcon } from './JobIcon'
  * stayed silent is a finding about the client's coverage, not a broken run,
  * and it is reported further down the page in amber. A skipped account check
  * is grey for the same reason: the run carried on without it.
+ *
+ * While the run waits for alerts, that job opens by default: what has arrived
+ * so far, and the way to stop waiting, are what a reader at that point wants.
  *
  * Every job is the same, fixed size. The spacing between columns is a shared
  * gap rather than padding on all but the last, which made the last job wider,
@@ -82,19 +87,46 @@ function failedStage(run: WorkflowRunDetail): StepKey {
 }
 
 /**
+ * When the alert window closes. formatWhen only describes the past and reads
+ * "just now" for any future time, so a deadline still ahead shows its clock time.
+ */
+function deadlineText(iso: string): string {
+  const when = new Date(iso)
+  if (when.getTime() <= Date.now()) return formatWhen(iso)
+  return when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+}
+
+/** The job a run opens on before the reader has picked one, if any. */
+function defaultStage(run: WorkflowRunDetail): StepKey | null {
+  if (run.status === 'failed') return failedStage(run)
+  if (run.status === 'awaiting_alerts') return 'alerts'
+  return null
+}
+
+/**
  * @param run - The workflow whose stages are drawn.
  * @param prevention - The emulation's declared phases and actions, which the
  *   account check's details need; null until loaded.
+ * @param onSettled - Receives the scored run after the reader stops waiting.
  */
-export function PipelineGraph({ run, prevention }: { run: WorkflowRunDetail; prevention: PreventionAnalysis | null }) {
+export function PipelineGraph({
+  run,
+  prevention,
+  onSettled,
+}: {
+  run: WorkflowRunDetail
+  prevention: PreventionAnalysis | null
+  onSettled: (run: WorkflowRunDetail) => void
+}) {
   const states = stepStates(run)
+  const [alertsOpen, setAlertsOpen] = useState(false)
   /*
    * Undefined means the reader has not picked a job yet, so the default
-   * applies: a failed run opens on its failed job, anything else stays closed.
-   * Null means the reader closed it, which must stick even on a failed run.
+   * applies (defaultStage). Null means the reader closed it, which must stick
+   * even on a failed run.
    */
   const [chosen, setChosen] = useState<StepKey | null | undefined>(undefined)
-  const open = chosen === undefined ? (run.status === 'failed' ? failedStage(run) : null) : chosen
+  const open = chosen === undefined ? defaultStage(run) : chosen
 
   return (
     <Card className="p-5">
@@ -150,25 +182,49 @@ export function PipelineGraph({ run, prevention }: { run: WorkflowRunDetail; pre
           {open === 'check' ? (
             <CheckDetail run={run} prevention={prevention} />
           ) : (
-            <StageDetail run={run} stage={open} />
+            <StageDetail run={run} stage={open} onViewAlerts={() => setAlertsOpen(true)} onSettled={onSettled} />
           )}
         </div>
       )}
+
+      <AlertsDrawer
+        open={alertsOpen}
+        workflowId={run.id}
+        emulationType={run.emulationType}
+        waiting={run.status === 'awaiting_alerts'}
+        onClose={() => setAlertsOpen(false)}
+      />
     </Card>
   )
 }
 
-/** A value is either plain text or a link to the record that owns it. */
-type DetailValue = string | { label: string; to: string }
+/**
+ * A value is plain text, a link to the record that owns it, or text with a
+ * button that opens more about it on the same page.
+ */
+type DetailValue = string | { label: string; to: string } | { text: string; onView: () => void }
 
 /**
  * What is known about one stage, pointing at the record that holds its state.
  *
  * @param run - The workflow being shown.
  * @param stage - The stage to describe.
+ * @param onViewAlerts - Opens the alerts drawer.
+ * @param onSettled - Receives the scored run after the reader stops waiting.
  */
-function StageDetail({ run, stage }: { run: WorkflowRunDetail; stage: StepKey }) {
+function StageDetail({
+  run,
+  stage,
+  onViewAlerts,
+  onSettled,
+}: {
+  run: WorkflowRunDetail
+  stage: StepKey
+  onViewAlerts: () => void
+  onSettled: (run: WorkflowRunDetail) => void
+}) {
   const failedHere = run.status === 'failed' && failedStage(run) === stage
+  const waiting = run.status === 'awaiting_alerts'
   let rows: [string, DetailValue][]
 
   if (stage === 'deploy') {
@@ -194,10 +250,19 @@ function StageDetail({ run, stage }: { run: WorkflowRunDetail; stage: StepKey })
       ],
     ]
   } else if (stage === 'alerts') {
+    const received = run.score ? run.score.alertsReceived : run.alertCount
+    const attributed = waiting ? `${received} so far` : run.score ? String(received) : 'still collecting'
     rows = [
-      ['Alerts attributed', run.score ? String(run.score.alertsReceived) : 'still collecting'],
-      ['Collecting until', run.alertDeadline ? formatWhen(run.alertDeadline) : 'not started'],
-      ['Integration', run.score ? (run.score.integrationHealth ? 'your SIEM reported' : 'nothing received') : 'unknown'],
+      ['Alerts attributed', received > 0 ? { text: attributed, onView: onViewAlerts } : attributed],
+      ['Collecting until', run.alertDeadline ? deadlineText(run.alertDeadline) : 'not started'],
+      [
+        'Integration',
+        run.score
+          ? (run.score.integrationHealth ? 'your SIEM reported' : 'nothing received')
+          : waiting
+            ? (received > 0 ? 'receiving alerts' : 'nothing yet')
+            : 'unknown',
+      ],
     ]
   } else {
     rows = [
@@ -216,6 +281,17 @@ function StageDetail({ run, stage }: { run: WorkflowRunDetail; stage: StepKey })
             <dd className="text-xs tracking-body mt-1.5 break-words">
               {typeof value === 'string' ? (
                 <span className="text-content-secondary">{value}</span>
+              ) : 'onView' in value ? (
+                <>
+                  <span className="text-content-secondary">{value.text}</span>
+                  <button
+                    type="button"
+                    onClick={value.onView}
+                    className="ml-2 text-xs tracking-body text-accent-blue transition-opacity hover:opacity-60"
+                  >
+                    View alerts
+                  </button>
+                </>
               ) : (
                 <Link
                   to={value.to}
@@ -230,9 +306,86 @@ function StageDetail({ run, stage }: { run: WorkflowRunDetail; stage: StepKey })
           </div>
         ))}
       </dl>
+      {stage === 'alerts' && waiting && (
+        <div className="flex flex-wrap items-center justify-between gap-3 mt-3 pt-3 border-t border-border">
+          <span className="text-xs text-content-dim tracking-body">
+            Not expecting more alerts? You can score this run now.
+          </span>
+          <StopWaiting run={run} onSettled={onSettled} />
+        </div>
+      )}
       {failedHere && run.detail && (
         <p className="text-xs text-danger leading-relaxed tracking-body mt-3">{run.detail}</p>
       )}
+    </div>
+  )
+}
+
+/**
+ * Ending the alert wait early, after an inline confirm.
+ *
+ * The window is a fixed wait, and a reader whose SIEM has already reported
+ * should not sit through the rest of it. Scoring early is final: the window
+ * closes, so anything the SIEM posts afterwards does not count, which is why
+ * it asks once before doing it.
+ *
+ * @param run - The waiting run.
+ * @param onSettled - Receives the scored run.
+ */
+function StopWaiting({ run, onSettled }: { run: WorkflowRunDetail; onSettled: (run: WorkflowRunDetail) => void }) {
+  const [confirming, setConfirming] = useState(false)
+  const [scoring, setScoring] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function score() {
+    if (scoring) return
+    setScoring(true)
+    setError(null)
+    try {
+      onSettled(await settleWorkflowRun(run.id))
+    } catch (caught) {
+      const detail = (caught as { response?: { data?: { detail?: string } } }).response?.data?.detail
+      setError(detail ?? 'Could not score this run.')
+      setConfirming(false)
+      setScoring(false)
+    }
+  }
+
+  const left = untilDeadline(run.alertDeadline)
+  const button = 'px-3 py-1.5 rounded-btn text-xs font-medium tracking-btn transition-opacity hover:opacity-60'
+  return (
+    <div className="flex flex-col items-end gap-1.5">
+      <div className="flex items-center gap-2">
+        {confirming ? (
+          <>
+            <button type="button" onClick={() => setConfirming(false)} className={`${button} text-content-dim`}>
+              Keep waiting
+            </button>
+            <button
+              type="button"
+              onClick={score}
+              disabled={scoring}
+              className={`${button} border border-accent-blue/40 text-accent-blue disabled:opacity-30 disabled:cursor-not-allowed`}
+            >
+              {scoring ? 'Scoring…' : 'Score now'}
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            className={`${button} border border-white/15 text-content-primary`}
+          >
+            Stop waiting
+          </button>
+        )}
+      </div>
+      <span className="text-2xs text-content-muted">
+        {confirming
+          ? 'Alerts that arrive after this are not counted.'
+          : `Score now rather than waiting out the window${left ? ` (${left})` : ''}.`}
+      </span>
+      {error && <span className="text-xs text-danger">{error}</span>}
     </div>
   )
 }

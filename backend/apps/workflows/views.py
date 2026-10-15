@@ -5,6 +5,8 @@ POST /api/workflows/alerts/<endpoint_id>/   AlertWebhookView       (unauthentica
 GET  POST /api/workflows/endpoints/         AlertEndpointView
 GET  POST /api/workflows/runs/              WorkflowRunListView
 GET  /api/workflows/runs/<id>/              WorkflowRunDetailView
+GET  /api/workflows/runs/<id>/alerts/       WorkflowRunAlertsView
+POST /api/workflows/runs/<id>/settle/       WorkflowRunSettleView
 
 AlertWebhookView is the only route in the platform that does not carry a JWT,
 because a client's SIEM cannot hold one. It authenticates on an HMAC signature
@@ -25,6 +27,7 @@ from datetime import timedelta
 
 from cryptography.fernet import InvalidToken
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rest_framework import status
@@ -61,6 +64,7 @@ from .ingest import (
 from .models import AlertEndpoint, IngestedAlert, WorkflowRun
 from .serializers import (
     AlertEndpointSerializer,
+    WindowAlertSerializer,
     WorkflowRunDetailSerializer,
     WorkflowRunSerializer,
 )
@@ -76,6 +80,10 @@ MAX_SCHEDULE_DAYS = 30
 # Characters of the secret kept in clear, so a user can tell two endpoints
 # apart without the value being recoverable from the hint.
 SECRET_HINT_LENGTH = 6
+
+# Alert bodies returned for one run. Each body can be up to the 64 KB ingest
+# limit, so the list is capped; the count says how many more there were.
+WINDOW_ALERTS_SHOWN = 10
 
 
 class AlertWebhookView(APIView):
@@ -668,6 +676,107 @@ class WorkflowRunDetailView(APIView):
             stack_name or "none",
         )
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class WorkflowRunAlertsView(APIView):
+    """
+    The newest alerts attributed to a run, with their bodies.
+
+    GET /api/workflows/runs/<workflow_id>/alerts/
+
+    Separate from the detail view because that one is polled while a run is
+    open, and up to ten bodies of up to 64 KB each are not worth sending on
+    every poll. The page fetches these only when the reader opens the list.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request, workflow_id: str) -> Response:
+        """
+        List the run's newest alerts.
+
+        Args:
+            request: DRF request.
+            workflow_id: UUID of the workflow.
+
+        Returns:
+            200 with {"count", "alerts"}: the total in the window and the
+            newest WINDOW_ALERTS_SHOWN of them, newest first. 404 when the run
+            is not the caller's.
+        """
+        workflow = WorkflowRun.objects.filter(id=workflow_id, owner=request.user).first()
+        if workflow is None:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        alerts = workflow.window_alerts()
+        newest = alerts.order_by("-received_at")[:WINDOW_ALERTS_SHOWN]
+        return Response({
+            "count": alerts.count(),
+            "alerts": WindowAlertSerializer(newest, many=True).data,
+        })
+
+
+class WorkflowRunSettleView(APIView):
+    """
+    Stop waiting for alerts and score the run now.
+
+    POST /api/workflows/runs/<workflow_id>/settle/
+
+    The alert window is a fixed wait, and a client whose SIEM has already
+    reported everything should not have to sit through the rest of it. Moving
+    the deadline to now and settling is exactly what the beat tick does when
+    the deadline passes, so the score is computed the same way; it only covers
+    a shorter window. Alerts that arrive afterwards are not counted.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request: Request, workflow_id: str) -> Response:
+        """
+        Close the run's alert window and score it.
+
+        The row is locked for the duration so two clicks, or a click racing
+        another request, cannot settle the same run twice.
+
+        Args:
+            request: DRF request.
+            workflow_id: UUID of the workflow.
+
+        Returns:
+            200 with the scored run, 409 when the run is not waiting for
+            alerts, 404 when it is not the caller's.
+        """
+        from .tasks import settle  # noqa: PLC0415 - tasks imports pulumi
+
+        with transaction.atomic():
+            workflow = (
+                WorkflowRun.objects.select_for_update()
+                .filter(id=workflow_id, owner=request.user)
+                .first()
+            )
+            if workflow is None:
+                return Response(status=status.HTTP_404_NOT_FOUND)
+            if workflow.status != WorkflowRun.Status.AWAITING_ALERTS:
+                return Response(
+                    {
+                        "detail": (
+                            "This run is not waiting for alerts, so there is nothing to "
+                            "stop. It may have just been scored."
+                        ),
+                        "reason": "not_waiting",
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            workflow.alert_deadline = timezone.now()
+            workflow.save(update_fields=["alert_deadline"])
+            settle(workflow, ended_early=True)
+
+        logger.info(
+            "Workflow %s: user=%s stopped waiting and scored the run",
+            workflow_id, request.user.username,
+        )
+        return Response(WorkflowRunDetailSerializer(workflow).data)
 
 
 class WorkflowDetectionExportView(APIView):

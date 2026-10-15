@@ -4,6 +4,8 @@
  * Endpoints (all require an authenticated user):
  *   GET  POST /api/workflows/runs/          list workflows, or start one
  *   GET  DELETE /api/workflows/runs/<id>/   one run with its verdicts, or remove it
+ *   GET  /api/workflows/runs/<id>/alerts/   the newest alerts in its window
+ *   POST /api/workflows/runs/<id>/settle/   stop waiting and score it now
  *   GET  /api/workflows/runs/<id>/report/   the evidence packet
  *   GET  POST /api/workflows/endpoints/     list webhooks, or create one
  *   GET  DELETE /api/workflows/endpoints/<id>/        read one, or delete it
@@ -18,6 +20,7 @@ import type { WorkflowReport } from '@/types/workflowReport'
 import type {
   AlertEndpoint,
   AlertEndpointCreated,
+  WindowAlerts,
   WorkflowRun,
   WorkflowRunDetail,
 } from '@/types/workflow'
@@ -154,5 +157,31 @@ export async function deleteWorkflowRun(workflowId: string): Promise<void> {
  */
 export async function getWorkflowReport(workflowId: string): Promise<WorkflowReport> {
   const { data } = await api.get<WorkflowReport>(`/workflows/runs/${workflowId}/report/`)
+  return data
+}
+
+/**
+ * Read the newest alerts attributed to a run, with their bodies.
+ *
+ * Kept off the run detail, which is polled, because each body can be large.
+ *
+ * @param workflowId - UUID of the run.
+ */
+export async function getWindowAlerts(workflowId: string): Promise<WindowAlerts> {
+  const { data } = await api.get<WindowAlerts>(`/workflows/runs/${workflowId}/alerts/`)
+  return data
+}
+
+/**
+ * Stop waiting for alerts and score the run now.
+ *
+ * The server refuses with 409 when the run is no longer waiting, which happens
+ * when its window closed on its own a moment earlier.
+ *
+ * @param workflowId - UUID of the run.
+ * @returns The scored run.
+ */
+export async function settleWorkflowRun(workflowId: string): Promise<WorkflowRunDetail> {
+  const { data } = await api.post<WorkflowRunDetail>(`/workflows/runs/${workflowId}/settle/`)
   return data
 }

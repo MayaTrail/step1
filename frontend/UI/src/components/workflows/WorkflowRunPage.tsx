@@ -47,7 +47,11 @@ export function WorkflowRunPage() {
   // Poll while the run is moving, stop once it has settled: a finished run
   // left open in a tab has nothing left to fetch.
   const [polling, setPolling] = useState(true)
-  const { data: run, loading } = useWorkflowRun(runId || null, polling)
+  const { data: fetched, loading } = useWorkflowRun(runId || null, polling)
+  // A run scored from this page shows its score at once. Until a poll catches
+  // up, the fetched copy may still say it is waiting, so the scored one wins.
+  const [scored, setScored] = useState<WorkflowRunDetail | null>(null)
+  const run = scored && (!fetched || fetched.status === 'awaiting_alerts') ? scored : fetched
 
   useEffect(() => {
     if (run) setPolling(isOpen(run.status))
@@ -64,11 +68,11 @@ export function WorkflowRunPage() {
     )
   }
 
-  return <RunView run={run} />
+  return <RunView run={run} onSettled={setScored} />
 }
 
 /** The page once the run has loaded. */
-function RunView({ run }: { run: WorkflowRunDetail }) {
+function RunView({ run, onSettled }: { run: WorkflowRunDetail; onSettled: (run: WorkflowRunDetail) => void }) {
   const attackDone = stageState(run, 'attack') === 'done'
   const type = attackDone ? run.emulationType : null
   const preventionType = attackDone || run.accountCheck?.status === 'checked' ? run.emulationType : null
@@ -115,7 +119,7 @@ function RunView({ run }: { run: WorkflowRunDetail }) {
         </div>
       </div>
 
-      <PipelineGraph run={run} prevention={prevention.data ?? null} />
+      <PipelineGraph run={run} prevention={prevention.data ?? null} onSettled={onSettled} />
 
       {!attackDone ? (
         <p className="text-xs text-content-dim tracking-body px-1">
