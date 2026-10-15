@@ -73,25 +73,31 @@ jobs:
             --overwrite --value "${{ secrets.GITHUB_TOKEN }}" --region "$AWS_REGION"
 
       - name: Deploy over SSM
+        env:
+          TARGET_TAG: ${{ steps.target.outputs.tag }}
+          TARGET_REF: ${{ steps.target.outputs.ref }}
+          GHCR_USER: ${{ github.actor }}
         run: |
-          read -r -d '' CMD <<SSM || true
+          # The host command is base64-encoded and sent as a single clean token,
+          # so the multi-line script never has to survive the --parameters shorthand
+          # parser (quotes, pipes and newlines would break it, AWS CLI exit 252).
+          SCRIPT=$(cat <<SSM
           set -e
           cd /home/ec2-user/step1
           export HOME=/home/ec2-user
           git -c safe.directory='*' fetch origin --tags --prune
-          git -c safe.directory='*' checkout --quiet ${{ steps.target.outputs.ref }}
-          IMAGE_TAG='${{ steps.target.outputs.tag }}' \
-          GIT_REF='${{ steps.target.outputs.ref }}' \
-          AWS_REGION='${{ env.AWS_REGION }}' \
-          TOKEN_PARAM='${{ env.TOKEN_PARAM }}' \
-          GHCR_USER='${{ github.actor }}' \
+          git -c safe.directory='*' checkout --quiet ${TARGET_REF}
+          IMAGE_TAG='${TARGET_TAG}' GIT_REF='${TARGET_REF}' AWS_REGION='${AWS_REGION}' \
+          TOKEN_PARAM='${TOKEN_PARAM}' GHCR_USER='${GHCR_USER}' \
           bash deploy/remote-deploy.sh
           SSM
-
+          )
+          B64=$(printf '%s' "$SCRIPT" | base64 -w0)
+          PARAMS=$(printf '{"commands":["echo %s | base64 -d | bash"]}' "$B64")
           CID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" \
             --document-name AWS-RunShellScript \
-            --comment "deploy ${{ steps.target.outputs.tag }}" \
-            --parameters commands="$CMD" --region "$AWS_REGION" \
+            --comment "deploy ${TARGET_TAG}" \
+            --parameters "$PARAMS" --region "$AWS_REGION" \
             --query Command.CommandId --output text)
           echo "command id: $CID"
 
