@@ -44,8 +44,12 @@ TOKEN="$(aws ssm get-parameter --name "$TOKEN_PARAM" --with-decryption \
 printf '%s' "$TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 unset TOKEN
 
-echo "== pull and restart =="
-docker compose -f "$COMPOSE_FILE" pull
+echo "== pull the app images only =="
+# Only the images this pipeline builds are pulled with the GHCR token, which is
+# scoped to this repo. scout lives in another repo (MayaTrail/scout) and is a
+# pinned external dependency; redis and nginx are public. All three are already
+# present on the host, so up -d starts them without a pull.
+docker compose -f "$COMPOSE_FILE" pull backend worker_enterprise beat ui
 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
 
 echo "== drop the registry login (no standing credential on the host) =="
