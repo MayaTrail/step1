@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useThreatFeed, useThreatFeedSources } from '@/hooks/useThreatFeed'
+import { getThreatFeed } from '@/services/threatintel.service'
 import type { FeedKind, ThreatFeedItem } from '@/types/threatintel'
 import { SearchInput } from '@/components/ui/SearchInput'
 import { FilterDropdown } from '@/components/ui/FilterDropdown'
@@ -79,18 +80,19 @@ export function ThreatFeedPage() {
   }
 
   if (total === 0) {
+    const publications = sources ? `${sources.totalCount} publications` : 'the subscribed publications'
     return (
       <div>
-        <PageHeader fetchedAt={null} />
-        <EmptyState
-          icon={<IconBroadcast size={32} />}
-          title="No feed items yet"
-          body={
-            sources
-              ? `${sources.totalCount} publications are subscribed. Items appear here after the daily ingest runs.`
-              : 'Items appear here after the daily ingest runs.'
-          }
-        />
+        <PageHeader fetchedAt={feed?.fetchedAt ?? null} />
+        {feed?.fetchedAt ? (
+          <EmptyState
+            icon={<IconBroadcast size={32} />}
+            title="No posts in the current window"
+            body={`The last fetch from ${publications} found nothing recent enough to show. The feed refreshes daily.`}
+          />
+        ) : (
+          <FeedPending publications={publications} />
+        )}
       </div>
     )
   }
@@ -255,5 +257,36 @@ function FeedRow({ item, active, onSelect }: FeedRowProps) {
         </span>
       </span>
     </button>
+  )
+}
+
+/** How often the pending state checks whether the first fetch has finished. */
+const PENDING_POLL_MS = 15_000
+
+/**
+ * Shown before the first fetch has written a feed on this server, typically
+ * right after a deploy. It checks for the feed every few seconds and reloads
+ * the page once it exists, so the reader sees it appear without doing anything
+ * instead of an empty page that looks broken.
+ */
+function FeedPending({ publications }: { publications: string }) {
+  useEffect(() => {
+    const timer = window.setInterval(async () => {
+      try {
+        const feed = await getThreatFeed({ limit: 1 })
+        if (feed.fetchedAt) window.location.reload()
+      } catch {
+        // A failed check is not fatal; the next tick tries again.
+      }
+    }, PENDING_POLL_MS)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  return (
+    <EmptyState
+      icon={<IconBroadcast size={32} />}
+      title="Fetching the threat feed"
+      body={`MayaTrail is pulling the latest posts from ${publications} for the first time on this server. This usually takes about a minute, and this page updates on its own.`}
+    />
   )
 }
