@@ -1,0 +1,22 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadDeployToken",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameter",
+      "Resource": "arn:aws:ssm:ap-south-1:ACCOUNT_ID:parameter/mayatrail/deploy/ghcr-token"
+    },
+    {
+      "Sid": "DecryptDeployTokenViaSsm",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "ssm.ap-south-1.amazonaws.com"
+        }
+      }
+    }
+  ]
+}
