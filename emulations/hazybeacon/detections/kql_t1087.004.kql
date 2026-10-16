@@ -1,0 +1,77 @@
+// T1087.004 - Account Discovery: Cloud Account (IAM Enumeration)
+// Detects bulk IAM enumeration from a static IAM user key: ListUsers, ListRoles,
+// GetAccountSummary. HazyBeacon calls all three in sequence to map the full identity
+// landscape. The correlated view below groups events per user within a 10-minute
+// window and flags users who issue 2 or more distinct enumeration calls.
+// Table: AWSCloudTrail (Microsoft Sentinel)
+
+// Single-event detection (high-fidelity per-event alert)
+let IamEnumEvents = AWSCloudTrail
+| where EventSource == "iam.amazonaws.com"
+| where EventName in ("ListUsers", "ListRoles", "GetAccountSummary")
+| where UserIdentityType == "IAMUser"
+| where UserIdentityArn !contains "SecurityAuditRole"
+| where UserIdentityArn !contains "ReadOnlyRole"
+| project
+    TimeGenerated,
+    EventName,
+    EventSource,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RequestParameters,
+    RecipientAccountId;
+
+// --- Correlated burst detection (run separately for hunting) ---
+// AWSCloudTrail
+// | where EventSource == "iam.amazonaws.com"
+// | where EventName in ("ListUsers", "ListRoles", "GetAccountSummary")
+// | where UserIdentityType == "IAMUser"
+// | summarize
+//     EventCount = count(),
+//     DistinctEventNames = dcount(EventName),
+//     EventNames = make_set(EventName),
+//     FirstSeen = min(TimeGenerated),
+//     LastSeen = max(TimeGenerated),
+//     SourceIPs = make_set(SourceIpAddress)
+//   by UserIdentityArn, bin(TimeGenerated, 10m)
+// | where DistinctEventNames >= 2
+// | sort by FirstSeen desc
+
+// T1087.004 - Account Discovery: Cloud Account (S3 + SecretsManager Enumeration)
+// Detects enumeration of S3 buckets and SecretsManager secrets by a static IAM user
+// credential. HazyBeacon calls ListBuckets, ListObjects, ListSecrets, and DescribeSecret
+// to identify exfiltration targets. CloudTrail data events must be enabled for S3
+// ListObjects to appear; management events capture the rest.
+let S3EnumEvents = AWSCloudTrail
+| where EventSource == "s3.amazonaws.com"
+| where EventName in ("ListBuckets", "ListObjects", "ListObjectsV2")
+| where UserIdentityType == "IAMUser"
+| where UserAgent !contains "aws-backup"
+| project
+    TimeGenerated,
+    EventName,
+    EventSource,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RequestParameters,
+    RecipientAccountId;
+let SecretsEnumEvents = AWSCloudTrail
+| where EventSource == "secretsmanager.amazonaws.com"
+| where EventName in ("ListSecrets", "DescribeSecret")
+| where UserIdentityType == "IAMUser"
+| project
+    TimeGenerated,
+    EventName,
+    EventSource,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RequestParameters,
+    RecipientAccountId;
+union IamEnumEvents, S3EnumEvents, SecretsEnumEvents
+| sort by TimeGenerated desc

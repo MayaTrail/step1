@@ -1,0 +1,83 @@
+title: HazyBeacon - Bulk IAM Identity Enumeration from Static User Credential
+id: 5c9e1234-d6f7-4a8b-b234-c567890d1e23
+status: experimental
+description: >
+  Detects bulk IAM enumeration (ListUsers, ListRoles, GetAccountSummary) issued by an IAM
+  user principal. HazyBeacon calls all three in sequence to map the full identity landscape
+  after validating stolen credentials. Legitimate IAM auditing runs under service roles or
+  cross-account audit roles, not static IAM user keys. Correlation across events within a
+  short window raises confidence significantly.
+references:
+    - https://attack.mitre.org/techniques/T1087/004/
+    - https://github.com/DataDog/stratus-red-team
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1087.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: iam.amazonaws.com
+        eventName:
+            - ListUsers
+            - ListRoles
+            - GetAccountSummary
+        userIdentity.type: IAMUser
+    filter_known_audit_roles:
+        userIdentity.arn|contains:
+            - 'SecurityAuditRole'
+            - 'ReadOnlyRole'
+            - 'AuditRole'
+    condition: selection and not filter_known_audit_roles
+falsepositives:
+    - IAM auditing tools (Prowler, ScoutSuite, Steampipe) configured to run under IAM user keys
+    - Cloud governance scripts in dev environments using personal IAM credentials
+    - AWS Organizations management account performing periodic inventory
+level: medium
+---
+title: HazyBeacon - S3 and SecretsManager Enumeration from Static User Credential
+id: 7e1a2345-e8f9-4b9c-c345-d678901e2f34
+status: experimental
+description: >
+  Detects S3 bucket and SecretsManager secret enumeration calls from an IAM user principal.
+  HazyBeacon enumerates ListBuckets, ListObjects, ListSecrets, and DescribeSecret to identify
+  high-value exfiltration targets. This pattern is anomalous when issued by a static IAM user
+  key rather than a service role; in normal operations S3/secrets access is scoped to specific
+  service principals, not broad-enumeration by user credentials.
+references:
+    - https://attack.mitre.org/techniques/T1087/004/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1087.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_s3:
+        eventSource: s3.amazonaws.com
+        eventName:
+            - ListBuckets
+            - ListObjects
+            - ListObjectsV2
+        userIdentity.type: IAMUser
+    selection_secrets:
+        eventSource: secretsmanager.amazonaws.com
+        eventName:
+            - ListSecrets
+            - DescribeSecret
+        userIdentity.type: IAMUser
+    filter_backup_agents:
+        userAgent|contains:
+            - 'aws-backup'
+            - 'backup.amazonaws.com'
+    condition: (selection_s3 or selection_secrets) and not filter_backup_agents
+falsepositives:
+    - FinOps cost-attribution tooling scanning all buckets under a user key
+    - Terraform state backend lookup using developer IAM credentials during plan/apply
+    - AWS Cost Explorer or billing reports that enumerate buckets for storage cost
+level: medium

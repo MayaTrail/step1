@@ -1,0 +1,74 @@
+// T1648 - Serverless Execution: Lambda Relay Deployment
+// Detects Lambda function creation by a static IAM user credential outside known
+// CI/CD service roles. HazyBeacon deploys a relay function with benign-sounding names
+// (UpdateWorker, BackupHandler, ImageResizer) and no VPC attachment. Lambda creation by
+// an IAM user key (not an assumed service role) is the primary anomaly indicator.
+// Table: AWSCloudTrail (Microsoft Sentinel)
+let LambdaDeploy = AWSCloudTrail
+| where EventSource == "lambda.amazonaws.com"
+| where EventName == "CreateFunction20150331"
+| where UserIdentityType == "IAMUser"
+// Exclude deployments via known automation agents
+| where UserIdentityArn !contains "terraform"
+| where UserIdentityArn !contains "deploy"
+| where UserIdentityArn !contains "cicd"
+| where UserIdentityArn !contains "github-actions"
+| where UserAgent !contains "cloudformation.amazonaws.com"
+// Extract function name and runtime from request parameters for enrichment
+| extend FunctionName = tostring(parse_json(RequestParameters).functionName)
+| extend Runtime = tostring(parse_json(RequestParameters).runtime)
+| extend HasVpcConfig = isnotempty(parse_json(RequestParameters).vpcConfig)
+| project
+    TimeGenerated,
+    EventName,
+    FunctionName,
+    Runtime,
+    HasVpcConfig,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RecipientAccountId;
+// T1648 / T1102 - Lambda Function URL Public Exposure (AuthType NONE)
+// Detects Lambda Function URL creation with no authentication (AuthType: NONE) or
+// AddPermission granting public invoke access (principal: *). This is the defining
+// HazyBeacon C2 setup step - it creates an unauthenticated HTTPS endpoint at
+// *.lambda-url.*.on.aws. Either event from an IAM user key is high-confidence.
+let NoAuthUrl = AWSCloudTrail
+| where EventSource == "lambda.amazonaws.com"
+| where EventName == "CreateFunctionUrlConfig"
+| where UserIdentityType == "IAMUser"
+| where UserIdentityArn !contains "terraform"
+| where UserIdentityArn !contains "cicd"
+| extend FunctionName = tostring(parse_json(RequestParameters).functionName)
+| extend AuthType = tostring(parse_json(RequestParameters).authType)
+| where AuthType == "NONE"
+| project
+    TimeGenerated,
+    EventName,
+    FunctionName,
+    AuthType,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RecipientAccountId;
+let PublicInvoke = AWSCloudTrail
+| where EventSource == "lambda.amazonaws.com"
+| where EventName == "AddPermission20150331"
+| where UserIdentityType == "IAMUser"
+| extend FunctionName = tostring(parse_json(RequestParameters).functionName)
+| extend Principal = tostring(parse_json(RequestParameters).principal)
+| where Principal == "*"
+| project
+    TimeGenerated,
+    EventName,
+    FunctionName,
+    Principal,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RecipientAccountId;
+union LambdaDeploy, NoAuthUrl, PublicInvoke
+| sort by TimeGenerated desc

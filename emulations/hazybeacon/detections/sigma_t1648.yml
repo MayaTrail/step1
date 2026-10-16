@@ -1,0 +1,82 @@
+title: HazyBeacon - Lambda Function Deployed by IAM User with Suspicious Naming Pattern
+id: b14c5678-01b2-4d1e-e567-f890123a4b56
+status: experimental
+description: >
+  Detects Lambda function creation by an IAM user principal where the function name matches
+  generic benign-sounding naming patterns used by HazyBeacon (UpdateWorker, BackupHandler,
+  ImageResizer) and the function has no VPC attachment. Legitimate infrastructure Lambda
+  functions are deployed via CI/CD service roles, not static IAM user keys. A function with
+  no VPC config and created by an interactive IAM user is consistent with attacker-deployed
+  serverless relay infrastructure.
+references:
+    - https://attack.mitre.org/techniques/T1648/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.execution
+    - attack.t1648
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: lambda.amazonaws.com
+        eventName: CreateFunction20150331
+        userIdentity.type: IAMUser
+    filter_terraform_service_roles:
+        userIdentity.arn|contains:
+            - ':assumed-role/terraform'
+            - ':assumed-role/deploy'
+            - ':assumed-role/cicd'
+            - ':assumed-role/github-actions'
+    filter_cloudformation:
+        userAgent|contains: 'cloudformation.amazonaws.com'
+    condition: selection and not (filter_terraform_service_roles or filter_cloudformation)
+falsepositives:
+    - Developer deploying a personal Lambda function for testing via AWS CLI or SDK
+    - Serverless Framework deployment using a developer IAM user key in non-prod accounts
+    - AWS SAM local deploy with user credentials in a sandbox environment
+level: high
+---
+title: HazyBeacon - Lambda Public URL Created with No Auth and Public Invoke Permission
+id: d25d6789-12c3-4e2f-f678-0901234b5c67
+status: experimental
+description: >
+  Detects creation of a Lambda Function URL with AuthType NONE (unauthenticated) or addition
+  of a public invoke permission (principal '*') by an IAM user principal. This is the
+  defining HazyBeacon C2 setup step - it exposes the relay function as an unauthenticated
+  HTTPS endpoint at *.lambda-url.*.on.aws. No-auth Lambda URLs created outside CI/CD service
+  roles are a high-confidence indicator of attacker-deployed serverless C2 infrastructure.
+references:
+    - https://attack.mitre.org/techniques/T1648/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.execution
+    - attack.t1648
+    - attack.command_and_control
+    - attack.t1102
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_url_noauth:
+        eventSource: lambda.amazonaws.com
+        eventName: CreateFunctionUrlConfig
+        requestParameters.authType: NONE
+        userIdentity.type: IAMUser
+    selection_public_invoke:
+        eventSource: lambda.amazonaws.com
+        eventName: AddPermission20150331
+        requestParameters.principal: '*'
+        userIdentity.type: IAMUser
+    filter_service_deployments:
+        userIdentity.arn|contains:
+            - ':assumed-role/terraform'
+            - ':assumed-role/deploy'
+            - ':assumed-role/cicd'
+    condition: (selection_url_noauth or selection_public_invoke) and not filter_service_deployments
+falsepositives:
+    - Developer testing a public Lambda endpoint for a personal project in a sandbox account
+    - Workshop or lab environment where Lambda URL with no auth is an expected teaching pattern
+level: high
