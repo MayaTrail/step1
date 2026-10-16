@@ -38,6 +38,7 @@ convert() without them raises BackendUnavailable with the install line.
 from __future__ import annotations
 
 import importlib
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -172,9 +173,22 @@ def _convert_documents(
     rules = list(collection.rules)
     if output_format and output_format != "default":
         rendered = backend.convert(collection, output_format=output_format)
-        queries = [rendered] if isinstance(rendered, str) else [str(q) for q in rendered]
+        queries = [rendered] if isinstance(rendered, str) else [_text(q) for q in rendered]
         return queries, rules
-    return [str(query) for query in backend.convert(collection)], rules
+    return [_text(query) for query in backend.convert(collection)], rules
+
+
+def _text(query: Any) -> str:
+    """
+    Render one backend output as deployable text.
+
+    Some formats (OpenSearch's dsl_lucene) return a dict per rule. str() on a
+    dict prints Python's repr, with single quotes, which no SIEM accepts, so
+    structured output is written as JSON instead.
+    """
+    if isinstance(query, (dict, list)):
+        return json.dumps(query, indent=2)
+    return str(query)
 
 
 def _identify(document: dict) -> tuple[str, str]:
