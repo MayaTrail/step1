@@ -1,24 +1,38 @@
-// ECScape — ECS task/execution role credentials used away from their owning task.
-// Sentinel / Log Analytics (AWSCloudTrail table).
+// ECScape -- stolen ECS task / execution-role credentials in use (T1552.007)
+// Dialect: Sentinel / Azure Log Analytics KQL (AWSCloudTrail table).
 //
-// Highest-fidelity ECScape signal: a *task execution* role (agent-only identity)
-// or a task role making API calls from a source IP that is not the container
-// instance it was issued to. ECScape harvests these over the ACS WebSocket, so
-// the theft is invisible — but the subsequent *use* of the stolen role is not.
-//
-// Adjust the role-name patterns and the known-instance IP set to your environment.
-let attackerRoles = dynamic(["s3-control-role", "secret-execution-role"]);
-AWSCloudTrail
-| where TimeGenerated > ago(1h)
-| extend RoleArn = tostring(parse_json(UserIdentity).arn)
-| where RoleArn has_any (attackerRoles)
-| extend SessionIssuer = tostring(parse_json(UserIdentity).sessionContext.sessionIssuer.userName)
-| summarize
-    Calls = count(),
-    Events = make_set(EventName, 20),
-    SourceIPs = make_set(SourceIpAddress, 20)
-    by RoleArn, SessionIssuer, bin(TimeGenerated, 5m)
-// Flag execution-role usage at all (should never appear in app calls),
-// or task-role usage from more than one distinct source IP in the window.
-| where RoleArn has "execution" or array_length(SourceIPs) > 1
-| project TimeGenerated, RoleArn, Calls, SourceIPs, Events
+// The ACS credential delivery is invisible (no CloudTrail), but the *use* of the
+// harvested roles is not. Two tells, unioned:
+//   (1) an execution role (agent-only identity) making calls at all after task
+//       start -- it should never appear in application activity; and
+//   (2) a task role appearing from more than one distinct source IP in a window
+//       (its owning task, plus the attacker task that stole it).
+// In this emulation the loot roles are 'ecscape-s3-control-role' (task role) and
+// 'ecscape-secret-execution-role' (execution role). Generalise the suffixes to
+// your environment.
+let window = 5m;
+let bootstrap = dynamic(["GetAuthorizationToken","BatchGetImage","GetDownloadUrlForLayer",
+                         "CreateLogStream","PutLogEvents","GetSecretValue","GetParameters","Decrypt"]);
+let creds = AWSCloudTrail
+    | where TimeGenerated > ago(1h)
+    | where UserIdentityType == "AssumedRole"
+    | extend RoleArn = tostring(parse_json(UserIdentity).arn)
+    | extend RoleName = tostring(split(RoleArn, "/")[1])
+    | where RoleName endswith "-execution-role" or RoleName endswith "-s3-control-role"
+    | where SourceIpAddress !endswith "amazonaws.com";
+// (1) execution-role used for non-bootstrap actions
+let execAbuse = creds
+    | where RoleName endswith "-execution-role"
+    | where EventName !in (bootstrap)
+    | summarize Calls = count(), Events = make_set(EventName, 25), SourceIPs = make_set(SourceIpAddress, 10)
+        by RoleName, bin(TimeGenerated, window)
+    | extend Signal = "EXECUTION-ROLE USED OUTSIDE AGENT BOOTSTRAP";
+// (2) task role seen from >1 source IP (owner task + attacker task)
+let taskReuse = creds
+    | summarize Calls = count(), Events = make_set(EventName, 25), SourceIPs = make_set(SourceIpAddress, 10)
+        by RoleName, bin(TimeGenerated, window)
+    | where array_length(SourceIPs) > 1
+    | extend Signal = "TASK-ROLE CREDENTIALS USED FROM MULTIPLE SOURCES";
+union execAbuse, taskReuse
+| project TimeGenerated, Signal, RoleName, Calls, SourceIPs, Events
+| order by TimeGenerated desc

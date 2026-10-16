@@ -1,0 +1,37 @@
+# ECScape -- IMDS instance-credential theft (T1552.005)
+#
+# The IMDS read that steals the instance role is link-local and produces NO
+# CloudTrail event, so there is no single-event Sigma rule for the theft itself.
+# The two deployable signals are:
+#   Rule A: GuardDuty InstanceCredentialExfiltration (fires only if the stolen
+#           instance creds are used off-instance / from another account; in a pure
+#           on-host ECScape run it may stay silent -- pair with T1552.007 rules).
+#   Rule B: the off-instance-IP correlation, which is a join against a role->IP
+#           lookup and cannot be expressed in Sigma -- it lives in kql_t1552.005.kql.
+title: GuardDuty EC2 instance credential exfiltration (ECScape step 1)
+id: 1b5c9e70-6d2a-4c8e-b1f0-ec5cape005001
+status: stable
+description: >-
+  GuardDuty observed EC2 instance-profile credentials used from outside the
+  instance. In ECScape these are the credentials the attacker container read from
+  IMDS and then used to impersonate the ECS agent. Definitive when it fires, but
+  absent when the instance creds are only used on the host.
+references:
+  - https://github.com/naorhaziz/ecscape
+  - https://www.sweet.security/blog/ecscape-understanding-iam-privilege-boundaries-in-amazon-ecs
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-iam.html
+author: MayaTrail
+date: 2026/09/04
+tags:
+  - attack.credential_access
+  - attack.t1552.005
+logsource:
+  product: aws
+  service: guardduty
+detection:
+  selection:
+    type|startswith: 'UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration'
+  condition: selection
+falsepositives:
+  - Legitimate cross-account automation reusing instance-profile credentials (rare; investigate).
+level: critical
