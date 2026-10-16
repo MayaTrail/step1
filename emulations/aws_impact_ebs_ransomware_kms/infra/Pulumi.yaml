@@ -1,0 +1,3 @@
+name: mayatrail-atomic-ebs-ransomware-kms
+runtime: python
+description: ATOMIC EBS Ransomware via KMS key-swap emulation - adversary emulation lab

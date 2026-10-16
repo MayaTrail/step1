@@ -1,0 +1,3 @@
+name: mayatrail-atomic-lambda-passrole-invoke
+runtime: python
+description: Atomic T1648 - Lambda PassRole privilege escalation emulation lab

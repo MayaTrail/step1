@@ -1,0 +1,77 @@
+"""MANIFEST for Query a Database Through the RDS Data API Without Network Access.
+
+Generated from the atomic spec by backend_package.generate_atomic_manifest (schema_version 3).
+Review the notes the pipeline printed before shipping to step1/emulations/.
+
+"""
+
+MANIFEST = {   'schema_version': 3,
+    'name': 'aws_discovery_rds_data_api_query',
+    'display_name': 'Query a Database Through the RDS Data API Without Network Access',
+    'description': 'On an Aurora cluster with the Data API enabled, any principal with '
+                   "rds-data:ExecuteStatement and read access to the cluster's secret can run SQL over "
+                   'HTTPS: no VPC path, no database driver. Enumerate clusters, read the secret ARN, run '
+                   'SHOW TABLES / SELECT against a lab canary table.',
+    'tier': 'atomic',
+    'platform': 'aws',
+    'added': '2026-10',
+    'services': ['IAM', 'RDS'],
+    'readiness': {'type': 'none'},
+    'origin': 'mayatrail',
+    'origin_label': 'ATOMIC TECHNIQUE',
+    'tags': ['Discovery', 'RDS'],
+    'technique_count': 1,
+    'severity': 'HIGH',
+    'aliases': 'aws.discovery.rds-data-api-query',
+    'attribution': 'Atomic adversary technique - no specific threat actor',
+    'active_since': 'Atomic technique (MayaTrail pipeline)',
+    'targets': 'AWS accounts where a principal holds: rds:DescribeDBClusters, secretsmanager:GetSecretValue, '
+               'rds-data:ExecuteStatement',
+    'incidents': [],
+    'attack_path': [   {   'phase': 1,
+                           'name': 'Discovery',
+                           'aws_actions': [   'rds-data:ExecuteStatement',
+                                              'secretsmanager:GetSecretValue',
+                                              'sts:AssumeRole'],
+                           'acting_as': {   'connected_role': ['sts:AssumeRole'],
+                                            'victim_role': [   'rds-data:ExecuteStatement',
+                                                               'secretsmanager:GetSecretValue']},
+                           'aws_resources': {   'rds-data:ExecuteStatement': '{cluster_arn}',
+                                                'secretsmanager:GetSecretValue': '{secret_arn}',
+                                                'sts:AssumeRole': '{victim_role_arn}'},
+                           'techniques': [{'id': 'T1213', 'name': 'Data from Information Repositories'}]}],
+    'mitre_mappings': [   {   'id': 'T1213',
+                              'name': 'Data from Information Repositories',
+                              'tactic': 'Discovery',
+                              'platform': 'AWS',
+                              'description': 'rds-data:ExecuteStatement from a principal or source IP that '
+                                             'does not normally use the Data API (requires the RDS Data API '
+                                             'data-event selector).'}],
+    'references': [   {   'icon': '>',
+                          'title': 'aws-samples.github.io - reference',
+                          'source': 'aws-samples.github.io',
+                          'type': 'REFERENCE',
+                          'color': 'cyan',
+                          'url': 'https://aws-samples.github.io/threat-technique-catalog-for-aws/Techniques/AT1023.001.html'},
+                      {   'icon': '>',
+                          'title': 'docs.aws.amazon.com - reference',
+                          'source': 'docs.aws.amazon.com',
+                          'type': 'REFERENCE',
+                          'color': 'cyan',
+                          'url': 'https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/logging-using-cloudtrail-data-api.html'},
+                      {   'icon': '#',
+                          'title': 'MITRE ATT&CK - T1213',
+                          'source': 'MITRE ATT&CK · mitre.org',
+                          'type': 'MITRE',
+                          'color': 'purple',
+                          'url': 'https://attack.mitre.org/techniques/T1213/'}],
+    'phase_count': 1,
+    'estimated_duration_minutes': 30,
+    'estimated_cost_per_hour_usd': 0.06,
+    'default_ttl_hours': 1,
+    'total_resources': 22,
+    'resources': {'ec2_count': 0, 'instance_types': []},
+    'resource_costs': [],
+    'identities': {   'victim_role': {   'kind': 'lab_role',
+                                         'label': "The lab's victim role",
+                                         'output': 'victim_role_arn'}}}

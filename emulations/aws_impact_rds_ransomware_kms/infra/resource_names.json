@@ -1,0 +1,31 @@
+{
+  "campaign": "ATOMIC-rds-ransomware-kms",
+  "csp": "aws",
+  "resources": {
+    "victim_kms_alias": "alias/rds-ransomware-kms-victim",
+    "attacker_kms_alias": "alias/rds-ransomware-kms-attacker",
+    "attacker_role_name": "rds-ransomware-kms-attacker-role",
+    "db_identifier": "rds-ransomware-kms-prod-customer-db",
+    "snapshot_identifier": "rds-ransomware-kms-prod-orders-2026-q3",
+    "secret_name": "prod/rds/orders/master",
+    "db_subnet_group_name": "rds-ransomware-kms-subnet-group",
+    "db_sg_name": "rds-ransomware-kms-db-sg",
+    "flow_log_role_name": "rds-ransomware-kms-flow-log-role",
+    "flow_log_group_name": "/rds-ransomware-kms/vpc-flow-logs"
+  },
+  "pulumi_export_keys": {
+    "attacker_role_arn": "attacker_role_arn",
+    "attacker_role_name": "attacker_role_name",
+    "victim_kms_key_arn": "victim_kms_key_arn",
+    "victim_kms_key_id": "victim_kms_key_id",
+    "attacker_kms_key_arn": "attacker_kms_key_arn",
+    "attacker_kms_key_id": "attacker_kms_key_id",
+    "db_instance_identifier": "db_instance_identifier",
+    "db_instance_arn": "db_instance_arn",
+    "snapshot_identifier": "snapshot_identifier",
+    "snapshot_arn": "snapshot_arn",
+    "secret_arn": "secret_arn",
+    "region": "region",
+    "account_id": "account_id"
+  }
+}

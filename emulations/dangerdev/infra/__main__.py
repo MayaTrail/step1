@@ -470,6 +470,147 @@ alice_access_key = aws.iam.AccessKey(
     user=alice_user.name,
 )
 
+# ------------------------------------------------------------
+# 11b. dangerdev-alice-emulation-guard — IAM-bounded outcome for
+#      attack.py steps 16 (T1583.001) and 17 (T1566.002).
+#
+#   Steps 16-17 make REAL calls as alice.chen's hijacked key (Step 12 creates
+#   it, so it inherits every policy on this user).  The harmful outcomes are
+#   refused here by explicit Deny, which overrides the ses:* Allow in
+#   AmazonSESFullAccess above:
+#     - RegisterDomain / TransferDomain (+ other billable domain ops): never
+#       purchase or move a domain.  The attempt is still logged
+#       (errorCode=AccessDenied), which is the detection signal.
+#     - SendEmail only to *@simulator.amazonses.com from the lab identity;
+#       every other send API is denied outright (SendRawEmail also covers the
+#       SMTP interface).
+#     - PutAccountDetails (leave the SES sandbox; files a real AWS case) and
+#       UpdateAccountSendingEnabled / PutAccountSendingAttributes (live mail
+#       flow) are denied.
+#   attack.py pre-flights each guarded action with SimulatePrincipalPolicy and
+#   skips the call unless this policy yields explicitDeny.
+#   Design: docs/DANGERDEV_SES_DOMAIN_SAFETY.md (apt_pipeline repo).
+# ------------------------------------------------------------
+# Must equal attack.SES_LAB_IDENTITY.  example.com receives no mail, so this
+# identity can never be verified.  Deliberately NOT the configurable sesEmail
+# identity (section 14), which an operator could verify.
+SES_LAB_IDENTITY = "emulation-noreply@emulation-lab-noreply.example.com"
+SES_SIMULATOR_RECIPIENTS = "*@simulator.amazonses.com"
+ses_lab_identity_arn = f"arn:aws:ses:{region}:{account_id}:identity/{SES_LAB_IDENTITY}"
+
+ALICE_EMULATION_GUARD_POLICY = {
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            # Step 16 recon. Read-only and free; Route 53 Domains has no
+            # resource-level permissions, so Resource must be "*".
+            "Sid": "AllowDomainRecon",
+            "Effect": "Allow",
+            "Action": [
+                "route53domains:CheckDomainAvailability",
+                "route53domains:GetDomainSuggestions",
+            ],
+            "Resource": "*",
+        },
+        {
+            "Sid": "DenyDomainPurchaseOrTransfer",
+            "Effect": "Deny",
+            "Action": [
+                "route53domains:RegisterDomain",
+                "route53domains:TransferDomain",
+                "route53domains:RenewDomain",
+                "route53domains:TransferDomainToAnotherAwsAccount",
+                "route53domains:AcceptDomainTransferFromAnotherAwsAccount",
+            ],
+            "Resource": "*",
+        },
+        {
+            # The design's simulator-only Allow. Documentation of intent:
+            # AmazonSESFullAccess already allows ses:*, so the three Deny
+            # statements below are what actually enforce it.
+            "Sid": "AllowSendToMailboxSimulatorOnly",
+            "Effect": "Allow",
+            "Action": "ses:SendEmail",
+            "Resource": "*",
+            "Condition": {
+                "ForAllValues:StringLike": {"ses:Recipients": SES_SIMULATOR_RECIPIENTS},
+                "StringEquals": {"ses:FromAddress": SES_LAB_IDENTITY},
+                "Null": {"ses:Recipients": "false"},
+            },
+        },
+        {
+            "Sid": "DenySendToNonSimulatorRecipient",
+            "Effect": "Deny",
+            "Action": "ses:SendEmail",
+            "Resource": "*",
+            "Condition": {
+                "ForAnyValue:StringNotLike": {"ses:Recipients": SES_SIMULATOR_RECIPIENTS},
+            },
+        },
+        {
+            # ForAnyValue evaluates false when the key is absent, so a request
+            # without recipients would slip past the statement above.
+            "Sid": "DenySendWithoutRecipientsKey",
+            "Effect": "Deny",
+            "Action": "ses:SendEmail",
+            "Resource": "*",
+            "Condition": {"Null": {"ses:Recipients": "true"}},
+        },
+        {
+            "Sid": "DenySendWithoutFromAddressKey",
+            "Effect": "Deny",
+            "Action": "ses:SendEmail",
+            "Resource": "*",
+            "Condition": {"Null": {"ses:FromAddress": "true"}},
+        },
+        {
+            "Sid": "DenySendFromNonLabIdentity",
+            "Effect": "Deny",
+            "Action": "ses:SendEmail",
+            "Resource": "*",
+            "Condition": {"StringNotEquals": {"ses:FromAddress": SES_LAB_IDENTITY}},
+        },
+        {
+            "Sid": "DenyOtherSendApis",
+            "Effect": "Deny",
+            "Action": [
+                "ses:SendRawEmail",
+                "ses:SendTemplatedEmail",
+                "ses:SendBulkTemplatedEmail",
+                "ses:SendBulkEmail",
+                "ses:SendCustomVerificationEmail",
+            ],
+            "Resource": "*",
+        },
+        {
+            "Sid": "DenySesAccountLevelChanges",
+            "Effect": "Deny",
+            "Action": [
+                "ses:PutAccountDetails",
+                "ses:UpdateAccountSendingEnabled",
+                "ses:PutAccountSendingAttributes",
+            ],
+            "Resource": "*",
+        },
+    ],
+}
+
+# Customer-managed rather than inline: a user's inline policies share a 2048-char
+# aggregate limit and this guard alone is ~1.9k, so any future inline statement
+# would break the deploy. Managed policies allow 6144 chars each.
+alice_guard_policy = aws.iam.Policy(
+    "dangerdev-alice-emulation-guard",
+    name="dangerdev-alice-emulation-guard",
+    description="MayaTrail emulation safety guard: deny domain purchase, non-simulator SES sends and SES account changes",
+    policy=json.dumps(ALICE_EMULATION_GUARD_POLICY),
+)
+
+aws.iam.UserPolicyAttachment(
+    "dangerdev-alice-emulation-guard-attach",
+    user=alice_user.name,
+    policy_arn=alice_guard_policy.arn,
+)
+
 # ============================================================
 # 12. dangerdev-decoy-user-ops + ses-smtp-user masquerade decoy
 #     Populates ListUsers to inform DangerDev's 'ses' username choice (T1036.005)
@@ -568,7 +709,9 @@ aws.cloudwatch.EventTarget(
 
 # ============================================================
 # 14. dangerdev-ses-email-identity — T1526 discovery + T1566.002 logging
-#     SES sandbox mode: CloudTrail logs SendEmail but zero external delivery
+#     Discovery target only.  Step 17 sends from the separate, unverifiable
+#     SES_LAB_IDENTITY (section 11b), never from this identity.  SendEmail is a
+#     CloudTrail data event, captured by the section 22 trail.
 # ============================================================
 ses_identity = aws.ses.EmailIdentity(
     "dangerdev-ses-email-identity",
@@ -892,6 +1035,44 @@ cloudtrail = aws.cloudtrail.Trail(
 )
 
 # ============================================================
+# 22. dangerdev-ses-data-events-trail — makes Step 17's SendEmail visible
+#     ses:SendEmail is a CloudTrail DATA event (AWS::SES::EmailIdentity): it is
+#     not in Event History or in a management-only trail.  Advanced selectors
+#     conflict with the basic event_selectors on the main trail, so this is a
+#     separate, single-region, data-events-only trail (no management events, so
+#     no duplicate-management-event charge) scoped to the lab identity ARN only.
+#     Cost: USD 0.10 per 100k data events - effectively free for the lab.
+#     s3_key_prefix must stay "cloudtrail" to match the log bucket policy.
+# ============================================================
+ses_data_trail = aws.cloudtrail.Trail(
+    "dangerdev-ses-data-events-trail",
+    name="dangerdev-ses-data-events-trail",
+    s3_bucket_name=log_bucket.id,
+    s3_key_prefix="cloudtrail",
+    is_multi_region_trail=False,
+    include_global_service_events=False,
+    enable_log_file_validation=True,
+    advanced_event_selectors=[
+        aws.cloudtrail.TrailAdvancedEventSelectorArgs(
+            name="Lab SES identity data events (SendEmail)",
+            field_selectors=[
+                aws.cloudtrail.TrailAdvancedEventSelectorFieldSelectorArgs(
+                    field="eventCategory", equals=["Data"],
+                ),
+                aws.cloudtrail.TrailAdvancedEventSelectorFieldSelectorArgs(
+                    field="resources.type", equals=["AWS::SES::EmailIdentity"],
+                ),
+                aws.cloudtrail.TrailAdvancedEventSelectorFieldSelectorArgs(
+                    field="resources.ARN", equals=[ses_lab_identity_arn],
+                ),
+            ],
+        ),
+    ],
+    tags=TAGS,
+    opts=pulumi.ResourceOptions(depends_on=[cloudtrail]),
+)
+
+# ============================================================
 # Stack exports
 # ============================================================
 pulumi.export("log_bucket_name", log_bucket.id)
@@ -900,6 +1081,8 @@ pulumi.export("ec2_instance_id", ec2_instance.id)
 pulumi.export("ec2_public_ip", ec2_instance.public_ip)
 pulumi.export("guardduty_detector_id", guardduty_detector.id)
 pulumi.export("cloudtrail_arn", cloudtrail.arn)
+pulumi.export("ses_data_trail_arn", ses_data_trail.arn)
+pulumi.export("ses_lab_identity_arn", ses_lab_identity_arn)
 pulumi.export("sensitive_bucket_name", sensitive_bucket.id)
 pulumi.export("leaked_creds_bucket_name", leaked_creds_bucket.id)
 pulumi.export("admin_user_name", admin_user.name)

@@ -1,0 +1,20 @@
+{
+  "campaign": "ATOMIC_EC2_UNUSED_REGION",
+  "csp": "aws",
+  "resources": {
+    "attacker_role_name": "atomic-ec2-unused-region-attacker-role",
+    "decoy_secret_name": "prod/database/master_credentials",
+    "vpc_name": "atomic-ec2-unused-region-vpc",
+    "subnet_name": "atomic-ec2-unused-region-subnet",
+    "sg_name": "atomic-ec2-unused-region-sg"
+  },
+  "pulumi_export_keys": {
+    "attacker_role_arn": "attacker_role_arn",
+    "attacker_role_name": "attacker_role_name",
+    "vpc_id": "vpc_id",
+    "subnet_id": "subnet_id",
+    "sg_id": "sg_id",
+    "decoy_secret_arn": "decoy_secret_arn",
+    "target_region": "target_region"
+  }
+}

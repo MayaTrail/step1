@@ -1,0 +1,23 @@
+{
+  "campaign": "ATOMIC_EC2_MASS_TERMINATE",
+  "csp": "aws",
+  "resources": {
+    "vpc_name":                  "atomic-ec2-mass-terminate-vpc",
+    "subnet_name":               "atomic-ec2-mass-terminate-subnet",
+    "sg_name":                   "atomic-ec2-mass-terminate-sg",
+    "role_name":                 "atomic-ec2-mass-terminate-prod-ops-role",
+    "role_policy_name":          "atomic-ec2-mass-terminate-prod-ops-policy",
+    "scenario_tag_value":        "atomic-ec2-mass-terminate",
+    "instance_web_name_tag":     "prod-web-01",
+    "instance_app_name_tag":     "prod-app-01",
+    "instance_db_name_tag":      "prod-db-01",
+    "instance_bastion_name_tag": "prod-bastion-01"
+  },
+  "pulumi_export_keys": {
+    "prod_ops_role_arn":           "prod_ops_role_arn",
+    "target_web_01_instance_id":   "target_web_01_instance_id",
+    "target_app_01_instance_id":   "target_app_01_instance_id",
+    "target_db_01_instance_id":    "target_db_01_instance_id",
+    "bait_bastion_01_instance_id": "bait_bastion_01_instance_id"
+  }
+}

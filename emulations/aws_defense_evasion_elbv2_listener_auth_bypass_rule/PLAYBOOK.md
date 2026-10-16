@@ -7,7 +7,7 @@
 | Incident Type | Authentication Bypass via ALB Listener Rule Injection |
 | Threat Actor | ATOMIC-elbv2-listener-auth-bypass-rule |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Defense Evasion |
 | MITRE Techniques | T1556 — Modify Authentication Process |
 | Primary Detection Source | CloudTrail (elasticloadbalancing.amazonaws.com CreateRule) |

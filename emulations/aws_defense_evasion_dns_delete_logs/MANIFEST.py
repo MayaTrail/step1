@@ -23,7 +23,7 @@ MANIFEST = {
     'origin_label': 'ATOMIC TECHNIQUE',
     'tags': ['Defense Evasion', 'Route 53'],
     'technique_count': 1,
-    'severity': 'MEDIUM',
+    'severity': 'HIGH',
     'aliases': 'aws.defense-evasion.dns-delete-logs',
     'attribution': 'Stratus Red Team — atomic technique',
     'active_since': 'Atomic technique (Stratus Red Team)',

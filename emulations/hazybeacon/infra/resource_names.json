@@ -1,0 +1,35 @@
+{
+  "campaign": "HAZYBEACON",
+  "csp": "aws",
+  "resources": {
+    "victim_iam_user": "hazybeacon-victim-iam-user",
+    "victim_policy": "hazybeacon-victim-policy",
+    "lambda_exec_role": "hazybeacon-lambda-exec-role",
+    "ssm_role": "hazybeacon-ssm-role",
+    "instance_profile": "hazybeacon-instance-profile",
+    "decoy_admin_user": "backup-svc-admin",
+    "secret_name": "prod/hazybeacon-lab/database-master-credentials",
+    "trail_name": "hazybeacon-cloudtrail",
+    "exfil_bucket_prefix": "hazybeacon-exfil-bucket-",
+    "exfil_bucket_iam_pattern": "hazybeacon-exfil-bucket",
+    "cloudtrail_bucket_prefix": "hazybeacon-cloudtrail-bucket-",
+    "dev_instance_name": "hazybeacon-dev-instance",
+    "tfstate_object_key": "terraform/prod/terraform.tfstate",
+    "flow_log_group": "/hazybeacon/vpc-flow-logs",
+    "flow_log_role": "hazybeacon-flow-log-role",
+    "relay_lambda_function": "BackupHandler"
+  },
+  "pulumi_export_keys": {
+    "victim_access_key_id": "victim_access_key_id",
+    "victim_secret_access_key": "victim_secret_access_key",
+    "exfil_bucket_name": "exfil_bucket_name",
+    "cloudtrail_bucket_name": "cloudtrail_bucket_name",
+    "dev_instance_id": "dev_instance_id",
+    "lambda_exec_role_arn": "lambda_exec_role_arn",
+    "vpc_id": "vpc_id",
+    "subnet_id": "subnet_id",
+    "dev_sg_id": "dev_sg_id",
+    "secret_arn": "secret_arn",
+    "victim_user_arn": "victim_user_arn"
+  }
+}

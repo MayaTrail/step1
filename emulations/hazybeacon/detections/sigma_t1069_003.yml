@@ -1,0 +1,40 @@
+title: HazyBeacon - IAM Permission Self-Enumeration to Verify Lambda Deployment Rights
+id: 9f3b4567-f0a1-4c0d-d456-e789012f3a45
+status: experimental
+description: >
+  Detects IAM group and policy enumeration from an IAM user principal - specifically the
+  pattern of calling ListGroups, ListAttachedGroupPolicies, and GetPolicy in sequence.
+  HazyBeacon performs this to confirm the stolen credential has Lambda deployment and
+  iam:PassRole rights before proceeding to execution. Automated CI/CD pipelines do not
+  need to self-enumerate their own group permissions; this pattern almost exclusively
+  appears in adversarial reconnaissance or automated IAM auditing tools.
+references:
+    - https://attack.mitre.org/techniques/T1069/003/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1069.003
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: iam.amazonaws.com
+        eventName:
+            - ListGroups
+            - ListGroupsForUser
+            - ListAttachedGroupPolicies
+            - GetPolicy
+            - GetPolicyVersion
+            - GetUserPolicy
+        userIdentity.type: IAMUser
+    filter_iam_admin_tasks:
+        userAgent|contains:
+            - 'console.amazonaws.com'
+    condition: selection and not filter_iam_admin_tasks
+falsepositives:
+    - IAM compliance scanner (Prowler T1069 check, cloudsplaining) running as IAM user
+    - Onboarding automation script that verifies its own permissions before proceeding
+    - Identity governance tooling performing periodic permission review
+level: medium

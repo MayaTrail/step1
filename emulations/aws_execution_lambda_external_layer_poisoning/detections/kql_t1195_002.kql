@@ -1,0 +1,127 @@
+// Lambda Layer Injection via UpdateFunctionConfiguration (T1195.002) - PRIMARY INDICATOR
+// Detects UpdateFunctionConfiguration calls that include a Layers field change,
+// attributed to a non-deployment principal. This is the definitive signal for
+// Lambda supply-chain layer poisoning.
+//
+// High-value correlation: join this event with PublishLayerVersion20181031 from the
+// same Principal within the preceding 10 minutes. Matching LayerVersionArn in both
+// events confirms the full injection chain.
+//
+// Prerequisites: CloudTrail management events ingested into AWSCloudTrail table.
+
+let DeployIdentityPatterns = dynamic(["pulumi", "cicd", "deploy", "github-actions"]);
+AWSCloudTrail
+| where EventName == "UpdateFunctionConfiguration20150331v2"
+| where EventSource == "lambda.amazonaws.com"
+| where isnotempty(parse_json(RequestParameters).layers)
+| where not(DeployIdentityPatterns has_any (UserIdentityArn))
+| extend
+    Principal        = UserIdentityArn,
+    SessionName      = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.userName),
+    FunctionName     = tostring(parse_json(RequestParameters).functionName),
+    InjectedLayers   = tostring(parse_json(RequestParameters).layers),
+    SourceIP         = SourceIpAddress,
+    UserAgentStr     = UserAgent
+// Correlate with PublishLayerVersion from same principal in prior 10 minutes
+| join kind=leftouter (
+    AWSCloudTrail
+    | where EventName == "PublishLayerVersion20181031"
+    | where EventSource == "lambda.amazonaws.com"
+    | extend
+        PublishPrincipal = UserIdentityArn,
+        PublishedArn     = tostring(parse_json(ResponseElements).layerVersionArn),
+        PublishTime      = TimeGenerated
+    | project PublishPrincipal, PublishedArn, PublishTime
+) on $left.Principal == $right.PublishPrincipal
+| where isempty(PublishTime) or (PublishTime between ((TimeGenerated - 10m) .. TimeGenerated))
+| extend ChainConfirmed = isnotempty(PublishedArn)
+| project
+    TimeGenerated,
+    EventName,
+    Principal,
+    SessionName,
+    FunctionName,
+    InjectedLayers,
+    ChainConfirmed,
+    PublishedArn,
+    SourceIP,
+    UserAgentStr,
+    AwsRegion,
+    RecipientAccountId
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// Lambda Layer Published by Unexpected Principal (T1195.002)
+// Detects PublishLayerVersion calls from principals that are not the registered
+// layer owner / CI-CD deployer. The adversary publishes a malicious new layer
+// version here; the returned ARN is later pushed into victim functions.
+//
+// Enrichment: join against the preceding GetFunction event on the same principal
+// within a short window to surface the full recon->publish->inject chain.
+//
+// Prerequisites: CloudTrail management events ingested into AWSCloudTrail table.
+
+AWSCloudTrail
+| where EventName == "PublishLayerVersion20181031"
+| where EventSource == "lambda.amazonaws.com"
+| where UserIdentityArn !contains "pulumi"
+    and UserIdentityArn !contains "cicd"
+    and UserIdentityArn !contains "deploy"
+    and UserIdentityArn !contains "github-actions"
+    and UserIdentityArn !contains "layer-publisher"
+| extend
+    Principal        = UserIdentityArn,
+    SessionName      = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.userName),
+    LayerName        = tostring(parse_json(RequestParameters).layerName),
+    PublishedArn     = tostring(parse_json(ResponseElements).layerVersionArn),
+    SourceIP         = SourceIpAddress,
+    UserAgentStr     = UserAgent
+| project
+    TimeGenerated,
+    EventName,
+    Principal,
+    SessionName,
+    LayerName,
+    PublishedArn,
+    SourceIP,
+    UserAgentStr,
+    AwsRegion,
+    RecipientAccountId
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// Lambda Function Reconnaissance by Non-Deployment Principal (T1195.002)
+// Detects GetFunction calls from principals outside expected CI/CD deployment identities.
+// This is the pre-attack recon step where an adversary reads the current Layers list
+// before injecting a poisoned version.
+//
+// Prerequisites: CloudTrail management events ingested into AWSCloudTrail table.
+//
+// Tuning: add your actual deployer role ARNs to the exclusion list below.
+
+AWSCloudTrail
+| where EventName == "GetFunction20150331v2"
+| where EventSource == "lambda.amazonaws.com"
+| where UserIdentityArn !contains "pulumi"
+    and UserIdentityArn !contains "cicd"
+    and UserIdentityArn !contains "deploy"
+    and UserIdentityArn !contains "github-actions"
+| extend
+    Principal        = UserIdentityArn,
+    SessionName      = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.userName),
+    FunctionName     = tostring(parse_json(RequestParameters).functionName),
+    SourceIP         = SourceIpAddress,
+    UserAgentStr     = UserAgent
+| project
+    TimeGenerated,
+    EventName,
+    Principal,
+    SessionName,
+    FunctionName,
+    SourceIP,
+    UserAgentStr,
+    AwsRegion,
+    RecipientAccountId
+| sort by TimeGenerated desc

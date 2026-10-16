@@ -1,5 +1,16 @@
 # K8s Writable /var/log Host Escape — IR & Detection Playbook
 
+## Classification
+
+| Field | Value |
+|-------|-------|
+| Incident Type | K8s Writable /var/log Host Escape |
+| Threat Actor | N/A — single technique, not actor-attributed |
+| Platform | k8s |
+| Severity | High |
+| MITRE Tactics | Execution, Privilege Escalation |
+| MITRE Techniques | T1609 (Container Administration Command), T1611 (Escape to Host) |
+
 ## Summary
 Simulates host escape by utilizing a writable host log directory mount combined
 with Kubelet log-retrieval permissions to read arbitrary host files via symlink.

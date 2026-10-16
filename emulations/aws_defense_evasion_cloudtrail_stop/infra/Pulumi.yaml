@@ -1,0 +1,3 @@
+name: mayatrail-aws-defense-evasion-cloudtrail-stop
+runtime: python
+description: Prerequisites for aws.defense-evasion.cloudtrail-stop

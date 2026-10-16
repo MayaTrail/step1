@@ -1,0 +1,3 @@
+name: mayatrail-atomic-rds-ransomware-kms
+runtime: python
+description: RDS ransomware KMS atomic emulation - T1486 snapshot re-encryption

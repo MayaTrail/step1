@@ -98,6 +98,7 @@ _SERVICE_CATEGORY = {
     "RDS": "Storage & Data",
     "Secrets Manager": "Storage & Data",
     "KMS": "Storage & Data",
+    "EBS": "Storage & Data",
     "PersistentVolume": "Storage & Data",
     "Route53": "Networking",
     "VPC": "Networking",
@@ -114,6 +115,7 @@ _SERVICE_CATEGORY = {
     "GuardDuty": "Management & Detection",
     "SSM": "Management & Detection",
     "CodeCommit": "Management & Detection",
+    "Organizations": "Management & Detection",
 }
 
 

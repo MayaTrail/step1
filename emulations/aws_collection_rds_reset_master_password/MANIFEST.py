@@ -1,0 +1,77 @@
+"""MANIFEST for Take Over an RDS Database by Resetting Its Master Password.
+
+Generated from the atomic spec by backend_package.generate_atomic_manifest (schema_version 3).
+Review the notes the pipeline printed before shipping to step1/emulations/.
+
+"""
+
+MANIFEST = {   'schema_version': 3,
+    'name': 'aws_collection_rds_reset_master_password',
+    'display_name': 'Take Over an RDS Database by Resetting Its Master Password',
+    'description': 'With rds:ModifyDBInstance alone an attacker resets the master user password '
+                   '(ApplyImmediately) and logs into the database with full rights, no database credentials '
+                   "needed. The emulation resets the lab instance's password, waits for the change to apply, "
+                   'connects from the worker over the VPC only if network allows (optional), and selects '
+                   'from a lab canary table.',
+    'tier': 'atomic',
+    'platform': 'aws',
+    'added': '2026-10',
+    'services': ['IAM', 'RDS'],
+    'readiness': {'type': 'none'},
+    'origin': 'mayatrail',
+    'origin_label': 'ATOMIC TECHNIQUE',
+    'tags': ['Collection', 'RDS'],
+    'technique_count': 1,
+    'severity': 'HIGH',
+    'aliases': 'aws.collection.rds-reset-master-password',
+    'attribution': 'Atomic adversary technique - no specific threat actor',
+    'active_since': 'Atomic technique (MayaTrail pipeline)',
+    'targets': 'AWS accounts where a principal holds: rds:DescribeDBInstances, rds:ModifyDBInstance',
+    'incidents': [],
+    'attack_path': [   {   'phase': 1,
+                           'name': 'Collection',
+                           'aws_actions': [   'rds:DescribeDBInstances',
+                                              'rds:ModifyDBInstance',
+                                              'sts:AssumeRole'],
+                           'acting_as': {   'connected_role': ['sts:AssumeRole'],
+                                            'victim_role': [   'rds:DescribeDBInstances',
+                                                               'rds:ModifyDBInstance']},
+                           'aws_resources': {   'rds:DescribeDBInstances': '{rds_instance_arn}',
+                                                'rds:ModifyDBInstance': '{rds_instance_arn}',
+                                                'sts:AssumeRole': '{victim_role_arn}'},
+                           'techniques': [{'id': 'T1213', 'name': 'Data from Information Repositories'}]}],
+    'mitre_mappings': [   {   'id': 'T1213',
+                              'name': 'Data from Information Repositories',
+                              'tactic': 'Collection',
+                              'platform': 'AWS',
+                              'description': 'ModifyDBInstance whose requestParameters contain '
+                                             'masterUserPassword, from a principal that is not the DBA or '
+                                             'secrets-rotation role.'}],
+    'references': [   {   'icon': '>',
+                          'title': 'aws-samples.github.io - reference',
+                          'source': 'aws-samples.github.io',
+                          'type': 'REFERENCE',
+                          'color': 'cyan',
+                          'url': 'https://aws-samples.github.io/threat-technique-catalog-for-aws/Techniques/T1213.A013.html'},
+                      {   'icon': '>',
+                          'title': 'hackingthe.cloud - reference',
+                          'source': 'hackingthe.cloud',
+                          'type': 'REFERENCE',
+                          'color': 'cyan',
+                          'url': 'https://hackingthe.cloud/aws/exploitation/rds-snapshot-or-reset-password/'},
+                      {   'icon': '#',
+                          'title': 'MITRE ATT&CK - T1213',
+                          'source': 'MITRE ATT&CK · mitre.org',
+                          'type': 'MITRE',
+                          'color': 'purple',
+                          'url': 'https://attack.mitre.org/techniques/T1213/'}],
+    'phase_count': 1,
+    'estimated_duration_minutes': 25,
+    'estimated_cost_per_hour_usd': 0.02,
+    'default_ttl_hours': 1,
+    'total_resources': 15,
+    'resources': {'ec2_count': 0, 'instance_types': []},
+    'resource_costs': [],
+    'identities': {   'victim_role': {   'kind': 'lab_role',
+                                         'label': "The lab's victim role",
+                                         'output': 'victim_role_arn'}}}

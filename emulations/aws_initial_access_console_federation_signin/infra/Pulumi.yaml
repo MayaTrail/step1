@@ -1,0 +1,3 @@
+name: mayatrail-console-federation-signin
+runtime: python
+description: ATOMIC T1538 - Console Sign-in via Federation Token emulation lab

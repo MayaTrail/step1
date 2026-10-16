@@ -1,0 +1,126 @@
+// T1578.003 - Combined Attack Pattern: Protection Removal -> Mass Termination
+// Correlates ModifyInstanceAttribute (disable termination protection) events with a
+// subsequent TerminateInstances call from the same principal within a 15-minute window.
+// This sequenced pattern is highly specific to adversarial mass-terminate behavior.
+let LookbackWindow = 15m;
+let ProtectionRemovals =
+    AWSCloudTrail
+    | where EventName == "ModifyInstanceAttribute"
+    | where EventSource == "ec2.amazonaws.com"
+    | where RequestParameters has "disableApiTermination"
+    | where RequestParameters has '"value":false'
+    | where isempty(ErrorCode)
+    | summarize
+        DisableCount = count(),
+        FirstDisable = min(TimeGenerated),
+        LastDisable = max(TimeGenerated),
+        AffectedInstances = make_set(extract('"instanceId":"([^"]+)"', 1, RequestParameters))
+      by UserIdentityArn, SourceIpAddress, AwsRegion;
+let Terminations =
+    AWSCloudTrail
+    | where EventName == "TerminateInstances"
+    | where EventSource == "ec2.amazonaws.com"
+    | where isempty(ErrorCode)
+    | project
+        TerminateTime = TimeGenerated,
+        UserIdentityArn,
+        TerminateSourceIp = SourceIpAddress,
+        AwsRegion,
+        TerminateParams = RequestParameters;
+ProtectionRemovals
+| join kind=inner (Terminations) on UserIdentityArn, AwsRegion
+| where TerminateTime between (FirstDisable .. (LastDisable + LookbackWindow))
+| project
+    FirstDisable,
+    TerminateTime,
+    UserIdentityArn,
+    SourceIpAddress,
+    TerminateSourceIp,
+    DisableCount,
+    AffectedInstances,
+    AwsRegion,
+    TerminateParams
+| extend AlertTitle = "T1578.003 - EC2 Termination Protection Removed then Mass Terminated"
+| sort by FirstDisable desc
+
+// ----- next query -----
+
+// T1578.003 - Denied Termination Attempt (Scope Probing)
+// Detects TerminateInstances calls that were denied with UnauthorizedOperation.
+// Adversaries may probe untagged or out-of-scope instances to determine the
+// effective blast radius of compromised credentials before targeting real assets.
+AWSCloudTrail
+| where EventName == "TerminateInstances"
+| where EventSource == "ec2.amazonaws.com"
+| where ErrorCode == "UnauthorizedOperation"
+| project
+    TimeGenerated,
+    EventName,
+    ErrorCode,
+    ErrorMessage,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AwsRegion,
+    RequestParameters
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1578.003 - Termination Protection Disabled (ModifyInstanceAttribute)
+// Detects EC2 API calls that remove instance termination protection.
+// AWS CloudTrail -> AWSCloudTrail table in Sentinel / Log Analytics.
+// requestParameters contains JSON with "disableApiTermination" and value false.
+AWSCloudTrail
+| where EventName == "ModifyInstanceAttribute"
+| where EventSource == "ec2.amazonaws.com"
+| where RequestParameters has "disableApiTermination"
+| where RequestParameters has '"value":false'
+// Suppress known IaC automation principals
+| where UserIdentityArn !has "/terraform"
+| where UserIdentityArn !has "/pulumi"
+| where UserIdentityArn !has "/cdk"
+| where UserIdentityArn !has "AWSServiceRoleFor"
+| extend InstanceId = extract('"instanceId":"([^"]+)"', 1, RequestParameters)
+| extend CallerAccount = UserIdentityAccountId
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    InstanceId,
+    CallerAccount,
+    AwsRegion,
+    RequestParameters
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1578.003 - Mass EC2 Instance Termination (TerminateInstances)
+// Detects successful TerminateInstances calls, enriched with instance count
+// extracted from requestParameters to surface bulk-termination events.
+AWSCloudTrail
+| where EventName == "TerminateInstances"
+| where EventSource == "ec2.amazonaws.com"
+| where isempty(ErrorCode)
+// Count distinct instance IDs in the request by counting instanceId occurrences
+| extend InstanceCount = array_length(extract_all('"instanceId":"([^"]+)"', RequestParameters))
+| where UserIdentityArn !has "autoscaling.amazonaws.com"
+| where UserIdentityArn !has "AWSServiceRoleFor"
+| where UserIdentityArn !has "/terraform"
+| where UserIdentityArn !has "/pulumi"
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    InstanceCount,
+    AwsRegion,
+    RequestParameters,
+    ResponseElements
+| sort by TimeGenerated desc

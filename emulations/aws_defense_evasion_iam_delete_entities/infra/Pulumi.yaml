@@ -1,0 +1,3 @@
+name: mayatrail-atomic-iam-delete-entities
+runtime: python
+description: Atomic emulation - IAM entity deletion (T1070.009 Clear Persistence)

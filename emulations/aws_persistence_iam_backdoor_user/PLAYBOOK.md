@@ -8,7 +8,7 @@
 | Emulation Tier | Atomic technique |
 | Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High, a second access key gives the attacker independent, standing programmatic access that **survives rotation of the user's own key**; it is quiet, durable persistence (`MANIFEST.py` rates MEDIUM; the IR view is High because it is an enduring foothold behind a legitimate identity) |
+| Severity | High, a second access key gives the attacker independent, standing programmatic access that **survives rotation of the user's own key**; it is quiet, durable persistence |
 | MITRE Tactics | Persistence |
 | MITRE Techniques | T1098.001 |
 | Services in Scope | IAM, STS, CloudTrail |

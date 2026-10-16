@@ -1,0 +1,115 @@
+# Disable CloudTrail Logging Through Event Selectors (T1685.002)
+#
+# WHAT WAS WRONG WITH THE GENERATED RULE. It matched requestParameters|contains on the literal
+# strings '"includeManagementEvents":false' and '"readWriteType":"ReadOnly"'. Two defects:
+#   1. IT DEPENDED ON SERIALISATION. Whether a nested object flattens to `"k":false` or
+#      `"k": false` is the backend's choice; the in-process evaluator renders the space, so the
+#      rule never fired there. The rules below use |re with \s* on the eventSelectors list.
+#   2. IT FIRED ON A LEGITIMATE LAYOUT. A trail commonly carries TWO selectors - one for
+#      management events, one data-only selector with includeManagementEvents=false. A data-only
+#      selector is not impairment while its sibling keeps management events, so the rule now
+#      requires that NO selector in the request keeps them.
+#
+# THE MECHANISM. PutEventSelectors REPLACES every selector on the trail. With one selector of
+# ReadWriteType=ReadOnly and IncludeManagementEvents=false and no data resources - this
+# emulation's payload - the trail delivers nothing at all, while GetTrailStatus keeps reporting
+# IsLogging=true. A trail can carry basic selectors (requestParameters.eventSelectors) or advanced
+# selectors (requestParameters.advancedEventSelectors), never both; each has its own document.
+#
+# FIELD SHAPE. eventSource cloudtrail.amazonaws.com, management event in the trail's home Region.
+# requestParameters.trailName (name or ARN); requestParameters.eventSelectors[] with
+# readWriteType, includeManagementEvents, dataResources[], excludeManagementEventSources[].
+title: CloudTrail event selectors changed to drop management events
+id: a86f7cd9-1de5-52ae-9012-24f89e4fe20d
+status: experimental
+description: >-
+  Detects cloudtrail:PutEventSelectors (basic selectors) leaving a trail with no selector that
+  records management events, or with only read-only selectors. The trail keeps reporting
+  IsLogging=true while write activity - or everything - goes unrecorded.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.cloudtrail-event-selectors/
+  - https://attack.mitre.org/techniques/T1685/002/
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_PutEventSelectors.html
+tags:
+  - attack.defense_impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'PutEventSelectors'
+  mgmt_off:
+    requestParameters.eventSelectors|re: '"includeManagementEvents":\s*false'
+  mgmt_on:
+    requestParameters.eventSelectors|re: '"includeManagementEvents":\s*true'
+  read_only:
+    requestParameters.eventSelectors|re: '"readWriteType":\s*"ReadOnly"'
+  write_capable:
+    requestParameters.eventSelectors|re: '"readWriteType":\s*"(All|WriteOnly)"'
+  condition: selection and ((mgmt_off and not mgmt_on) or (read_only and not write_capable))
+falsepositives:
+  - A secondary, data-events-only trail being (re)configured while another trail records
+    management events. Allowlist that trail's name, not the event.
+level: high
+---
+# Advanced event selectors express the same outcome differently: management events are recorded
+# only by a selector with a fieldSelector `eventCategory equals Management`. A
+# PutEventSelectors whose advanced selectors never mention the Management category therefore
+# records no management events at all.
+title: CloudTrail advanced event selectors exclude all management events
+id: 1cf6ff9a-387c-4c27-818e-24ca7ad6791c
+status: experimental
+description: >-
+  Detects cloudtrail:PutEventSelectors with advanced event selectors and no Management event
+  category. The trail keeps reporting IsLogging=true while management events go unrecorded.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_PutEventSelectors.html
+tags:
+  - attack.defense_impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'PutEventSelectors'
+  advanced:
+    requestParameters.advancedEventSelectors|exists: true
+  has_management:
+    requestParameters.advancedEventSelectors|contains: 'Management'
+  condition: selection and advanced and not has_management
+falsepositives:
+  - A data-events-only trail, as above.
+level: high
+---
+# Narrower: management events stay on, but named event sources are excluded from them. AWS
+# supports this for kms.amazonaws.com and rdsdata.amazonaws.com, usually for cost. Excluding KMS
+# removes the record of every Decrypt/GenerateDataKey - the trail an exfiltration of encrypted
+# data leaves - so it is surfaced at medium.
+title: CloudTrail management event sources excluded from a trail
+id: 8349330b-10e1-45c1-9cfe-302b31a3e08e
+status: experimental
+description: >-
+  Detects cloudtrail:PutEventSelectors setting a non-empty excludeManagementEventSources list,
+  which stops the trail recording management events from those services (KMS, RDS Data API).
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_PutEventSelectors.html
+tags:
+  - attack.defense_impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'PutEventSelectors'
+  excludes_sources:
+    requestParameters.eventSelectors|re: '"excludeManagementEventSources":\s*\[\s*"'
+  condition: selection and excludes_sources
+falsepositives:
+  - Deliberate cost reduction of KMS event volume on a high-throughput account.
+level: medium

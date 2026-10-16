@@ -1,0 +1,153 @@
+// T1496.003 - SMS Pumping: AssumeRole with suspicious session name
+// Adversaries staging SMS pumping adopt an attacker-controlled role using
+// a session name baked into their tooling. This query surfaces AssumeRole
+// calls whose RoleSessionName matches common SMS pumping tool signatures.
+AWSCloudTrail
+| where EventName == "AssumeRole"
+| where EventSource == "sts.amazonaws.com"
+| extend RoleSessionName = tostring(parse_json(RequestParameters).roleSessionName)
+| extend RoleArn = tostring(parse_json(RequestParameters).roleArn)
+| where RoleSessionName has_any ("sms-pump", "smspump", "sms_pump", "otp-abuse", "otpabuse", "sms-fraud", "smsbomb")
+| project
+    TimeGenerated,
+    EventName,
+    RoleArn,
+    RoleSessionName,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    ErrorCode,
+    ErrorMessage
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1496.003 - SMS Pumping: SetSMSAttributes denied - spend limit raise attempt
+// This query MUST match errorCode == "AccessDenied".
+// Rules that only match successful events (errorCode == "" or IS NULL) will
+// completely miss this step. The denied call is the intent signal: adversary
+// probed whether they could remove the billing guard before launching the burst.
+AWSCloudTrail
+| where EventSource == "sns.amazonaws.com"
+| where EventName == "SetSMSAttributes"
+// Include both denied and successful - flag denied separately
+| extend IsDenied = (ErrorCode == "AccessDenied")
+| extend RequestedAttributes = parse_json(RequestParameters)
+| extend MonthlySpendLimit = tostring(RequestedAttributes.attributes.MonthlySpendLimit)
+| where IsDenied == true
+    or isnotempty(MonthlySpendLimit)  // also flag successful spend-limit changes
+| project
+    TimeGenerated,
+    EventName,
+    ErrorCode,
+    ErrorMessage,
+    IsDenied,
+    MonthlySpendLimit,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    RequestParameters
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1496.003 - SMS Pumping: SNS Publish burst to direct phone numbers
+// Two complementary queries:
+//   Part 1 - raw signal: any Publish call targeting a phone number directly
+//   Part 2 - burst detector: >= 10 distinct phone numbers per principal per minute
+
+// Part 1: individual Publish-to-phone events
+let PublishToPhone = AWSCloudTrail
+| where EventSource == "sns.amazonaws.com"
+| where EventName == "Publish"
+| extend Params = parse_json(RequestParameters)
+| extend PhoneNumber = tostring(Params.phoneNumber)
+| extend TopicArn = tostring(Params.topicArn)
+| extend TargetArn = tostring(Params.targetArn)
+| extend SMSType = tostring(Params["MessageAttributes"]["AWS.SNS.SMS.SMSType"]["Value"])
+| where isnotempty(PhoneNumber)                   // direct-to-phone (not topic)
+| where isempty(TopicArn) and isempty(TargetArn)
+| project
+    TimeGenerated,
+    PhoneNumber,
+    SMSType,
+    UserIdentityArn,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    ErrorCode;
+
+// Part 2: burst aggregation — alert when >= 10 distinct numbers per minute
+PublishToPhone
+| summarize
+    DistinctPhoneNumbers = dcount(PhoneNumber),
+    PhoneNumberSample = make_set(PhoneNumber, 10),
+    TotalPublish = count(),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated),
+    PromotionalCount = countif(SMSType == "Promotional"),
+    FailedCount = countif(isnotempty(ErrorCode))
+    by bin(TimeGenerated, 1m), UserIdentityArn, SourceIpAddress, AWSRegion
+| where DistinctPhoneNumbers >= 10
+| extend BurstWindowSeconds = datetime_diff("second", LastSeen, FirstSeen)
+| extend AllPromotional = (PromotionalCount == TotalPublish)
+| project
+    TimeGenerated,
+    BurstWindowSeconds,
+    UserIdentityArn,
+    SourceIpAddress,
+    AWSRegion,
+    TotalPublish,
+    DistinctPhoneNumbers,
+    PromotionalCount,
+    AllPromotional,
+    FailedCount,
+    PhoneNumberSample
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1496.003 - SMS Pumping: SNS SMS account reconnaissance
+// Detects GetSMSAttributes and GetSMSSandboxAccountStatus calls.
+// Both together from the same principal in a short window indicate
+// pre-pumping reconnaissance: adversary is reading spend headroom and
+// sandbox gate status before launching the Publish burst.
+//
+// Part 1: raw recon event stream
+let SmsReconEvents = AWSCloudTrail
+| where EventSource == "sns.amazonaws.com"
+| where EventName in ("GetSMSAttributes", "GetSMSSandboxAccountStatus")
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    SessionIssuerArn = tostring(parse_json(UserIdentitySessionContext).sessionIssuer.arn);
+SmsReconEvents
+| summarize
+    Events = make_list(EventName),
+    EventCount = count(),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated),
+    SourceIPs = make_set(SourceIpAddress)
+    by UserIdentityArn, SessionIssuerArn, AWSRegion
+| extend BothCallsMade = array_length(set_difference(dynamic(["GetSMSAttributes","GetSMSSandboxAccountStatus"]), Events)) == 0
+| extend ReconWindowSeconds = datetime_diff("second", LastSeen, FirstSeen)
+| project
+    FirstSeen,
+    LastSeen,
+    ReconWindowSeconds,
+    UserIdentityArn,
+    SessionIssuerArn,
+    AWSRegion,
+    EventCount,
+    BothCallsMade,
+    SourceIPs,
+    Events
+| sort by FirstSeen desc

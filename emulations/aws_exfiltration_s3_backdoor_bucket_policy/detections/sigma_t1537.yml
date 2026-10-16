@@ -1,0 +1,99 @@
+# Backdoor an S3 Bucket Through Its Bucket Policy (T1537)
+#
+# WHAT WAS WRONG WITH THE GENERATED RULE. `requestParameters|contains: ':root'` fired on any
+# policy mentioning an account-root ARN - including the bucket owner's OWN account, which is in a
+# large share of ordinary policies, and including Deny statements - and missed every grant written
+# as a bare 12-digit account ID or a role ARN. It also could not see the public case at all.
+#
+# FIELD SHAPE. PutBucketPolicy is a bucket-level MANAGEMENT event (s3.amazonaws.com).
+# requestParameters.bucketName, and requestParameters.bucketPolicy carrying the policy as a parsed
+# JSON object (Version, Statement[] with Effect / Principal / Action / Resource / Condition).
+# Principal is "*", {"AWS": "<arn-or-account-id>"} or {"AWS": [...]}.
+#
+# HOW THE RULES READ A STATEMENT. Sigma has no JSON-path over arrays, so the policy is matched
+# with regular expressions that require an Allow and a principal of interest inside the SAME
+# statement object (no braces between them). They are written for either key order. A Deny with
+# Principal "*" - the standard deny-insecure-transport statement - does not match.
+#
+# WHAT SIGMA CANNOT DO, AND THE KQL DOES. Compare the principal's account to the bucket owner's
+# (recipientAccountId), so the cross-account rule below needs the allowlist populated with your
+# own and your organization's account IDs. IAM Access Analyzer is the authoritative answer to
+# "is this bucket shared outside my zone of trust".
+#
+# DOCUMENT ORDER. The cross-account rule is first and the public rule is held at the same level
+# (high): the product renders and AI-validates the first highest-level document, and that must be
+# the rule this emulation fires. Deploy the public rule at critical in your SIEM; the KQL already
+# ranks a public grant critical.
+# A named principal - account root, a role or user ARN, or a bare account ID. This is the
+# emulation's grant: Allow s3:GetObject + s3:ListBucket to arn:aws:iam::193672423079:root.
+title: S3 bucket policy grants access to another AWS account
+id: 2a27f903-0ca1-57e1-859a-9d34e4e2fd2e
+name: s3_bucket_policy_cross_account
+status: experimental
+description: >-
+  Detects s3:PutBucketPolicy installing an Allow statement for an AWS principal named by account
+  ID or IAM ARN that is not on the allowlist. A grant to another account is a persistent
+  exfiltration path that survives credential rotation in this account.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.exfiltration.s3-backdoor-bucket-policy/
+  - https://attack.mitre.org/techniques/T1537/
+  - https://docs.aws.amazon.com/IAM/latest/UserGuide/what-is-access-analyzer.html
+tags:
+  - attack.exfiltration
+  - attack.t1537
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketPolicy'
+  allow_named_account:
+    requestParameters.bucketPolicy|re:
+      - '"Effect":\s*"Allow"[^{}]*"Principal":\s*\{\s*"AWS":\s*(\[[^\]]*)?"(arn:aws:iam::)?\d{12}'
+      - '"Principal":\s*\{\s*"AWS":\s*(\[[^\]]*)?"(arn:aws:iam::)?\d{12}[^}]*\}[^{}]*"Effect":\s*"Allow"'
+  # POPULATE BEFORE DEPLOYING with your own account ID and your organization's account IDs. The
+  # bucket owner's own account appears in many legitimate policies; without this the rule is noisy.
+  known_accounts:
+    requestParameters.bucketPolicy|contains:
+      - 'arn:aws:iam::000000000000:'   # replace with real account IDs, one entry per account
+  condition: selection and allow_named_account and not known_accounts
+falsepositives:
+  - Approved cross-account sharing (log archive, analytics, partner accounts). Allowlist those
+    account IDs above.
+  - Same-account principals until your own account ID is added to the allowlist.
+level: high
+---
+title: S3 bucket policy grants access to everyone
+id: 6d45e852-56f4-4643-9426-603cd6965b83
+name: s3_bucket_policy_public
+status: experimental
+description: >-
+  Detects s3:PutBucketPolicy installing an Allow statement whose principal is "*" (or AWS "*")
+  without an aws:PrincipalOrgID condition. Unless S3 Block Public Access refuses it, the bucket is
+  readable or writable by anyone.
+references:
+  - https://attack.mitre.org/techniques/T1537/
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketPolicy.html
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html
+tags:
+  - attack.exfiltration
+  - attack.t1537
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketPolicy'
+  allow_everyone:
+    requestParameters.bucketPolicy|re:
+      - '"Effect":\s*"Allow"[^{}]*"Principal":\s*("\*"|\{\s*"AWS":\s*"\*"\s*\})'
+      - '"Principal":\s*("\*"|\{\s*"AWS":\s*"\*"\s*\})[^{}]*"Effect":\s*"Allow"'
+  org_scoped:
+    requestParameters.bucketPolicy|contains: 'aws:PrincipalOrgID'
+  condition: selection and allow_everyone and not org_scoped
+falsepositives:
+  - Static website or public dataset buckets. Allowlist by bucket name; they should be few and
+    known.
+level: high

@@ -1,0 +1,20 @@
+{
+  "campaign": "ATOMIC-ec2-ssrf-imdsv1",
+  "csp": "aws",
+  "resources": {
+    "iam_instance_role": "atomic-ec2-ssrf-imdsv1-instance-role",
+    "iam_instance_profile": "atomic-ec2-ssrf-imdsv1-instance-profile",
+    "iam_instance_policy": "atomic-ec2-ssrf-imdsv1-instance-policy"
+  },
+  "pulumi_export_keys": {
+    "vpc_id": "vpc_id",
+    "ec2_public_ip": "ec2_public_ip",
+    "ec2_instance_id": "ec2_instance_id",
+    "iam_role_arn": "iam_role_arn",
+    "iam_role_name": "iam_role_name",
+    "iam_instance_role_name": "iam_instance_role_name",
+    "iam_instance_profile_name": "iam_instance_profile_name",
+    "s3_bait_bucket_name": "s3_bait_bucket_name",
+    "flowlog_bucket_name": "flowlog_bucket_name"
+  }
+}

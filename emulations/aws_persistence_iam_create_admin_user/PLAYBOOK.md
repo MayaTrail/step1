@@ -8,7 +8,7 @@
 | Emulation Tier | Atomic technique |
 | Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High, a new IAM user with `AdministratorAccess` and its own access key is a fully independent admin foothold that survives remediation of the original credential (`MANIFEST.py` rates MEDIUM; the IR view is High because it plants a standing admin identity) |
+| Severity | High, a new IAM user with `AdministratorAccess` and its own access key is a fully independent admin foothold that survives remediation of the original credential |
 | MITRE Tactics | Persistence |
 | MITRE Techniques | T1136.003 |
 | Services in Scope | IAM, CloudTrail, GuardDuty |

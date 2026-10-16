@@ -1,0 +1,24 @@
+{
+  "campaign": "ATOMIC-SES-SEND-ABUSE",
+  "csp": "aws",
+  "resources": {
+    "attacker_role_name": "atomic-ses-send-abuse-attacker-role",
+    "ses_policy_name": "atomic-ses-send-abuse-ses-policy",
+    "email_identity": "noreply@lab.example.com",
+    "config_set_name": "atomic-ses-send-abuse-config-set",
+    "victim_secret_name": "prod/marketing/ses-sending-credentials"
+  },
+  "pulumi_export_keys": {
+    "attacker_role_name": "attacker_role_name",
+    "attacker_role_arn": "attacker_role_arn",
+    "ses_policy_arn": "ses_policy_arn",
+    "email_identity_name": "email_identity_name",
+    "email_identity_arn": "email_identity_arn",
+    "config_set_name": "config_set_name",
+    "campaigns_bucket_name": "campaigns_bucket_name",
+    "victim_secret_name": "victim_secret_name",
+    "victim_secret_arn": "victim_secret_arn",
+    "ses_events_topic_arn": "ses_events_topic_arn",
+    "ses_log_group_name": "ses_log_group_name"
+  }
+}

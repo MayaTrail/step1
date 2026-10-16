@@ -27,8 +27,10 @@ MANIFEST = {
         "17-step AWS adversary emulation based on the real DangerDev "
         "(DangerDev@protonmail.me) campaign: a leaked IAM admin key seeds backdoor "
         "user creation, cross-account trust backdoors, account hijacking, "
-        "GPU-cryptomining reconnaissance, defense evasion, and documented "
-        "SES/Route53 phishing infrastructure."
+        "GPU-cryptomining reconnaissance, defense evasion, and phishing "
+        "infrastructure: real Route 53 Domains and SES calls whose harmful outcomes "
+        "(domain purchase, leaving the SES sandbox, mail to real people) are refused "
+        "by IAM deny guards and the SES mailbox simulator."
     ),
     "tier": "enterprise",
 
@@ -69,7 +71,7 @@ MANIFEST = {
         "Phishing Infrastructure",
     ],
     "technique_count": 17,
-    "severity": "HIGH",
+    "severity": "CRITICAL",
     "aliases": "DangerDev@protonmail.me",
     "attribution": "DangerDev (Indonesia, financially motivated) — Cryptomining + SES/PayPal phishing",
     "active_since": "Documented by Invictus IR",
@@ -152,6 +154,18 @@ MANIFEST = {
             # step 15, not lab teardown. The teardown calls in the same function run
             # through lab_iam and are excluded, which is why iam:DetachUserPolicy and
             # iam:DeleteLoginProfile do not appear here.
+            #
+            # Steps 16-17 run as alice. route53domains:RegisterDomain,
+            # ses:PutAccountDetails and ses:UpdateAccountSendingEnabled are real
+            # calls that alice.chen's inline policy dangerdev-alice-emulation-guard
+            # explicitly denies: AccessDenied is the expected, emulated outcome
+            # (attempt-level), so the account check reporting them as refused for
+            # this lab user is correct. ses:SendEmail is allowed only to
+            # *@simulator.amazonses.com from the lab identity (conditions
+            # ses:Recipients / ses:FromAddress). The SimulatePrincipalPolicy
+            # pre-flight attack.py runs before each guarded call is a lab safety
+            # interlock made by lab-infra-admin, not attacker tradecraft, and is
+            # excluded like the teardown calls.
             "aws_actions": [
                 "iam:CreateUser",
                 "iam:CreateAccessKey",
@@ -172,15 +186,45 @@ MANIFEST = {
                 "iam:UpdateAccessKey",
                 "iam:DeleteAccessKey",
                 "iam:DeleteUser",
+                "route53domains:CheckDomainAvailability",
+                "route53domains:GetDomainSuggestions",
+                "route53domains:RegisterDomain",
+                "ses:GetSendQuota",
+                "ses:GetAccount",
+                "ses:ListIdentities",
                 "ses:VerifyEmailIdentity",
+                "ses:SendEmail",
+                "ses:PutAccountDetails",
+                "ses:UpdateAccountSendingEnabled",
             ],
             "acting_as": {
-                "alice": ["ses:VerifyEmailIdentity"],
+                "alice": [
+                    "route53domains:CheckDomainAvailability",
+                    "route53domains:GetDomainSuggestions",
+                    "route53domains:RegisterDomain",
+                    "ses:GetSendQuota",
+                    "ses:GetAccount",
+                    "ses:ListIdentities",
+                    "ses:VerifyEmailIdentity",
+                    "ses:SendEmail",
+                    "ses:PutAccountDetails",
+                    "ses:UpdateAccountSendingEnabled",
+                ],
                 "leaked_admin": ["iam:DeleteAccessKey", "iam:DeleteUser"],
                 "backdoor_user": ["iam:CreateUser", "iam:CreateAccessKey", "iam:ListRoles", "iam:GetRole", "iam:AttachRolePolicy", "sts:AssumeRole", "iam:UpdateLoginProfile", "s3:ListAllMyBuckets", "s3:ListBucket", "iam:ListInstanceProfiles", "iam:ListGroupsForUser", "iam:ListSSHPublicKeys", "guardduty:ListDetectors", "guardduty:ListFindings", "guardduty:GetFindings", "iam:SimulatePrincipalPolicy", "iam:UpdateAccessKey", "iam:DeleteAccessKey", "iam:DeleteUser"],
             },
             "aws_resources": {
+                # Route 53 Domains has no resource-level permissions.
+                "route53domains:CheckDomainAvailability": "*",
+                "route53domains:GetDomainSuggestions": "*",
+                "route53domains:RegisterDomain": "*",
+                "ses:GetSendQuota": "*",
+                "ses:GetAccount": "*",
+                "ses:ListIdentities": "*",
                 "ses:VerifyEmailIdentity": "arn:aws:ses:{region}:{account_id}:identity/emulation-noreply@emulation-lab-noreply.example.com",
+                "ses:SendEmail": "arn:aws:ses:{region}:{account_id}:identity/emulation-noreply@emulation-lab-noreply.example.com",
+                "ses:PutAccountDetails": "*",
+                "ses:UpdateAccountSendingEnabled": "*",
                 "iam:DeleteAccessKey": "arn:aws:iam::{account_id}:user/DangerDev@protonmail.me",
                 "iam:DeleteUser": "arn:aws:iam::{account_id}:user/DangerDev@protonmail.me",
             },
@@ -230,9 +274,9 @@ MANIFEST = {
         {"id": "T1070", "name": "Indicator Removal", "tactic": "Defense Evasion", "platform": "AWS IAM",
          "description": "Delete the ses masquerade user and the DangerDev@protonmail.me backdoor (the deletions are themselves CloudTrail indicators)."},
         {"id": "T1583.001", "name": "Acquire Infrastructure: Domains", "tactic": "Resource Development", "platform": "AWS Route53",
-         "description": "DOCUMENTED ONLY — RegisterDomain for PayPal-mimicking domains is not executed; the simulated CloudTrail event is printed."},
+         "description": "EMULATED (attempt-level) — as hijacked alice.chen: real CheckDomainAvailability and GetDomainSuggestions on a lab-marked, non-brand name (us-east-1), then a real RegisterDomain refused by an explicit IAM Deny. CloudTrail records RegisterDomain with errorCode AccessDenied in us-east-1; no domain is ever purchased and no PayPal lookalike is ever requested."},
         {"id": "T1566.002", "name": "Phishing: Spearphishing Link", "tactic": "Initial Access", "platform": "AWS SES",
-         "description": "VerifyEmailIdentity on a lab-controlled address is executed; SendEmail to real targets is documented-only (SES sandbox blocks delivery)."},
+         "description": "EMULATED (attempt-level) — as hijacked alice.chen: SES recon, VerifyEmailIdentity on an unverifiable example.com lab address, and a real SendEmail that IAM permits only to success@simulator.amazonses.com (expected MessageRejected: unverified sender). PutAccountDetails (leave sandbox) and UpdateAccountSendingEnabled are attempted and refused by IAM Deny. SendEmail is a CloudTrail data event, captured by the lab's SES data-event trail."},
     ],
 
     # ── References (frontend references) ──────────────────────────────────────
@@ -248,7 +292,10 @@ MANIFEST = {
     "estimated_duration_minutes": 8,
     "estimated_cost_per_hour_usd": 0.05,
     "default_ttl_hours": 4,
-    "total_resources": 65,  # confirmed via `pulumi preview` (pulumi-aws v7)
+    # 65 confirmed via `pulumi preview` (pulumi-aws v7); +2 for the alice.chen
+    # emulation-guard inline policy and the SES data-event trail (not yet
+    # re-confirmed by preview).
+    "total_resources": 68,
     "resources": {
         "ec2_count": 1,
         "instance_types": ["t2.micro"],
@@ -261,6 +308,7 @@ MANIFEST = {
         {"name": "EC2 t2.micro (Windows)", "count": 1, "cost_per_hour_usd": 0.0162},
         {"name": "GuardDuty detector",     "count": 1, "cost_per_hour_usd": 0.01},
         {"name": "CloudTrail (data events)","count": 1, "cost_per_hour_usd": 0.01},
+        {"name": "CloudTrail SES data-event trail (lab identity only, USD 0.10/100k events)", "count": 1, "cost_per_hour_usd": 0.0},
         {"name": "KMS key",                "count": 1, "cost_per_hour_usd": 0.0014},
         {"name": "Secrets Manager secret", "count": 1, "cost_per_hour_usd": 0.00055},
         {"name": "S3 buckets",             "count": 3, "cost_per_hour_usd": 0.0},

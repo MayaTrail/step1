@@ -1,0 +1,151 @@
+title: EBS Snapshot Re-encrypted Under External KMS Key (Ransomware Key-Swap)
+id: 5501ed97-3042-5905-bd90-3a6f0051c06d
+status: experimental
+description: |
+  Detects CopySnapshot calls where the destination encryption key (kmsKeyId) belongs to
+  a different AWS account than the caller. This is the core ransomware key-swap primitive:
+  attacker re-encrypts victim snapshot data under an attacker-controlled CMK, then deletes
+  originals. Victim loses access to their own data without the attacker key.
+references:
+    - https://attack.mitre.org/techniques/T1486/
+    - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_CopySnapshot.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1486
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: CopySnapshot
+        eventSource: ec2.amazonaws.com
+    # Flag copies that specify an explicit kmsKeyId ARN - legitimate intra-account
+    # copies typically inherit the source key or use the account's default EBS CMK.
+    # Cross-account key ARNs contain a different account ID than the caller's account.
+    # SIEM rule: alert when requestParameters.kmsKeyId is present and non-empty.
+    # Tuning: suppress if kmsKeyId account component matches caller account ID.
+    with_external_key:
+        requestParameters.kmsKeyId|startswith: 'arn:aws:kms:'
+    condition: selection and with_external_key
+falsepositives:
+    - Authorized disaster-recovery workflows that explicitly re-key snapshots during
+      cross-account copy (e.g., sharing snapshots to a backup account with that account's key).
+    - Intra-account copies that specify a non-default CMK ARN for compliance purposes.
+    - Tune by allowlisting known-safe kmsKeyId ARNs or accounts in the filter below.
+level: high
+---
+title: EBS Volume and Snapshot Bulk Deletion from Single Principal (Ransomware Destruction Phase)
+id: b844ceb0-d852-56a5-8467-903ea699204d
+status: experimental
+description: |
+  Detects both DeleteVolume and DeleteSnapshot issued by the same IAM principal within
+  a short window. Legitimate operations rarely delete an EBS volume and its associated
+  snapshot in the same session. Combined with prior CopySnapshot events, this pattern
+  indicates the destruction phase of an EBS ransomware chain where originals are wiped
+  after re-encryption under an attacker-controlled key.
+references:
+    - https://attack.mitre.org/techniques/T1486/
+    - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DeleteVolume.html
+    - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DeleteSnapshot.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1486
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_delete_volume:
+        eventName: DeleteVolume
+        eventSource: ec2.amazonaws.com
+    selection_delete_snapshot:
+        eventName: DeleteSnapshot
+        eventSource: ec2.amazonaws.com
+    # This rule fires on each individual event. Correlation logic (same principal,
+    # <5 min window) must be implemented in the SIEM. Pair with CopySnapshot alert
+    # for the full ransomware chain signature.
+    condition: selection_delete_volume or selection_delete_snapshot
+falsepositives:
+    - Automated cleanup pipelines that decommission EBS volumes and their snapshots
+      as part of instance termination workflows.
+    - Cost-optimization scripts that delete old unattached volumes and stale snapshots.
+    - Tune by suppressing when userIdentity.arn matches known automation role ARNs.
+level: medium
+---
+title: KMS Key Policy Modification Denied - Attempted Account Lockout
+id: 4e0883db-2ec9-59c3-aa6f-b3a01cc2d864
+status: experimental
+description: |
+  Detects PutKeyPolicy calls on KMS CMKs that return AccessDenied. Attackers who have
+  re-encrypted victim data under their own CMK may attempt to replace the key policy to
+  lock the account owner out of the key entirely, eliminating any administrative recovery
+  path. A deny-guard IAM policy blocks this call, but CloudTrail still records the attempt.
+  Detection rules must NOT filter on errorCode IS NULL for this event - the AccessDenied
+  response IS the indicator of compromise.
+references:
+    - https://attack.mitre.org/techniques/T1486/
+    - https://docs.aws.amazon.com/kms/latest/APIReference/API_PutKeyPolicy.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1486
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: PutKeyPolicy
+        eventSource: kms.amazonaws.com
+        errorCode: AccessDenied
+    condition: selection
+falsepositives:
+    - Misconfigured automation attempting key policy updates without sufficient IAM permissions.
+    - Developer error from testing key policy changes against a restricted key.
+    - SCPs or permission boundaries legitimately blocking non-critical key policy changes.
+level: high
+---
+title: KMS CMK Scheduled for Deletion Immediately After EBS Destruction (Ransomware Ransom Demand)
+id: 2364a299-54e8-5eb6-9096-ef1b58d62c5c
+status: experimental
+description: |
+  Detects ScheduleKeyDeletion on a KMS Customer Managed Key within a short time window
+  after DeleteVolume or DeleteSnapshot events. This is the ransomware "ransom demand"
+  signature: attacker re-encrypts victim data under their CMK, deletes originals, then
+  schedules their key for deletion to create an artificial deadline. Victim data will be
+  permanently unrecoverable when the key self-destructs unless the ransom is paid.
+  Note: ScheduleKeyDeletion alone is not unusual; the temporal correlation with EBS
+  destruction events is what elevates severity.
+references:
+    - https://attack.mitre.org/techniques/T1486/
+    - https://docs.aws.amazon.com/kms/latest/APIReference/API_ScheduleKeyDeletion.html
+    - https://docs.aws.amazon.com/securityhub/latest/userguide/kms-controls.html#kms-3
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1486
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: ScheduleKeyDeletion
+        eventSource: kms.amazonaws.com
+    filter_legitimate:
+        # Suppress known key rotation or scheduled retirement workflows.
+        # Populate with automation role ARNs used by your key lifecycle processes.
+        userIdentity.arn|contains:
+            - 'key-rotation-automation'
+            - 'kms-lifecycle-role'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - Authorized key retirement as part of planned infrastructure decommission.
+    - IaC teardown (e.g., pulumi destroy, terraform destroy) that schedules CMK deletion
+      as part of lab or staging environment cleanup. Tune by suppressing when the call is from
+      a known CI/CD role or IaC deploy principal.
+    - Security team testing KMS key lifecycle procedures.
+level: high

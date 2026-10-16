@@ -1,0 +1,240 @@
+title: S3 Bucket Discovery During SES Abuse Campaign Staging
+id: 5c01e0f9-abbd-5bc1-941c-55362b392cd9
+status: experimental
+description: >
+  Detects ListBuckets calls from an assumed-role session that also generated SES
+  API events within the same session. In cloud email hijacking (T1496.004), an
+  adversary may enumerate S3 for email campaign templates, recipient lists, or
+  stored SES configuration. A ListBuckets call paired with SES enumeration events
+  (GetAccount, GetSendQuota, ListIdentities) from the same principal within a short
+  window is a compound indicator of an active campaign-staging session.
+  Note: S3 object-level access (ListObjectsV2, GetObject) is a data-plane event
+  not visible in CloudTrail management events without explicit data event logging.
+references:
+    - https://attack.mitre.org/techniques/T1496/004/
+author: MayaTrail
+date: 2026/10/11
+tags:
+    - attack.discovery
+    - attack.t1496.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    s3_list_buckets:
+        eventSource: 's3.amazonaws.com'
+        eventName: 'ListBuckets'
+        userIdentity.type: 'AssumedRole'
+    filter_known_backup_roles:
+        userIdentity.sessionContext.sessionIssuer.userName|contains:
+            - 'backup'
+            - 'audit'
+            - 'compliance'
+            - 'scanner'
+    condition: s3_list_buckets and not filter_known_backup_roles
+falsepositives:
+    - Backup, compliance, or security tooling that enumerates all S3 buckets for auditing
+    - IaC pipelines checking existing bucket state before provisioning
+    - Cloud management platforms with broad discovery permissions
+level: low
+---
+title: Unexpected SES Email Identity Registration
+id: 21ee0adb-b6e3-5de7-b37e-50e9941484d8
+status: experimental
+description: >
+  Detects CreateEmailIdentity calls from non-standard principals. In cloud email
+  hijacking (T1496.004), an adversary with a stolen session registers a new sender
+  address to use as a From address for a spam campaign. Legitimate SES identity
+  registrations are infrequent, infrastructure-driven events; ad-hoc calls from
+  IAM roles — especially assumed-role sessions — are high-fidelity indicators.
+references:
+    - https://attack.mitre.org/techniques/T1496/004/
+    - https://docs.aws.amazon.com/ses/latest/APIReference/API_CreateEmailIdentity.html
+author: MayaTrail
+date: 2026/10/11
+tags:
+    - attack.impact
+    - attack.t1496.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    create_identity:
+        eventSource: 'ses.amazonaws.com'
+        eventName: 'CreateEmailIdentity'
+    filter_assumed_role_automation:
+        # Allow known CI/CD or IaC role session names if applicable
+        userIdentity.type: 'AssumedRole'
+        userIdentity.sessionContext.sessionIssuer.userName|contains:
+            - 'pulumi'
+            - 'terraform'
+            - 'cdk'
+            - 'cloudformation'
+    condition: create_identity and not filter_assumed_role_automation
+falsepositives:
+    - IaC pipelines (Pulumi, Terraform, CDK) adding new verified sender domains or addresses
+    - DevOps teams onboarding new sending identities for legitimate email services
+level: medium
+---
+title: SES Email Identity Deleted Post-Campaign (Defense Evasion)
+id: ed3d05a6-1c54-5684-9d1c-05ad235cc860
+status: experimental
+description: >
+  Detects DeleteEmailIdentity following a recent CreateEmailIdentity from the
+  same principal. After executing a spam campaign, adversaries delete the attacker-
+  registered sender identity to remove evidence of their infrastructure (T1496.004,
+  Defense Evasion). The delete event itself is an IOC: legitimate SES identity
+  lifecycle management rarely pairs a create and delete within the same short
+  session. Correlate with CreateEmailIdentity from the same userIdentity.arn or
+  sessionContext.sessionIssuer within a 30-minute window.
+references:
+    - https://attack.mitre.org/techniques/T1496/004/
+    - https://docs.aws.amazon.com/ses/latest/APIReference/API_DeleteEmailIdentity.html
+author: MayaTrail
+date: 2026/10/11
+tags:
+    - attack.defense_evasion
+    - attack.t1496.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    delete_identity:
+        eventSource: 'ses.amazonaws.com'
+        eventName: 'DeleteEmailIdentity'
+    filter_iac_roles:
+        userIdentity.type: 'AssumedRole'
+        userIdentity.sessionContext.sessionIssuer.userName|contains:
+            - 'pulumi'
+            - 'terraform'
+            - 'cdk'
+            - 'cloudformation'
+    condition: delete_identity and not filter_iac_roles
+falsepositives:
+    - IaC teardown pipelines removing SES verified identities during environment cleanup
+    - Legitimate domain decommissioning workflows
+level: medium
+---
+title: SES Account and Identity Enumeration Before Spam Campaign
+id: 7f55b735-f3bf-5e03-a047-56e207034fe8
+status: experimental
+description: >
+  Detects rapid SES account posture enumeration — GetAccount, GetSendQuota, and
+  ListIdentities — performed by a non-SES-service principal. This combination
+  mirrors the pre-attack recon phase of cloud email hijacking (T1496.004): an
+  adversary with a stolen role session first checks the account's sending limits
+  and production-access status, then lists registered sender addresses before
+  staging a spam campaign.
+references:
+    - https://attack.mitre.org/techniques/T1496/004/
+    - https://docs.aws.amazon.com/ses/latest/APIReference/API_GetAccount.html
+author: MayaTrail
+date: 2026/10/11
+tags:
+    - attack.discovery
+    - attack.impact
+    - attack.t1496.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    ses_enum_events:
+        eventSource: 'ses.amazonaws.com'
+        eventName|contains:
+            - 'GetAccount'
+            - 'GetSendQuota'
+            - 'ListIdentities'
+    filter_ses_service_principal:
+        userIdentity.type: 'Service'
+        userIdentity.invokedBy: 'ses.amazonaws.com'
+    condition: ses_enum_events and not filter_ses_service_principal
+falsepositives:
+    - Monitoring or compliance tools that periodically audit SES quotas and identities
+    - Developers testing SES integrations in non-prod accounts
+    - Infrastructure-as-code tools (Pulumi, Terraform) running SES configuration checks
+level: medium
+---
+title: SES Production Access Escalation Attempt (AccessDenied)
+id: db1ffb8f-9126-5dec-8ad0-3c7308806fee
+status: experimental
+description: >
+  Detects attempts to elevate SES account sending limits via PutAccountDetails
+  or UpdateAccountSendingEnabled that were denied by IAM policy. An adversary who
+  has compromised a cloud role will try to lift sandbox restrictions to broaden
+  the blast radius of a spam campaign (T1496.004). These events will carry
+  errorCode: AccessDenied when the role is deny-guarded; the attempt itself is
+  the IOC — do NOT filter on errorCode IS NULL. Both API calls target
+  account-level SES settings and have no legitimate reason to come from an
+  assumed-role session in most environments.
+references:
+    - https://attack.mitre.org/techniques/T1496/004/
+    - https://docs.aws.amazon.com/ses/latest/APIReference/API_PutAccountDetails.html
+    - https://docs.aws.amazon.com/ses/latest/APIReference/API_UpdateAccountSendingEnabled.html
+author: MayaTrail
+date: 2026/10/11
+tags:
+    - attack.impact
+    - attack.t1496.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    escalation_attempt:
+        eventSource: 'ses.amazonaws.com'
+        eventName|contains:
+            - 'PutAccountDetails'
+            - 'UpdateAccountSendingEnabled'
+        errorCode: 'AccessDenied'
+    filter_ses_service:
+        userIdentity.type: 'Service'
+        userIdentity.invokedBy: 'ses.amazonaws.com'
+    condition: escalation_attempt and not filter_ses_service
+falsepositives:
+    - Developers testing IAM permission boundaries for SES administration
+    - Incorrect IAM policy reviews that trigger AccessDenied for SES account mgmt
+level: high
+---
+title: SES Credential Secret Read During Post-Compromise Discovery
+id: b199142d-cc15-51dd-82de-6df0061fbfb7
+status: experimental
+description: >
+  Detects GetSecretValue on secrets whose names contain SES-related patterns
+  (ses, smtp, email, marketing) from an assumed-role session. In cloud email
+  hijacking (T1496.004), an adversary harvests stored SES SMTP credentials from
+  Secrets Manager to gain additional sending identities or higher-quota credentials
+  beyond those available through the compromised role. Pairing ListSecrets with
+  GetSecretValue in the same session is a strong indicator of credential harvesting.
+references:
+    - https://attack.mitre.org/techniques/T1496/004/
+    - https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
+author: MayaTrail
+date: 2026/10/11
+tags:
+    - attack.credential_access
+    - attack.discovery
+    - attack.t1496.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    get_secret:
+        eventSource: 'secretsmanager.amazonaws.com'
+        eventName: 'GetSecretValue'
+        requestParameters.secretId|contains:
+            - 'ses'
+            - 'smtp'
+            - 'email'
+            - 'marketing'
+            - 'sendgrid'
+            - 'mailgun'
+    filter_known_automation:
+        userIdentity.type: 'AssumedRole'
+        userIdentity.sessionContext.sessionIssuer.userName|contains:
+            - 'lambda-exec'
+            - 'ecs-task'
+            - 'app-service'
+    condition: get_secret and not filter_known_automation
+falsepositives:
+    - Application Lambda or ECS task execution roles legitimately reading SES credentials at startup
+    - Rotation Lambda functions accessing SES secrets during scheduled rotation
+level: high

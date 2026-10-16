@@ -1,0 +1,227 @@
+title: Failed AssumeRoleWithWebIdentity Attempt Against IAM Role (InvalidIdentityToken)
+id: 829233bc-57f5-59a7-93ff-14e984ea68be
+status: experimental
+description: >
+  Detects failed AssumeRoleWithWebIdentity calls with errorCode InvalidIdentityToken.
+  This occurs when an attacker probes or verifies a freshly installed OIDC backdoor
+  role using a synthetic or expired JWT web identity token. A real GitHub Actions
+  workflow would supply a valid OIDC token, so InvalidIdentityToken from an unexpected
+  principal or IP is a reliable signal of role probing. Correlate with prior
+  CreateOpenIDConnectProvider or CreateRole (Federated) events in the same session.
+references:
+    - https://attack.mitre.org/techniques/T1484/002/
+    - https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.privilege_escalation
+    - attack.t1484.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: sts.amazonaws.com
+        eventName: AssumeRoleWithWebIdentity
+        errorCode: InvalidIdentityToken
+    condition: selection
+falsepositives:
+    - Misconfigured GitHub Actions workflows passing stale or malformed tokens
+    - Developer testing OIDC federation with manually crafted tokens
+    - Clock skew causing legitimate token expiry before STS evaluation
+level: medium
+---
+title: IAM Role Created with OIDC Federated Trust Policy (GitHub Actions Backdoor)
+id: 9dab3b86-195b-50ee-8c00-2173ca97fb6d
+status: experimental
+description: >
+  Detects creation of an IAM role whose trust policy contains a Federated principal
+  referencing an IAM OIDC provider (oidc-provider/). This is the primary persistence
+  primitive in OIDC backdoor attacks: a standing IAM identity that any future GitHub
+  Actions token satisfying the sub condition can assume via AssumeRoleWithWebIdentity.
+  Legitimate federated roles are provisioned by IaC; ad-hoc CreateRole calls with
+  Federated OIDC principals from non-infrastructure identities are high-fidelity.
+references:
+    - https://attack.mitre.org/techniques/T1484/002/
+    - https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.privilege_escalation
+    - attack.t1484.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: iam.amazonaws.com
+        eventName: CreateRole
+        requestParameters.assumeRolePolicyDocument|contains: 'oidc-provider'
+    selection_github:
+        requestParameters.assumeRolePolicyDocument|contains: 'token.actions.githubusercontent.com'
+    filter_iac:
+        userIdentity.arn|contains:
+            - 'terraform'
+            - 'pulumi'
+            - 'cdk'
+            - 'AWSServiceRole'
+    condition: (selection or selection_github) and not filter_iac
+falsepositives:
+    - Platform engineering creating federated deploy roles via IaC pipelines
+    - CDK/Terraform bootstrapping GitHub Actions integration roles
+level: high
+---
+title: Backdoor IAM OIDC Provider Created for GitHub Actions
+id: 604453bd-39c1-5a2a-85fe-97ad8e0a2f9b
+status: experimental
+description: >
+  Detects creation of an IAM OIDC identity provider pointing to
+  token.actions.githubusercontent.com. Legitimate providers are provisioned once
+  during IaC bootstrapping; out-of-band CreateOpenIDConnectProvider calls from
+  non-infrastructure principals are a strong signal of OIDC backdoor installation.
+  An attacker who creates or piggybacks on this provider can then create a federated
+  role whose trust policy allows any GitHub Actions token to assume it.
+references:
+    - https://attack.mitre.org/techniques/T1484/002/
+    - https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.privilege_escalation
+    - attack.t1484.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: iam.amazonaws.com
+        eventName: CreateOpenIDConnectProvider
+        requestParameters.url|contains: 'token.actions.githubusercontent.com'
+    filter_iac:
+        userIdentity.arn|contains:
+            - 'terraform'
+            - 'pulumi'
+            - 'cdk'
+            - 'AWSServiceRole'
+    condition: selection and not filter_iac
+falsepositives:
+    - First-time IaC deployment adding the GitHub OIDC provider to a new AWS account
+    - Platform engineering scripts setting up GitHub Actions federation for the first time
+level: high
+---
+title: IAM Federated Role Deleted Shortly After Creation (OIDC Backdoor Cleanup)
+id: ca945dc1-9ec8-5579-93c7-7581b93f6996
+status: experimental
+description: >
+  Detects deletion of an IAM role that was created with a Federated OIDC trust policy
+  within a short window. Attackers who install an OIDC backdoor and then attempt to
+  clean indicator artefacts will call DeleteRole against the same role ARN. On its own,
+  DeleteRole is low-fidelity; paired with a prior CreateRole (Federated) event in the
+  same CloudTrail session or from the same principal, it indicates an indicator-removal
+  phase following OIDC backdoor installation. Correlate with
+  sigma_t1484_002_create_federated_role.
+references:
+    - https://attack.mitre.org/techniques/T1484/002/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1484.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: iam.amazonaws.com
+        eventName: DeleteRole
+    filter_iac:
+        userIdentity.arn|contains:
+            - 'terraform'
+            - 'pulumi'
+            - 'cdk'
+            - 'AWSServiceRole'
+    condition: selection and not filter_iac
+falsepositives:
+    - IaC destroy operations tearing down legitimate federated roles
+    - Routine role lifecycle management by platform engineering
+level: low
+---
+title: IAM OIDC Provider Deleted (Indicator Removal After Backdoor Installation)
+id: 87472324-777b-52c5-8da4-835dd7a1a05e
+status: experimental
+description: >
+  Detects deletion of an IAM OIDC identity provider via DeleteOpenIDConnectProvider.
+  In the OIDC backdoor attack chain, an attacker who created a shadow OIDC provider
+  entry calls this after using it to create a federated role, removing the immediate
+  indicator while leaving the role as the persistent backdoor. Legitimate OIDC provider
+  deletion is extremely rare outside full IaC teardown; ad-hoc calls from
+  non-infrastructure principals warrant immediate investigation. Correlate with prior
+  CreateOpenIDConnectProvider or CreateRole (Federated) events from the same principal.
+references:
+    - https://attack.mitre.org/techniques/T1484/002/
+    - https://docs.aws.amazon.com/IAM/latest/APIReference/API_DeleteOpenIDConnectProvider.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1484.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: iam.amazonaws.com
+        eventName: DeleteOpenIDConnectProvider
+    filter_iac:
+        userIdentity.arn|contains:
+            - 'terraform'
+            - 'pulumi'
+            - 'cdk'
+            - 'AWSServiceRole'
+    condition: selection and not filter_iac
+falsepositives:
+    - IaC teardown of a decommissioned GitHub Actions OIDC integration
+    - Platform engineering migrating OIDC providers between accounts
+level: high
+---
+title: IAM OIDC Provider Enumeration via ListOpenIDConnectProviders
+id: 3c83a164-8811-5746-a7fd-73f4e76c5e47
+status: experimental
+description: >
+  Detects enumeration of IAM OIDC identity providers via ListOpenIDConnectProviders.
+  Attackers call this before creating a backdoor OIDC provider or federated role to
+  discover existing provider ARNs that can serve as trust anchors. Elevated risk when
+  the caller is not a known automation principal or when paired with CreateRole or
+  CreateOpenIDConnectProvider in the same session.
+references:
+    - https://attack.mitre.org/techniques/T1484/002/
+    - https://docs.aws.amazon.com/IAM/latest/APIReference/API_ListOpenIDConnectProviders.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.privilege_escalation
+    - attack.t1484.002
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: iam.amazonaws.com
+        eventName: ListOpenIDConnectProviders
+    filter_automation:
+        userIdentity.arn|contains:
+            - 'terraform'
+            - 'pulumi'
+            - 'cdk'
+            - 'sso'
+            - 'AWSServiceRole'
+    condition: selection and not filter_automation
+falsepositives:
+    - IaC tooling (Terraform, Pulumi, CDK) auditing OIDC provider state during plan/apply
+    - Security audit scripts enumerating IAM identity providers
+    - AWS SSO/IAM Identity Center service actions
+level: low

@@ -1,0 +1,514 @@
+title: API Gateway Backdoor Injection - Full Attack Sequence
+status: experimental
+description: "Composite detection for the complete API Gateway backdoor proxy attack chain (T1190):\n\
+  CreateResource + PutMethod (authorizationType=NONE) + PutIntegration (AWS_PROXY) +\nCreateDeployment\
+  \ from the same principal within a short time window. This sequence\nrepresents the full backdoor injection\
+  \ lifecycle: inject route, strip auth, wire to\nattacker Lambda, activate in prod. No legitimate CI/CD\
+  \ pipeline executes this sequence\noutside of a deployment run (and deployments use known pipeline principals\
+  \ filtered below).\n\nNOTE: This rule uses SIGMA temporal correlation which requires a backend that\
+  \ supports\nevent grouping over a time window (e.g. Elastic SIEM with correlation rules, Splunk\ncorrelation\
+  \ searches). For Microsoft Sentinel, use the companion kql_T1190_apigw_backdoor_sequence.kql.\n\nIndividual\
+  \ atomic rules:\n  sigma_T1190_apigw_createresource_outside_pipeline.yml\n  sigma_T1190_apigw_putmethod_unauth.yml\n\
+  \  sigma_T1190_apigw_putintegration_proxy.yml\n  sigma_T1190_apigw_createdeployment_outside_pipeline.yml"
+references:
+- https://attack.mitre.org/techniques/T1190/
+- https://attack.mitre.org/tactics/TA0003/
+- https://attack.mitre.org/tactics/TA0005/
+author: MayaTrail
+date: 2026/04/15
+tags:
+- attack.initial_access
+- attack.persistence
+- attack.defense_evasion
+- attack.t1190
+correlation:
+  type: temporal
+  rules:
+  - apigw_create_resource
+  - apigw_put_method_noauth
+  - apigw_put_integration_proxy
+  - apigw_create_deployment
+  group-by:
+  - userIdentity.arn
+  timespan: 15m
+falsepositives:
+- Legitimate rapid deployments by authorized engineers during incidents
+- New pipeline principal not yet in filter_pipeline list
+level: critical
+---
+title: API Gateway Backdoor Injection - Full Attack Sequence - CreateResource
+name: apigw_create_resource
+status: experimental
+description: Base rule for the correlation 'API Gateway Backdoor Injection - Full Attack Sequence'. Matches
+  the single event by design; deploy the correlation, not this rule.
+tags:
+- attack.initial_access
+- attack.persistence
+- attack.defense_evasion
+- attack.t1190
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  event_createresource:
+    eventName: CreateResource
+    eventSource: apigateway.amazonaws.com
+  filter_pipeline:
+    userIdentity.arn|contains:
+    - :assumed-role/CodeBuildRole/
+    - :assumed-role/CodePipelineRole/
+    - :assumed-role/GitHubActionsRole/
+    - :assumed-role/TerraformRole/
+    - :assumed-role/PulumiRole/
+  condition: event_createresource and not filter_pipeline
+falsepositives:
+- Legitimate rapid deployments by authorized engineers during incidents
+- New pipeline principal not yet in filter_pipeline list
+level: low
+---
+title: API Gateway Backdoor Injection - Full Attack Sequence - PutMethod with no authorizer
+name: apigw_put_method_noauth
+status: experimental
+description: Base rule for the correlation 'API Gateway Backdoor Injection - Full Attack Sequence'. Matches
+  the single event by design; deploy the correlation, not this rule.
+tags:
+- attack.initial_access
+- attack.persistence
+- attack.defense_evasion
+- attack.t1190
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  event_putmethod:
+    eventName: PutMethod
+    eventSource: apigateway.amazonaws.com
+    requestParameters.authorizationType: NONE
+  filter_pipeline:
+    userIdentity.arn|contains:
+    - :assumed-role/CodeBuildRole/
+    - :assumed-role/CodePipelineRole/
+    - :assumed-role/GitHubActionsRole/
+    - :assumed-role/TerraformRole/
+    - :assumed-role/PulumiRole/
+  condition: event_putmethod and not filter_pipeline
+falsepositives:
+- Legitimate rapid deployments by authorized engineers during incidents
+- New pipeline principal not yet in filter_pipeline list
+level: low
+---
+title: API Gateway Backdoor Injection - Full Attack Sequence - PutIntegration AWS_PROXY
+name: apigw_put_integration_proxy
+status: experimental
+description: Base rule for the correlation 'API Gateway Backdoor Injection - Full Attack Sequence'. Matches
+  the single event by design; deploy the correlation, not this rule.
+tags:
+- attack.initial_access
+- attack.persistence
+- attack.defense_evasion
+- attack.t1190
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  event_putintegration:
+    eventName: PutIntegration
+    eventSource: apigateway.amazonaws.com
+    requestParameters.type: AWS_PROXY
+  filter_pipeline:
+    userIdentity.arn|contains:
+    - :assumed-role/CodeBuildRole/
+    - :assumed-role/CodePipelineRole/
+    - :assumed-role/GitHubActionsRole/
+    - :assumed-role/TerraformRole/
+    - :assumed-role/PulumiRole/
+  condition: event_putintegration and not filter_pipeline
+falsepositives:
+- Legitimate rapid deployments by authorized engineers during incidents
+- New pipeline principal not yet in filter_pipeline list
+level: low
+---
+title: API Gateway Backdoor Injection - Full Attack Sequence - CreateDeployment
+name: apigw_create_deployment
+status: experimental
+description: Base rule for the correlation 'API Gateway Backdoor Injection - Full Attack Sequence'. Matches
+  the single event by design; deploy the correlation, not this rule.
+tags:
+- attack.initial_access
+- attack.persistence
+- attack.defense_evasion
+- attack.t1190
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  event_createdeployment:
+    eventName: CreateDeployment
+    eventSource: apigateway.amazonaws.com
+  filter_pipeline:
+    userIdentity.arn|contains:
+    - :assumed-role/CodeBuildRole/
+    - :assumed-role/CodePipelineRole/
+    - :assumed-role/GitHubActionsRole/
+    - :assumed-role/TerraformRole/
+    - :assumed-role/PulumiRole/
+  condition: event_createdeployment and not filter_pipeline
+falsepositives:
+- Legitimate rapid deployments by authorized engineers during incidents
+- New pipeline principal not yet in filter_pipeline list
+level: low
+---
+title: API Gateway Production Deployment Outside Approved Pipeline
+id: e50fe381-54f0-5e8b-8881-aec1f15eeb22
+status: experimental
+description: |
+  Detects CreateDeployment calls on an API Gateway REST API from a principal that does not
+  match approved deployment pipeline identities. In the API Gateway backdoor proxy attack
+  chain (T1190 Step 7), the attacker calls CreateDeployment to activate the backdoor
+  /health-check-v2 route in the prod stage: before this step, the backdoor resource/method/
+  integration exist only in the API definition and cannot receive traffic. After this step,
+  the route is live and exploitable. A deployment to a prod stage by a non-pipeline principal
+  is a critical control-plane event in any IaC-governed environment.
+  Also fires on Step 10 (cleanup redeployment for defense evasion) - same event, same principal.
+references:
+    - https://attack.mitre.org/techniques/T1190/
+    - https://docs.aws.amazon.com/apigateway/latest/api/API_CreateDeployment.html
+    - https://attack.mitre.org/tactics/TA0003/
+    - https://attack.mitre.org/tactics/TA0005/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.persistence
+    - attack.defense_evasion
+    - attack.t1190
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: CreateDeployment
+        eventSource: apigateway.amazonaws.com
+    filter_pipeline:
+        userIdentity.arn|contains:
+            - ':assumed-role/CodeBuildRole/'
+            - ':assumed-role/CodePipelineRole/'
+            - ':assumed-role/GitHubActionsRole/'
+            - ':assumed-role/TerraformRole/'
+            - ':assumed-role/PulumiRole/'
+    filter_aws_services:
+        userIdentity.type: Service
+    condition: selection and not filter_pipeline and not filter_aws_services
+falsepositives:
+    - Emergency hotfix deployments by senior engineers during active incidents
+    - Authorized manual deployments for one-off configuration changes
+    - New pipeline role ARN not yet added to filter list
+level: high
+fields:
+    - userIdentity.arn
+    - requestParameters.restApiId
+    - requestParameters.stageName
+    - requestParameters.description
+    - sourceIPAddress
+    - userAgent
+    - awsRegion
+---
+title: API Gateway Resource Created Outside Deployment Pipeline
+id: 8c753f55-4264-5c21-bed5-b05cef443539
+status: experimental
+description: |
+  Detects CreateResource calls on an API Gateway REST API from a principal that does not
+  match the approved deployment pipeline identity. In the API Gateway backdoor proxy attack
+  chain (T1190 Step 3), the attacker creates a new /health-check-v2 path chosen to blend
+  with legitimate health-check infrastructure. Any API Gateway resource creation outside of
+  the CI/CD pipeline is anomalous in environments with IaC-enforced infrastructure.
+  Correlate with subsequent PutMethod (authorizationType=NONE) events on the same restApiId
+  for high-confidence backdoor confirmation.
+references:
+    - https://attack.mitre.org/techniques/T1190/
+    - https://docs.aws.amazon.com/apigateway/latest/api/API_CreateResource.html
+    - https://attack.mitre.org/tactics/TA0003/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.persistence
+    - attack.t1190
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: CreateResource
+        eventSource: apigateway.amazonaws.com
+    filter_pipeline:
+        userIdentity.arn|contains:
+            - ':assumed-role/CodeBuildRole/'
+            - ':assumed-role/CodePipelineRole/'
+            - ':assumed-role/GitHubActionsRole/'
+            - ':assumed-role/TerraformRole/'
+            - ':assumed-role/PulumiRole/'
+    filter_aws_services:
+        userIdentity.type: Service
+    condition: selection and not filter_pipeline and not filter_aws_services
+falsepositives:
+    - Manual hotfix deployments by authorized engineers during incidents
+    - New team members creating test resources in production APIs
+    - Pipeline identity not yet added to filter_pipeline list
+level: medium
+fields:
+    - userIdentity.arn
+    - requestParameters.restApiId
+    - requestParameters.parentId
+    - requestParameters.pathPart
+    - sourceIPAddress
+    - userAgent
+    - awsRegion
+---
+title: API Gateway AWS_PROXY Integration Wired to Unapproved Lambda
+id: dd2a3958-23f1-5e6c-bee9-37e5b77b76b5
+status: experimental
+description: |
+  Detects PutIntegration calls on an API Gateway REST API that configure an AWS_PROXY
+  integration pointing to a Lambda function. In the API Gateway backdoor proxy attack chain
+  (T1190 Step 5), the attacker wires the unauthenticated /health-check-v2 route to an
+  attacker-controlled backdoor Lambda (internal-health-check) via AWS_PROXY. After this step,
+  any request to the backdoor route is forwarded verbatim to the attacker-controlled function.
+  Correlate the Lambda function name in the integration URI against the approved integration
+  baseline for the API to distinguish legitimate deployments from backdoors.
+references:
+    - https://attack.mitre.org/techniques/T1190/
+    - https://docs.aws.amazon.com/apigateway/latest/api/API_PutIntegration.html
+    - https://attack.mitre.org/tactics/TA0003/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.persistence
+    - attack.t1190
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: PutIntegration
+        eventSource: apigateway.amazonaws.com
+        requestParameters.type: AWS_PROXY
+    filter_pipeline:
+        userIdentity.arn|contains:
+            - ':assumed-role/CodeBuildRole/'
+            - ':assumed-role/CodePipelineRole/'
+            - ':assumed-role/GitHubActionsRole/'
+            - ':assumed-role/TerraformRole/'
+            - ':assumed-role/PulumiRole/'
+    filter_aws_services:
+        userIdentity.type: Service
+    condition: selection and not filter_pipeline and not filter_aws_services
+falsepositives:
+    - Legitimate Lambda-backed API routes deployed by authorized pipeline outside filter list
+    - Development work on Lambda integrations by developers with direct API access
+level: medium
+fields:
+    - userIdentity.arn
+    - requestParameters.restApiId
+    - requestParameters.resourceId
+    - requestParameters.httpMethod
+    - requestParameters.type
+    - requestParameters.uri
+    - sourceIPAddress
+    - userAgent
+    - awsRegion
+---
+title: API Gateway Method Configured with No Authentication
+id: 19550c78-c401-5422-bfce-e61f5063d513
+status: experimental
+description: |
+  Detects PutMethod calls on an API Gateway REST API where authorizationType is set to NONE,
+  meaning the route requires no IAM credentials, Cognito tokens, or Lambda authorizer to access.
+  This is the primary high-confidence indicator of the API Gateway backdoor proxy attack chain
+  (T1190 Step 4): the attacker creates an unauthenticated sibling route (/health-check-v2)
+  on an API where all legitimate routes require authorization. A new route with authorizationType
+  NONE on a production API is almost always malicious or a serious misconfiguration.
+  No pipeline filter is applied because authorizationType=NONE on a production API is
+  never an expected outcome of a legitimate deployment in a security-conscious environment.
+references:
+    - https://attack.mitre.org/techniques/T1190/
+    - https://docs.aws.amazon.com/apigateway/latest/api/API_PutMethod.html
+    - https://attack.mitre.org/tactics/TA0003/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.persistence
+    - attack.t1190
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: PutMethod
+        eventSource: apigateway.amazonaws.com
+        requestParameters.authorizationType: NONE
+    condition: selection
+falsepositives:
+    - Intentionally public API routes in development or sandbox environments
+    - Health-check endpoints explicitly designed for unauthenticated access (verify pathPart)
+    - Internal APIs behind network controls that use no API-level auth
+level: high
+fields:
+    - userIdentity.arn
+    - requestParameters.restApiId
+    - requestParameters.resourceId
+    - requestParameters.httpMethod
+    - requestParameters.authorizationType
+    - sourceIPAddress
+    - userAgent
+    - awsRegion
+---
+title: API Gateway Resource Enumeration by Non-Pipeline Principal
+id: f2ede41c-e395-5ad7-b145-c28744597fca
+status: experimental
+description: |
+  Detects GetResources calls against an API Gateway REST API from a principal that does not
+  match known deployment pipeline identities. In the API Gateway backdoor proxy attack chain
+  (T1190 Step 2), the attacker enumerates existing resource paths to extract the root resource
+  ID needed to inject a new backdoor route. Alone this is low-confidence; combined with
+  subsequent CreateResource/PutMethod events from the same principal it is high-confidence.
+references:
+    - https://attack.mitre.org/techniques/T1190/
+    - https://docs.aws.amazon.com/apigateway/latest/api/API_GetResources.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1190
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: GetResources
+        eventSource: apigateway.amazonaws.com
+    filter_pipeline:
+        userIdentity.arn|contains:
+            - ':assumed-role/CodeBuildRole/'
+            - ':assumed-role/CodePipelineRole/'
+            - ':assumed-role/GitHubActionsRole/'
+            - ':assumed-role/TerraformRole/'
+            - ':assumed-role/PulumiRole/'
+    filter_aws_services:
+        userIdentity.type: Service
+    condition: selection and not filter_pipeline and not filter_aws_services
+falsepositives:
+    - Developers inspecting API configuration via console or CLI
+    - Monitoring tools performing API audits
+    - Authorized security reviews
+level: low
+fields:
+    - userIdentity.arn
+    - requestParameters.restApiId
+    - sourceIPAddress
+    - userAgent
+    - awsRegion
+---
+title: AssumeRole for Over-Permissioned API Gateway DevOps Role
+id: 14141d49-89b8-5f62-ad1a-3229d0ffffe5
+status: experimental
+description: |
+  Detects AssumeRole calls followed by a GetCallerIdentity probe from the resulting session,
+  consistent with an attacker confirming they have obtained credentials for a DevOps role with
+  broad API Gateway write access (apigateway:*). The combination of AssumeRole + identity
+  probe from a non-CI/CD source IP or principal is the initial foothold signal in the API
+  Gateway backdoor proxy attack chain (T1190 Step 1).
+  Tune filter_pipeline to match your deployment pipeline role ARN patterns.
+references:
+    - https://attack.mitre.org/techniques/T1190/
+    - https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.initial_access
+    - attack.t1190
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_assume:
+        eventName: AssumeRole
+        eventSource: sts.amazonaws.com
+    selection_probe:
+        eventName: GetCallerIdentity
+        eventSource: sts.amazonaws.com
+        userIdentity.type: AssumedRole
+    filter_pipeline:
+        userIdentity.arn|contains:
+            - ':assumed-role/CodeBuildRole/'
+            - ':assumed-role/CodePipelineRole/'
+            - ':assumed-role/GitHubActionsRole/'
+            - ':assumed-role/TerraformRole/'
+            - ':assumed-role/PulumiRole/'
+    filter_aws_services:
+        userIdentity.type: Service
+    condition: (selection_assume or selection_probe) and not filter_pipeline and not filter_aws_services
+falsepositives:
+    - Authorized break-glass access by on-call engineers
+    - New CI/CD pipelines not yet added to filter_pipeline list
+    - Developer local credential testing
+level: low
+fields:
+    - userIdentity.arn
+    - userIdentity.principalId
+    - requestParameters.roleArn
+    - requestParameters.roleSessionName
+    - sourceIPAddress
+    - userAgent
+    - awsRegion
+---
+title: Lambda Resource Policy Modified to Allow API Gateway Invocation Outside Pipeline
+id: 64094509-c0bc-5b07-a149-ec2f7372ab9c
+status: experimental
+description: |
+  Detects AddPermission calls on a Lambda function that grant API Gateway (apigateway.amazonaws.com)
+  the right to invoke the function, when the call originates from a non-pipeline principal.
+  In the API Gateway backdoor proxy attack chain (T1190 Step 6), the attacker must add an
+  invoke permission scoped to the new API stage ARN before API Gateway can proxy requests
+  to the backdoor Lambda. Without this permission, requests to the backdoor route return 500.
+  Lambda resource policy changes by non-deployment-pipeline principals are high-confidence
+  indicators of unauthorized API wiring.
+references:
+    - https://attack.mitre.org/techniques/T1190/
+    - https://docs.aws.amazon.com/lambda/latest/api/API_AddPermission.html
+    - https://attack.mitre.org/tactics/TA0003/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.persistence
+    - attack.t1190
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: AddPermission20150331v2
+        eventSource: lambda.amazonaws.com
+        requestParameters.principal: apigateway.amazonaws.com
+    filter_pipeline:
+        userIdentity.arn|contains:
+            - ':assumed-role/CodeBuildRole/'
+            - ':assumed-role/CodePipelineRole/'
+            - ':assumed-role/GitHubActionsRole/'
+            - ':assumed-role/TerraformRole/'
+            - ':assumed-role/PulumiRole/'
+    filter_aws_services:
+        userIdentity.type: Service
+    condition: selection and not filter_pipeline and not filter_aws_services
+falsepositives:
+    - New Lambda-backed API routes deployed by authorized engineers outside pipeline
+    - Hotfix deployments during incidents that bypass normal pipeline
+level: high
+fields:
+    - userIdentity.arn
+    - requestParameters.functionName
+    - requestParameters.statementId
+    - requestParameters.action
+    - requestParameters.principal
+    - requestParameters.sourceArn
+    - sourceIPAddress
+    - userAgent
+    - awsRegion

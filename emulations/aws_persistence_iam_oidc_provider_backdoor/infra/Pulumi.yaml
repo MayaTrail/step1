@@ -1,0 +1,3 @@
+name: mayatrail-atomic-iam-oidc-provider-backdoor
+runtime: python
+description: ATOMIC IAM OIDC Provider Backdoor emulation - T1484.002

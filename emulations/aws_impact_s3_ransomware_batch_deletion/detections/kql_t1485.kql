@@ -1,0 +1,34 @@
+// S3 bucket enumerated and batch-deleted with DeleteObjects (T1485)
+//
+// REQUIRES S3 DATA EVENTS. DeleteObjects and ListObjects are CloudTrail data events: present only
+// if a trail or event data store selects S3 data events for the bucket. An empty result on a
+// workspace without them is INCONCLUSIVE, not clean.
+//
+// DeleteCalls counts CALLS. One DeleteObjects call removes up to 1,000 objects and its CloudTrail
+// record does not list the keys, so the object count must come from S3 (NumberOfObjects metric,
+// inventory, or listing what is left), not from this query.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL (AWSCloudTrail table).
+let lookback = 7d;
+AWSCloudTrail
+| where TimeGenerated > ago(lookback)
+| where EventSource == "s3.amazonaws.com"
+| where EventName in ("ListObjects", "ListObjectsV2", "DeleteObjects", "DeleteObject", "PutObject")
+| extend Bucket = tostring(parse_json(RequestParameters).bucketName)
+| summarize ListCalls = countif(EventName in ("ListObjects", "ListObjectsV2")),
+            DeleteCalls = countif(EventName == "DeleteObjects" and isempty(ErrorCode)),
+            FailedDeleteCalls = countif(EventName == "DeleteObjects" and isnotempty(ErrorCode)),
+            SingleDeletes = countif(EventName == "DeleteObject"),
+            Puts = countif(EventName == "PutObject"),
+            FirstList = minif(TimeGenerated, EventName in ("ListObjects", "ListObjectsV2")),
+            FirstDelete = minif(TimeGenerated, EventName == "DeleteObjects"),
+            LastDelete = maxif(TimeGenerated, EventName == "DeleteObjects"),
+            SourceIps = make_set(SourceIpAddress, 10), UserAgents = make_set(UserAgent, 5)
+    by PrincipalArn = UserIdentityArn, Bucket, RecipientAccountId, bin(TimeGenerated, 15m)
+| where DeleteCalls + FailedDeleteCalls > 0
+| extend EnumeratedFirst = isnotnull(FirstList) and FirstList <= FirstDelete,
+         MaxObjectsRemoved = DeleteCalls * 1000,
+         // Ransom-note pattern: the wipe followed by a small number of new objects.
+         RansomNoteCandidate = Puts between (1 .. 3)
+| extend Severity = case(EnumeratedFirst or DeleteCalls >= 3, "high", "medium")
+| order by FirstDelete desc

@@ -1,0 +1,3 @@
+name: mayatrail-atomic-rds-delete-instance-and-backups
+runtime: python
+description: Atomic RDS delete instance and backups emulation lab - T1485

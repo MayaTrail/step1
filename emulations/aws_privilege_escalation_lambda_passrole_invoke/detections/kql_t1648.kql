@@ -1,0 +1,171 @@
+// FILE: kql_t1648_lambda_discovery_enumeration.kql
+// T1648 Pre-Attack Discovery -- Multi-service enumeration sequence
+//
+// Identifies principals that called 3 or more distinct discovery APIs across
+// Lambda, IAM, and Secrets Manager within a 10-minute sliding window.
+// This pattern maps to steps 1-4 of the PassRole attack chain:
+//   GetCallerIdentity -> ListFunctions -> ListRoles/GetRole -> ListSecrets
+//
+// Adjust the MinDistinctApis threshold to tune sensitivity.
+
+let LookbackWindow  = 10m;
+let MinDistinctApis = 3;
+
+let DiscoveryEvents = AWSCloudTrail
+| where EventName in (
+    "GetCallerIdentity",
+    "ListFunctions20150331",
+    "ListRoles",
+    "GetRole",
+    "ListSecrets"
+  )
+| where EventSource in (
+    "sts.amazonaws.com",
+    "lambda.amazonaws.com",
+    "iam.amazonaws.com",
+    "secretsmanager.amazonaws.com"
+  )
+| where UserIdentityType !in ("Service", "AWSService")
+| project
+    TimeGenerated,
+    EventName,
+    EventSource,
+    CallerArn  = UserIdentityArn,
+    SourceIP   = SourceIpAddress,
+    UserAgent,
+    AWSRegion;
+
+DiscoveryEvents
+| summarize
+    DistinctApis        = dcount(EventName),
+    ApisCalled          = make_set(EventName),
+    ServicesCovered     = dcount(EventSource),
+    FirstSeen           = min(TimeGenerated),
+    LastSeen            = max(TimeGenerated),
+    SourceIPs           = make_set(SourceIP),
+    UserAgents          = make_set(UserAgent),
+    EventCount          = count()
+    by CallerArn, AWSRegion, bin(TimeGenerated, LookbackWindow)
+| where DistinctApis >= MinDistinctApis
+| extend WindowDurationSeconds = datetime_diff('second', LastSeen, FirstSeen)
+| project
+    WindowStart         = TimeGenerated,
+    FirstSeen,
+    LastSeen,
+    WindowDurationSeconds,
+    CallerArn,
+    AWSRegion,
+    DistinctApis,
+    ApisCalled,
+    ServicesCovered,
+    EventCount,
+    SourceIPs,
+    UserAgents
+| sort by FirstSeen desc
+
+// ----- next query -----
+
+// FILE: kql_t1648_lambda_passrole_create.kql
+// T1648 Lambda Privilege Escalation via IAM PassRole -- CreateFunction by interactive principal
+//
+// Flags Lambda function creation events where:
+//   - The caller is not a service principal or IaC tool
+//   - The execution role ARN is extracted for analyst review
+//   - Enriched with function name, source IP, and user agent
+//
+// Tune filter_iac_agents to your org's deployment tooling.
+
+AWSCloudTrail
+| where EventName == "CreateFunction20150331"
+| where EventSource == "lambda.amazonaws.com"
+| where UserIdentityType !in ("Service", "AWSService")
+| where not (UserAgent has_any ("pulumi", "terraform", "cloudformation", "aws-cdk", "aws-console-backend"))
+| extend
+    FunctionName      = tostring(parse_json(RequestParameters).functionName),
+    ExecutionRoleArn  = tostring(parse_json(RequestParameters).role),
+    Runtime           = tostring(parse_json(RequestParameters).runtime),
+    Handler           = tostring(parse_json(RequestParameters).handler),
+    FunctionArn       = tostring(parse_json(ResponseElements).functionArn)
+| project
+    TimeGenerated,
+    FunctionName,
+    ExecutionRoleArn,
+    Runtime,
+    Handler,
+    CallerArn       = UserIdentityArn,
+    CallerType      = UserIdentityType,
+    SourceIP        = SourceIpAddress,
+    UserAgent,
+    AWSRegion,
+    FunctionArn
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// FILE: kql_t1648_lambda_short_lifecycle.kql
+// T1648 Lambda Short Lifecycle -- Create->Invoke->Delete by same principal within minutes
+//
+// High-confidence composite indicator: attacker creates a throwaway Lambda to exfiltrate
+// data via an elevated execution role, then immediately deletes it to remove the artifact.
+// Legitimate deployments are rarely created and deleted by the same identity within minutes.
+//
+// Tune MaxLifetimeSeconds to your environment's fastest legitimate deploy-destroy cycle.
+
+let LookbackPeriod   = 1h;
+let MaxLifetimeSeconds = 300;  // 5 minutes -- raise to 600 if CI teardown triggers FPs
+
+let CreateEvents = AWSCloudTrail
+| where TimeGenerated > ago(LookbackPeriod)
+| where EventName == "CreateFunction20150331"
+| where EventSource == "lambda.amazonaws.com"
+| where UserIdentityType !in ("Service", "AWSService")
+| where not (UserAgent has_any ("pulumi", "terraform", "cloudformation", "aws-cdk"))
+| extend
+    FunctionName      = tostring(parse_json(RequestParameters).functionName),
+    ExecutionRoleArn  = tostring(parse_json(RequestParameters).role),
+    Runtime           = tostring(parse_json(RequestParameters).runtime)
+| project
+    CreatedAt        = TimeGenerated,
+    FunctionName,
+    ExecutionRoleArn,
+    Runtime,
+    CreatorArn       = UserIdentityArn,
+    CreateSourceIP   = SourceIpAddress,
+    CreateUserAgent  = UserAgent,
+    AWSRegion;
+
+let DeleteEvents = AWSCloudTrail
+| where TimeGenerated > ago(LookbackPeriod)
+| where EventName == "DeleteFunction20150331"
+| where EventSource == "lambda.amazonaws.com"
+| where UserIdentityType !in ("Service", "AWSService")
+| where not (UserAgent has_any ("pulumi", "terraform", "cloudformation", "aws-cdk"))
+| extend FunctionName = tostring(parse_json(RequestParameters).functionName)
+| project
+    DeletedAt       = TimeGenerated,
+    FunctionName,
+    DeleterArn      = UserIdentityArn,
+    DeleteSourceIP  = SourceIpAddress,
+    DeleteUserAgent = UserAgent,
+    AWSRegion;
+
+CreateEvents
+| join kind=inner DeleteEvents on FunctionName, AWSRegion
+| where CreatorArn == DeleterArn
+| where DeletedAt > CreatedAt
+| extend LifetimeSeconds = datetime_diff('second', DeletedAt, CreatedAt)
+| where LifetimeSeconds <= MaxLifetimeSeconds
+| project
+    FunctionName,
+    ExecutionRoleArn,
+    Runtime,
+    CallerArn         = CreatorArn,
+    AWSRegion,
+    CreatedAt,
+    DeletedAt,
+    LifetimeSeconds,
+    CreateSourceIP,
+    DeleteSourceIP,
+    CreateUserAgent,
+    DeleteUserAgent
+| sort by CreatedAt desc

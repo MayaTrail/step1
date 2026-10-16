@@ -8,7 +8,7 @@
 | Emulation Tier | Atomic technique |
 | Threat Actor | N/A, single-technique emulation (the AMBERSQUID campaign playbook covers a full actor version of this) |
 | Platform | aws |
-| Severity | Medium-High - Medium as the atomic launch signal; High once mining is confirmed or the launch is at scale/across regions, given direct billing loss and reputational risk |
+| Severity | Medium. Raise to High once mining is confirmed or the launch is at scale or across Regions, given direct billing loss and reputational risk |
 | MITRE Tactics | Execution |
 | MITRE Techniques | T1204.003 (as mapped by Stratus, a poor fit; T1496 Resource Hijacking is closer, see §6) |
 | Services in Scope | EC2, GuardDuty, CloudTrail, Cost Explorer / Budgets, Auto Scaling, EC2 Fleet/Spot |

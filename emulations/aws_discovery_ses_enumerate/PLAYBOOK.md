@@ -8,7 +8,7 @@
 | Emulation Tier | Atomic technique |
 | Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | Medium, reconnaissance only, but it is a targeted assessment of the account's ability to send mail, and the follow-on (phishing/spam from your verified domains and sender reputation) carries real blocklisting, financial, and reputational damage (`MANIFEST.py` rates LOW; the IR view is Medium because of what this recon is *for*) |
+| Severity | Medium, reconnaissance only, but it is a targeted assessment of the account's ability to send mail, and the follow-on (phishing/spam from your verified domains and sender reputation) carries real blocklisting, financial, and reputational damage |
 | MITRE Tactics | Discovery |
 | MITRE Techniques | T1087 (as mapped by Stratus, a poor fit; see §6) |
 | Services in Scope | SES / SESv2, CloudTrail, IAM |

@@ -1,0 +1,52 @@
+// EBS snapshot shared outside the account: grant, exposure window, and consumption (T1537)
+//
+// One row per recipient added by ModifySnapshotAttribute (successful or refused - a default-key
+// snapshot cannot be shared, so this emulation is often refused). Each grant is checked against
+// the allowlist, paired with the first later removal of the same recipient, and joined to any
+// SharedSnapshotCopyInitiated / SharedSnapshotVolumeCreated event for the snapshot - AWS records
+// those in the OWNER's account when a recipient uses the share, so Consumed is real evidence.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL (AWSCloudTrail table).
+let lookback = 30d;
+let KnownRecipients = dynamic(["000000000000"]);   // your organization's and backup accounts
+let ec2 = AWSCloudTrail
+    | where TimeGenerated > ago(lookback)
+    | where EventSource == "ec2.amazonaws.com";
+let perms = ec2
+    | where EventName == "ModifySnapshotAttribute"
+    | extend Req = parse_json(RequestParameters)
+    | extend SnapshotId = tostring(Req.snapshotId),
+             Added = Req.createVolumePermission.add.items,
+             Removed = Req.createVolumePermission.remove.items;
+let grants = perms
+    | where isnotempty(Added)
+    | mv-expand Item = Added
+    | extend Recipient = coalesce(tostring(Item.userId), tostring(Item.group)),
+             Kind = iff(tostring(Item.group) == "all", "PUBLIC", "ACCOUNT")
+    | project GrantedAt = TimeGenerated, SnapshotId, Recipient, Kind, ErrorCode, ErrorMessage,
+              RecipientAccountId, AWSRegion, PrincipalArn = UserIdentityArn,
+              AccessKey = UserIdentityAccessKeyId, SourceIpAddress, UserAgent;
+let revokes = perms
+    | where isnotempty(Removed) and isempty(ErrorCode)
+    | mv-expand Item = Removed
+    | project RevokedAt = TimeGenerated, SnapshotId,
+              Recipient = coalesce(tostring(Item.userId), tostring(Item.group));
+let consumed = ec2
+    | where EventName in ("SharedSnapshotCopyInitiated", "SharedSnapshotVolumeCreated")
+    | extend SnapshotId = coalesce(tostring(parse_json(RequestParameters).snapshotId),
+                                   tostring(parse_json(ServiceEventDetails).snapshotId))
+    | summarize ConsumedEvents = make_set(EventName), FirstConsumed = min(TimeGenerated),
+                ConsumerAccounts = make_set(UserIdentityAccountId) by SnapshotId;
+grants
+| where Recipient !in (KnownRecipients) and Recipient != RecipientAccountId
+| join kind=leftouter revokes on SnapshotId, Recipient
+| summarize RevokedAt = minif(RevokedAt, RevokedAt > GrantedAt)
+    by GrantedAt, SnapshotId, Recipient, Kind, ErrorCode, ErrorMessage, RecipientAccountId, AWSRegion,
+       PrincipalArn, AccessKey, SourceIpAddress, UserAgent
+| join kind=leftouter consumed on SnapshotId
+| extend Outcome = iff(isempty(ErrorCode), "SHARED", strcat("REFUSED: ", ErrorCode)),
+         Severity = case(isnotempty(ConsumedEvents), "critical (consumed)", Kind == "PUBLIC", "critical", "high"),
+         ExposureMinutes = iff(isempty(ErrorCode) and isnotnull(RevokedAt),
+                               datetime_diff("minute", RevokedAt, GrantedAt), long(null))
+| project-away SnapshotId1
+| order by GrantedAt desc

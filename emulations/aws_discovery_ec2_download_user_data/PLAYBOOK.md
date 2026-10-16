@@ -8,7 +8,7 @@
 | Emulation Tier | Atomic technique |
 | Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | Medium - High if any harvested user-data contains live secrets; Low if none do (`MANIFEST.py` rates LOW; the IR view is Medium because user-data very often contains bootstrap credentials, and the technique reads *every* instance's) |
+| Severity | Medium. Raise to High if any harvested user-data contains live secrets; Low if none do. User-data very often contains bootstrap credentials, and the technique reads every instance's |
 | MITRE Tactics | Credential Access (MANIFEST tags Discovery, see mapping note in §6) |
 | MITRE Techniques | T1552.001 |
 | Services in Scope | EC2, CloudTrail, IAM, plus every system whose credentials appear in a harvested user-data script |

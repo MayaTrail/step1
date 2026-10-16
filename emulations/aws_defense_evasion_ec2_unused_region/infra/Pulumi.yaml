@@ -1,0 +1,3 @@
+name: mayatrail-atomic-ec2-unused-region
+runtime: python
+description: T1535 - EC2 in unused/unmonitored region (eu-north-1) adversary emulation lab

@@ -1,0 +1,69 @@
+title: EC2 IMDS Credentials Used Outside EC2 Fleet - Potential SSRF Exfiltration
+id: ea195fd2-ee2b-5969-b7bf-ad48d628d01a
+status: experimental
+description: |
+  Detects EC2 instance-role credentials that were delivered via the Instance Metadata
+  Service (IMDSv1/v2) being exercised from a source IP outside of AWS infrastructure.
+  The ec2RoleDelivery flag in CloudTrail sessionContext confirms credentials originated
+  from IMDS; any subsequent API call from a non-AWS-internal source IP indicates those
+  credentials were harvested from the metadata endpoint - typically via a Server-Side
+  Request Forgery (SSRF) vulnerability in a public-facing application - and are now
+  being used by an adversary on a remote host.
+  Covers both the STS identity confirmation step (GetCallerIdentity) and the follow-on
+  data-access step (ListBuckets) that together form the full SSRF credential exfiltration
+  and use chain documented in T1190.
+references:
+    - https://attack.mitre.org/techniques/T1190/
+    - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-iam.html#unauthorizedaccess-iam-instancecredentialexfiltrationoutsideaws
+    - https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.initial_access
+    - attack.t1190
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    # API calls made using the stolen instance-role session
+    selection_api_events:
+        eventName:
+            - 'GetCallerIdentity'
+            - 'ListBuckets'
+        userIdentity.type: 'AssumedRole'
+
+    # ec2RoleDelivery=true confirms the AssumedRole session was created via IMDS credential delivery
+    # rather than an explicit sts:AssumeRole call - this flag is only present when credentials
+    # were fetched directly from the metadata service by the EC2 instance process.
+    selection_imds_delivery:
+        userIdentity.sessionContext.ec2RoleDelivery: 'true'
+
+    # AWS-internal source IPs (e.g. Lambda, service-to-service) are expected;
+    # any external IP with ec2RoleDelivery=true is anomalous.
+    filter_aws_internal:
+        sourceIPAddress|endswith:
+            - '.amazonaws.com'
+            - '.amazon.com'
+
+    condition: selection_api_events and selection_imds_delivery and not filter_aws_internal
+
+fields:
+    - eventName
+    - eventSource
+    - sourceIPAddress
+    - userIdentity.arn
+    - userIdentity.principalId
+    - userIdentity.sessionContext.sessionIssuer.arn
+    - userIdentity.sessionContext.ec2RoleDelivery
+    - awsRegion
+    - userAgent
+
+falsepositives:
+    - AWS Systems Manager (SSM) Session Manager executing commands under the instance role
+      from a non-EC2 control plane host (rare, sourceIPAddress would still be amazonaws.com)
+    - Custom automation that intentionally forwards IMDS credentials to a management host
+      (should be flagged for review regardless - this credential pattern is inherently risky)
+    - Security tooling that harvests and replays instance credentials as part of authorized
+      pen-testing (should generate a GuardDuty suppression rule, not a SIGMA filter)
+
+level: high

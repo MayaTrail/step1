@@ -1,15 +1,29 @@
-// T1583.001 Acquire Infrastructure: Domains — Route53 Domain Registration
+// T1583.001 Acquire Infrastructure: Domains — Route53 Domain Registration / Transfer Attempt
 // DangerDev: registered 4 PayPal-mimicking domains via alice.chen hijacked session.
+// Do NOT filter on ErrorCode: a denied RegisterDomain (AccessDenied) from a principal
+// with no domain-admin role is the signal. The MayaTrail emulation makes a real
+// RegisterDomain call that an explicit IAM Deny refuses, so its event carries
+// ErrorCode == "AccessDenied".
+// Route 53 Domains is us-east-1 only: these events land in us-east-1 regardless of
+// where the rest of the activity happened. Make sure us-east-1 is ingested.
 // Enrichment: brand-impersonation keyword check on DomainName escalates to Critical.
 // Correlate with preceding T1098 (alice.chen key creation) for confirmed hijack-to-infra chain.
+
+let recon = AWSCloudTrail
+| where TimeGenerated > ago(7d)
+| where EventSource == "route53domains.amazonaws.com"
+| where EventName in ("CheckDomainAvailability", "GetDomainSuggestions")
+| summarize ReconCalls = count(), FirstRecon = min(TimeGenerated) by UserIdentityArn;
 
 AWSCloudTrail
 | where TimeGenerated > ago(7d)
 | where EventSource == "route53domains.amazonaws.com"
-| where EventName == "RegisterDomain"
+| where EventName in ("RegisterDomain", "TransferDomain")
 | extend DomainName       = tostring(parse_json(RequestParameters).domainName)
 | extend DurationYears    = toint(parse_json(RequestParameters).durationInYears)
 | extend PrivacyProtected = tobool(parse_json(RequestParameters).privacyProtectRegistrantContact)
+| extend Outcome = iff(isempty(ErrorCode), "Succeeded", strcat("Refused: ", ErrorCode))
+| join kind=leftouter (recon) on UserIdentityArn
 | extend ImpersonationRisk = case(
     DomainName matches regex @"(paypal|microsoft|amazon|apple|google|chase|wellsfargo|bankof|dropbox|netflix)",
         "BrandImpersonation-Critical",
@@ -19,15 +33,16 @@ AWSCloudTrail
   )
 | extend Severity = case(
     ImpersonationRisk contains "BrandImpersonation", "Critical",
+    isempty(ErrorCode),                               "Critical",
     ImpersonationRisk contains "PhishingKeywords",   "High",
     UserIdentityArn !contains "DomainRegistration",  "High",
     "Medium"
   )
 | extend AlertTitle = strcat(
-    "Route53 Domain Registration from Anomalous Principal: ", DomainName,
+    "Route53 ", EventName, " (", Outcome, ") from Anomalous Principal: ", DomainName,
     iff(ImpersonationRisk != "None", strcat(" [", ImpersonationRisk, "]"), "")
   )
-| project TimeGenerated, Severity, AlertTitle, DomainName, ImpersonationRisk,
-          DurationYears, PrivacyProtected, UserIdentityUserName, UserIdentityArn,
-          SourceIpAddress, UserAgent, AwsRegion
+| project TimeGenerated, Severity, AlertTitle, EventName, ErrorCode, Outcome, DomainName,
+          ImpersonationRisk, DurationYears, PrivacyProtected, ReconCalls, FirstRecon,
+          UserIdentityUserName, UserIdentityArn, SourceIpAddress, UserAgent, AwsRegion
 | sort by TimeGenerated desc

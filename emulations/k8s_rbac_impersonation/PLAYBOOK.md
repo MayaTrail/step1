@@ -1,5 +1,16 @@
 # K8s RBAC Impersonation Privilege Escalation — IR & Detection Playbook
 
+## Classification
+
+| Field | Value |
+|-------|-------|
+| Incident Type | K8s RBAC Impersonation Privilege Escalation |
+| Threat Actor | N/A — single technique, not actor-attributed |
+| Platform | k8s |
+| Severity | High |
+| MITRE Tactics | Discovery, Privilege Escalation |
+| MITRE Techniques | T1069 (Permission Groups Discovery), T1548 (Abuse Elevation Control Mechanism) |
+
 ## Summary
 Simulates a Kubernetes attacker exploiting service accounts with `impersonate`
 access rights to gain admin privileges.

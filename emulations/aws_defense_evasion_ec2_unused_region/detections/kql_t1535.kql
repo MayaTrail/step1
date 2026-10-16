@@ -1,0 +1,229 @@
+// FILE: kql_T1535_cloudtrail_coverage_enum.kql
+// T1535 - CloudTrail Coverage Enumeration (IncludeShadowTrails=True)
+// Detects DescribeTrails with shadow trail enumeration, used to identify regions
+// not covered by any multi-region or regional CloudTrail trail.
+AWSCloudTrail
+| where EventName == "DescribeTrails"
+| where EventSource == "cloudtrail.amazonaws.com"
+| where RequestParameters has "includeShadowTrails"
+| where RequestParameters has "true"
+| where UserIdentityType !in ("AWSService", "AWSAccount")
+| where UserIdentityArn !has "AWSServiceRole"
+| where UserIdentityArn !has "aws-service-role"
+| project
+    TimeGenerated,
+    EventName,
+    AwsRegion,
+    UserIdentityArn,
+    UserIdentityType,
+    UserIdentityPrincipalid,
+    SourceIpAddress,
+    UserAgent,
+    RequestParameters
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// FILE: kql_T1535_composite_behavioral.kql
+// T1535 - Composite Behavioral: Unused Region Evasion Full Kill Chain
+//
+// Detects the full T1535 attack chain within a 30-minute window:
+//   1. DescribeRegions (AllRegions=True) - region enumeration
+//   2. ListDetectors across multiple regions  - GD coverage mapping
+//   3. DescribeTrails (IncludeShadowTrails)   - CT coverage mapping
+//   4. RunInstances / DescribeImages in unused region - execution
+//   5. EnableRegion attempt (success or denied) - optional escalation signal
+//
+// Each step alone is low-medium signal. The sequential pattern from the same
+// principal across a 30m window is high-confidence T1535.
+let Lookback = 30m;
+let UnusedRegions = dynamic([
+    "eu-north-1", "ap-east-1", "me-south-1",
+    "ap-southeast-3", "ap-southeast-4", "ap-south-2",
+    "eu-south-2", "eu-central-2", "il-central-1"
+]);
+// Step 1: principals that ran all-region enumeration
+let RegionEnumActors =
+    AWSCloudTrail
+    | where EventName == "DescribeRegions"
+    | where EventSource == "ec2.amazonaws.com"
+    | where RequestParameters has "allRegions" and RequestParameters has "true"
+    | where UserIdentityArn !has "AWSServiceRole" and UserIdentityArn !has "aws-service-role"
+    | project TimeGenerated, UserIdentityArn, SourceIpAddress;
+// Step 2: principals that swept GD coverage across 3+ regions
+let GDSweepActors =
+    AWSCloudTrail
+    | where EventName == "ListDetectors"
+    | where EventSource == "guardduty.amazonaws.com"
+    | where UserIdentityArn !has "AWSServiceRole" and UserIdentityArn !has "aws-service-role"
+    | summarize RegionCount = dcount(AwsRegion) by UserIdentityArn, bin(TimeGenerated, Lookback)
+    | where RegionCount >= 3
+    | project UserIdentityArn;
+// Step 3: principals that enumerated CloudTrail coverage
+let CTEnumActors =
+    AWSCloudTrail
+    | where EventName == "DescribeTrails"
+    | where EventSource == "cloudtrail.amazonaws.com"
+    | where RequestParameters has "includeShadowTrails" and RequestParameters has "true"
+    | where UserIdentityArn !has "AWSServiceRole" and UserIdentityArn !has "aws-service-role"
+    | project UserIdentityArn;
+// Step 4: principals that launched or imaged in an unused region
+let UnusedRegionActors =
+    AWSCloudTrail
+    | where EventName in ("RunInstances", "DescribeImages")
+    | where EventSource == "ec2.amazonaws.com"
+    | where AwsRegion in (UnusedRegions)
+    | where UserIdentityArn !has "AWSServiceRole" and UserIdentityArn !has "aws-service-role"
+    | project UserIdentityArn, UnusedRegion = AwsRegion, UnusedRegionEvent = EventName, EventTime = TimeGenerated;
+// Composite: require at least 3 of the 4 steps from the same principal
+RegionEnumActors
+| join kind=inner GDSweepActors on UserIdentityArn
+| join kind=inner UnusedRegionActors on UserIdentityArn
+| extend StepsObserved = "DescribeRegions+ListDetectors(multi-region)+UnusedRegionEC2"
+| project
+    TimeGenerated,
+    UserIdentityArn,
+    SourceIpAddress,
+    UnusedRegion,
+    UnusedRegionEvent,
+    UnusedRegionEventTime = EventTime,
+    StepsObserved
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// FILE: kql_T1535_ec2_unused_region_launch.kql
+// T1535 - EC2 Instance Launch in Unused/Infrequent Region
+// Detects RunInstances in regions that are rarely or never used for production workloads.
+// Tune the UnusedRegions list to match the set of regions with no active workloads
+// or GuardDuty detectors in your environment.
+let UnusedRegions = dynamic([
+    "eu-north-1",
+    "ap-east-1",
+    "me-south-1",
+    "ap-southeast-3",
+    "ap-southeast-4",
+    "ap-south-2",
+    "eu-south-2",
+    "eu-central-2",
+    "il-central-1"
+]);
+AWSCloudTrail
+| where EventName == "RunInstances"
+| where EventSource == "ec2.amazonaws.com"
+| where AwsRegion in (UnusedRegions)
+| where UserIdentityType !in ("AWSService", "AWSAccount")
+| where UserIdentityArn !has "AWSServiceRole"
+| where UserIdentityArn !has "aws-service-role"
+| extend
+    InstanceType = tostring(parse_json(RequestParameters).instanceType),
+    ImageId = tostring(parse_json(RequestParameters).imageId)
+| project
+    TimeGenerated,
+    EventName,
+    AwsRegion,
+    InstanceType,
+    ImageId,
+    UserIdentityArn,
+    UserIdentityType,
+    UserIdentityPrincipalid,
+    SourceIpAddress,
+    UserAgent,
+    ErrorCode
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// FILE: kql_T1535_enable_region_attempt.kql
+// T1535 - EnableRegion Attempt (including AccessDenied)
+// Fires on ANY EnableRegion call - successful or denied. An AccessDenied result
+// means an SCP or IAM Deny blocked the action, but the intent to expand to a new
+// region is still an IOC. Do NOT filter this query on isempty(ErrorCode).
+// Note: the Account API always records events in us-east-1 regardless of caller region.
+AWSCloudTrail
+| where EventName == "EnableRegion"
+| where EventSource == "account.amazonaws.com"
+| where UserIdentityType !in ("AWSService", "AWSAccount")
+| where UserIdentityArn !has "AWSServiceRole"
+| where UserIdentityArn !has "aws-service-role"
+| extend
+    WasDenied = iff(ErrorCode == "AccessDenied", true, false),
+    TargetRegion = tostring(parse_json(RequestParameters).regionName)
+| project
+    TimeGenerated,
+    EventName,
+    TargetRegion,
+    WasDenied,
+    ErrorCode,
+    ErrorMessage,
+    UserIdentityArn,
+    UserIdentityType,
+    UserIdentityPrincipalid,
+    SourceIpAddress,
+    UserAgent
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// FILE: kql_T1535_guardduty_coverage_sweep.kql
+// T1535 - GuardDuty Detector Coverage Sweep
+// Detects a single principal calling ListDetectors across 3 or more distinct AWS regions
+// within a 10-minute window. Adversaries map GD coverage to find unmonitored regions.
+// Single-region ListDetectors is low signal; the multi-region sweep is the IOC.
+let LookbackWindow = 10m;
+let MinRegionCount = 3;
+AWSCloudTrail
+| where EventName == "ListDetectors"
+| where EventSource == "guardduty.amazonaws.com"
+| where UserIdentityType !in ("AWSService", "AWSAccount")
+| where UserIdentityArn !has "AWSServiceRole"
+| where UserIdentityArn !has "aws-service-role"
+| where UserIdentityArn !has "SecurityAudit"
+| summarize
+    RegionsQueried = dcount(AwsRegion),
+    RegionList = make_set(AwsRegion),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated),
+    CallCount = count()
+    by
+    UserIdentityArn,
+    UserIdentityPrincipalid,
+    SourceIpAddress,
+    bin(TimeGenerated, LookbackWindow)
+| where RegionsQueried >= MinRegionCount
+| project
+    FirstSeen,
+    LastSeen,
+    UserIdentityArn,
+    UserIdentityPrincipalid,
+    SourceIpAddress,
+    RegionsQueried,
+    RegionList,
+    CallCount
+| sort by FirstSeen desc
+
+// ----- next query -----
+
+// FILE: kql_T1535_region_enumeration.kql
+// T1535 - All-Region Enumeration via DescribeRegions (AllRegions=True)
+// Fires when a non-service principal enumerates every AWS region, including
+// opted-in and not-opted-in regions. Precursor to unused-region selection.
+AWSCloudTrail
+| where EventName == "DescribeRegions"
+| where EventSource == "ec2.amazonaws.com"
+| where RequestParameters has "allRegions"
+| where RequestParameters has "true"
+| where UserIdentityType !in ("AWSService", "AWSAccount")
+| where UserIdentityArn !has "AWSServiceRole"
+| where UserIdentityArn !has "aws-service-role"
+| project
+    TimeGenerated,
+    EventName,
+    AwsRegion,
+    UserIdentityArn,
+    UserIdentityType,
+    UserIdentityPrincipalid,
+    SourceIpAddress,
+    UserAgent,
+    RequestParameters
+| sort by TimeGenerated desc

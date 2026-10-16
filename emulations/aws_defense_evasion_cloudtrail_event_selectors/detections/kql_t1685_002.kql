@@ -1,0 +1,46 @@
+// CloudTrail event selectors changed so the trail stops recording management events (T1685.002)
+//
+// PutEventSelectors REPLACES every selector on a trail, so each event fully describes the trail's
+// new coverage. The query classifies that coverage:
+//   NO_MANAGEMENT   no selector keeps management events (basic) / no Management category (advanced)
+//   READ_ONLY       management events kept, but only read events
+//   EXCLUDED_SRC    management events kept, but KMS or RDS Data API events excluded
+//   ok              at least one selector records read+write management events
+// and pairs each impairing change with the next PutEventSelectors on the same trail that restores
+// full coverage, giving the length of the blind window.
+//
+// tostring() of a dynamic value renders compact JSON (no spaces), which the string tests rely on.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL (AWSCloudTrail table).
+let lookback = 7d;
+let changes = AWSCloudTrail
+    | where TimeGenerated > ago(lookback)
+    | where EventSource == "cloudtrail.amazonaws.com" and EventName == "PutEventSelectors"
+    | where isempty(ErrorCode)
+    | extend Req = parse_json(RequestParameters)
+    | extend TrailKey = tostring(split(tostring(Req.trailName), "/")[-1]),
+             Basic = tostring(Req.eventSelectors), Advanced = tostring(Req.advancedEventSelectors)
+    | extend Mode = iff(isnotempty(Advanced) and Advanced != "[]", "advanced", "basic")
+    | extend Coverage = case(
+        Mode == "advanced" and Advanced !has "Management", "NO_MANAGEMENT",
+        Mode == "basic" and Basic !contains '"includeManagementEvents":true', "NO_MANAGEMENT",
+        Mode == "basic" and Basic contains '"readWriteType":"ReadOnly"'
+            and Basic !contains '"readWriteType":"All"' and Basic !contains '"readWriteType":"WriteOnly"', "READ_ONLY",
+        Basic contains '"excludeManagementEventSources":["', "EXCLUDED_SRC",
+        "ok");
+changes
+| where Coverage != "ok"
+| project ChangedAt = TimeGenerated, TrailKey, Coverage, Mode, RecipientAccountId, AWSRegion,
+          PrincipalArn = UserIdentityArn, AccessKey = UserIdentityAccessKeyId, SourceIpAddress,
+          UserAgent, NewSelectors = iff(Mode == "advanced", Advanced, Basic)
+| join kind=leftouter (
+    changes | where Coverage == "ok"
+            | project RestoredAt = TimeGenerated, TrailKey, RecipientAccountId, RestoredBy = UserIdentityArn
+  ) on TrailKey, RecipientAccountId
+| summarize RestoredAt = minif(RestoredAt, RestoredAt > ChangedAt),
+            RestoredBy = take_anyif(RestoredBy, RestoredAt > ChangedAt)
+    by ChangedAt, TrailKey, Coverage, Mode, RecipientAccountId, AWSRegion, PrincipalArn, AccessKey,
+       SourceIpAddress, UserAgent, NewSelectors
+| extend BlindMinutes = iff(isnotnull(RestoredAt), datetime_diff("minute", RestoredAt, ChangedAt), long(null)),
+         State = iff(isnull(RestoredAt), "STILL IMPAIRED (or restored outside lookback)", "restored")
+| order by ChangedAt desc

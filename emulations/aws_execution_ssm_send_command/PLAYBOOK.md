@@ -8,7 +8,7 @@
 | Emulation Tier | Atomic technique |
 | Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High, `SendCommand` runs arbitrary shell **as root** on every targeted instance with no SSH or network access; a multi-instance send is fleet-wide root RCE (`MANIFEST.py` rates MEDIUM; the IR view is High because of the root-on-many-hosts blast radius) |
+| Severity | High, `SendCommand` runs arbitrary shell **as root** on every targeted instance with no SSH or network access; a multi-instance send is fleet-wide root RCE |
 | MITRE Tactics | Execution |
 | MITRE Techniques | T1651 |
 | Services in Scope | SSM, EC2, CloudTrail, IAM, GuardDuty, VPC Flow Logs |

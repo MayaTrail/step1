@@ -7,7 +7,7 @@
 | Incident Type | Cloud Firewall Impairment / Defense Evasion |
 | Threat Actor | ATOMIC-wafv2-disable-web-acl (technique emulation) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Defense Evasion |
 | MITRE Techniques | T1686.001 — Disable or Modify System Firewall: Cloud Firewall |
 | Affected Services | AWS WAFv2, AWS STS, AWS IAM |

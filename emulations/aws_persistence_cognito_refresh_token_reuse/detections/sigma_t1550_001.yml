@@ -1,0 +1,117 @@
+title: Cognito AdminUserGlobalSignOut - Session Revocation Indicator
+id: c65bff07-bd12-58e8-a8d7-f41aeb157ded
+status: experimental
+description: >
+  Detects Cognito AdminUserGlobalSignOut events, which invalidate all tokens
+  for a user account. In a T1550.001 (Application Access Token) abuse scenario
+  this event appears in two contexts: (1) as an incident-response action taken
+  by defenders after detecting refresh token reuse, or (2) as an attacker
+  action to disrupt the victim's sessions. Alerting on this event provides
+  visibility into both the attack and the response phase. Correlate with
+  preceding InitiateAuth REFRESH_TOKEN_AUTH events (if Cognito advanced
+  security logging is enabled) or with the AssumeRole + SSM GetParameters
+  sequence to distinguish defender response from attacker disruption.
+references:
+  - https://attack.mitre.org/techniques/T1550/001/
+  - https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-the-access-token.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+  - attack.credential_access
+  - attack.t1550.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cognito-idp.amazonaws.com'
+    eventName: 'AdminUserGlobalSignOut'
+  filter_known_service_accounts:
+    userIdentity.arn|contains:
+      - 'cognito-identity-pool-service-role'
+      - 'svc-cognito-admin'
+  condition: selection and not filter_known_service_accounts
+falsepositives:
+  - Legitimate incident response actions revoking compromised user sessions
+  - Administrative user management workflows that perform periodic session cleanup
+  - Automated account security tools that sign out inactive users
+level: medium
+---
+title: Cognito Refresh Token Reuse - Attacker Role AssumeRole
+id: fbad8fa6-077d-50cf-9850-14667e3f5d5a
+status: experimental
+description: >
+  Detects STS AssumeRole calls targeting IAM roles associated with Cognito
+  refresh token reuse emulation or abuse scenarios. An attacker who has
+  obtained a stolen Cognito refresh token out-of-band will first assume a
+  role to establish their execution context (T1550.001). Look for AssumeRole
+  events where the target role ARN contains naming patterns indicative of
+  attacker-staged roles, combined with an unusual source IP or non-service
+  caller type.
+references:
+  - https://attack.mitre.org/techniques/T1550/001/
+author: MayaTrail
+date: 2026/04/15
+tags:
+  - attack.credential_access
+  - attack.t1550.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'sts.amazonaws.com'
+    eventName: 'AssumeRole'
+    requestParameters.roleArn|contains: 'cognito-refresh-token-reuse'
+  filter_automation:
+    userIdentity.sessionContext.sessionIssuer.type: 'Role'
+    userIdentity.arn|contains: 'assumed-role/AWSServiceRole'
+  condition: selection and not filter_automation
+falsepositives:
+  - CI/CD pipelines running Cognito integration tests against lab roles
+  - Authorized red team exercises using attacker role naming conventions
+level: high
+---
+title: Cognito Refresh Token Reuse - SSM Parameter Read for Cognito Config
+id: 4d29d9d3-9052-576e-899d-80c394ad547b
+status: experimental
+description: >
+  Detects SSM GetParameters calls targeting Cognito configuration parameters
+  (pool ID, app client ID, user credentials) from an assumed attacker role
+  session. Attackers targeting Cognito refresh token reuse commonly read
+  SSM parameters to discover pool and client IDs needed to call InitiateAuth.
+  When correlated with a preceding AssumeRole for an attacker-staged role,
+  this sequence strongly indicates credential reconnaissance ahead of
+  application access token abuse (T1550.001).
+references:
+  - https://attack.mitre.org/techniques/T1550/001/
+  - https://attack.mitre.org/techniques/T1552/
+author: MayaTrail
+date: 2026/04/15
+tags:
+  - attack.credential_access
+  - attack.t1550.001
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection_api:
+    eventSource: 'ssm.amazonaws.com'
+    eventName: 'GetParameters'
+  selection_path:
+    requestParameters.names|contains:
+      - '/atomic-cognito-refresh-token-reuse/'
+      - 'cognito'
+      - 'pool-id'
+      - 'app-client'
+  filter_known_automation:
+    userIdentity.arn|contains:
+      - 'AWSServiceRole'
+      - 'lambda-execution'
+      - 'ecs-task-execution'
+  condition: selection_api and selection_path and not filter_known_automation
+falsepositives:
+  - Application deployment pipelines reading Cognito config from SSM at startup
+  - Lambda functions resolving Cognito pool IDs from SSM at cold start
+  - Developers running manual SSM reads during troubleshooting
+level: medium

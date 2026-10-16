@@ -1,0 +1,115 @@
+# S3 Ransomware Through Batch Object Deletion (T1485)
+#
+# S3 OBJECT CALLS ARE CLOUDTRAIL DATA EVENTS. DeleteObjects, ListObjects / ListObjectsV2 and
+# GetObject are recorded only by a trail (or event data store) with an S3 data-event selector
+# covering the bucket. They are never in Event history and never returned by lookup-events. Every
+# rule in this file is silent - not negative - on a trail without S3 data events.
+#
+# ONE EVENT IS UP TO 1,000 OBJECTS. A DeleteObjects data event names the bucket but, per Stratus
+# Red Team's sample, does not list which keys were deleted or how many. Counting events counts
+# CALLS, not objects: this emulation's 100 objects produce ONE DeleteObjects event. That is why the
+# generated single-event rule (kept below as the base) is paired with an enumerate-then-delete
+# sequence, which does fire on one call, rather than with a volume threshold alone.
+#
+# FIELD SHAPE. eventSource s3.amazonaws.com, eventCategory Data, managementEvent false,
+# requestParameters.bucketName. ListObjectsV2 may be logged as eventName ListObjects or
+# ListObjectsV2 depending on the request; both are matched.
+title: S3 objects deleted in bulk with DeleteObjects
+id: 1f8b41aa-3514-5ba0-891c-4b38ddaa8af8
+name: s3_delete_objects
+status: experimental
+description: >-
+  Detects s3:DeleteObjects, which removes up to 1,000 objects per call. Without versioning or
+  Object Lock the data is gone. Requires S3 data events on the trail.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.impact.s3-ransomware-batch-deletion/
+  - https://attack.mitre.org/techniques/T1485/
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
+  - https://docs.aws.amazon.com/awscloudtrail/latest/userguide/logging-data-events-with-cloudtrail.html
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'DeleteObjects'
+  condition: selection
+falsepositives:
+  - Cleanup jobs and ETL pipelines that batch-delete staging data. Allowlist their role ARNs.
+level: medium
+---
+# Base rule - sequence component only, not for direct alerting.
+title: S3 bucket listed
+id: 7b9fe784-fece-4818-a227-25c67635dfc1
+name: s3_list_objects_bb
+status: experimental
+description: Base rule - sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName:
+      - 'ListObjects'
+      - 'ListObjectsV2'
+  condition: selection
+level: informational
+---
+# ENUMERATE, THEN DELETE. Listing a bucket and batch-deleting from it within minutes, as one
+# principal, is how a wipe is scripted: the keys for DeleteObjects have to come from somewhere.
+# A lifecycle-style cleanup job does the same, which is why it is allowlisted on the base rule
+# rather than tolerated here.
+title: S3 bucket enumerated and then batch-deleted by one principal
+id: 06ebe9af-0433-451b-bbbf-c64d1a24d783
+status: experimental
+description: >-
+  One principal listed a bucket and then called DeleteObjects on it within 15 minutes - the
+  destruction stage of S3 ransomware, even when it is a single call.
+references:
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: temporal_ordered
+  rules:
+    - s3_list_objects_bb
+    - s3_delete_objects
+  group-by:
+    - userIdentity.arn
+    - requestParameters.bucketName
+  timespan: 15m
+level: high
+---
+# Volume: three or more DeleteObjects calls on one bucket by one principal in ten minutes is at
+# least 2,001 objects' worth of capacity. gte, never gt, so exactly three does not fall through.
+title: Repeated S3 DeleteObjects calls against one bucket
+id: 99a73e0a-29da-4e77-a5f3-5e25b30c5d7f
+status: experimental
+description: >-
+  One principal called DeleteObjects three or more times on one bucket within ten minutes.
+references:
+  - https://attack.mitre.org/techniques/T1485/
+tags:
+  - attack.impact
+  - attack.t1485
+correlation:
+  type: event_count
+  rules:
+    - s3_delete_objects
+  group-by:
+    - userIdentity.arn
+    - requestParameters.bucketName
+  timespan: 10m
+  condition:
+    gte: 3
+level: high

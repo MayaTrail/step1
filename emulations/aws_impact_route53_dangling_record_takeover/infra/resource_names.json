@@ -1,0 +1,21 @@
+{
+  "campaign": "ATOMIC-route53-dangling-record-takeover",
+  "csp": "aws",
+  "resources": {
+    "hosted_zone_name": "corp-victim-lab.internal",
+    "hosted_zone_comment": "MayaTrail emulation zone",
+    "dangling_record_name": "app.corp-victim-lab.internal",
+    "dangling_record_target": "app-corp-victim-lab.s3-website-us-east-1.amazonaws.com",
+    "bait_www_record_name": "www.corp-victim-lab.internal",
+    "bait_www_record_target": "www-corp-victim-lab.s3-website-us-east-1.amazonaws.com",
+    "bait_www_bucket": "www-corp-victim-lab",
+    "attacker_role_name": "atomic-route53-dangling-attacker-role",
+    "unclaimed_bucket_name": "app-corp-victim-lab"
+  },
+  "pulumi_export_keys": {
+    "hosted_zone_id": "hosted_zone_id",
+    "attacker_role_arn": "attacker_role_arn",
+    "dangling_record_fqdn": "dangling_record_fqdn",
+    "bait_www_bucket_name": "bait_www_bucket_name"
+  }
+}

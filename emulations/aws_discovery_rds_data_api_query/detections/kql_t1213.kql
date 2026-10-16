@@ -1,0 +1,85 @@
+// T1213 - Data from Information Repositories: RDS Data API ExecuteStatement
+// Detects rds-data:ExecuteStatement calls from unexpected IAM principals.
+// The RDS Data API accepts SQL over HTTPS without VPC access - an adversary
+// with stolen static keys can exfiltrate Aurora data without touching private subnets.
+//
+// PREREQUISITE: CloudTrail data events for AWS::RDS::DBCluster must be explicitly
+// enabled. These are NOT on by default. Without this, ExecuteStatement is invisible.
+// Enable via: CloudTrail console -> Trail -> Data events -> RDS -> Log all clusters
+//
+// Required log source: AWSCloudTrail (Microsoft Sentinel AWS connector)
+// Technique: T1213 | Tactic: Collection
+// SIGMA counterpart: sigma_T1213_ExecuteStatement.yml
+
+AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "rds-data.amazonaws.com"
+| where EventName == "ExecuteStatement"
+// Exclude expected application principals - tune for your environment
+| where UserIdentityArn !contains ":assumed-role/app-service-role/"
+| where UserIdentityArn !contains ":assumed-role/lambda-execution-role/"
+| where UserIdentityArn !contains ":assumed-role/ecs-task-role/"
+| where UserIdentityType != "AWSService"
+// Flag high-value SQL patterns in RequestParameters (Data API logs the SQL statement)
+| extend SqlStatement = tostring(parse_json(RequestParameters).sql)
+| extend IsSuspiciousQuery = SqlStatement has_any ("SELECT *", "SHOW TABLES", "SHOW DATABASES",
+    "information_schema", "DUMP", "employees", "salary", "ssn", "email")
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    SqlStatement,
+    IsSuspiciousQuery,
+    RequestParameters,
+    AWSRegion
+| sort by TimeGenerated desc
+
+// Secondary query: cluster-level volume anomaly (many ExecuteStatements in short window)
+// Run separately to detect bulk enumeration/exfiltration patterns
+//
+// AWSCloudTrail
+// | where TimeGenerated > ago(1h)
+// | where EventSource == "rds-data.amazonaws.com"
+// | where EventName == "ExecuteStatement"
+// | summarize QueryCount = count(), UniqueCallers = dcount(UserIdentityArn) by bin(TimeGenerated, 5m), AWSRegion
+// | where QueryCount > 20
+// | sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1213 - Data from Information Repositories: GetSecretValue on DB Credential Secrets
+// Detects SecretsManager GetSecretValue calls from IAM principals that are NOT
+// the expected application service roles. This is a CloudTrail management event
+// (always present, no data event enablement required).
+//
+// Required log source: AWSCloudTrail (Microsoft Sentinel AWS connector)
+// Technique: T1213 | Tactic: Collection
+// SIGMA counterpart: sigma_T1213_GetSecretValue.yml
+
+AWSCloudTrail
+| where TimeGenerated > ago(1d)
+| where EventSource == "secretsmanager.amazonaws.com"
+| where EventName == "GetSecretValue"
+// Optionally scope to DB credential secrets by name pattern
+| where RequestParameters has_any ("db-credentials", "rds-", "aurora-", "database-", "db-password")
+// Exclude expected application principals - tune for your environment
+| where UserIdentityArn !contains ":assumed-role/app-service-role/"
+| where UserIdentityArn !contains ":assumed-role/lambda-execution-role/"
+| where UserIdentityArn !contains ":assumed-role/ecs-task-role/"
+| where UserIdentityType != "AWSService"
+// Exclude AWS-internal rotation
+| where UserAgent !startswith "aws-secretsmanager-rotation"
+| project
+    TimeGenerated,
+    EventName,
+    UserIdentityArn,
+    UserIdentityType,
+    SourceIpAddress,
+    UserAgent,
+    RequestParameters,
+    ErrorCode,
+    AWSRegion
+| sort by TimeGenerated desc

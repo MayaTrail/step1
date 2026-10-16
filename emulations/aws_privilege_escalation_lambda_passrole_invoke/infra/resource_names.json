@@ -1,0 +1,28 @@
+{
+  "campaign": "ATOMIC-LAMBDA-PASSROLE-INVOKE",
+  "csp": "aws",
+  "resources": {
+    "victim_role_name": "atomic-lambda-passrole-invoke-victim-role",
+    "target_role_name": "atomic-lambda-passrole-invoke-target-role",
+    "decoy_execution_role_name": "atomic-lambda-passrole-invoke-decoy-execution-role",
+    "victim_policy_name": "atomic-lambda-passrole-invoke-victim-policy",
+    "target_role_policy_name": "atomic-lambda-passrole-invoke-target-role-policy",
+    "canary_secret_name": "prod/rds/master-credentials",
+    "decoy_lambda_name": "prod-db-backup-handler",
+    "victim_user_name": "atomic-lambda-passrole-invoke-attacker",
+    "victim_user_assume_policy_name": "atomic-lambda-passrole-invoke-assume-victim-role"
+  },
+  "pulumi_export_keys": {
+    "victim_role_arn": "victim_role_arn",
+    "target_role_arn": "target_role_arn",
+    "canary_secret_arn": "canary_secret_arn",
+    "victim_access_key_id": "victim_access_key_id",
+    "victim_secret_access_key": "victim_secret_access_key",
+    "decoy_lambda_arn": "decoy_lambda_arn",
+    "victim_role_name": "victim_role_name",
+    "target_role_name": "target_role_name",
+    "canary_secret_name": "canary_secret_name",
+    "decoy_lambda_name": "decoy_lambda_name",
+    "victim_user_name": "victim_user_name"
+  }
+}

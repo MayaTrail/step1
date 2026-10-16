@@ -1,0 +1,167 @@
+title: RDS Master Password Reset via ModifyDBInstance
+id: a85325cd-3d9b-53d8-9cb1-50f0126f2d97
+status: experimental
+description: >
+  Detects an attacker resetting the RDS master user password via ModifyDBInstance.
+  CloudTrail records requestParameters.masterUserPassword as
+  HIDDEN_DUE_TO_SECURITY_REASONS, making the field itself the detection signal.
+  This is the primary indicator for RDS credential theft without requiring
+  network access to the database instance.
+references:
+    - https://attack.mitre.org/techniques/T1213/
+    - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.DBInstance.Modifying.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.collection
+    - attack.t1213
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: rds.amazonaws.com
+        eventName: ModifyDBInstance
+        requestParameters|contains: 'masterUserPassword'
+    filter_legitimate_rotation:
+        userIdentity.arn|contains:
+            - 'secrets-rotation'
+            - 'rds-rotation'
+            - 'db-rotation'
+    condition: selection and not filter_legitimate_rotation
+falsepositives:
+    - Scheduled secrets rotation lambda executing rds:ModifyDBInstance
+    - DBA manually resetting password through AWS Console during an incident
+    - Terraform/CDK pipeline applying a stack change that includes a password update
+level: high
+---
+title: RDS Instance Reconnaissance via DescribeDBInstances from Assumed Role
+id: 0d2baed1-9266-5683-a7e2-a13e308ec3c7
+status: experimental
+description: >
+  Detects DescribeDBInstances calls issued by an assumed-role (AssumedRole
+  identity type) session rather than a long-lived IAM user or service account.
+  Attackers enumerate RDS instances to confirm the target identifier and
+  available state before issuing rds:ModifyDBInstance for a master password
+  reset. When chained with prior Secrets Manager access attempts from the
+  same session, this constitutes a pre-attack reconnaissance sequence.
+references:
+    - https://attack.mitre.org/techniques/T1213/
+    - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_DescribeDBInstances.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.collection
+    - attack.t1213
+    - attack.discovery
+    - attack.t1580
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: rds.amazonaws.com
+        eventName: DescribeDBInstances
+        userIdentity.type: AssumedRole
+    filter_known_monitoring:
+        userIdentity.arn|contains:
+            - 'cloudwatch-agent'
+            - 'monitoring-role'
+            - 'health-check'
+            - 'rds-enhanced-monitoring'
+    condition: selection and not filter_known_monitoring
+falsepositives:
+    - AWS Config rules performing compliance checks on RDS configuration
+    - AWS Trusted Advisor running resource inventory
+    - Authorized DBA tooling or dashboards querying instance metadata
+    - RDS Proxy or Multi-AZ failover internal calls
+level: low
+---
+title: Secrets Manager Enumeration or Access Denied from Non-Rotation Principal
+id: 1d43fb81-bab7-51c0-bbf2-a9d36b7b3bcf
+status: experimental
+description: >
+  Detects ListSecrets or GetSecretValue calls from principals that are not
+  authorized secrets-rotation or application service accounts, including
+  AccessDenied variants. A denied call is itself a detection signal: it
+  indicates a principal probing for credential stores it should not access.
+  Commonly precedes an RDS master password reset chain (T1213).
+references:
+    - https://attack.mitre.org/techniques/T1213/
+    - https://docs.aws.amazon.com/secretsmanager/latest/userguide/auth-and-access.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.collection
+    - attack.t1213
+    - attack.credential_access
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_list:
+        eventSource: secretsmanager.amazonaws.com
+        eventName: ListSecrets
+    selection_get:
+        eventSource: secretsmanager.amazonaws.com
+        eventName: GetSecretValue
+    filter_rotation:
+        userIdentity.arn|contains:
+            - 'secrets-rotation'
+            - 'SecretsManagerRotation'
+            - 'lambda-rotation'
+    filter_app:
+        userIdentity.arn|contains:
+            - 'app-service-account'
+            - 'application-role'
+    condition: (selection_list or selection_get) and not (filter_rotation or filter_app)
+falsepositives:
+    - Developer or SRE accessing secrets manually during incident response
+    - Authorized auditing scripts scanning secret inventory
+    - CI/CD pipelines with broad secrets access for deployment
+level: medium
+---
+title: STS AssumeRole into Database Management Role from Non-Standard Principal
+id: 627a8662-1d94-5e4e-b070-a1267552d125
+status: experimental
+description: >
+  Detects AssumeRole calls targeting a DB-management IAM role from a principal
+  that is not the expected automation or application identity. This models the
+  initial credential pivot step of an RDS master password reset chain (T1213),
+  where an attacker uses ambient credentials to assume a victim role with
+  rds:ModifyDBInstance before issuing the password reset. The RoleSessionName
+  pattern 'atomic-rds-reset-master-password-session' is emulation-specific but
+  any short-lived session from an unexpected caller warrants investigation.
+references:
+    - https://attack.mitre.org/techniques/T1213/
+    - https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.collection
+    - attack.t1213
+    - attack.privilege_escalation
+    - attack.t1078
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: sts.amazonaws.com
+        eventName: AssumeRole
+        requestParameters.roleArn|contains:
+            - 'victim'
+            - 'db-mgmt'
+            - 'database-mgmt'
+            - 'rds-admin'
+    filter_known_automation:
+        userIdentity.arn|contains:
+            - 'pipeline-deployer'
+            - 'ci-role'
+            - 'terraform'
+    condition: selection and not filter_known_automation
+falsepositives:
+    - Authorized cross-account database management tooling assuming the role
+    - Break-glass access by an on-call engineer during a DB incident
+    - Infrastructure-as-code deployment pipeline running stack updates
+level: medium

@@ -1,0 +1,27 @@
+{
+  "campaign": "ATOMIC-LAMBDA-EXTERNAL-LAYER-POISONING",
+  "csp": "aws",
+  "resources": {
+    "log_group_name":        "/aws/lambda/atomic-lambda-external-layer-poisoning-victim",
+    "victim_function_name":  "atomic-lambda-external-layer-poisoning-victim",
+    "baseline_layer_name":   "atomic-lambda-external-layer-poisoning-common-deps",
+    "prod_secret_name":      "atomic-lambda-external-layer-poisoning/prod/database/master_credentials",
+    "victim_exec_role_name": "atomic-lambda-external-layer-poisoning-victim-exec-role",
+    "attacker_role_name":    "atomic-lambda-external-layer-poisoning-attacker-role"
+  },
+  "pulumi_export_keys": {
+    "log_group_name":        "log_group_name",
+    "victim_function_name":  "victim_function_name",
+    "baseline_layer_name":   "baseline_layer_name",
+    "prod_secret_name":      "prod_secret_name",
+    "victim_exec_role_name": "victim_exec_role_name",
+    "attacker_role_name":    "attacker_role_name",
+    "state_bucket_name":     "state_bucket_name",
+    "state_bucket_arn":      "state_bucket_arn",
+    "prod_secret_arn":       "prod_secret_arn",
+    "baseline_layer_arn":    "baseline_layer_arn",
+    "victim_function_arn":   "victim_function_arn",
+    "attacker_role_arn":     "attacker_role_arn",
+    "victim_exec_role_arn":  "victim_exec_role_arn"
+  }
+}

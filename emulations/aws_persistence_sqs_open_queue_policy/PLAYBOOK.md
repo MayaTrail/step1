@@ -6,7 +6,7 @@
 | Incident Type | SQS Resource Policy Manipulation — Public Queue Exposure |
 | Threat Actor | ATOMIC-sqs-open-queue-policy |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Persistence |
 | MITRE Techniques | T1098 — Account Manipulation |
 | Detection Sources | CloudTrail management events, CloudWatch Logs |

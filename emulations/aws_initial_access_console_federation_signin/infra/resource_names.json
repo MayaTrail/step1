@@ -1,0 +1,15 @@
+{
+  "campaign": "ATOMIC-console-federation-signin",
+  "csp": "aws",
+  "resources": {
+    "victim_iam_user": "atomic-console-federation-victim-user",
+    "bait_secret_name": "prod/database/master_credentials"
+  },
+  "pulumi_export_keys": {
+    "victim_iam_user": "victim_iam_user",
+    "victim_access_key_id": "victim_access_key_id",
+    "victim_secret_access_key": "victim_secret_access_key",
+    "target_bucket_name": "target_bucket_name",
+    "bait_secret_name": "bait_secret_name"
+  }
+}

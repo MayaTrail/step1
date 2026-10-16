@@ -1,0 +1,17 @@
+{
+  "campaign": "ATOMIC-sns-sms-pumping",
+  "csp": "aws",
+  "resources": {
+    "attacker_role_name": "atomic-sns-sms-pumping-attacker-role",
+    "sns_topic_name": "atomic-sns-sms-pumping-prod-customer-notifications",
+    "cloudtrail_trail_name": "atomic-sns-sms-pumping-trail"
+  },
+  "pulumi_export_keys": {
+    "attacker_role_arn": "attacker_role_arn",
+    "attacker_role_name": "attacker_role_name",
+    "sns_topic_arn": "sns_topic_arn",
+    "cloudtrail_bucket_name": "cloudtrail_bucket_name",
+    "cloudtrail_trail_arn": "cloudtrail_trail_arn",
+    "cloudtrail_trail_name": "cloudtrail_trail_name"
+  }
+}

@@ -1,0 +1,144 @@
+# S3 Ransomware Through Client-Side Encryption (T1486)
+#
+# THE PATTERN, PER OBJECT: GetObject <key> -> PutObject <key>.encrypted -> DeleteObject <key>,
+# all by one principal, repeated across the bucket. The key exists only in the attacker's memory,
+# so no S3 or KMS encryption setting helps and nothing in AWS can decrypt the result. This is the
+# client-side variant; the SSE-C variant (see the codefinger emulation) rewrites objects in place
+# with a customer-provided key and is caught on x-amz-server-side-encryption-customer-algorithm.
+#
+# ALL THREE CALLS ARE CLOUDTRAIL DATA EVENTS: recorded only by a trail or event data store with an
+# S3 data-event selector covering the bucket; never in Event history or lookup-events.
+#
+# WHAT WAS MISSING FROM THE GENERATED RULE. The single-event suffix rule (kept, first below) is the
+# right anchor but alerted per object and could not express the pattern. Added: a volume
+# correlation on the suffix writes, and a read -> rewrite -> delete sequence. Sigma cannot join
+# <key>.encrypted to <key> (that needs string arithmetic across events); the KQL does it.
+#
+# SUFFIXES. `.encrypted` is what this emulation writes. `.locked` and `.crypted` are common
+# ransomware renames and are included at the same level; `.enc` is not, because legitimate
+# client-side encryption tools use it. Extend the list with any suffix seen in a ransom note.
+title: S3 object rewritten with a ransomware-style suffix
+id: f54ea1c9-c7ea-5fe2-83cf-4c526870edba
+name: s3_put_encrypted_suffix
+status: experimental
+description: >-
+  Detects s3:PutObject writing a key that ends in .encrypted, .locked or .crypted. Paired with
+  DeleteObject of the matching original key across many objects this is client-side S3
+  ransomware. Requires S3 data events on the trail.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.impact.s3-ransomware-client-side-encryption/
+  - https://attack.mitre.org/techniques/T1486/
+  - https://docs.aws.amazon.com/awscloudtrail/latest/userguide/logging-data-events-with-cloudtrail.html
+tags:
+  - attack.impact
+  - attack.t1486
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutObject'
+  enc_suffix:
+    requestParameters.key|endswith:
+      - '.encrypted'
+      - '.locked'
+      - '.crypted'
+  condition: selection and enc_suffix
+falsepositives:
+  - Backup tools that write client-side encrypted copies with one of these suffixes. Allowlist
+    the tool's role ARN.
+level: high
+---
+# Base rule - sequence component only, not for direct alerting.
+title: S3 object read
+id: 937ff044-020e-4378-a8f5-a84ec45a11e3
+name: s3_get_object_bb
+status: experimental
+description: Base rule - sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html
+tags:
+  - attack.impact
+  - attack.t1486
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'GetObject'
+  condition: selection
+level: informational
+---
+# Base rule - sequence component only, not for direct alerting.
+title: S3 object deleted
+id: 086c4b35-449f-4419-919a-e00960fd3962
+name: s3_delete_object_bb
+status: experimental
+description: Base rule - sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html
+tags:
+  - attack.impact
+  - attack.t1486
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'DeleteObject'
+  condition: selection
+level: informational
+---
+# READ, REWRITE WITH A RANSOM SUFFIX, DELETE: the per-object cycle, by one principal on one bucket
+# within five minutes. One cycle is enough to fire; that is deliberate, because the first object
+# is the cheapest moment to stop the rest.
+title: S3 object read, rewritten with a ransomware suffix and deleted by one principal
+id: 5927fbee-a7c9-440a-bc74-737e5a60b20d
+status: experimental
+description: >-
+  One principal read an object, wrote a .encrypted/.locked/.crypted object and deleted an object
+  in the same bucket within five minutes - the client-side S3 ransomware cycle.
+references:
+  - https://attack.mitre.org/techniques/T1486/
+tags:
+  - attack.impact
+  - attack.t1486
+correlation:
+  type: temporal_ordered
+  rules:
+    - s3_get_object_bb
+    - s3_put_encrypted_suffix
+    - s3_delete_object_bb
+  group-by:
+    - userIdentity.arn
+    - requestParameters.bucketName
+  timespan: 5m
+level: critical
+---
+# Volume: ten suffix writes by one principal in one bucket in ten minutes is a sweep, not a
+# backup tool writing the odd encrypted copy. This emulation writes 50.
+title: Many S3 objects rewritten with a ransomware suffix by one principal
+id: 6e7c5805-56fc-4265-9612-beafe6eb0953
+status: experimental
+description: >-
+  One principal wrote ten or more .encrypted/.locked/.crypted objects into one bucket within ten
+  minutes.
+references:
+  - https://attack.mitre.org/techniques/T1486/
+tags:
+  - attack.impact
+  - attack.t1486
+correlation:
+  type: event_count
+  rules:
+    - s3_put_encrypted_suffix
+  group-by:
+    - userIdentity.arn
+    - requestParameters.bucketName
+  timespan: 10m
+  condition:
+    gte: 10
+level: critical

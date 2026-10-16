@@ -1,0 +1,3 @@
+name: mayatrail-atomic-lambda-external-layer-poisoning
+runtime: python
+description: Atomic emulation - Lambda external layer poisoning (T1195.002)

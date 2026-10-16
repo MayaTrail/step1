@@ -4,7 +4,13 @@ MayaTrail Adversary Emulation | AWS | 3-Phase | 17 Steps
 
 Executes the complete DangerDev attack chain: credential theft from leaked
 terraform.tfstate → IAM persistence → compute recon → cross-account backdoors
-→ account hijacking → indicator removal → documented phishing infrastructure.
+→ account hijacking → indicator removal → phishing infrastructure.
+
+Steps 16-17 (domain acquisition, SES phishing) make REAL AWS calls as alice.chen's
+hijacked key, with the harmful outcomes refused by IAM rather than by this script:
+RegisterDomain / PutAccountDetails / UpdateAccountSendingEnabled are deny-guarded
+(CloudTrail records the AccessDenied attempt) and SendEmail is IAM-restricted to the
+SES mailbox simulator from an unverifiable lab identity (expected MessageRejected).
 
 Entry point: run(outputs, region) — called by the run_emulation_attack Celery
 task. The leaked lab-infra-admin credential is read from the Pulumi stack outputs
@@ -15,6 +21,7 @@ Step 15 / post-17 self-cleanup of the attack-created IAM principals.
 import json
 import logging
 import random
+import re
 import socket
 import time
 from datetime import datetime, timezone
@@ -497,14 +504,14 @@ def phase2(creds: CredentialStore, account_id: str, region: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PHASE 3 — Persistence Hardening, Collection, Evasion, Documented Phishing
+# PHASE 3 — Persistence Hardening, Collection, Evasion, Phishing Infrastructure
 # Techniques: T1036.005, T1199, T1098, T1530, T1518.001, T1070, T1583.001, T1566.002
-# Credential:  dangerdev_session → alice_hijacked_session (steps 16-17)
+# Credential:  dangerdev_session → alice_hijacked_session (steps 16-17, deny-guarded)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def phase3(creds: CredentialStore, account_id: str, region: str):
     print("\n" + "=" * 70)
-    print("PHASE 3 — Persistence Hardening, Collection, Evasion, Documented Phishing")
+    print("PHASE 3 — Persistence Hardening, Collection, Evasion, Phishing Infrastructure")
     print("=" * 70)
     phase_delay()
 
@@ -902,100 +909,333 @@ def phase3(creds: CredentialStore, account_id: str, region: str):
         "iam:DeleteUser(DangerDev@protonmail.me) [via LAB_OPERATOR_KEY]",
     ], "success")
 
-    # ── Step 16 · T1583.001 — Domain acquisition ──────────────────────────────
-    # ┌─────────────────────────────────────────────────────────────────────────┐
-    # │  DOCUMENTED ONLY — T1583.001: Acquire Infrastructure: Domains          │
-    # │                                                                         │
-    # │  CANNOT SAFELY EMULATE: route53domains:RegisterDomain creates real     │
-    # │  internet-facing infrastructure with billing and legal implications.   │
-    # │  No API call is made. Simulated CloudTrail event is printed to stdout. │
-    # │                                                                         │
-    # │  In the real DangerDev incident:                                       │
-    # │    - Four PayPal-mimicking domains registered via alice.chen session   │
-    # │    - Used as credential harvesting landing pages                       │
-    # │    - Registered with PrivacyProtectRegistrantContact: true             │
-    # │    - AutoRenew: false (operational, not long-term infrastructure)      │
-    # │                                                                         │
-    # │  Expected CloudTrail event (NOT executed):                             │
-    # │    eventName:   RegisterDomain                                         │
-    # │    eventSource: route53domains.amazonaws.com                          │
-    # │    principal:   alice.chen (alice_hijacked_session)                   │
-    # │    DomainName:  [REDACTED — PayPal-mimicking domain]                  │
-    # └─────────────────────────────────────────────────────────────────────────┘
-    print_step("Step 16 [T1583.001] Domain acquisition: DOCUMENTED ONLY — no API call made")
-    simulated_register_domain = {
-        "eventVersion": "1.08",
-        "eventSource": "route53domains.amazonaws.com",
-        "eventName": "RegisterDomain",
-        "userIdentity": {"type": "IAMUser", "userName": "alice.chen"},
-        "requestParameters": {
-            "domainName": "[REDACTED — PayPal-mimicking domain]",
-            "durationInYears": 1,
-            "autoRenew": False,
-            "privacyProtectRegistrantContact": True,
-        },
-        "_emulationStatus": "SIMULATED — NOT EXECUTED",
-    }
-    print("Simulated RegisterDomain CloudTrail event (not executed):")
-    print(json.dumps(simulated_register_domain, indent=2))
+    # Steps 16-17 run as alice.chen's hijacked key ONLY (never a fallback
+    # session: lab-infra-admin / DangerDev@protonmail.me hold AdministratorAccess
+    # and carry none of the deny guards).  If they raise (guard breach), the
+    # hijacked alice.chen key is still removed before the exception propagates.
+    try:
+        step16_domain_acquisition(creds, account_id)
+        step17_ses_phishing(creds, account_id, region)
+    finally:
+        _cleanup_alice_hijacked_key(creds)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEPS 16-17 — Real calls, IAM-bounded outcome
+# (design: docs/DANGERDEV_SES_DOMAIN_SAFETY.md in the apt_pipeline repo)
+#
+# Every call below is a real AWS API call made with alice.chen's hijacked key.
+# Calls whose real outcome would be harmful (buying/transferring a domain,
+# leaving the SES sandbox, toggling account sending, mailing a real person)
+# are refused by IAM, not by this script: infra/__main__.py attaches the
+# customer-managed policy `dangerdev-alice-emulation-guard` to alice.chen with explicit
+# Denies.  AWS still records each refused attempt in CloudTrail with
+# errorCode=AccessDenied, which is the detection signal.
+#
+# Defence in depth, in order:
+#   1. Hard-coded lab-only inputs, asserted before any call (_assert_lab_*).
+#   2. Pre-flight interlock: iam:SimulatePrincipalPolicy (as lab-infra-admin)
+#      must report `explicitDeny` for alice.chen before a guarded call is made;
+#      otherwise the call is skipped (fail closed).  The pre-flight is a lab
+#      safety check, not attacker tradecraft, so MANIFEST.py does not list it.
+#   3. The IAM Deny itself.
+#   4. Post-call verification: a guarded call that returns anything other
+#      than AccessDenied raises GuardrailBreach.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class GuardrailBreach(RuntimeError):
+    """A deny-guarded call was NOT refused by IAM.  Never swallowed."""
+
+
+ALICE_USER_NAME = "alice.chen"
+ROUTE53DOMAINS_REGION = "us-east-1"   # Route 53 Domains is a us-east-1-only API
+SES_SIMULATOR_RECIPIENT = "success@simulator.amazonses.com"
+_LAB_DOMAIN_RE = re.compile(r"^mayatrail-emu-[a-z0-9-]+\.com$")
+_SIMULATOR_RE = re.compile(r"^[a-z0-9._+-]+@simulator\.amazonses\.com$")
+_BRAND_TOKENS = ("paypal", "pay-pal", "paypa1", "amazon", "aws", "apple", "microsoft",
+                 "google", "bank", "chase", "coinbase", "binance", "login", "secure", "verify")
+_ACCESS_DENIED = ("AccessDenied", "AccessDeniedException")
+
+# Obviously-fake registrant data; only ever sent on a call IAM refuses.
+_LAB_CONTACT = {
+    "FirstName": "MayaTrail",
+    "LastName": "EmulationLab",
+    "ContactType": "PERSON",
+    "AddressLine1": "1 Emulation Lab Way",
+    "City": "Seattle",
+    "State": "WA",
+    "CountryCode": "US",
+    "ZipCode": "98101",
+    "PhoneNumber": "+1.5555550100",
+    "Email": "registrant@example.com",
+}
+
+
+def _assert_lab_domain(domain: str) -> None:
+    if not _LAB_DOMAIN_RE.fullmatch(domain) or any(t in domain for t in _BRAND_TOKENS):
+        raise GuardrailBreach(f"refusing non-lab domain name {domain!r}")
+
+
+def _assert_lab_recipients(recipients: list[str]) -> None:
+    if not recipients or not all(_SIMULATOR_RE.fullmatch(r) for r in recipients):
+        raise GuardrailBreach(f"refusing non-simulator recipients {recipients!r}")
+
+
+def _guard_preflight(creds: CredentialStore, account_id: str, action: str,
+                     context: list[dict] | None = None) -> bool:
+    """
+    True only when IAM is confirmed to EXPLICITLY deny `action` for alice.chen.
+
+    Fail closed: any doubt (no admin session, unknown account, simulate error,
+    implicitDeny, allowed) returns False and the guarded call is skipped.
+    """
+    if not account_id or not creds.has("leaked_admin_session"):
+        print_err(f"[GUARD] cannot pre-flight {action}: no account id / admin session -- skipping call")
+        return False
+    try:
+        kwargs = {
+            "PolicySourceArn": f"arn:aws:iam::{account_id}:user/{ALICE_USER_NAME}",
+            "ActionNames": [action],
+        }
+        if context:
+            kwargs["ContextEntries"] = context
+        resp = creds.get("leaked_admin_session").client("iam").simulate_principal_policy(**kwargs)
+        decision = resp["EvaluationResults"][0]["EvalDecision"]
+    except (ClientError, KeyError, IndexError) as e:
+        print_err(f"[GUARD] pre-flight SimulatePrincipalPolicy {action} failed ({e}) -- skipping call")
+        return False
+    if decision != "explicitDeny":
+        print_err(f"[GUARD] {action} for alice.chen evaluates to {decision!r}, not explicitDeny "
+                  "-- deny guard missing, skipping call")
+        return False
+    print_ok(f"[GUARD] pre-flight: {action} -> explicitDeny for alice.chen")
+    return True
+
+
+def _expect_denied(action: str, call) -> str:
+    """
+    Make a deny-guarded call.  AccessDenied is the expected success outcome.
+    Anything else (success, or any other error, which means IAM let the
+    request through to the service) raises GuardrailBreach.
+    """
+    try:
+        call()
+    except ClientError as e:
+        code = e.response["Error"]["Code"]
+        if code in _ACCESS_DENIED:
+            print_ok(f"{action} -> {code} [EXPECTED: deny-guarded; CloudTrail records the attempt "
+                     "with errorCode=AccessDenied]")
+            return f"{action} [ATTEMPT: AccessDenied by IAM deny guard]"
+        raise GuardrailBreach(
+            f"{action} reached the service (error {code}: {e}) -- the IAM deny guard did NOT "
+            "refuse it.  Stop and fix the dangerdev-alice-emulation-guard policy."
+        ) from e
+    raise GuardrailBreach(
+        f"{action} SUCCEEDED -- the IAM deny guard did NOT refuse it.  Investigate immediately."
+    )
+
+
+def _alice_session(creds: CredentialStore) -> boto3.Session | None:
+    # Deliberately no fallback to the active session (boto_client() default).
+    if creds.has("alice_hijacked_session"):
+        return creds.get("alice_hijacked_session")
+    return None
+
+
+def step16_domain_acquisition(creds: CredentialStore, account_id: str) -> None:
+    # ── Step 16 · T1583.001 — Domain acquisition (attempt-level emulation) ────
+    # Real DangerDev registered four PayPal-mimicking domains with alice.chen's
+    # hijacked key.  Here: real availability check + suggestions (read-only,
+    # free) on a lab-marked, non-brand name, then a real RegisterDomain that the
+    # IAM deny guard refuses (a registration is a non-refundable charge and a
+    # real internet asset).  Route 53 Domains only exists in us-east-1, so the
+    # client and the CloudTrail events are in us-east-1 whatever the lab region.
+    print_step("Step 16 [T1583.001] Domain acquisition: CheckDomainAvailability + GetDomainSuggestions "
+               "(real), RegisterDomain (real call, deny-guarded -> AccessDenied)")
+    alice = _alice_session(creds)
+    if alice is None:
+        print_err("alice_hijacked_session unavailable -- skipping Step 16 (no fallback identity)")
+        record(16, "T1583.001", [], "skipped_no_session")
+        return
+
+    domain = f"mayatrail-emu-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{random.randint(0, 0xFFFF):04x}.com"
+    _assert_lab_domain(domain)
+    r53d = alice.client("route53domains", region_name=ROUTE53DOMAINS_REGION)
+    calls: list[str] = []
+
+    try:
+        resp = r53d.check_domain_availability(DomainName=domain)
+        print_ok(f"CheckDomainAvailability {domain}: {resp.get('Availability')}")
+        calls.append("route53domains:CheckDomainAvailability")
+    except ClientError as e:
+        print_err(f"CheckDomainAvailability: {e}")
 
     op_delay(1, 3)
-    record(16, "T1583.001", [], "documented_only")
 
-    # ── Step 17 · T1566.002 — SES spearphishing ───────────────────────────────
-    # ┌─────────────────────────────────────────────────────────────────────────┐
-    # │  PHISHING ATTACK — T1566.002: Phishing: Spearphishing Link            │
-    # │                                                                         │
-    # │  CANNOT SAFELY EMULATE: ses:SendEmail to real external recipients is  │
-    # │  illegal and harms third parties. Lab account enforces SES sandbox     │
-    # │  mode — external delivery is blocked. SendEmail API call is NOT made.  │
-    # │                                                                         │
-    # │  In the real DangerDev incident:                                       │
-    # │    - Phishing emails sent via alice.chen SES credentials               │
-    # │    - PayPal-themed lure linking to registered harvesting domains        │
-    # │    - Targeted victim accounts with active PayPal relationships          │
-    # │    - SES sending quota consumed → AWS Trust & Safety abuse alert       │
-    # │                                                                         │
-    # │  Executed here (low-risk): ses:VerifyEmailIdentity on lab-controlled   │
-    # │  address — generates CloudTrail event, no external effect.             │
-    # │  NOT executed: ses:SendEmail — documented structure printed to stdout.  │
-    # └─────────────────────────────────────────────────────────────────────────┘
-    print_step("Step 17 [T1566.002] SES: VerifyEmailIdentity (executed); SendEmail (documented only, not executed)")
+    try:
+        resp = r53d.get_domain_suggestions(DomainName=domain, SuggestionCount=5, OnlyAvailable=True)
+        names = [s.get("DomainName") for s in resp.get("SuggestionsList", [])]
+        print_ok(f"GetDomainSuggestions {domain}: {names}")
+        calls.append("route53domains:GetDomainSuggestions")
+    except ClientError as e:
+        print_err(f"GetDomainSuggestions: {e}")
 
-    if creds.has("alice_hijacked_session"):
-        alice_ses = creds.get("alice_hijacked_session").client("ses")
-        try:
-            alice_ses.verify_email_identity(EmailAddress=SES_LAB_IDENTITY)
-            print_ok(f"VerifyEmailIdentity: {SES_LAB_IDENTITY} — CloudTrail event generated")
-        except ClientError as e:
-            print_err(f"VerifyEmailIdentity: {e}")
+    op_delay(1, 3)
+
+    outcome = "emulated_attempt"
+    if _guard_preflight(creds, account_id, "route53domains:RegisterDomain"):
+        calls.append(_expect_denied(
+            "route53domains:RegisterDomain",
+            lambda: r53d.register_domain(
+                DomainName=domain,
+                DurationInYears=1,
+                AutoRenew=False,
+                AdminContact=_LAB_CONTACT,
+                RegistrantContact=_LAB_CONTACT,
+                TechContact=_LAB_CONTACT,
+                PrivacyProtectAdminContact=True,
+                PrivacyProtectRegistrantContact=True,
+                PrivacyProtectTechContact=True,
+            ),
+        ))
     else:
-        print_err("alice_hijacked_session unavailable — skipping VerifyEmailIdentity")
+        outcome = "skipped_guard_unverified"
+        calls.append("route53domains:RegisterDomain [SKIPPED: deny guard not confirmed]")
 
-    simulated_send_email = {
-        "eventVersion": "1.08",
-        "eventSource": "ses.amazonaws.com",
-        "eventName": "SendEmail",
-        "userIdentity": {"type": "IAMUser", "userName": "alice.chen"},
-        "requestParameters": {
-            "source": "emulation-noreply@emulation-lab-noreply.example.com",
-            "destination": {"toAddresses": ["[SANDBOX-VERIFIED-RECIPIENT-ONLY]"]},
-            "message": {
-                "subject": {"data": "[PHISHING-SIMULATION — NOT SENT]"},
-                "body": {"text": {"data": "[PHISHING-BODY-REDACTED]"}},
+    op_delay(1, 3)
+    record(16, "T1583.001", calls, outcome)
+
+
+def step17_ses_phishing(creds: CredentialStore, account_id: str, region: str) -> None:
+    # ── Step 17 · T1566.002 — SES spearphishing (attempt-level emulation) ─────
+    # Real SES recon, a lab sender identity on an unverifiable example.com
+    # address, and a real SendEmail to the SES mailbox simulator.  IAM only
+    # lets alice.chen send to *@simulator.amazonses.com from the lab identity;
+    # the identity can never verify, so SES answers MessageRejected.  Nobody
+    # can ever be phished.  Leaving the sandbox (PutAccountDetails) and
+    # toggling account sending (UpdateAccountSendingEnabled) are attempted and
+    # refused by the IAM deny guard.
+    #
+    # NOTE: SendEmail is a CloudTrail DATA event (AWS::SES::EmailIdentity); it
+    # is not in Event History or a default trail.  The lab's
+    # dangerdev-ses-data-events trail captures it for the lab identity only.
+    print_step("Step 17 [T1566.002] SES: recon, lab identity, SendEmail to mailbox simulator (real), "
+               "PutAccountDetails / UpdateAccountSendingEnabled (real calls, deny-guarded)")
+    alice = _alice_session(creds)
+    if alice is None:
+        print_err("alice_hijacked_session unavailable -- skipping Step 17 (no fallback identity)")
+        record(17, "T1566.002", [], "skipped_no_session")
+        return
+
+    ses = alice.client("ses")
+    sesv2 = alice.client("sesv2")
+    calls: list[str] = []
+    outcome = "emulated_attempt"
+
+    # 17a — recon as the hijacked user
+    try:
+        quota = ses.get_send_quota()
+        print_ok(f"GetSendQuota (alice.chen): Max24h={quota['Max24HourSend']}")
+        calls.append("ses:GetSendQuota")
+    except ClientError as e:
+        print_err(f"GetSendQuota: {e}")
+    try:
+        acct = sesv2.get_account()
+        print_ok(f"GetAccount (sesv2): ProductionAccessEnabled={acct.get('ProductionAccessEnabled')}, "
+                 f"SendingEnabled={acct.get('SendingEnabled')}")
+        calls.append("ses:GetAccount")
+    except ClientError as e:
+        print_err(f"GetAccount: {e}")
+    try:
+        ids = ses.list_identities(IdentityType="EmailAddress")
+        print_ok(f"ListIdentities (EmailAddress): {ids['Identities']}")
+        calls.append("ses:ListIdentities")
+    except ClientError as e:
+        print_err(f"ListIdentities: {e}")
+
+    op_delay(1, 3)
+
+    # 17b — lab sender identity (unverifiable: example.com receives no mail)
+    try:
+        ses.verify_email_identity(EmailAddress=SES_LAB_IDENTITY)
+        print_ok(f"VerifyEmailIdentity: {SES_LAB_IDENTITY} (never verifies; removed by remediate_out_of_band)")
+        calls.append("ses:VerifyEmailIdentity")
+    except ClientError as e:
+        print_err(f"VerifyEmailIdentity: {e}")
+
+    op_delay(1, 3)
+
+    # 17c — real SendEmail, mailbox simulator only
+    recipients = [SES_SIMULATOR_RECIPIENT]
+    _assert_lab_recipients(recipients)
+    try:
+        resp = ses.send_email(
+            Source=SES_LAB_IDENTITY,
+            Destination={"ToAddresses": recipients},
+            Message={
+                "Subject": {"Data": "[MAYATRAIL EMULATION] T1566.002 lure - simulator only"},
+                "Body": {"Text": {"Data": (
+                    "MayaTrail DANGERDEV emulation. Sent only to the SES mailbox simulator; "
+                    "no human recipient. Lure link placeholder: https://example.com/"
+                )}},
             },
-        },
-        "_emulationStatus": "SIMULATED — NOT EXECUTED (SES sandbox blocks external delivery)",
-    }
-    print("Simulated SendEmail CloudTrail event (not executed):")
-    print(json.dumps(simulated_send_email, indent=2))
+        )
+        print_ok(f"SendEmail -> {SES_SIMULATOR_RECIPIENT}: MessageId={resp['MessageId']} "
+                 "(lab identity is verified; delivered to the SES mailbox simulator only)")
+        calls.append("ses:SendEmail [SENT to mailbox simulator]")
+        outcome = "emulated"
+    except ClientError as e:
+        code = e.response["Error"]["Code"]
+        if code == "MessageRejected":
+            print_ok(f"SendEmail -> MessageRejected [EXPECTED: sender {SES_LAB_IDENTITY} is unverified]. "
+                     "Real ses:SendEmail call made; CloudTrail data event only if the trail selects "
+                     "AWS::SES::EmailIdentity data events")
+            calls.append("ses:SendEmail [ATTEMPT: MessageRejected, unverified sender]")
+        elif code in _ACCESS_DENIED:
+            print_err(f"SendEmail -> {code}: the simulator-only Allow did not match -- check the "
+                      "ses:Recipients / ses:FromAddress conditions in dangerdev-alice-emulation-guard")
+            calls.append(f"ses:SendEmail [UNEXPECTED: {code}]")
+            outcome = "emulated_attempt_unexpected_deny"
+        else:
+            print_err(f"SendEmail: {e}")
+            calls.append(f"ses:SendEmail [ERROR: {code}]")
+
+    op_delay(1, 3)
+
+    # 17d — leave the sandbox (files a real AWS support case if it went through)
+    if _guard_preflight(creds, account_id, "ses:PutAccountDetails"):
+        calls.append(_expect_denied(
+            "ses:PutAccountDetails",
+            lambda: sesv2.put_account_details(
+                MailType="MARKETING",
+                WebsiteURL="https://example.com/",
+                ContactLanguage="EN",
+                UseCaseDescription="MayaTrail emulation lab - this request must be refused by IAM",
+                ProductionAccessEnabled=True,
+            ),
+        ))
+    else:
+        outcome = "skipped_guard_unverified"
+        calls.append("ses:PutAccountDetails [SKIPPED: deny guard not confirmed]")
+
+    op_delay(1, 2)
+
+    # 17e — account sending toggle.  Enabled=True so that even a hypothetical
+    # guard failure is a no-op on an enabled account, never an outage.
+    if _guard_preflight(creds, account_id, "ses:UpdateAccountSendingEnabled"):
+        calls.append(_expect_denied(
+            "ses:UpdateAccountSendingEnabled",
+            lambda: ses.update_account_sending_enabled(Enabled=True),
+        ))
+    else:
+        outcome = "skipped_guard_unverified"
+        calls.append("ses:UpdateAccountSendingEnabled [SKIPPED: deny guard not confirmed]")
 
     op_delay(2, 5)
-    record(17, "T1566.002", [
-        "ses:VerifyEmailIdentity [executed, lab-controlled address]",
-        "ses:SendEmail [SIMULATED ONLY — NOT EXECUTED]",
-    ], "partial_documented")
+    record(17, "T1566.002", calls, outcome)
 
+
+def _cleanup_alice_hijacked_key(creds: CredentialStore) -> None:
     # ── Post-17 lab cleanup — remove alice.chen's hijacked key ─────────────────
     # Prevent key accumulation across repeated emulation runs. Uses operator key
     # (same as Step 15 DangerDev cleanup) to delete the key created in Step 12.
@@ -1024,8 +1264,11 @@ def print_summary():
         "success":            "[+]",
         "expected_failure_ok":"[+]",
         "userdata_only":      "[~]",
-        "documented_only":    "[~]",
-        "partial_documented": "[~]",
+        "emulated":           "[+]",
+        "emulated_attempt":   "[+]",
+        "emulated_attempt_unexpected_deny": "[!]",
+        "skipped_no_session": "[-]",
+        "skipped_guard_unverified": "[-]",
     }
     print("\n" + "=" * 70)
     print("ATTACK CHAIN SUMMARY")
@@ -1037,8 +1280,11 @@ def print_summary():
         print(f"  {icon} Step {ev['step']:>2}  {ev['technique']:<13}  {ev['outcome']:<22}  {calls_str}")
 
     total_calls = sum(len(e["api_calls"]) for e in _events)
-    executed = sum(1 for e in _events if e["outcome"] in ("success", "expected_failure_ok", "partial_documented"))
-    print(f"\n  Steps: {len(_events)}  |  Executed: {executed}  |  UserData/Documented: {len(_events)-executed}"
+    executed = sum(1 for e in _events if e["outcome"] in (
+        "success", "expected_failure_ok", "emulated", "emulated_attempt",
+        "emulated_attempt_unexpected_deny",
+    ))
+    print(f"\n  Steps: {len(_events)}  |  Executed: {executed}  |  UserData/Skipped: {len(_events)-executed}"
           f"  |  API calls logged: {total_calls}")
     print("  Tactics: Initial Access, Discovery, Persistence, Privilege Escalation,")
     print("           Defense Evasion, Lateral Movement, Impact, Collection, Resource Development")

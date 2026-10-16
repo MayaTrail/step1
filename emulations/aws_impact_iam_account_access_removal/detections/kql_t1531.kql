@@ -1,0 +1,117 @@
+// FILE: kql_T1531.kql
+// T1531 - Account Access Removal (AWS CloudTrail)
+// Covers: DeleteLoginProfile, UpdateAccessKey(Inactive), DeactivateMFADevice,
+//         RemoveUserFromGroup, DetachUserPolicy, PutUserPermissionsBoundary
+
+// ============================================================
+// Query 1: Console Login Profile Deletion
+// ============================================================
+AWSCloudTrail
+| where EventName == "DeleteLoginProfile"
+| where EventSource == "iam.amazonaws.com"
+| where UserIdentityArn !contains ":assumed-role/aws-service-role/"
+| extend
+    Actor = UserIdentityArn,
+    TargetUser = tostring(parse_json(RequestParameters).userName),
+    ActorType = UserIdentityType
+| project TimeGenerated, EventName, Actor, ActorType, TargetUser, SourceIpAddress, UserAgent, AwsRegion
+| sort by TimeGenerated desc
+
+// ============================================================
+// Query 2: Access Key Disabled (Inactive) by Non-Owner
+// ============================================================
+AWSCloudTrail
+| where EventName == "UpdateAccessKey"
+| where EventSource == "iam.amazonaws.com"
+| extend params = parse_json(RequestParameters)
+| where tostring(params.status) == "Inactive"
+| where UserIdentityType != "IAMUser"
+| extend
+    Actor = UserIdentityArn,
+    TargetUser = tostring(params.userName),
+    DisabledKeyId = tostring(params.accessKeyId)
+| project TimeGenerated, EventName, Actor, TargetUser, DisabledKeyId, SourceIpAddress, AwsRegion
+| sort by TimeGenerated desc
+
+// ============================================================
+// Query 3: MFA Device Deactivated
+// ============================================================
+AWSCloudTrail
+| where EventName == "DeactivateMFADevice"
+| where EventSource == "iam.amazonaws.com"
+| extend
+    Actor = UserIdentityArn,
+    TargetUser = tostring(parse_json(RequestParameters).userName),
+    MFASerial = tostring(parse_json(RequestParameters).serialNumber)
+| project TimeGenerated, EventName, Actor, TargetUser, MFASerial, SourceIpAddress, AwsRegion
+| sort by TimeGenerated desc
+
+// ============================================================
+// Query 4: Group Membership Removed
+// ============================================================
+AWSCloudTrail
+| where EventName == "RemoveUserFromGroup"
+| where EventSource == "iam.amazonaws.com"
+| extend
+    Actor = UserIdentityArn,
+    TargetUser = tostring(parse_json(RequestParameters).userName),
+    RemovedFromGroup = tostring(parse_json(RequestParameters).groupName)
+| where Actor !contains ":assumed-role/aws-service-role/"
+| project TimeGenerated, EventName, Actor, TargetUser, RemovedFromGroup, SourceIpAddress, AwsRegion
+| sort by TimeGenerated desc
+
+// ============================================================
+// Query 5: Managed Policy Detached from User
+// ============================================================
+AWSCloudTrail
+| where EventName == "DetachUserPolicy"
+| where EventSource == "iam.amazonaws.com"
+| extend
+    Actor = UserIdentityArn,
+    TargetUser = tostring(parse_json(RequestParameters).userName),
+    DetachedPolicy = tostring(parse_json(RequestParameters).policyArn)
+| where UserAgent !contains "Okta"
+| project TimeGenerated, EventName, Actor, TargetUser, DetachedPolicy, SourceIpAddress, AwsRegion
+| sort by TimeGenerated desc
+
+// ============================================================
+// Query 6: Permissions Boundary Applied to User
+// ============================================================
+AWSCloudTrail
+| where EventName == "PutUserPermissionsBoundary"
+| where EventSource == "iam.amazonaws.com"
+| extend
+    Actor = UserIdentityArn,
+    TargetUser = tostring(parse_json(RequestParameters).userName),
+    BoundaryPolicy = tostring(parse_json(RequestParameters).permissionsBoundary)
+| project TimeGenerated, EventName, Actor, TargetUser, BoundaryPolicy, SourceIpAddress, AwsRegion
+| sort by TimeGenerated desc
+
+// ============================================================
+// Query 7: Correlated T1531 Campaign - 3+ Distinct Actions Per Actor
+//           Within 10-Minute Window (High-Confidence Signal)
+// ============================================================
+let t1531_events = AWSCloudTrail
+| where EventSource == "iam.amazonaws.com"
+| where EventName in (
+    "DeleteLoginProfile",
+    "UpdateAccessKey",
+    "DeactivateMFADevice",
+    "RemoveUserFromGroup",
+    "DetachUserPolicy",
+    "PutUserPermissionsBoundary"
+  )
+| where UserIdentityArn !contains ":assumed-role/aws-service-role/"
+| extend Actor = UserIdentityArn;
+t1531_events
+| summarize
+    ActionCount = dcount(EventName),
+    Actions = make_set(EventName),
+    TargetUsers = make_set(tostring(parse_json(RequestParameters).userName)),
+    FirstSeen = min(TimeGenerated),
+    LastSeen = max(TimeGenerated),
+    SourceIPs = make_set(SourceIpAddress)
+  by Actor, bin(TimeGenerated, 10m)
+| where ActionCount >= 3
+| project FirstSeen, LastSeen, Actor, ActionCount, Actions, TargetUsers, SourceIPs
+| sort by FirstSeen desc

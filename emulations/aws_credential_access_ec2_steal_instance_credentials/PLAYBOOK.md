@@ -8,7 +8,7 @@
 | Emulation Tier | Atomic technique |
 | Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High, yields live, usable IAM role credentials (note: `MANIFEST.py` currently rates this MEDIUM; the IR view is High because a successful run hands the attacker working role credentials, not just a log signal) |
+| Severity | High, yields live, usable IAM role credentials |
 | MITRE Tactics | Credential Access |
 | MITRE Techniques | T1552.005 |
 | Services in Scope | SSM, EC2, STS, IAM, GuardDuty, CloudTrail, VPC Flow Logs |

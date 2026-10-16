@@ -1,0 +1,298 @@
+title: STS AssumeRole into RDS Ransomware Attack Session (T1486 Credential Bootstrap)
+id: c7fdc4bc-ba29-550f-a2b2-092b2aa14cf7
+status: experimental
+description: |
+  Detects STS AssumeRole where the RoleSessionName matches the ransomware operator
+  session naming convention used in emulation (atomic-rds-ransomware-kms-session) or,
+  more broadly, any assumption of an IAM role that subsequently makes RDS write API
+  calls. The credential bootstrap step is the first CloudTrail event in the kill chain;
+  correlating it with subsequent RDS events (CreateDBSnapshot, CopyDBSnapshot) provides
+  a complete principal lineage for incident response. Tune the RoleSessionName pattern
+  to match your organization's legitimate automation naming conventions.
+references:
+    - https://attack.mitre.org/techniques/T1486/
+    - https://attack.mitre.org/techniques/T1078/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1486
+    - attack.defense-evasion
+    - attack.t1078.004
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_assumerole:
+        eventSource: sts.amazonaws.com
+        eventName: AssumeRole
+        requestParameters.roleSessionName|contains:
+            - 'ransomware'
+            - 'atomic-rds'
+            - 'kms-session'
+    condition: selection_assumerole
+fields:
+    - eventTime
+    - userIdentity.arn
+    - userIdentity.principalId
+    - requestParameters.roleArn
+    - requestParameters.roleSessionName
+    - responseElements.assumedRoleUser.arn
+    - sourceIPAddress
+    - userAgent
+    - awsRegion
+falsepositives:
+    - Legitimate security testing or red team exercises using similar session name patterns
+    - Automated DR runbooks that use descriptive session names referencing KMS
+level: high
+---
+title: RDS Snapshot Re-encrypted Under Attacker-Controlled KMS Key (T1486 Core Signal)
+id: 182b0ace-96fa-52ce-b40d-be065f5d59ec
+status: experimental
+description: |
+  Detects CopyDBSnapshot where the KmsKeyId in requestParameters references a CMK
+  ARN that differs from the standard account backup key alias pattern. This is the
+  primary CloudTrail signal for the RDS ransomware technique: an attacker copies a
+  production snapshot encrypted under their own CMK, making it irrecoverable by the
+  victim organization. High-fidelity when correlated with a preceding CreateDBSnapshot
+  by the same non-backup principal (two-snapshot re-encryption pattern).
+references:
+    - https://attack.mitre.org/techniques/T1486/
+    - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_CopyDBSnapshot.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1486
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: rds.amazonaws.com
+        eventName: CopyDBSnapshot
+    filter_backup_service:
+        userIdentity.invokedBy:
+            - backup.amazonaws.com
+            - rds.amazonaws.com
+    condition: selection and not filter_backup_service
+fields:
+    - eventTime
+    - userIdentity.arn
+    - userIdentity.sessionContext.sessionIssuer.arn
+    - requestParameters.sourceDBSnapshotIdentifier
+    - requestParameters.targetDBSnapshotIdentifier
+    - requestParameters.kmsKeyId
+    - sourceIPAddress
+    - userAgent
+    - awsRegion
+falsepositives:
+    - Legitimate cross-region snapshot copy operations using a region-specific CMK
+    - Authorized DR runbooks that copy snapshots to a separate CMK for isolation
+    - AWS Backup jobs using a custom KMS key (covered by filter_backup_service but
+      custom IAM roles for backup may not match the filter)
+level: high
+---
+title: RDS Snapshot Created by Non-Backup Principal (T1486 Staging Signal)
+id: 57885042-7876-5b2c-9f5f-59e2411e0d27
+status: experimental
+description: |
+  Detects CreateDBSnapshot invoked by a principal that is not a recognized backup
+  service or scheduled backup automation role. Attackers create a fresh snapshot of
+  a live production RDS instance before re-encrypting it under an attacker-controlled
+  KMS key, preserving a complete copy of the data. When followed by CopyDBSnapshot
+  from the same session, this constitutes the two-snapshot re-encryption ransomware
+  pattern. GuardDuty RDS Protection also fires an anomalous-snapshot-creation finding
+  for this behaviour.
+references:
+    - https://attack.mitre.org/techniques/T1486/
+    - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_CreateDBSnapshot.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1486
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: rds.amazonaws.com
+        eventName: CreateDBSnapshot
+    filter_backup_principals:
+        userIdentity.invokedBy:
+            - backup.amazonaws.com
+            - rds.amazonaws.com
+        userIdentity.sessionContext.sessionIssuer.arn|contains:
+            - '/aws-backup-role'
+            - '/rds-backup'
+            - '/AWSBackup'
+    condition: selection and not filter_backup_principals
+fields:
+    - eventTime
+    - userIdentity.arn
+    - userIdentity.principalId
+    - userIdentity.sessionContext.sessionIssuer.arn
+    - requestParameters.dBInstanceIdentifier
+    - requestParameters.dBSnapshotIdentifier
+    - sourceIPAddress
+    - userAgent
+    - awsRegion
+falsepositives:
+    - Developers or ops engineers creating manual snapshots before schema migrations
+    - CI/CD pipelines with embedded snapshot steps that use custom IAM roles
+    - Third-party database management tools (e.g., Snapshooter, cloud management platforms)
+level: medium
+---
+title: RDS Instance or Snapshot Deletion Attempted (T1486 Chain Completion - Any Outcome)
+id: f2179f00-9a05-5e06-b656-d7d4a6646284
+status: experimental
+description: |
+  Detects DeleteDBInstance or DeleteDBSnapshot API calls regardless of whether they
+  succeed or return AccessDenied. In the RDS ransomware kill chain, both events are
+  expected to be denied by an explicit IAM deny-guard, but the AccessDenied events
+  are themselves high-fidelity indicators: they confirm the attacker attempted to
+  destroy the original instance and backup after re-encrypting under their KMS key.
+  IMPORTANT: This rule intentionally does NOT filter on errorCode to catch both
+  succeeded and denied variants. A successful DeleteDBInstance is a critical severity
+  event requiring immediate incident response.
+references:
+    - https://attack.mitre.org/techniques/T1486/
+    - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_DeleteDBInstance.html
+    - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_DeleteDBSnapshot.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1486
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_instance:
+        eventSource: rds.amazonaws.com
+        eventName: DeleteDBInstance
+    selection_snapshot:
+        eventSource: rds.amazonaws.com
+        eventName: DeleteDBSnapshot
+    filter_backup_service:
+        userIdentity.invokedBy:
+            - backup.amazonaws.com
+            - rds.amazonaws.com
+    condition: (selection_instance or selection_snapshot) and not filter_backup_service
+fields:
+    - eventTime
+    - eventName
+    - userIdentity.arn
+    - userIdentity.sessionContext.sessionIssuer.arn
+    - requestParameters.dBInstanceIdentifier
+    - requestParameters.dBSnapshotIdentifier
+    - requestParameters.finalDBSnapshotIdentifier
+    - errorCode
+    - errorMessage
+    - sourceIPAddress
+    - awsRegion
+falsepositives:
+    - Authorized teardown of non-production environments by infra automation roles
+    - AWS Backup automated snapshot expiry (covered by filter_backup_service)
+level: critical
+---
+title: RDS Instance Deletion Protection Disabled (T1486 Pre-Delete Signal)
+id: e47c3923-1652-5a47-9956-e79b11134984
+status: experimental
+description: |
+  Detects ModifyDBInstance where requestParameters.deletionProtection is set to false.
+  Disabling deletion protection is a mandatory prerequisite to DeleteDBInstance and is a
+  leading-edge ransomware signal when performed by a non-DBA principal on a production
+  database. Critically, this rule must fire whether errorCode is absent (modification
+  succeeded) or contains AccessDenied (blocked by IAM deny-guard) -- both outcomes are
+  meaningful in a kill-chain correlation. AWS Config rule
+  aws-rds-instance-deletion-protection-enabled provides a complementary compliance signal.
+references:
+    - https://attack.mitre.org/techniques/T1486/
+    - https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_ModifyDBInstance.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.impact
+    - attack.t1486
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: rds.amazonaws.com
+        eventName: ModifyDBInstance
+        requestParameters.deletionProtection: 'false'
+    filter_db_admins:
+        userIdentity.sessionContext.sessionIssuer.arn|contains:
+            - '/rds-admin'
+            - '/DBAdminRole'
+    condition: selection and not filter_db_admins
+fields:
+    - eventTime
+    - userIdentity.arn
+    - userIdentity.sessionContext.sessionIssuer.arn
+    - requestParameters.dBInstanceIdentifier
+    - requestParameters.deletionProtection
+    - errorCode
+    - errorMessage
+    - sourceIPAddress
+    - awsRegion
+falsepositives:
+    - Authorized database lifecycle management (decommissioning a dev/test instance)
+    - Terraform/CDK destroy workflows run by authorized automation roles
+level: high
+---
+title: RDS Ransomware Reconnaissance - Instance and Snapshot Enumeration (T1486 Pre-Chain)
+id: a6d13bbd-e516-5d68-8ea8-21553f2c87f9
+status: experimental
+description: |
+  Detects the reconnaissance pattern that precedes RDS ransomware operations:
+  DescribeDBInstances followed by DescribeDBSnapshots within a short window from the
+  same principal. Attackers enumerate the target instance state (confirming it is
+  'available') and then enumerate available backups before launching the re-encryption
+  chain. This rule correlates both Describe* calls in a single detection; a SIEM
+  correlation rule (see kql_T1486_rds_ransomware_chain.kql) covers the full multi-step
+  sequence with time-window grouping.
+references:
+    - https://attack.mitre.org/techniques/T1486/
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.discovery
+    - attack.t1486
+    - attack.t1580
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_describe_instances:
+        eventSource: rds.amazonaws.com
+        eventName: DescribeDBInstances
+    selection_describe_snapshots:
+        eventSource: rds.amazonaws.com
+        eventName: DescribeDBSnapshots
+    filter_monitoring:
+        userIdentity.invokedBy:
+            - monitoring.rds.amazonaws.com
+            - config.amazonaws.com
+        userIdentity.sessionContext.sessionIssuer.arn|contains:
+            - '/CloudWatchRole'
+            - '/ConfigRole'
+    condition: (selection_describe_instances or selection_describe_snapshots) and not filter_monitoring
+fields:
+    - eventTime
+    - eventName
+    - userIdentity.arn
+    - userIdentity.principalId
+    - requestParameters.dBInstanceIdentifier
+    - requestParameters.filters
+    - sourceIPAddress
+    - userAgent
+    - awsRegion
+falsepositives:
+    - Monitoring agents (CloudWatch, Datadog, New Relic) that regularly poll RDS state
+    - DevOps tooling and IaC tools that enumerate RDS resources during plan/apply
+    - AWS Config and Security Hub periodic resource evaluation
+level: low

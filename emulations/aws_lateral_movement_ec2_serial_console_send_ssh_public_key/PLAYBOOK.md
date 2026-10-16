@@ -8,7 +8,7 @@
 | Emulation Tier | Atomic technique |
 | Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High, grants interactive serial-console access to the instance while **bypassing all network controls** (security groups, NACLs, closed port 22); gated only by the account-level serial-console setting (`MANIFEST.py` rates MEDIUM; the IR view is High because it yields console access no firewall can stop) |
+| Severity | High, grants interactive serial-console access to the instance while **bypassing all network controls** (security groups, NACLs, closed port 22); gated only by the account-level serial-console setting |
 | MITRE Tactics | Lateral Movement |
 | MITRE Techniques | T1021.004 (see mapping note in §6 - T1021.008 is the more precise fit) |
 | Services in Scope | EC2 Instance Connect (serial console), EC2 (account serial-console setting), CloudTrail, IAM |

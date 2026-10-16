@@ -1,0 +1,137 @@
+# Exfiltrate an AMI by Sharing It (T1537)
+#
+# WHAT WAS WRONG WITH THE GENERATED RULE. It matched requestParameters|contains on the literal
+# string '"launchPermission":{"add"'. Whether a backend flattens that nested object with a space
+# after the colon is its own choice - the in-process evaluator renders one, so the rule never
+# fired there - and it collapsed a PUBLIC AMI and a share with one named account into one level.
+# The rules below address the nested path directly and split the two cases.
+#
+# FIELD SHAPE (ModifyImageAttribute, ec2.amazonaws.com, management event, image Region).
+#   requestParameters.imageId
+#   requestParameters.attributeType            'launchPermission'
+#   requestParameters.launchPermission.add.items[]      {userId} | {group: all} |
+#                                                        {organizationArn} | {organizationalUnitArn}
+#   requestParameters.launchPermission.remove.items[]   the same shape - the UNSHARE
+# Matching on `launchPermission.add` existing keeps the rule off the revert, which carries only
+# `remove`. Stratus Red Team's sample event for this technique shows the target account under
+# launchPermission.add.items.
+#
+# NO errorCode FILTER. A refused share - Block public access for AMIs refusing group:all, or an
+# AMI whose snapshots use the default aws/ebs key - is the same intent and precedes a retry.
+title: AMI made public
+id: 4616b47c-077a-47a8-89b4-44c52a61fc64
+name: ami_shared_public
+status: experimental
+description: >-
+  Detects ec2:ModifyImageAttribute adding launch permission for group "all". Every AWS account
+  can now launch the image, or copy it, and read every byte of its volumes in their own account.
+references:
+  - https://attack.mitre.org/techniques/T1537/
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifyImageAttribute.html
+  - https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/block-public-access-to-amis.html
+tags:
+  - attack.exfiltration
+  - attack.t1537
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'ModifyImageAttribute'
+  public_value:
+    requestParameters.launchPermission.add.items|re: '"group":\s*"all"'
+  condition: selection and public_value
+falsepositives:
+  - A deliberately published image (a vendor or community AMI). Always a decision somebody can
+    name; if nobody can, it is an incident.
+level: critical
+---
+# A named account, organization or OU. This is what the emulation does: it adds launch
+# permission for one external account ID, then removes it 15 seconds later.
+title: AMI shared with another AWS account
+id: 262d3498-c7a4-5147-aab2-f4b4c4f60d89
+name: ami_shared_cross_account
+status: experimental
+description: >-
+  Detects ec2:ModifyImageAttribute adding a launch permission for a specific AWS account,
+  organization or OU. The recipient can launch or copy the image and read its volumes outside your
+  control; a copy, once taken, cannot be recalled.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.exfiltration.ec2-share-ami/
+  - https://attack.mitre.org/techniques/T1537/
+  - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifyImageAttribute.html
+tags:
+  - attack.exfiltration
+  - attack.t1537
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName: 'ModifyImageAttribute'
+  adds_permission:
+    requestParameters.launchPermission.add|exists: true
+  public_value:
+    requestParameters.launchPermission.add.items|re: '"group":\s*"all"'
+  # POPULATE BEFORE DEPLOYING with your own organization's account IDs and organization ARN.
+  known_recipients:
+    requestParameters.launchPermission.add.items|contains:
+      - '000000000000'          # replace with a real account ID or organization ARN, or delete
+  condition: selection and adds_permission and not public_value and not known_recipients
+falsepositives:
+  - Golden-AMI pipelines sharing images to accounts in the same organization. Allowlist those
+    account IDs (or the organization ARN) above rather than muting the rule.
+level: high
+---
+# Base rule - sequence component only, not for direct alerting. Success only.
+title: AMI created or copied
+id: ed9ad8d6-719e-4959-a061-af107a567fc7
+name: ami_created_bb
+status: experimental
+description: Base rule - sequence component only, not for direct alerting.
+references:
+  - https://attack.mitre.org/techniques/T1578/001/
+tags:
+  - attack.exfiltration
+  - attack.t1537
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'ec2.amazonaws.com'
+    eventName:
+      - 'CreateImage'
+      - 'CopyImage'
+      - 'RegisterImage'
+  success:
+    errorCode|exists: false
+  condition: selection and success
+level: informational
+---
+# IMAGE A RUNNING INSTANCE, THEN SHARE IT. An actor who wants a server's disks in their own
+# account creates (or copies, to re-encrypt under a shareable key) an AMI and shares it. A
+# golden-image pipeline also creates then shares, but to known accounts - which the allowlist in
+# the cross-account rule removes before this correlation sees it.
+title: AMI created and then shared out of the account by one principal
+id: fd665894-0446-4071-9bc1-6056204edbb1
+status: experimental
+description: >-
+  One principal created, copied or registered an AMI and then shared one with an unlisted account
+  within an hour.
+references:
+  - https://attack.mitre.org/techniques/T1537/
+tags:
+  - attack.exfiltration
+  - attack.t1537
+correlation:
+  type: temporal_ordered
+  rules:
+    - ami_created_bb
+    - ami_shared_cross_account
+  group-by:
+    - userIdentity.arn
+  timespan: 1h
+level: high

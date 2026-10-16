@@ -1,0 +1,42 @@
+// CloudTrail trail deleted, with what the trail was and whether it came back (T1685.002)
+//
+// One row per DeleteTrail (successful or refused). For each, the query recovers the trail's last
+// known configuration from the most recent CreateTrail/UpdateTrail in the lookback - after the
+// delete that event is the only record of which bucket, Regions and KMS key the trail covered -
+// and reports whether a CreateTrail with the same name followed (recreated) or not (still gone).
+//
+// requestParameters.name may be a name or an ARN; TrailKey normalises both to the name.
+//
+// Dialect: Sentinel / Azure Log Analytics KQL (AWSCloudTrail table).
+let lookback = 30d;
+let ct = AWSCloudTrail
+    | where TimeGenerated > ago(lookback)
+    | where EventSource == "cloudtrail.amazonaws.com"
+    | where EventName in ("CreateTrail", "UpdateTrail", "DeleteTrail")
+    | extend Req = parse_json(RequestParameters)
+    | extend TrailKey = tostring(split(tostring(Req.name), "/")[-1]);
+let config = ct
+    | where EventName in ("CreateTrail", "UpdateTrail") and isempty(ErrorCode)
+    | summarize arg_max(TimeGenerated, Req) by TrailKey, RecipientAccountId
+    | project TrailKey, RecipientAccountId,
+              LastBucket = tostring(Req.s3BucketName),
+              LastMultiRegion = tostring(Req.isMultiRegionTrail),
+              LastKmsKey = tostring(Req.kmsKeyId);
+let recreated = ct
+    | where EventName == "CreateTrail" and isempty(ErrorCode)
+    | project RecreatedAt = TimeGenerated, TrailKey, RecipientAccountId;
+ct
+| where EventName == "DeleteTrail"
+| project DeletedAt = TimeGenerated, TrailKey, TrailParam = tostring(Req.name), RecipientAccountId,
+          AWSRegion, PrincipalArn = UserIdentityArn, AccessKey = UserIdentityAccessKeyId,
+          ErrorCode, SourceIpAddress, UserAgent
+| join kind=leftouter config on TrailKey, RecipientAccountId
+| join kind=leftouter recreated on TrailKey, RecipientAccountId
+| summarize RecreatedAt = minif(RecreatedAt, RecreatedAt > DeletedAt)
+    by DeletedAt, TrailKey, TrailParam, RecipientAccountId, AWSRegion, PrincipalArn, AccessKey,
+       ErrorCode, SourceIpAddress, UserAgent, LastBucket, LastMultiRegion, LastKmsKey
+| extend Outcome = iff(isempty(ErrorCode), "DELETED", strcat("REFUSED: ", ErrorCode)),
+         State = case(isnotempty(ErrorCode), "trail intact",
+                      isnull(RecreatedAt), "STILL GONE (or recreated outside lookback)",
+                      "recreated")
+| order by DeletedAt desc

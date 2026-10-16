@@ -1,0 +1,266 @@
+// T1496.004 - S3 Bucket Discovery During SES Abuse Campaign Staging
+// Fires on ListBuckets from an assumed-role session. On its own this is
+// low-fidelity; the compound query below checks whether the same principal
+// also generated SES events within the same 30-minute window, which elevates
+// confidence significantly — the actor is staging an email campaign.
+// Note: ListObjectsV2 and GetObject are data-plane events not captured here
+// without explicit S3 data event CloudTrail logging.
+
+let LookbackWindow = 30m;
+let S3ListEvents = AWSCloudTrail
+    | where EventSource == "s3.amazonaws.com"
+    | where EventName == "ListBuckets"
+    | where UserIdentityType == "AssumedRole"
+    | extend
+        ActorArn      = tostring(UserIdentityArn),
+        SessionIssuer = tostring(parse_json(UserIdentitySessionContextSessionIssuerUserName)),
+        SourceIP      = SourceIpAddress,
+        ListedAt      = TimeGenerated,
+        Region        = AWSRegion
+    | where SessionIssuer !contains "backup"
+          and SessionIssuer !contains "audit"
+          and SessionIssuer !contains "compliance"
+          and SessionIssuer !contains "scanner"
+    | project ActorArn, SessionIssuer, SourceIP, ListedAt, Region;
+let SESEvents = AWSCloudTrail
+    | where EventSource == "ses.amazonaws.com"
+    | where EventName in ("GetAccount", "GetSendQuota", "ListIdentities",
+                          "CreateEmailIdentity", "DeleteEmailIdentity",
+                          "PutAccountDetails", "UpdateAccountSendingEnabled")
+    | extend
+        ActorArn = tostring(UserIdentityArn),
+        SESAt    = TimeGenerated
+    | project ActorArn, SESAt, EventName;
+S3ListEvents
+| join kind=inner (SESEvents) on ActorArn
+| where SESAt between (ListedAt - LookbackWindow .. ListedAt + LookbackWindow)
+| summarize
+    S3ListAt         = min(ListedAt),
+    SESEventNames    = make_set(EventName),
+    SESEventCount    = count(),
+    SourceIPs        = make_set(SourceIP)
+    by ActorArn, SessionIssuer, Region
+| extend CompoundSignal = true
+| project
+    S3ListAt,
+    ActorArn,
+    SessionIssuer,
+    SourceIPs,
+    SESEventNames,
+    SESEventCount,
+    CompoundSignal,
+    Region
+| sort by S3ListAt desc
+
+// ----- next query -----
+
+// T1496.004 - Unexpected SES Email Identity Registration
+// Fires on CreateEmailIdentity from any principal that is not a known IaC role.
+// Adversaries register sender addresses to use as From headers for spam campaigns.
+// Legitimate registrations are rare, infrastructure-driven, and come from
+// automation identities (pulumi, terraform, cdk, cloudformation).
+
+AWSCloudTrail
+| where EventSource == "ses.amazonaws.com"
+| where EventName == "CreateEmailIdentity"
+| extend
+    ActorArn      = tostring(UserIdentityArn),
+    ActorType     = tostring(UserIdentityType),
+    SessionIssuer = tostring(parse_json(UserIdentitySessionContextSessionIssuerUserName)),
+    SourceIP      = SourceIpAddress,
+    RequestParams = tostring(RequestParameters),
+    Region        = AWSRegion
+| where SessionIssuer !contains "pulumi"
+      and SessionIssuer !contains "terraform"
+      and SessionIssuer !contains "cdk"
+      and SessionIssuer !contains "cloudformation"
+| extend
+    NewIdentity = extract('"emailIdentity":"([^"]+)"', 1, RequestParams)
+| project
+    TimeGenerated,
+    ActorArn,
+    ActorType,
+    SessionIssuer,
+    SourceIP,
+    NewIdentity,
+    Region
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1496.004 - SES Email Identity Deleted Post-Campaign (Defense Evasion)
+// Looks for DeleteEmailIdentity and correlates it with a preceding
+// CreateEmailIdentity from the same principal within a 30-minute window.
+// A create-then-delete lifecycle in a single session is a strong indicator
+// of an adversary registering a throw-away sender, running the campaign,
+// then cleaning up their tracks.
+
+let LookbackWindow = 30m;
+let CreateEvents = AWSCloudTrail
+    | where EventSource == "ses.amazonaws.com"
+    | where EventName == "CreateEmailIdentity"
+    | extend
+        ActorArn    = tostring(UserIdentityArn),
+        CreatedAt   = TimeGenerated,
+        NewIdentity = extract('"emailIdentity":"([^"]+)"', 1, tostring(RequestParameters))
+    | project ActorArn, CreatedAt, NewIdentity;
+AWSCloudTrail
+| where EventSource == "ses.amazonaws.com"
+| where EventName == "DeleteEmailIdentity"
+| extend
+    ActorArn       = tostring(UserIdentityArn),
+    SessionIssuer  = tostring(parse_json(UserIdentitySessionContextSessionIssuerUserName)),
+    SourceIP       = SourceIpAddress,
+    DeletedIdentity = extract('"emailIdentity":"([^"]+)"', 1, tostring(RequestParameters)),
+    Region         = AWSRegion
+| join kind=inner (CreateEvents) on ActorArn
+| where TimeGenerated between (CreatedAt .. (CreatedAt + LookbackWindow))
+| extend MinutesAfterCreate = datetime_diff("minute", TimeGenerated, CreatedAt)
+| project
+    TimeGenerated,
+    ActorArn,
+    SessionIssuer,
+    SourceIP,
+    DeletedIdentity,
+    NewIdentity,
+    CreatedAt,
+    MinutesAfterCreate,
+    Region
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1496.004 - SES Account and Identity Enumeration Before Spam Campaign
+// Fires when a non-service principal calls GetAccount, GetSendQuota, or ListIdentities
+// against SES. A burst of these three calls in a single session is the recon
+// fingerprint of cloud email hijacking — the actor is mapping sending limits and
+// available identities before staging a campaign.
+//
+// Table: AWSCloudTrail (Microsoft Sentinel / AWS Security Lake)
+// Tune: extend the session window or add additional SES events to raise fidelity.
+
+AWSCloudTrail
+| where EventSource == "ses.amazonaws.com"
+| where EventName in ("GetAccount", "GetSendQuota", "ListIdentities")
+| where UserIdentityType != "Service"
+| extend
+    ActorArn      = tostring(parse_json(UserIdentityArn)),
+    SessionIssuer = tostring(parse_json(UserIdentitySessionContextSessionIssuerUserName)),
+    SourceIP      = SourceIpAddress,
+    Region        = AWSRegion
+| summarize
+    EventCount      = count(),
+    EventNames      = make_set(EventName),
+    FirstSeen       = min(TimeGenerated),
+    LastSeen        = max(TimeGenerated),
+    DistinctRegions = dcount(Region)
+    by ActorArn, SessionIssuer, SourceIP
+| where EventCount >= 2
+| extend
+    SessionDurationMinutes = datetime_diff("minute", LastSeen, FirstSeen),
+    SignalCoverage = array_length(EventNames)
+| where SignalCoverage >= 2 or EventCount >= 3
+| project
+    FirstSeen,
+    LastSeen,
+    SessionDurationMinutes,
+    ActorArn,
+    SessionIssuer,
+    SourceIP,
+    EventNames,
+    EventCount,
+    DistinctRegions
+| sort by FirstSeen desc
+
+// ----- next query -----
+
+// T1496.004 - SES Production Access Escalation Attempt (AccessDenied)
+// Fires on PutAccountDetails or UpdateAccountSendingEnabled that returned
+// AccessDenied. An adversary with a stolen role tries to lift sandbox sending
+// limits to scale their spam operation. The IAM deny makes the attempt fail,
+// but CloudTrail still records it — the attempt IS the IOC.
+// IMPORTANT: Do NOT add a filter for errorCode == "" — these calls WILL have
+// errorCode: AccessDenied in the emulation and in real attacks on deny-guarded roles.
+
+AWSCloudTrail
+| where EventSource == "ses.amazonaws.com"
+| where EventName in ("PutAccountDetails", "UpdateAccountSendingEnabled")
+| where ErrorCode == "AccessDenied"
+| extend
+    ActorArn        = tostring(UserIdentityArn),
+    ActorType       = tostring(UserIdentityType),
+    SessionIssuer   = tostring(parse_json(UserIdentitySessionContextSessionIssuerUserName)),
+    SourceIP        = SourceIpAddress,
+    ErrorMsg        = tostring(ErrorMessage),
+    Region          = AWSRegion
+| project
+    TimeGenerated,
+    EventName,
+    ActorArn,
+    ActorType,
+    SessionIssuer,
+    SourceIP,
+    ErrorCode,
+    ErrorMsg,
+    Region
+| sort by TimeGenerated desc
+
+// ----- next query -----
+
+// T1496.004 - SES Credential Secret Read During Post-Compromise Discovery
+// Fires when GetSecretValue is called on a secret whose name contains
+// SES/email/SMTP/marketing patterns from an assumed-role session.
+// Correlates ListSecrets + GetSecretValue in the same session window for
+// highest-fidelity signal — the list-then-read pattern is hallmark of
+// an adversary mapping the secrets store and extracting email credentials.
+
+let LookbackWindow = 15m;
+let SecretPatterns = dynamic(["ses", "smtp", "email", "marketing", "sendgrid", "mailgun"]);
+let GetSecretEvents = AWSCloudTrail
+    | where EventSource == "secretsmanager.amazonaws.com"
+    | where EventName == "GetSecretValue"
+    | extend
+        ActorArn     = tostring(UserIdentityArn),
+        SessionIssuer = tostring(parse_json(UserIdentitySessionContextSessionIssuerUserName)),
+        SourceIP     = SourceIpAddress,
+        SecretId     = tostring(parse_json(RequestParameters).secretId),
+        Region       = AWSRegion
+    | where SessionIssuer !contains "lambda-exec"
+          and SessionIssuer !contains "ecs-task"
+          and SessionIssuer !contains "app-service"
+    | mv-expand Pattern = SecretPatterns
+    | where SecretId contains tostring(Pattern)
+    | summarize
+        SecretsRead = make_set(SecretId),
+        SecretCount = dcount(SecretId),
+        FirstAccess = min(TimeGenerated),
+        LastAccess  = max(TimeGenerated),
+        SourceIPs   = make_set(SourceIP)
+        by ActorArn, SessionIssuer, Region;
+let ListSecretEvents = AWSCloudTrail
+    | where EventSource == "secretsmanager.amazonaws.com"
+    | where EventName == "ListSecrets"
+    | extend
+        ActorArn  = tostring(UserIdentityArn),
+        ListedAt  = TimeGenerated
+    | project ActorArn, ListedAt;
+GetSecretEvents
+| join kind=leftouter (ListSecretEvents) on ActorArn
+| extend
+    PrecededByListSecrets   = isnotempty(ListedAt) and ListedAt < FirstAccess
+                               and FirstAccess < ListedAt + LookbackWindow,
+    MinutesAfterList        = iff(isnotempty(ListedAt),
+                                 tolong(datetime_diff("minute", FirstAccess, ListedAt)),
+                                 long(null))
+| project
+    FirstAccess,
+    LastAccess,
+    ActorArn,
+    SessionIssuer,
+    SourceIPs,
+    SecretsRead,
+    SecretCount,
+    PrecededByListSecrets,
+    MinutesAfterList,
+    Region
+| sort by FirstAccess desc

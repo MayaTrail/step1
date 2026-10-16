@@ -1,5 +1,16 @@
 # K8s External IPs Hijacking (CVE-2020-8554) — IR & Detection Playbook
 
+## Classification
+
+| Field | Value |
+|-------|-------|
+| Incident Type | K8s External IPs Hijacking (CVE-2020-8554) |
+| Threat Actor | N/A — single technique, not actor-attributed |
+| Platform | k8s |
+| Severity | Medium |
+| MITRE Tactics | Credential Access |
+| MITRE Techniques | T1557 (Adversary-in-the-Middle) |
+
 ## Summary
 Emulates CVE-2020-8554 where an attacker creates a Kubernetes Service with
 arbitrary `externalIPs`, forcing cluster traffic to route to an attacker-controlled

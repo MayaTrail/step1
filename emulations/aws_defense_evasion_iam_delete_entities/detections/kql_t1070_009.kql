@@ -1,0 +1,118 @@
+// FILE: kql_t1070_009_iam_delete_entities.kql
+// T1070.009 - Clear Persistence: IAM Entity Deletion Sequence
+//
+// Correlates CloudTrail events to surface the full APT cleanup pattern:
+//   AssumeRole (scoped deletion role)
+//   -> GetCallerIdentity (confirm session)
+//   -> DeleteAccessKey / DeleteLoginProfile / DeleteUserPolicy / DeleteUser
+//   -> DeleteRolePolicy / DeleteRole
+//
+// Table: AWSCloudTrail (Sentinel AWS connector) or
+//        awsCloudTrail (Defender for Cloud Apps unified log)
+// Adjust table name to match your workspace ingestion.
+
+// ── Step 1: Collect all IAM/STS delete events with session lineage ──────────
+let LookbackWindow = 1h;
+let KnownAutomationRoles = dynamic([
+    "aws-service-role",
+    "StackSet-",
+    "AWSControlTowerExecution",
+    "OrganizationAccountAccessRole"   // add your specific provisioner role names here
+]);
+
+let IamDeleteEvents =
+    AWSCloudTrail
+    | where TimeGenerated > ago(LookbackWindow)
+    | where EventSource in ("iam.amazonaws.com", "sts.amazonaws.com")
+    | where EventName in (
+        "AssumeRole",
+        "GetCallerIdentity",
+        "DeleteAccessKey",
+        "DeleteLoginProfile",
+        "DeleteUserPolicy",
+        "DetachUserPolicy",
+        "DeleteUser",
+        "DeleteRolePolicy",
+        "DetachRolePolicy",
+        "DeleteRole"
+    )
+    // Extract the role that issued the call (sessionIssuer for assumed-role sessions)
+    | extend
+        CallerType        = tostring(parse_json(UserIdentityType)),
+        CallerArn         = tostring(parse_json(UserIdentityArn)),
+        PrincipalId       = tostring(parse_json(UserIdentityPrincipalid)),
+        SessionIssuerArn  = tostring(parse_json(UserIdentitySessionContextSessionIssuerArn)),
+        SessionIssuerName = tostring(parse_json(UserIdentitySessionContextSessionIssuerUserName)),
+        ReqParams         = tostring(RequestParameters)
+    | extend
+        TargetUser = tostring(parse_json(RequestParameters).userName),
+        TargetRole = tostring(parse_json(RequestParameters).roleName),
+        TargetKey  = tostring(parse_json(RequestParameters).accessKeyId)
+    // Drop known-clean automation by session issuer name
+    | where not(SessionIssuerName has_any (KnownAutomationRoles))
+    | where CallerType == "AssumedRole";
+
+// ── Step 2: Identify sessions that performed the full user deletion chain ────
+let UserChainSessions =
+    IamDeleteEvents
+    | where EventName in ("DeleteAccessKey", "DeleteLoginProfile", "DeleteUser")
+    | summarize
+        ChainEvents      = make_set(EventName),
+        FirstDeleteEvent = min(TimeGenerated),
+        LastDeleteEvent  = max(TimeGenerated),
+        TargetUsers      = make_set(TargetUser),
+        SourceIPs        = make_set(SourceIpAddress)
+      by PrincipalId, SessionIssuerArn
+    // Require at least DeleteAccessKey AND DeleteUser in the same session window
+    | where ChainEvents has "DeleteAccessKey" and ChainEvents has "DeleteUser"
+    | extend
+        ChainDurationSec = datetime_diff("second", LastDeleteEvent, FirstDeleteEvent),
+        ChainType        = "user-deletion-chain";
+
+// ── Step 3: Identify sessions that performed the full role deletion chain ────
+let RoleChainSessions =
+    IamDeleteEvents
+    | where EventName in ("DeleteRolePolicy", "DetachRolePolicy", "DeleteRole")
+    | summarize
+        ChainEvents      = make_set(EventName),
+        FirstDeleteEvent = min(TimeGenerated),
+        LastDeleteEvent  = max(TimeGenerated),
+        TargetRoles      = make_set(TargetRole),
+        SourceIPs        = make_set(SourceIpAddress)
+      by PrincipalId, SessionIssuerArn
+    | where ChainEvents has "DeleteRole"
+    | extend
+        ChainDurationSec = datetime_diff("second", LastDeleteEvent, FirstDeleteEvent),
+        ChainType        = "role-deletion-chain";
+
+// ── Step 4: Union chains and surface high-fidelity findings ─────────────────
+union
+    (UserChainSessions | project-rename TargetEntities = TargetUsers),
+    (RoleChainSessions | project-rename TargetEntities = TargetRoles)
+| join kind=leftouter (
+    // Enrich with the AssumeRole that started this session
+    IamDeleteEvents
+    | where EventName == "AssumeRole"
+    | project AssumeRoleTime = TimeGenerated, PrincipalId, AssumedRoleArn = CallerArn
+  ) on PrincipalId
+| project
+    TimeGenerated         = FirstDeleteEvent,
+    ChainType,
+    PrincipalId,
+    SessionIssuerArn,
+    AssumedRoleArn,
+    ChainEvents,
+    TargetEntities,
+    ChainDurationSec,
+    SourceIPs
+| sort by TimeGenerated desc
+
+// ── Supplemental: Raw event stream for a known suspicious session ────────────
+// Uncomment and substitute PrincipalId to drill into a specific session:
+//
+// let SuspectSession = "<PrincipalId from above>";
+// AWSCloudTrail
+// | where TimeGenerated > ago(LookbackWindow)
+// | where UserIdentityPrincipalid == SuspectSession
+// | project TimeGenerated, EventName, EventSource, RequestParameters, ErrorCode, SourceIpAddress
+// | sort by TimeGenerated asc

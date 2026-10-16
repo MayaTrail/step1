@@ -19,7 +19,7 @@ MANIFEST = {
     'origin_label': 'ATOMIC TECHNIQUE',
     'tags': ['Exfiltration', 'SNS'],
     'technique_count': 1,
-    'severity': 'MEDIUM',
+    'severity': 'HIGH',
     'aliases': 'aws.exfiltration.sns-external-subscription',
     'attribution': 'Atomic adversary technique — no specific threat actor',
     'active_since': 'Atomic technique (MayaTrail pipeline)',

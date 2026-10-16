@@ -62,12 +62,16 @@
 | GuardDuty: `UnauthorizedAccess:IAMUser/MaliciousIPCaller` | GuardDuty | High | API calls from known-malicious IP |
 | GuardDuty: `Persistence:IAMUser/UserPermissions` | GuardDuty | High | New IAM user or policy attachment from anomalous source |
 | GuardDuty: `PrivilegeEscalation:IAMUser/AdministrativePermissions` | GuardDuty | High | AdministratorAccess granted to user or role |
+| `route53domains:RegisterDomain` / `TransferDomain` from a non-domain-admin principal, **including `errorCode=AccessDenied`** | CloudTrail / Route 53 Domains (**us-east-1 only**) | High | Domain acquisition attempt (T1583.001). A refused attempt is still a signal; never filter on `errorCode IS NULL` |
+| `ses:PutAccountDetails` (leave-sandbox / production-access request) or `UpdateAccountSendingEnabled` from an IAM user, **including AccessDenied** | CloudTrail / SES | High | SES abuse preparation (T1566.002) |
 
 #### MEDIUM-CONFIDENCE — Warrant investigation; may have legitimate explanations
 
 | Event | Source | Confidence | Trigger Condition |
 |-------|--------|------------|-------------------|
 | `GetSendQuota` + `ListIdentities` from non-ops IAM principal | CloudTrail / SES | Medium | SES enumeration from unexpected user |
+| `CheckDomainAvailability` / `GetDomainSuggestions` from a non-domain-admin principal | CloudTrail / Route 53 Domains (us-east-1) | Medium | Lookalike-domain reconnaissance preceding RegisterDomain |
+| `SendEmail` / `SendRawEmail` from a hijacked IAM user (incl. `MessageRejected`) | CloudTrail **data event** (`AWS::SES::EmailIdentity`) | Medium | Visible only if a trail has an advanced event selector for SES email identities; SMTP-interface sends are never logged. No selector = no CloudTrail visibility of SES phishing |
 | `ListUsers` burst from a non-automation IAM principal | CloudTrail / IAM | Medium | > 3 list calls within 5 minutes from same principal |
 | `DescribeInstanceTypes` with GPU filter (`p3.*`, `p4d.*`, `g4dn.*`) | CloudTrail / EC2 | Medium | Mining candidate reconnaissance |
 | `RunInstances` from anomalous IAM user with open security group (0.0.0.0/0 on 22 or 3389) | CloudTrail / EC2 | Medium | Paired with Security Hub EC2.19 finding |
@@ -214,9 +218,23 @@ aws ses get-send-statistics --output json | jq '.SendDataPoints | sort_by(.Times
 
 ```bash
 # Check Route53 for suspicious domain registrations (last 30 days)
-aws route53domains list-domains \
+# Route 53 Domains is a us-east-1-only API: always pass --region us-east-1.
+aws route53domains list-domains --region us-east-1 \
   --query 'Domains[*].[DomainName,CreatedDate,ExpiryDate]' \
   --output table
+```
+
+```bash
+# Domain registration ATTEMPTS, including refused ones (events land in us-east-1)
+aws cloudtrail lookup-events --region us-east-1 \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=RegisterDomain \
+  --query 'Events[*].CloudTrailEvent' --output json | \
+  jq '.[] | fromjson | {time: .eventTime, user: .userIdentity.arn, domain: .requestParameters.domainName, error: .errorCode}'
+
+# SES SendEmail is a DATA event: lookup-events (Event History) will NOT return it.
+# Query the trail's S3 / CloudWatch Logs / Lake data instead, filtering on
+# eventSource=ses.amazonaws.com and eventCategory=Data. The DangerDev lab deploys
+# dangerdev-ses-data-events-trail, scoped to its lab identity, for this purpose.
 ```
 
 ```bash
@@ -642,7 +660,7 @@ aws ses update-account-sending-enabled --enabled true
 
 ```bash
 # Check for and delete any Route53 domains registered during attack window
-aws route53domains list-domains --output json | \
+aws route53domains list-domains --region us-east-1 --output json | \
   jq --arg date "$ATTACK_START" '.Domains[] | select(.CreatedDate > $date) | {domain: .DomainName, created: .CreatedDate}'
 # For malicious domains: aws route53domains delete-domain --domain-name "<domain>"
 ```

@@ -96,6 +96,10 @@ print(f"# orphan-sweep identity: acct={_acct}\n", flush=True)
 
 def sweep():
     """Direct describe/list calls (the Resource Groups Tagging API lags minutes)."""
+    global _sess
+    _c = _assume_user_role(user)  # STS credentials expire after an hour; refresh per sweep
+    _sess = boto3.Session(aws_access_key_id=_c["AWS_ACCESS_KEY_ID"], aws_secret_access_key=_c["AWS_SECRET_ACCESS_KEY"],
+                          aws_session_token=_c["AWS_SESSION_TOKEN"], region_name=REGION)
     found = set()
     try:
         ec2 = _sess.client("ec2")
@@ -181,6 +185,12 @@ def deploy_attack(et, stack, row):
     try:
         deploy_emulation_stack.apply(args=[str(stack.id)]).get(propagate=True)
         stack.refresh_from_db()
+        # Web-probe emulations park in EC2_BOOTING; a separate async task polls /health
+        # and flips the stack to READY_FOR_ATTACK, so wait for that before attacking.
+        _wait_until = time.time() + int(os.environ.get("READY_WAIT_S", "900"))
+        while stack.status == Stack.Status.EC2_BOOTING and time.time() < _wait_until:
+            time.sleep(15)
+            stack.refresh_from_db()
         row["deploy"] = stack.status
         row["deploy_s"] = round(time.time() - t0)
         row["outputs_keys"] = sorted((stack.outputs or {}).keys())

@@ -1,0 +1,148 @@
+title: Multi-Service Discovery Enumeration Preceding Lambda PassRole Attack
+status: experimental
+description: 'Detects a burst of cross-service discovery API calls (Lambda, IAM, Secrets Manager) from
+  a single principal within a short window. This pattern precedes T1648 Lambda PassRole privilege escalation:
+  an attacker enumerates Lambda functions to map the serverless landscape, IAM roles to find a passable
+  privileged role, and secrets to identify the exfiltration target. Three or more distinct discovery calls
+  from one identity within 10 minutes is a strong composite indicator.'
+references:
+- https://attack.mitre.org/techniques/T1648/
+- https://attack.mitre.org/tactics/TA0007/
+author: MayaTrail
+date: 2026/10/11
+tags:
+- attack.discovery
+- attack.privilege_escalation
+- attack.t1648
+- attack.t1526
+correlation:
+  type: event_count
+  rules:
+  - lambda_passrole_discovery_calls
+  group-by:
+  - userIdentity.arn
+  timespan: 10m
+  condition:
+    gt: 2
+falsepositives:
+- Cloud security posture management tools and asset inventory scanners
+- DevOps engineers performing multi-service health checks
+- AWS Config, SecurityHub, or similar AWS-native inventory services
+- Automated on-call runbooks that enumerate resources during incident response
+level: medium
+---
+title: Multi-Service Discovery Enumeration Preceding Lambda PassRole Attack - discovery call
+name: lambda_passrole_discovery_calls
+status: experimental
+description: Base rule for the correlation 'Multi-Service Discovery Enumeration Preceding Lambda PassRole
+  Attack'. Matches the single event by design; deploy the correlation, not this rule.
+tags:
+- attack.discovery
+- attack.privilege_escalation
+- attack.t1648
+- attack.t1526
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource:
+    - lambda.amazonaws.com
+    - iam.amazonaws.com
+    - secretsmanager.amazonaws.com
+    eventName:
+    - ListFunctions20150331
+    - ListRoles
+    - GetRole
+    - ListSecrets
+    - GetCallerIdentity
+  condition: selection
+falsepositives:
+- Cloud security posture management tools and asset inventory scanners
+- DevOps engineers performing multi-service health checks
+- AWS Config, SecurityHub, or similar AWS-native inventory services
+- Automated on-call runbooks that enumerate resources during incident response
+level: low
+---
+title: Lambda Function Deletion by Interactive Principal - Potential Attacker Cleanup
+id: ba958adc-2593-5cf7-8f7b-755d70f784f7
+status: experimental
+description: >
+  Detects Lambda function deletion by a non-service, non-IaC principal. Following T1648
+  PassRole privilege escalation via Lambda, attackers delete their created function to remove
+  the persistent configuration artifact (T1070). The short function lifetime (create->invoke->
+  delete in under 60 seconds) is a high-confidence cleanup indicator when correlated with a
+  recent CreateFunction by the same principal. This rule flags the deletion event; pair with
+  sigma_t1648_lambda_passrole_create for full lifecycle correlation.
+references:
+    - https://attack.mitre.org/techniques/T1648/
+    - https://attack.mitre.org/techniques/T1070/
+author: MayaTrail
+date: 2026/10/11
+tags:
+    - attack.defense_evasion
+    - attack.t1070
+    - attack.execution
+    - attack.t1648
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: 'lambda.amazonaws.com'
+        eventName: 'DeleteFunction20150331'
+    filter_service_principal:
+        userIdentity.type: 'Service'
+    filter_iac_useragent:
+        userAgent|contains:
+            - 'pulumi'
+            - 'terraform'
+            - 'cloudformation'
+            - 'aws-cdk'
+    condition: selection and not filter_service_principal and not filter_iac_useragent
+falsepositives:
+    - Integration test teardown creating and deleting Lambda functions in CI pipelines
+    - Developer iteration loops with rapid deploy-test-delete cycles
+    - Scheduled Lambda cleanup automation removing deprecated functions
+level: low
+---
+title: Lambda Privilege Escalation via IAM PassRole on CreateFunction
+id: 61b8f667-bc5a-5c22-b669-fe1be502cccc
+status: experimental
+description: >
+  Detects AWS Lambda function creation by a non-service, non-IaC principal. Attackers with
+  lambda:CreateFunction and iam:PassRole can create a function whose execution role grants
+  privileges the caller does not directly hold (T1648). The assigned role becomes the effective
+  identity for all actions the function takes, allowing collection or lateral movement beyond
+  the caller's own permission boundary.
+references:
+    - https://attack.mitre.org/techniques/T1648/
+    - https://rhinosecuritylabs.com/aws/aws-privilege-escalation-methods-mitigation/
+author: MayaTrail
+date: 2026/10/11
+tags:
+    - attack.privilege_escalation
+    - attack.execution
+    - attack.t1648
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventSource: 'lambda.amazonaws.com'
+        eventName: 'CreateFunction20150331'
+    filter_service_principal:
+        userIdentity.type: 'Service'
+    filter_iac_useragent:
+        userAgent|contains:
+            - 'pulumi'
+            - 'terraform'
+            - 'cloudformation'
+            - 'aws-cdk'
+            - 'aws-console-backend'
+    condition: selection and not filter_service_principal and not filter_iac_useragent
+falsepositives:
+    - Developers deploying Lambda functions via CLI or custom scripts
+    - CI/CD pipelines using custom deployment tooling not identified as IaC
+    - Legitimate Lambda management automation
+level: medium

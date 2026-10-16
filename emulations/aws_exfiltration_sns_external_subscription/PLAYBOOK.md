@@ -7,7 +7,7 @@
 | Incident Type | Data Exfiltration via SNS Subscription Hijacking |
 | Threat Actor | ATOMIC-sns-external-subscription (Technique Emulation) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Exfiltration |
 | MITRE Techniques | T1567 — Exfiltration Over Web Service |
 | Detection Window | Steps 1–3 visible in CloudTrail; Steps 4–5 data-plane only |

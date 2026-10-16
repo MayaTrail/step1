@@ -6,7 +6,7 @@
 | Incident Type | Cloud Firewall Impairment / RDS Public Exposure |
 | Threat Actor | ATOMIC-rds-modify-public-access (technique emulation) |
 | Platform | aws |
-| Severity | Critical |
+| Severity | High |
 | MITRE Tactics | Defense Evasion |
 | MITRE Techniques | T1686.001 — Disable or Modify System Firewall: Cloud Firewall |
 | Execution Plane | Control Plane (AWS API / CloudTrail management events) |

@@ -8,7 +8,7 @@
 | Emulation Tier | Atomic technique |
 | Threat Actor | N/A, single-technique emulation, not actor-attributed |
 | Platform | aws |
-| Severity | High, grants an interactive SSH session on the instance as an OS user (typically sudo-capable); at fan-out across many instances it is a lateral-movement sweep (`MANIFEST.py` rates MEDIUM; the IR view is High because it yields a real shell) |
+| Severity | High, grants an interactive SSH session on the instance as an OS user (typically sudo-capable); at fan-out across many instances it is a lateral-movement sweep |
 | MITRE Tactics | Lateral Movement |
 | MITRE Techniques | T1021.004 (see mapping note in §6 - T1021.008 is the more precise fit) |
 | Services in Scope | EC2 Instance Connect, EC2, CloudTrail, VPC Flow Logs, IAM |

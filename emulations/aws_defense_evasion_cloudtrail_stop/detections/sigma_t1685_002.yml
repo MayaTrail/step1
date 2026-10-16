@@ -1,0 +1,102 @@
+# Stop CloudTrail Trail (T1685.002)
+#
+# WHAT THE GENERATED RULE GOT RIGHT, AND WHAT IT LEFT OUT. The first rule below is the one this
+# package shipped with: eventSource + eventName StopLogging, no errorCode filter. That is kept,
+# because it is correct - a REFUSED StopLogging is intent, not noise, and filtering on success
+# would hide the attacker who tried first and found the trail protected by an SCP or an
+# organization trail. What it left out is the shape that makes this technique dangerous: the
+# stop is followed by a restart, so a later GetTrailStatus reads IsLogging=true and every
+# posture check (AWS Config, Security Hub CloudTrail.1) evaluates a healthy trail. The pair is
+# covered by the temporal_ordered correlation at the end.
+#
+# FIELD SHAPE. eventSource cloudtrail.amazonaws.com, a MANAGEMENT event in the trail's home
+# region (StopLogging called from any other region fails with InvalidHomeRegionException).
+# requestParameters.name carries whatever the caller passed - the trail NAME or its ARN - so the
+# correlation groups on it only together with the principal. responseElements is null.
+#
+# WHY GUARDDUTY IS NOT THE ALERT. Stealth:IAMUser/CloudTrailLoggingDisabled has default
+# severity LOW, and AWS documents it as triggered by "a successful deletion or update of a
+# trail" (or deletion of the log bucket). Do not assume it fires on StopLogging, and do not let a
+# Low finding stand in for a paging rule.
+title: CloudTrail trail logging stopped
+id: c902d9ee-3c2b-5339-998c-549fa6b299e6
+name: cloudtrail_stop_logging
+status: experimental
+description: >-
+  Detects cloudtrail:StopLogging, successful or refused. Stopping a trail blinds its API audit
+  log for every action that follows; attackers do it before the noisy part of an intrusion and
+  often restart the trail afterwards so that posture checks read it as healthy.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.cloudtrail-stop/
+  - https://attack.mitre.org/techniques/T1685/002/
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_StopLogging.html
+  - https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_finding-types-iam.html
+tags:
+  - attack.defense_impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'StopLogging'
+  condition: selection
+falsepositives:
+  - Change-managed trail maintenance by an IaC pipeline. Allowlist that pipeline's role ARN, not
+    the event.
+level: high
+---
+# Base rule - sequence component only, not for direct alerting. Success only: a StartLogging
+# that failed restored nothing and must not close the correlation below.
+# `errorCode|exists: false` rather than `errorCode: null`: both mean "absent" in Sigma, but the
+# in-process evaluator treats `field: null` as never matching, so only the exists form behaves
+# the same in both places.
+title: CloudTrail trail logging started
+id: 3aebee09-0b6c-4d8c-b5a8-89247c368b77
+name: cloudtrail_start_logging_bb
+status: experimental
+description: Base rule - sequence component only, not for direct alerting.
+references:
+  - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_StopLogging.html
+tags:
+  - attack.defense_impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 'cloudtrail.amazonaws.com'
+    eventName: 'StartLogging'
+  success:
+    errorCode|exists: false
+  condition: selection and success
+level: informational
+---
+# STOP, DWELL, RESTART. One principal stopping a trail and starting it again inside an hour is
+# the evasive form of this technique: it leaves a gap in the trail's log files and a trail that
+# every later status check reports as logging. Grouped on the principal AND the trail value so
+# two unrelated trails do not compose. A real change window restarts too - which is why the
+# single StopLogging rule above stays at high rather than being replaced by this one.
+title: CloudTrail trail stopped and restarted by the same principal
+id: 6a568b6e-97a6-478e-8a4e-55aa1bb20a2b
+status: experimental
+description: >-
+  One principal stopped a trail and started it again within an hour. The trail now reports
+  IsLogging=true, but nothing it would have delivered during the gap exists in its log files.
+references:
+  - https://attack.mitre.org/techniques/T1685/002/
+tags:
+  - attack.defense_impairment
+  - attack.t1685.002
+correlation:
+  type: temporal_ordered
+  rules:
+    - cloudtrail_stop_logging
+    - cloudtrail_start_logging_bb
+  group-by:
+    - userIdentity.arn
+    - requestParameters.name
+  timespan: 1h
+level: high

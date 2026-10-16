@@ -34,7 +34,7 @@ evaluated, an IAM-policy denial as `AccessDenied`, a resource-policy denial as
 `DecryptionFailure`. Confirm the exact strings against a real denied event in
 your account.
 
-**Severity:** the manifest rates this MEDIUM; the IR view is **High**, the
+**Severity:** **High**, the
 technique discloses live secret plaintext.
 
 **GuardDuty:** no finding type specific to this technique.

@@ -1,0 +1,85 @@
+# Delete CloudTrail Logs Through an S3 Lifecycle Rule (T1685.002)
+#
+# THE EVENT NAME TRAP. The API is PutBucketLifecycleConfiguration and the IAM action is
+# s3:PutLifecycleConfiguration, but the CloudTrail eventName is PutBucketLifecycle. A rule written
+# against either of the other two spellings never fires. The same IAM action authorises
+# DeleteBucketLifecycle (eventName DeleteBucketLifecycle). All three are bucket-level MANAGEMENT
+# events, so they are in Event history and in every trail - unlike the object deletions they
+# cause, which S3 performs itself and which never appear in CloudTrail at all (they show up only
+# in S3 server access logs as S3.EXPIRE.OBJECT, or as s3:LifecycleExpiration:* event
+# notifications).
+#
+# WHAT WAS WRONG WITH THE GENERATED RULE. `requestParameters|contains: 'Expiration'` is a
+# substring test on the whole flattened request, so it is at the mercy of how the backend renders
+# a nested object. It is kept as the broad medium rule but pointed at
+# requestParameters.LifecycleConfiguration, and a second rule now carries the actual
+# discriminator: how SHORT the expiration is. A 365-day retention rule on a log bucket is policy;
+# a 1-day rule is destruction on a timer.
+#
+# FIELD SHAPE. requestParameters.bucketName, requestParameters.LifecycleConfiguration.Rule (an
+# object for one rule, a list for several) with ID, Status, Filter/Prefix, Expiration.Days,
+# NoncurrentVersionExpiration.NoncurrentDays. Numbers may be rendered as strings, so the
+# regular expression accepts an optional quote.
+#
+# NOT SIGMA-EXPRESSIBLE: whether the bucket is a CloudTrail destination. That needs the trail
+# inventory and is done by the KQL, which joins against CreateTrail/UpdateTrail s3BucketName.
+title: Expiration lifecycle rule set on an S3 bucket
+id: 2e870fd1-b25f-53a8-8493-6ff2040c0419
+status: experimental
+description: >-
+  Detects s3:PutBucketLifecycleConfiguration (CloudTrail eventName PutBucketLifecycle) adding an
+  Expiration or NoncurrentVersionExpiration action. On a bucket that receives CloudTrail, Config
+  or VPC flow logs this makes S3 delete the audit record without any DeleteObject call.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.cloudtrail-lifecycle-rule/
+  - https://attack.mitre.org/techniques/T1685/002/
+  - https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketLifecycleConfiguration.html
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/cloudtrail-logging-s3-info.html
+tags:
+  - attack.defense_impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketLifecycle'
+  expires:
+    requestParameters.LifecycleConfiguration|contains: 'Expiration'
+  condition: selection and expires
+falsepositives:
+  - Routine retention policies on non-log buckets.
+  - IaC applying an approved log-retention rule (typically 365 days or more).
+level: medium
+---
+# The discriminator: an expiration of seven days or less. Shorter than any audit-log retention
+# requirement, and long enough (one day) to be the attacker's minimum - S3 evaluates lifecycle
+# rules asynchronously, roughly daily, so a 1-day rule removes logs within a day or two.
+title: Short expiration lifecycle rule set on an S3 bucket
+id: df5fd40d-cdd0-43aa-8b3c-11880e7e00a1
+status: experimental
+description: >-
+  Detects PutBucketLifecycle with an Expiration or NoncurrentVersionExpiration of seven days or
+  less. Applied to a CloudTrail destination bucket it deletes the audit trail - history and new
+  deliveries alike - on S3's own schedule.
+references:
+  - https://stratus-red-team.cloud/attack-techniques/AWS/aws.defense-evasion.cloudtrail-lifecycle-rule/
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/lifecycle-expire-general-considerations.html
+tags:
+  - attack.defense_impairment
+  - attack.t1685.002
+logsource:
+  product: aws
+  service: cloudtrail
+detection:
+  selection:
+    eventSource: 's3.amazonaws.com'
+    eventName: 'PutBucketLifecycle'
+  short_expiry:
+    requestParameters.LifecycleConfiguration|re: '"(Expiration|NoncurrentVersionExpiration)":\s*\{[^}]*"(Days|NoncurrentDays)":\s*"?[1-7]"?\s*[,}]'
+  condition: selection and short_expiry
+falsepositives:
+  - Scratch or staging buckets with deliberately short retention. Allowlist those bucket names;
+    never a bucket that any trail, Config recorder or flow log delivers to.
+level: high

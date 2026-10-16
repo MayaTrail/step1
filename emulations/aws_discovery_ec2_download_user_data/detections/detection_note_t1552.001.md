@@ -31,7 +31,7 @@ canonically a Credential Access technique (TA0006). The behaviour is genuinely
 dual, enumeration in service of credential theft, but the tactic label is
 imprecise.
 
-**Severity:** the manifest rates this LOW; the IR view is **Medium**, the
+**Severity:** **Medium**, the
 payoff is conditional on what the user-data actually contains, but when it
 contains secrets the disclosure is complete and silent.
 

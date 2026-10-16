@@ -1,0 +1,3 @@
+name: mayatrail-atomic-sns-sms-pumping
+runtime: python
+description: Atomic SNS SMS pumping emulation infrastructure (T1496.003)

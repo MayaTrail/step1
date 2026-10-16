@@ -1,0 +1,241 @@
+# FILE: sigma_T1535_ami_enum_unused_region.yml
+title: AMI Enumeration in Infrequently Used AWS Region
+id: 529dc5f6-4d3c-5218-ab39-d9897a06d6a1
+status: experimental
+description: >
+  Detects DescribeImages called in regions that are not part of the account's standard
+  operational footprint. Adversaries call DescribeImages before launching instances to
+  locate a valid AMI in the target region (T1535). This event often immediately precedes
+  a RunInstances call in the same unusual region and from the same principal.
+references:
+    - https://attack.mitre.org/techniques/T1535/
+    - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeImages.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1535
+    - attack.discovery
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: DescribeImages
+        eventSource: ec2.amazonaws.com
+        awsRegion:
+            - eu-north-1
+            - ap-east-1
+            - me-south-1
+            - ap-southeast-3
+            - ap-southeast-4
+            - ap-south-2
+            - eu-south-2
+            - eu-central-2
+            - il-central-1
+    filter_legitimate:
+        userIdentity.arn|contains:
+            - 'AWSServiceRole'
+            - 'aws-service-role'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - Infrastructure-as-code tooling scanning for latest AMIs in all regions during templating
+    - Golden image baking pipelines that push AMIs to all regions
+level: medium
+---
+# FILE: sigma_T1535_cloudtrail_coverage_enum.yml
+title: CloudTrail Coverage Enumeration with Shadow Trails
+id: 86b94439-461a-5dfd-be37-c458a995ecf7
+status: experimental
+description: >
+  Detects DescribeTrails called with IncludeShadowTrails=True, which enumerates
+  both regional and multi-region trails to identify which regions lack CloudTrail
+  coverage. Adversaries use this in combination with region enumeration (T1535) to
+  select an unmonitored region for follow-on activity.
+references:
+    - https://attack.mitre.org/techniques/T1535/
+    - https://docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_DescribeTrails.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1535
+    - attack.discovery
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: DescribeTrails
+        eventSource: cloudtrail.amazonaws.com
+        requestParameters|contains: '"includeShadowTrails":true'
+    filter_legitimate:
+        userIdentity.arn|contains:
+            - 'AWSServiceRole'
+            - 'aws-service-role'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - AWS Security Hub, Prowler, or Steampipe performing security posture assessments
+    - Security engineers auditing trail configuration
+    - Compliance automation checking CloudTrail enablement
+level: low
+---
+# FILE: sigma_T1535_ec2_unused_region_launch.yml
+title: EC2 Instance Launch in Infrequently Used AWS Region
+id: 9fb7ee16-0aeb-55e6-a6f8-3db75013259e
+status: experimental
+description: >
+  Detects RunInstances called in AWS regions that are typically dormant for the account
+  (e.g., eu-north-1, ap-east-1, me-south-1). Adversaries select unused regions that
+  lack GuardDuty detectors and multi-region CloudTrail trail coverage to reduce
+  detection probability during T1535 operations. Tune the awsRegion list to the set
+  of regions with no active workloads or GuardDuty detectors in your environment.
+references:
+    - https://attack.mitre.org/techniques/T1535/
+    - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_RunInstances.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1535
+    - attack.execution
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: RunInstances
+        eventSource: ec2.amazonaws.com
+        awsRegion:
+            - eu-north-1
+            - ap-east-1
+            - me-south-1
+            - ap-southeast-3
+            - ap-southeast-4
+            - ap-south-2
+            - eu-south-2
+            - eu-central-2
+            - il-central-1
+    filter_legitimate:
+        userIdentity.arn|contains:
+            - 'AWSServiceRole'
+            - 'aws-service-role'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - Legitimate workload expansion to new regions
+    - DR/BCP drills spinning up resources in alternate regions
+    - Developers testing regional latency or data residency features
+level: high
+---
+# FILE: sigma_T1535_enable_region_attempt.yml
+title: AWS Region Enable Attempt Including Denied Calls
+id: 8b18eeb1-5d4a-5ab1-9018-66d4783eaf06
+status: experimental
+description: >
+  Detects any EnableRegion call to account.amazonaws.com, including calls that result
+  in AccessDenied. An adversary attempting to expand their operational footprint by
+  activating a new AWS region (T1535) will generate this event even if an SCP or IAM
+  Deny blocks the action. Do NOT filter on errorCode IS NULL - the denied attempt is
+  itself an indicator of lateral expansion intent. The Account API always targets
+  us-east-1 regardless of the caller's home region.
+references:
+    - https://attack.mitre.org/techniques/T1535/
+    - https://docs.aws.amazon.com/accounts/latest/reference/API_EnableRegion.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1535
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection_success:
+        eventName: EnableRegion
+        eventSource: account.amazonaws.com
+    selection_denied:
+        eventName: EnableRegion
+        eventSource: account.amazonaws.com
+        errorCode: AccessDenied
+    filter_legitimate:
+        userIdentity.arn|contains:
+            - 'AWSServiceRole'
+            - 'aws-service-role'
+    condition: (selection_success or selection_denied) and not filter_legitimate
+falsepositives:
+    - Cloud administrators legitimately expanding to new geographic regions
+    - Automated provisioning pipelines activating regions for new business units
+level: high
+---
+# FILE: sigma_T1535_guardduty_coverage_sweep.yml
+title: GuardDuty Detector Coverage Sweep Across AWS Regions
+id: f5349e5f-8ecc-5595-8ccc-28c67d60f82b
+status: experimental
+description: >
+  Detects ListDetectors calls used to map GuardDuty coverage across AWS regions.
+  An adversary performing T1535 will call ListDetectors in every enabled region to
+  find regions where no detector exists, then operate exclusively there to evade
+  GuardDuty-based alerting. A single event is low-signal; use the KQL composite
+  rule to detect the multi-region sweep pattern.
+references:
+    - https://attack.mitre.org/techniques/T1535/
+    - https://docs.aws.amazon.com/guardduty/latest/APIReference/API_ListDetectors.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1535
+    - attack.discovery
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: ListDetectors
+        eventSource: guardduty.amazonaws.com
+    filter_legitimate:
+        userIdentity.arn|contains:
+            - 'AWSServiceRole'
+            - 'aws-service-role'
+            - 'SecurityAudit'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - Security posture management tools (AWS Security Hub, Prowler, Scout Suite)
+    - SOC automation querying detector status
+    - AWS Trusted Advisor performing security checks
+level: informational
+---
+# FILE: sigma_T1535_region_enumeration.yml
+title: AWS All-Region Enumeration via DescribeRegions
+id: 115fc258-ca24-5333-9c0c-224e9515b16a
+status: experimental
+description: >
+  Detects DescribeRegions called with AllRegions=True, which enumerates every AWS region
+  including opted-in and not-opted-in regions. Adversaries use this to identify
+  regions with no GuardDuty detectors or CloudTrail coverage (T1535).
+references:
+    - https://attack.mitre.org/techniques/T1535/
+    - https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeRegions.html
+author: MayaTrail
+date: 2026/04/15
+tags:
+    - attack.defense_evasion
+    - attack.t1535
+logsource:
+    product: aws
+    service: cloudtrail
+detection:
+    selection:
+        eventName: DescribeRegions
+        eventSource: ec2.amazonaws.com
+        requestParameters|contains: '"allRegions":true'
+    filter_legitimate:
+        userIdentity.arn|contains:
+            - 'AWSServiceRole'
+            - 'aws-service-role'
+    condition: selection and not filter_legitimate
+falsepositives:
+    - Infrastructure automation (Terraform, Pulumi, CDK) running region inventory during planning phase
+    - Security tooling performing periodic coverage audits
+    - AWS Config rules performing compliance checks
+level: low
