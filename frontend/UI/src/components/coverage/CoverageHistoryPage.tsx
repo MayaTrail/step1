@@ -8,6 +8,7 @@ import type { WorkflowRun } from '@/types/workflow'
 
 import { BulletRow } from './BulletRow'
 import { ComparePanel } from './ComparePanel'
+import { EmulationPicker, type EmulationRuns } from './EmulationPicker'
 import { RunGauge } from './RunGauge'
 import { compareRuns } from './compare'
 
@@ -124,8 +125,27 @@ function runLabel(iso: string | null, all: (string | null)[]): string {
     return `${date} ${time}`
 }
 
+/**
+ * Group completed runs by emulation, most recently run first.
+ *
+ * A picker replaced a row of tabs because the row grew with every emulation
+ * and the registry ids are long; most recent first because the emulation
+ * just run is usually the one being checked.
+ */
+function summarise(runs: WorkflowRun[]): EmulationRuns[] {
+    const byType = new Map<string, EmulationRuns>()
+    for (const run of runs) {
+        if (run.status !== 'completed') continue
+        const entry = byType.get(run.emulationType) ?? { type: run.emulationType, runs: 0, last: null }
+        entry.runs += 1
+        if (run.completedAt && (!entry.last || run.completedAt > entry.last)) entry.last = run.completedAt
+        byType.set(run.emulationType, entry)
+    }
+    return [...byType.values()].sort((a, b) => (b.last ?? '').localeCompare(a.last ?? ''))
+}
+
 export function CoverageHistoryPage() {
-    const [emulations, setEmulations] = useState<string[]>([])
+    const [emulations, setEmulations] = useState<EmulationRuns[]>([])
     const [selected, setSelected] = useState<string>('')
     const [history, setHistory] = useState<CoverageHistory | null>(null)
     const [loading, setLoading] = useState(true)
@@ -156,16 +176,10 @@ export function CoverageHistoryPage() {
         listWorkflowRuns(true)
             .then((runs) => {
                 if (cancelled) return
-                const types = Array.from(
-                    new Set(
-                        runs
-                            .filter((run) => run.status === 'completed')
-                            .map((run) => run.emulationType),
-                    ),
-                ).sort()
-                setEmulations(types)
-                setSelected((current) => current || types[0] || '')
-                if (types.length === 0) setLoading(false)
+                const summaries = summarise(runs)
+                setEmulations(summaries)
+                setSelected((current) => current || summaries[0]?.type || '')
+                if (summaries.length === 0) setLoading(false)
             })
             .catch(() => {
                 if (cancelled) return
@@ -344,27 +358,9 @@ export function CoverageHistoryPage() {
 
     return (
         <div className="animate-fadeIn">
-            <Header />
-
-            {emulations.length > 1 && (
-                <div className="mb-5 inline-flex gap-0.5 rounded-btn bg-surface-elevated p-0.5">
-                    {emulations.map((type) => (
-                        <button
-                            key={type}
-                            type="button"
-                            onClick={() => setSelected(type)}
-                            aria-pressed={type === selected}
-                            className={`rounded-md px-3.5 py-1.5 text-[13px] transition-opacity hover:opacity-60 ${
-                                type === selected
-                                    ? 'bg-white/[0.08] text-content-primary'
-                                    : 'text-content-dim'
-                            }`}
-                        >
-                            {type}
-                        </button>
-                    ))}
-                </div>
-            )}
+            <Header
+                picker={<EmulationPicker entries={emulations} value={selected} onChange={setSelected} />}
+            />
 
             {error && (
                 <Card accent="red" className="mb-3 p-4 text-sm text-content-secondary">
@@ -678,18 +674,25 @@ function ArchivedRuns({ runs, busy, onRestore }: ArchivedRunsProps) {
 }
 
 /** Page heading, shared by the empty and populated states. */
-function Header() {
+/**
+ * The page title, with the emulation picker on its right once there is
+ * history to pick from.
+ */
+function Header({ picker }: { picker?: React.ReactNode }) {
     return (
-        <div className="mb-6">
-            <div className="mb-2 font-mono text-2xs uppercase tracking-label text-accent-blue">
-                Detection engineering
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+            <div>
+                <div className="mb-2 font-mono text-2xs uppercase tracking-label text-accent-blue">
+                    Detection engineering
+                </div>
+                <h1 className="font-display text-2xl font-semibold leading-tight text-content-primary">
+                    Coverage History
+                </h1>
+                <p className="mt-1.5 text-sm text-content-dim">
+                    Which of your detections actually fire, measured across every run of an emulation
+                </p>
             </div>
-            <h1 className="font-display text-2xl font-semibold leading-tight text-content-primary">
-                Coverage History
-            </h1>
-            <p className="mt-1.5 text-sm text-content-dim">
-                Which of your detections actually fire, measured across every run of an emulation
-            </p>
+            {picker}
         </div>
     )
 }

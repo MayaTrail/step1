@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useEmulations } from '@/hooks/usePlatformData'
 import { useAlertEndpoints, useWorkflowRuns } from '@/hooks/useWorkflows'
 import { startWorkflowRun } from '@/services/workflow.service'
@@ -113,7 +114,10 @@ export function WorkflowsPage() {
   const { data: endpoints, loading: endpointsLoading } = useAlertEndpoints(version)
   const { data: emulations } = useEmulations('aws')
 
-  const [selected, setSelected] = useState('')
+  // "Run this workflow again" on a run page links here with ?start=<emulation>,
+  // which picks the emulation without starting anything.
+  const [params] = useSearchParams()
+  const [selected, setSelected] = useState(() => params.get('start') ?? '')
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Empty means start now. A datetime-local value carries no timezone, so it is

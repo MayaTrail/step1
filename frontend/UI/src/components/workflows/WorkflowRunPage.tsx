@@ -137,7 +137,7 @@ function RunView({ run, onSettled }: { run: WorkflowRunDetail; onSettled: (run: 
 
       {silent > 0 && (
         <Card className="p-5">
-          <CloseTheGap workflowId={run.id} silentCount={silent} />
+          <CloseTheGap run={run} phases={techniques.data?.attackPath ?? []} />
         </Card>
       )}
 

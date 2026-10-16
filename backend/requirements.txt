@@ -30,3 +30,8 @@ PyYAML==6.0.2
 pysigma==0.11.23
 pySigma-backend-splunk==1.1.3
 pySigma-backend-opensearch==1.0.4
+# pysigma 0.11.23 pulls pyparsing unpinned, and pyparsing 3.3.3 breaks its
+# condition parser: every export fails with "TypeError: 'str' object is not
+# callable". Images built after that release shipped it. Same cap as
+# requirements-dev.txt; drop both when pysigma is upgraded.
+pyparsing<3.3

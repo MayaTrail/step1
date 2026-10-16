@@ -22,6 +22,7 @@ runs the whole thing locally.
 """
 
 import glob
+import json
 import os
 from pathlib import Path
 
@@ -174,6 +175,15 @@ class ConvertUnitTests(SimpleTestCase):
             any("stats" in q.query for q in result.queries),
             "the event_count correlation should have produced an aggregating query",
         )
+
+    def test_query_dsl_is_valid_json(self):
+        # Regression: the DSL backend returns a dict per rule, and str() on it
+        # printed Python's repr with single quotes, which OpenSearch rejects.
+        if reason := _installed("opensearch"):
+            self.skipTest(reason)
+        result = convert(_PLAIN_RULE, "opensearch", output_format="dsl_lucene")
+        self.assertTrue(result.ok, result.error)
+        self.assertIn("query", json.loads(result.queries[0].query))
 
     def test_unknown_target_raises(self):
         with self.assertRaises(KeyError):
